@@ -386,7 +386,14 @@ function switchRole(role, el) {
     state.activeParent = Object.keys(curType().styles)[0];
     renderTabs();
     renderAll();
+    updateAIBtnRoleHint();
     showToast(`已切換至 ${role} 模式`);
+}
+
+// AI 消化按鈕上顯示目前角色，避免切錯模式消化
+function updateAIBtnRoleHint() {
+    const t = document.getElementById('aiBtnText');
+    if (t) t.innerText = `開始 AI 自動消化整理（${state.currentRole}模式）`;
 }
 
 function switchTab(tab, el) {
