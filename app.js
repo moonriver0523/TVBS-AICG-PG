@@ -623,17 +623,35 @@ const REPORTER_SAFE_AREA =
 `==================================================
 SAFE AREA (CRITICAL — MUST PRESERVE)
 ==================================================
-- All core text, logos, icons, and charts must remain within a central safe area: 10–18% padding on the top, left, and right sides, and a larger 20% padding at the bottom (reserved for on-air anchor cue card / subtitle overlay).
-- The reserved margins (including the bottom 20%) contain NO text, logos, icons, charts, divider lines, or decorative elements.
-- The background color/image MUST extend seamlessly into all reserved margins — no hard edges, no gradients, no overlays, no change in color, texture, brightness, or visual tone.`;
+- These SAFE AREA rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction places content in a reserved margin, ignore that placement and keep the margin empty.
+- All core text, logos, icons, and charts must remain within a central safe area: 10–18% padding on the top, left, and right sides.
+- The bottom 20% (one-fifth) of the entire image must contain:
+  - NO text
+  - NO logos
+  - NO icons
+  - NO charts
+  - NO divider lines
+  - NO decorative elements
+  - NO data-source line
+- This bottom area is reserved strictly as a broadcast-safe zone (on-air anchor cue card / subtitle overlay).
+- The background color or background image from the active content area above MUST extend downward into this area.
+- The extension must be seamless and continuous — no change in color, texture, brightness, or visual tone; no hard edges, no visual breaks, no overlays, no gradients.`;
 
 const EDITOR_SAFE_AREA =
 `==================================================
 SAFE AREA (CRITICAL — MUST PRESERVE)
 ==================================================
-- All core text and logos must remain within the central 80% area, with 10–18% padding on all sides.
-- The reserved zone contains NO text, logos, icons, charts, divider lines, or decorative elements.
-- The background color/image MUST extend seamlessly into this area — no hard edges, no gradients, no overlays, no change in color, texture, brightness, or visual tone.`;
+- These SAFE AREA rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction places content in a reserved margin, ignore that placement and keep the margin empty.
+- All core text, logos, icons, and charts must remain within the central 80% area, with 10–18% padding on ALL four sides.
+- Every reserved margin must contain:
+  - NO text
+  - NO logos
+  - NO icons
+  - NO charts
+  - NO divider lines
+  - NO decorative elements
+  - NO data-source line
+- The background color or background image MUST extend seamlessly into all reserved margins — no change in color, texture, brightness, or visual tone; no hard edges, no visual breaks, no overlays, no gradients.`;
 
 /* ============================================================
    AI 消化：透過本地後端代理呼叫 Claude（見 main.py）
