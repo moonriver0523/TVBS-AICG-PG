@@ -38,7 +38,11 @@ const CARD_LAYOUT_ITEMS = [
     { zh:'直向三分割', en:'Vertical triple split layout. Title at the very top. Content area occupies the bottom 55%-60% of the screen. Split into three equal vertical columns (Left, Middle, Right) with uniform spacing. Each block features a professional card-based design.',
       template: '[標題]\n\n[左側卡片]\n<數據 A>\n\n[中間卡片]\n<數據 B>\n\n[右側卡片]\n<數據 C>' },
     { zh:'混合三分割', en:'Mixed triple split layout. Title at the very top. Content area occupies the bottom 55%-60% of the screen. Left side is a single vertical column. Right side is split into two stacked horizontal blocks. Each block features a professional card-based design.',
-      template: '[標題]\n\n[左側主卡片]\n<主要數據>\n\n[右上方卡片]\n<次要數據 A>\n\n[右下方卡片]\n<次要數據 B>' }
+      template: '[標題]\n\n[左側主卡片]\n<主要數據>\n\n[右上方卡片]\n<次要數據 A>\n\n[右下方卡片]\n<次要數據 B>' },
+    { zh:'四分割', en:'Quad split layout. Title at the very top, split into two lines. Content area is a 2x2 grid of four equal cards with uniform spacing. Each card contains a numbered circle badge, a short label paired with a themed icon or small illustration, and two to three lines of concise explanation. All cards share a consistent professional card-based design.',
+      template: '[標題] <主題>\n\n[卡片1 編號+小標+icon] <小標1>\n<說明1>\n\n[卡片2 編號+小標+icon] <小標2>\n<說明2>\n\n[卡片3 編號+小標+icon] <小標3>\n<說明3>\n\n[卡片4 編號+小標+icon] <小標4>\n<說明4>' },
+    { zh:'半版示意圖+資訊', en:'Half-scene layout. One half of the frame is a large thematic illustration or scene serving as the main visual anchor; the other half carries the headline and stacked information blocks. The scene and information zones blend with a soft transition rather than a hard divider, keeping a unified broadcast look.',
+      template: '[標題] <主題>\n[示意圖側] <場景或主視覺描述>\n[資訊側]\n<要點1> 說明\n<要點2> 說明\n<要點3> 說明' }
 ];
 
 /* ============================================================
@@ -97,6 +101,9 @@ const CHART_TYPES = {
             '視感': [
                 { zh:'向量', en:'Vector art style, clean flat shapes, sharp outline edges, minimal ornamentation, editorial news aesthetic.' },
                 { zh:'立體', en:'3D dimensional visual feel, depth layering with soft shadows, subtle embossed effects, polished studio textures.' }
+            ],
+            '後製預留': [
+                { zh:'左側留1/3', en:'在畫面左側預留1/3空間 讓我後製放圖片，該區域只延伸背景，不放任何文字或元素。' }
             ]
         }
     },
@@ -743,8 +750,11 @@ async function handleImageGeneration() {
         const download = document.getElementById('downloadGeneratedImage');
         const result = document.getElementById('generatedImageResult');
         const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
+        const isPng = data.mime_type === 'image/png';
         image.src = imageUrl;
         download.href = imageUrl;
+        download.download = `tvbs-news-cg.${isPng ? 'png' : 'jpg'}`;
+        download.innerText = `下載 ${isPng ? 'PNG' : 'JPEG'}`;
         result.classList.remove('hidden');
         showToast('Gemini 已完成圖片生成');
     } catch (err) {
