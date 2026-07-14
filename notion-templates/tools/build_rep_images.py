@@ -2,7 +2,6 @@
 """為每個模板產出壓縮代表圖到 repo，並回寫 rep_image 欄位到 templates.json"""
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 EXPORT = Path.home() / "Downloads/AI圖資料庫"

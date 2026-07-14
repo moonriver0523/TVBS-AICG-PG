@@ -794,7 +794,7 @@ async function handleImageGeneration() {
                 prompt,
                 provider,
                 aspect_ratio: '16:9',
-                image_size: '2K'
+                image_size: '1K'
             })
         });
         const data = await response.json();

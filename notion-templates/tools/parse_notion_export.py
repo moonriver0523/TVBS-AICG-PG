@@ -71,13 +71,24 @@ def parse_md(md_path: Path) -> dict:
             code = fm.group(1)
             # 去掉共同縮排
             code_lines = code.split("\n")
-            indents = [len(l) - len(l.lstrip()) for l in code_lines if l.strip()]
+            indents = [
+                len(line) - len(line.lstrip())
+                for line in code_lines
+                if line.strip()
+            ]
             pad = min(indents) if indents else 0
-            code = "\n".join(l[pad:] if len(l) >= pad else l for l in code_lines).strip()
+            code = "\n".join(
+                line[pad:] if len(line) >= pad else line
+                for line in code_lines
+            ).strip()
             if code:
                 blocks.append(code)
         if not blocks:
-            plain = "\n".join(l.strip() for l in body_lines if l.strip() and not IMG_REF_RE.search(l))
+            plain = "\n".join(
+                line.strip()
+                for line in body_lines
+                if line.strip() and not IMG_REF_RE.search(line)
+            )
             if plain:
                 blocks.append(plain)
         sections.append({"label": label, "blocks": blocks})
