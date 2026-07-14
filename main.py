@@ -42,7 +42,7 @@ class ImageGenerateRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=20_000)
     provider: Literal["gemini", "gpt"] = "gemini"
     aspect_ratio: str = "16:9"
-    image_size: str = "1K"
+    image_size: str = "2K"
 
 
 class ImageGenerateResponse(BaseModel):
