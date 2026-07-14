@@ -118,10 +118,23 @@ const CHART_TYPES = {
                 { zh:'災害示意', en:'Disaster scene depiction for news illustration, restrained and non-graphic, focus on environment and scale rather than casualties, informative broadcast tone.' },
                 { zh:'事故示意', en:'Accident scene reconstruction illustration, clear depiction of the location and objects involved, arrows or highlight markers optional, broadcast-safe non-graphic treatment.' },
                 { zh:'天氣示意', en:'Weather-driven scene illustration, atmospheric conditions clearly rendered (storm, flood, snow, heat), environmental focus, broadcast news aesthetic.' }
+            ],
+            '實戰風格包': [
+                { zh:'WPA Poster', en:'WPA Poster 向量插畫風格。Color palette: parchment cream base (#EBE4D1), tan shading (#D8C7A5), navy blue title blocks (#1D2A38), classic gold accents (#B79440), steel blue icon backgrounds (#ADC2D1), white text on dark backgrounds.' },
+                { zh:'UE5電影渲染', en:'UE5電影等級精緻渲染風格。' },
+                { zh:'軍事UI', en:'軍事科幻UI風格，標籤有飄浮的科技UI立體感，字體立體、統一的UI風格配色。' }
             ]
         },
         structures: {
             '自訂': [ { zh:'預設', en:'Manual scene description', template: '[標題]\n[場景描述]\n<重點標記>' } ],
+            '實戰構圖': [
+                { zh:'要件情境圖解',
+                  en:'<大標題置頂置中> <第二行小標題 顏色醒目> <大標題 小標題 都不要太大> 構圖1: 背景是相關場景或地圖，顏色刷淡。構圖2: 各要件分別放在相對應位置，圓圈內放向量ICON，圓圈下方放小標與內文。',
+                  template: '[大標題] <標題>\n[小標題] <時間或補充>\n\n[要件小標1 + ICON 1] <名稱>\n[要件1 內文] <說明>\n\n[要件小標2 + ICON 2] <名稱>\n[要件2 內文] <說明>\n\n[要件小標3 + ICON 3] <名稱>\n[要件3 內文] <說明>' },
+                { zh:'概念連結示意',
+                  en:'空中俯瞰主體，主體拉出科幻UI風格的亮線，連接其他物件（都要出現在畫面上），表示連結關係，物件旁放相對應標籤。',
+                  template: '[主體] <主體名稱>\n[連結物件 標籤]\n<物件1>\n<物件2>\n<物件3>' }
+            ],
             '場景構圖': [
                 { zh:'現場全景',
                   en:'Wide establishing shot of the scene, showing the full environment and spatial context. Camera positioned to capture the overall situation. Optional label callouts pointing to key elements. A clear headline bar at the top.',
@@ -150,28 +163,45 @@ const CHART_TYPES = {
         aspect: '16:9 / 2K',
         tabs: ['style', 'structure', 'visual'],
         styles: {
-            '地圖風格': [
-                { zh:'新聞平面地圖', en:'Clean flat broadcast news map style, simplified geography, muted land and water colors, clear borders, editorial cartography aesthetic optimized for TV readability.' },
-                { zh:'衛星擬真', en:'Satellite-style realistic terrain map, subtle relief and texture, broadcast overlay graphics on top, high-contrast labels.' },
-                { zh:'暗色主題地圖', en:'Dark-theme broadcast map, deep navy or charcoal base, glowing accent routes and markers, high-tech news graphics aesthetic.' },
-                { zh:'極簡示意地圖', en:'Minimalist schematic map, abstracted shapes and simplified coastlines, focus on relationships rather than accuracy, clean editorial style.' }
+            '新聞地圖': [
+                { zh:'TVBS向量地圖', en:'TVBS-style Google Maps vector map aesthetic. Land: muted gray-blue (#DDE2EA / #C8CFD9). Water: soft blue-gray (#AFC4D6 / #B8D0E0). Subtle hillshade terrain (not strong), clean and crisp, no clutter. Main-country border: bold dark line (#1A1A1A); neighbor borders: thin iron-gray (#6C6C6C). Country name shown as Traditional Chinese + English (English in TVBS blue #1E4FC7, Chinese in dark gray #333333); neighbor countries labeled in thin iron-gray Traditional Chinese only. Smooth vector rendering, soft gradients.' },
+                { zh:'簡明世界地圖', en:'Flat vector map design, broadcast news graphic style, professional geopolitical visualization, minimal shapes with sharp borders. Neutral grey base map, bright red highlighted regions, white and dark blue text elements, soft light-blue ocean background. Bold sans-serif headline, clean sans-serif labels, smooth digital vector texture, flat color fields, no gradients or minimal gradients.' }
+            ],
+            '軍事風格': [
+                { zh:'軍事UI 戰情室', en:'風格是白宮戰情室由上而下俯瞰戰情地圖，全息投影，標籤有飄浮的科技UI立體感，正進行軍事兵推戰棋，有戰機飛彈的小模型或圖標。' },
+                { zh:'軍事戰棋 立體模型', en:'精緻的立體模型地圖，標示的地點依照現實地理位置標出來，小模型isometric。風格是精緻兵推戰棋軍事科技風格。' },
+                { zh:'軍事戰棋 夜景', en:'精緻的立體模型地圖，俯瞰，夜晚微光，有燈火亮光，標示的地點依照現實地理位置標出來，小模型isometric。風格是精緻兵推戰棋軍事科技風格。' },
+                { zh:'全息投影地形', en:'精緻圓形全息投影立體地形圖，觀者視角isometric，放在黑暗的戰情室的正中間，標籤UI也是全息投影漂浮立體感。' }
+            ],
+            '復古插畫': [
+                { zh:'WPA Poster', en:'WPA Poster 向量插畫風格，適合用在地圖的風格與配色。Color palette: parchment cream base (#EBE4D1), tan land shading (#D8C7A5), navy blue title blocks (#1D2A38), ocean blue water (#446E82), classic gold accents (#B79440), steel blue icon backgrounds (#ADC2D1), white text on dark backgrounds.' },
+                { zh:'威權宣傳向量', en:'威權國家宣傳向量插畫風格，不要明顯的國家標誌元素(如 紅星)。' }
             ]
         },
         structures: {
             '自訂': [ { zh:'預設', en:'Manual map specification', template: '[標題]\n[地區]\n<地點標記>' } ],
             '地圖類型': [
-                { zh:'單點標示',
-                  en:'News map highlighting a single key location with a prominent pin or marker and a label callout. The surrounding region provides geographic context. Inset mini-map optional to show the location within a larger area. Headline bar at the top.',
-                  template: '[標題] <地點名稱>\n[所屬地區] \n<地點標記> 名稱與說明' },
-                { zh:'多點標示',
-                  en:'News map with multiple labeled location markers, each with a distinct pin and short label. A legend distinguishes marker types if needed. Clear geographic context. Headline bar at the top.',
-                  template: '[標題] <主題>\n[地區] \n<地點1> 說明\n<地點2> 說明\n<地點3> 說明' },
-                { zh:'路線示意',
-                  en:'News map showing a route or movement path with a clear directional line and arrows connecting an origin and destination, with intermediate waypoints labeled. Distance or time annotations optional. Headline bar at the top.',
-                  template: '[標題] <路線主題>\n[起點] <地點A>\n[終點] <地點B>\n<途經點> 說明' },
-                { zh:'範圍示意',
-                  en:'News map showing an affected area or zone with a clearly shaded or outlined region, a legend indicating intensity or category, and labels for key places inside or near the zone. Headline bar at the top.',
-                  template: '[標題] <範圍主題>\n[範圍描述] 影響或涵蓋區域\n<區域> 程度或類別\n<關鍵地點> 說明' }
+                { zh:'單點定位（國家+地點）',
+                  en:'Vector map of the specified country. All geographic markers MUST be placed strictly according to actual coordinates; no beautification adjustment or repositioning is allowed. Mark the capital with a black star EXACTLY at its true coordinate, labeled 「首都 + 名稱」 in a white label box. Mark the user-specified location with a red dot (#E53935) EXACTLY at the given coordinates, label placed near the dot without replacing it. The whole map may be shifted for layout, but marker positions must never move independently of the map. Do NOT display coordinate numbers or English names of the specified location.',
+                  template: '[國家名稱（中文）] <國家>\n[指定地點名稱（中文）] <地點>\n[指定地點座標 lat,long] <座標>\n[地點標籤（可留白）] <標籤>' },
+                { zh:'多點標示（模型註解）',
+                  en:'製作新聞圖表，主視覺是大地圖，標出相對應的實際地理位置。每個地點有標籤，配 isometric 小模型或圖標與內文註解。',
+                  template: '[左上方國旗、右上方國旗]\n[大標題] <標題>\n\n[地點1 標籤] <地名>\n[地點1 isometric模型 + 內文] <說明>\n\n[地點2 標籤] <地名>\n[地點2 isometric模型 + 內文] <說明>\n\n[地點3 標籤] <地名>\n[地點3 isometric模型 + 內文] <說明>' },
+                { zh:'世界地圖 多國套色',
+                  en:'世界地圖並依序將指定國家套色，並標出各國名稱。國家的位置要核對正確的資訊，根據網路資料重複驗證。Central world map layout, color-coded highlighted regions, text labels anchored to countries, title banner at the top, clean grid-aligned information blocks.',
+                  template: '[標題] <標題>\n[套色國家清單]\n<國家1>、<國家2>、<國家3>' },
+                { zh:'部署／設施標示',
+                  en:'底圖是指定區域地圖，稍微刷淡。以簡單向量插圖在對應的實際位置標出艦艇、部隊或設施，插圖下方或旁邊放名稱與說明文字。',
+                  template: '[標題] <國旗> <標題>\n<向量插圖 放在實際位置> <名稱>\n[內文] <說明>' },
+                { zh:'航跡／路線圖',
+                  en:'重新繪製航跡圖，地圖風格為簡單向量，航跡線要明顯可辨識，有細黑線框。交通工具 ICON 放在指定的位置，時間與說明文字跟著 ICON 放置。',
+                  template: '[大標題] <標題>\n[大標題底下 小小字] <日期/時區>\n\n[ICON地點: <位置>]\n[放在ICON上面 字大] <時間>\n[內文] <說明>' },
+                { zh:'地震速報',
+                  en:'TV news "Earthquake Breaking Alert" infographic. From the pasted USGS input, automatically: translate ALL place names into Traditional Chinese; convert the location string into 「{地名}{方位}{距離}公里」 (N→以北 S→以南 E→以東 W→以西 NE→東北方 NW→西北方 SE→東南方 SW→西南方); extract country for the main title 「{國家} M {規模} 地震」; convert UTC to Taiwan time (UTC+8) formatted MM-DD HH:MM:SS; extract depth and epicenter coordinates. Main map: Google-Maps-style clean vector map around the epicenter, marked with vivid red (#E53935) concentric rings, map occupies the majority of the frame. Secondary line: 「震源深度 {深度} km」 centered + 「台灣時間 MM-DD HH:MM:SS」 small right-aligned. Right-side info box: 「震央位置：{方位距離}」. Bottom-right small font: 「資料來源：USGS」. All visible text must be Traditional Chinese.',
+                  template: '[USGS原文貼上]\nM 6.4 - 27 km E of Santiago, Philippines\n2026-01-07 03:02:58 (UTC)\n7.254°N 126.823°E\n58.5 km depth' },
+                { zh:'天氣／數據地圖',
+                  en:'文字有立體感，不要新增沒給的文字或內容。內文跟插圖同樣 isometric 的立體視角 UI，不要照觀者視角，就像立體模型上的標示，對應地理位置，可用拉線延伸避免視覺擁擠，標出各地點數字，以主題 ICON 填滿比例來表示百分比，數字寫在 ICON 內。',
+                  template: '[標題] <標題>\n[次標題 字小] <單位說明>\n\n<地點1> <數值> <百分比>\n<地點2> <數值> <百分比>\n<地點3> <數值> <百分比>' }
             ]
         },
         visual: {
@@ -194,10 +224,32 @@ const CHART_TYPES = {
                 { zh:'寫實3D', en:'Photorealistic 3D reconstruction, accurate materials and lighting, documentary broadcast quality, focus on plausibility.' },
                 { zh:'剖面透視', en:'Cutaway cross-section 3D illustration revealing internal structure or hidden mechanics, labeled layers, technical broadcast aesthetic.' },
                 { zh:'簡潔圖解', en:'Clean simplified 3D infographic style, reduced detail, strong shapes and arrows, optimized for quick comprehension on TV.' }
+            ],
+            '實戰風格包': [
+                { zh:'TVBS藍', en:'TVBS-style news infographic aesthetic, using signature TVBS blue (pure blue, not purple) as the primary accent color, combined with contrasting highlight accents in a different hue such as TVBS orange for emphasis. Modern bold sans-serif typography for high readability, clean semi-flat vector rendering, soft controlled shadows, balanced contrast, subtle light-gray reflective background texture with a smooth, faint mirror-like finish that is not distracting, minimal ornamentation, crisp edges, polished broadcast-screen look, clean white and gray UI elements, high-clarity digital finish, no clutter, no metallic textures, no TVBS logo.' },
+                { zh:'夜藍檳金', en:'Modernized Art Deco combined with Fintech Aesthetic. Deep navy background (#010B13), metallic gold titles and icons (#D4AF37), champagne gold text highlights (#F5E1A4), royal blue node containers (#0B2545), glowing orange arrows and flow lines (#FFB347), grid cyan decorative lines (#0077B6). High contrast between cold navy and warm gold, glow effects on arrows to suggest motion, low-saturation dark background keeping foreground data as the sole visual focus.' },
+                { zh:'線索板', en:'警方調查辦案的線索board，每一個時間點都是單獨的線索卡，有立體感。' },
+                { zh:'New Deal立體', en:'New Deal Graphic Style 有立體感。' },
+                { zh:'教科書立體', en:'設計精緻、極度有視覺創意、有立體感的資訊圖表，風格是國家地理雜誌的精緻資訊圖表。' },
+                { zh:'UE5電影渲染', en:'UE5電影等級精緻渲染風格。' }
             ]
         },
         structures: {
             '自訂': [ { zh:'預設', en:'Manual process specification', template: '[標題]\n[步驟]\n<步驟1>\n<步驟2>' } ],
+            '實戰構圖': [
+                { zh:'步驟流程圖',
+                  en:'製作一張流程圖，每個步驟配一張照片或簡單向量插圖，以箭頭連接。步驟編號用主色底＋白字＋圓圈呈現。',
+                  template: '[標題] <標題>\n\n<步驟1 主色底+白字+圓圈> 1\n<步驟1 說明>\n\n<步驟2 主色底+白字+圓圈> 2\n<步驟2 說明>\n\n<步驟3 主色底+白字+圓圈> 3\n<步驟3 說明>' },
+                { zh:'報導精簡流程圖',
+                  en:'以流程圖的方式解說事件機制，繁體中文，字精簡不要太多。將原報導內容精簡設計成流程解說圖，節點之間以箭頭連接表示流向。',
+                  template: '[大標題] <標題>\n[左節點] <主體A>\n[右節點] <主體B>\n[以下是原報導 幫我精簡 設計流程解說圖]\n<貼上報導段落>' },
+                { zh:'左圖右時間軸',
+                  en:'最上方標題。左邊是相關地圖或圖片（重點元素加小icon），右邊是有設計感的時間軸，年份數字都用標籤呈現。',
+                  template: '[標題] <標題>\n[左圖] <地圖或照片說明>\n[時間軸 年份數字都用標籤 <>內強調變色]\n<年份1> <事件1>\n<年份2> <事件2>\n<年份3> <事件3>' },
+                { zh:'線索卡時間軸',
+                  en:'每一個時間點都是單獨的線索卡，日期改成日曆icon上面寫日期，可搭配指定照片放在側邊。',
+                  template: '[標題] <標題>\n[標題第二行 字小] <副標>\n[左邊] <照片或主圖說明>\n[右內文區 日期改成日曆icon上面寫日期]\n<日期1> <事件1>\n<日期2> <事件2>\n<日期3> <事件3>' }
+            ],
             '流程類型': [
                 { zh:'分步序列',
                   en:'Step-by-step sequence diagram laid out left to right (or top to bottom), each step in its own numbered panel with a 3D illustration and a short caption, connected by directional arrows showing progression. Headline bar at the top.',
@@ -425,6 +477,8 @@ function syncOutput() {
     const variableInput = document.getElementById('field-variable').value.trim();
     const display = document.getElementById('displayPrompt');
 
+    invalidateGeneratedImage();
+
     if (!style && !structure && !variableInput && !visual) {
         display.innerText = "Waiting for data input…";
         return;
@@ -578,6 +632,7 @@ SAFE AREA (CRITICAL — MUST PRESERVE)
    AI 消化：透過本地後端代理呼叫 Claude（見 main.py）
    ============================================================ */
 const AI_BACKEND_URL = "http://127.0.0.1:8787/api/generate";
+const IMAGE_BACKEND_URL = "http://127.0.0.1:8787/api/images/generate";
 
 async function handleAIDigestion() {
     const input = document.getElementById('aiInput').value.trim();
@@ -612,6 +667,93 @@ async function handleAIDigestion() {
         showToast("AI 服務連線失敗，請稍後再試");
     } finally {
         btn.disabled = false; btnText.classList.remove('hidden'); loading.classList.add('hidden');
+    }
+}
+
+/* ============================================================
+   Gemini 圖片生成：僅在使用者確認最終 Prompt 後呼叫後端代理
+   ============================================================ */
+function getFinalPrompt() {
+    return document.getElementById('displayPrompt').innerText.trim();
+}
+
+function updateImageGenerationControls() {
+    const confirmed = document.getElementById('promptConfirmed');
+    const button = document.getElementById('generateImageBtn');
+    const hint = document.getElementById('imageGenerationHint');
+    if (!confirmed || !button || !hint) return;
+
+    const hasPrompt = !getFinalPrompt().includes('Waiting for data');
+    const isGemini = state.engine === 'gemini';
+    button.disabled = !confirmed.checked || !hasPrompt || !isGemini;
+
+    if (!isGemini) {
+        hint.innerText = '目前圖片生成只支援 Gemini，請切回 Gemini 後再確認 Prompt';
+    } else if (!hasPrompt) {
+        hint.innerText = '請先填寫內容，產生最終 Prompt';
+    } else if (!confirmed.checked) {
+        hint.innerText = '確認後可使用 Gemini 一鍵生成 16:9／2K 圖片';
+    } else {
+        hint.innerText = '將以目前顯示的 Prompt 送至 Gemini 生成圖片';
+    }
+}
+
+function invalidateGeneratedImage() {
+    const confirmed = document.getElementById('promptConfirmed');
+    const result = document.getElementById('generatedImageResult');
+    const image = document.getElementById('generatedImage');
+    const download = document.getElementById('downloadGeneratedImage');
+
+    if (confirmed) confirmed.checked = false;
+    if (result) result.classList.add('hidden');
+    if (image) image.removeAttribute('src');
+    if (download) download.removeAttribute('href');
+    updateImageGenerationControls();
+}
+
+async function handleImageGeneration() {
+    const confirmed = document.getElementById('promptConfirmed');
+    const prompt = getFinalPrompt();
+    if (!confirmed.checked || state.engine !== 'gemini' || prompt.includes('Waiting for data')) {
+        updateImageGenerationControls();
+        return;
+    }
+
+    const button = document.getElementById('generateImageBtn');
+    const buttonText = document.getElementById('generateImageBtnText');
+    const loading = document.getElementById('generateImageLoading');
+    button.disabled = true;
+    buttonText.classList.add('hidden');
+    loading.classList.remove('hidden');
+
+    try {
+        const response = await fetch(IMAGE_BACKEND_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                prompt,
+                aspect_ratio: '16:9',
+                image_size: '2K'
+            })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+
+        const image = document.getElementById('generatedImage');
+        const download = document.getElementById('downloadGeneratedImage');
+        const result = document.getElementById('generatedImageResult');
+        const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
+        image.src = imageUrl;
+        download.href = imageUrl;
+        result.classList.remove('hidden');
+        showToast('Gemini 已完成圖片生成');
+    } catch (err) {
+        console.error(err);
+        showToast(err.message || '圖片生成失敗，請稍後再試');
+    } finally {
+        buttonText.classList.remove('hidden');
+        loading.classList.add('hidden');
+        updateImageGenerationControls();
     }
 }
 
