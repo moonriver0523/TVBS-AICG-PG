@@ -1,158 +1,250 @@
 # 新聞 CG Prompt 生成器 — 技術交接文件
 
-> 這份文件的目的：讓你在 Claude Code 裡接手時，不用重新解釋一次背景。把它跟專案檔案一起放進去，開新 session 時貼給 Claude 看就能接上進度。
+> 這份文件用來讓新的 Claude Code 工作階段快速接手專案，不必重新解釋背景、架構與目前進度。
 
 ---
 
 ## 一、專案是什麼
 
-一個給 Taiwanese 電視新聞（TVBS 國際新聞）用的**內部工具**：使用者只需修改或輸入少數變量，就能依照標準化 TEMPLATE 自動組出完整 Prompt，貼給圖片生成 AI（Gemini / GPT）產出新聞資訊圖表（CG）。核心目的是把新聞圖表的各種規格標準化，減少每次從零手寫 prompt 的重工。
+這是一個給 TVBS 國際新聞使用的內部工具。使用者輸入新聞素材或少數變量後，系統依標準化模板組成圖片生成 Prompt，交給 Gemini 或 GPT 產出電視新聞資訊圖表（CG）。
 
-使用者本人是國際新聞記者，負責把外電新聞稿處理成廣播用的中文文稿；本工具是他的圖表製作輔助工具，非公開產品，是內部工作流程優化。
+核心目標是把新聞圖表的視覺風格、構圖、文字內容與播出安全區規格標準化，減少每次從零撰寫 Prompt 的時間。
+
+目前版本為 **V8.2**。專案已從單檔 Artifact 原型演進為本機前後端工具，但尚未正式部署成多人使用的網路服務。
 
 ---
 
 ## 二、目前檔案結構
 
-```
+```text
 project/
-├── index.html          # 主頁面：UI 結構、樣式（Tailwind CDN）
-├── app.js              # 核心邏輯：資料模型 + 渲染 + 輸出組合 + AI 消化
-├── docs/
-│   └── notion-integration-plan.md   # App化／Notion直連的完整規劃書（階段A/B/C）
-└── archive/             # 存放舊版本或棄用素材
+├── index.html                  # 前端 UI 與樣式（Tailwind CDN）
+├── app.js                      # 模板資料、狀態、渲染、Prompt 組合與前端 API 呼叫
+├── main.py                     # FastAPI 後端：AI 消化與 Gemini／GPT 圖片生成代理
+├── dev.sh                      # 同時啟動後端 8787 與 BrowserSync 前端 3000
+├── pyproject.toml / uv.lock    # Python 依賴與鎖定檔
+├── tests/
+│   └── test_digest_prompts.py  # AI 消化密度與後端預設規則測試
+├── notion-templates/           # 記者 Notion 資料庫快照、代表圖與解析工具
+├── editor-templates/           # 編輯版 Prompt、提案與版型參考圖
+└── docs/
+    ├── HANDOFF.md
+    ├── notion-integration-plan.md
+    └── superpowers/            # 已核准設計規格與實作計畫
 ```
 
-**目前版本：V8.2**（單機 HTML 原型階段，尚未 App 化）
+開發時執行：
 
-在 claude.ai 環境測試時，`index.html` 與 `app.js` 是分開檔案（`<script src="app.js">` 引用）；若要在 claude.ai 的 Artifact 裡預覽，需要先把兩者合併成單一檔案內嵌 `<script>`（因為 Artifact 只支援單檔）。**在 Claude Code / 一般網頁環境中不需要合併，維持分離即可**，這樣也更利於版本控制與後續開發。
+```bash
+./dev.sh
+```
+
+- 前端即時預覽：`http://localhost:3000`
+- FastAPI 後端：`http://127.0.0.1:8787`
+
+`index.html` 與 `app.js` 維持分離，BrowserSync 會在修改後自動刷新頁面。
 
 ---
 
 ## 三、核心架構：三層變量模型
 
-整個生成邏輯的骨幹，是把一張新聞圖表的規格拆成三層變量：
+一張新聞圖表拆成三層：
 
+```text
+風格（Style）      → 品牌配色、材質、視覺語言
+構圖（Structure）  → 元素排列、資訊層級、圖表或場景布局
+變量（Variable）   → 標題、數據、重點文字等實際內容
 ```
-風格 (Style)      → 視覺語言：品牌配色、質感、風格傾向
-構圖 (Structure)  → 佈局規則：元素怎麼排、資料怎麼呈現
-變量 (Variable)   → 使用者實際要填的內容：標題、數字、要點文字
-```
 
-三層各自可獨立替換，組合起來變成完整 prompt。這個設計让同一套構圖可以套用不同風格（例如同一個「儀表板」構圖，可以是 TVBS 風也可以是 CNN 風），也讓使用者只需要換「變量」就能重複產出同類型圖表。
+三層可以獨立替換。同一套構圖可以套用不同風格，使用者也可以只更換變量來重複產出同類型圖表。
 
-### 資料模型：`CHART_TYPES`
+### `CHART_TYPES`
 
-`app.js` 最上層是一個物件 `CHART_TYPES`，四大圖表類型分別是 key：
+`app.js` 目前有四大類型：
 
 ```js
 CHART_TYPES = {
-  'data':    { label:'資料圖表',   hint, aspect, tabs, styles, structures, visual },
-  'scene':   { label:'情境示意圖', ... },
-  'map':     { label:'地圖／位置', ... },
-  'process': { label:'3D示意／流程', ... }
+  data:    { label: '資料圖表', styles, structures, visual },
+  scene:   { label: '情境示意圖', styles, structures, visual },
+  map:     { label: '地圖／位置', styles, structures, visual },
+  process: { label: '3D示意／流程', styles, structures, visual }
 }
 ```
 
-每個類型底下：
-- `styles` — 巢狀物件：`{ 父分類名: [ {zh, en}, ... ] }`。`zh` 是 UI 顯示的中文標籤，`en` 是實際塞進 prompt 的英文描述。
-- `structures` — 同樣巢狀，但每個項目多一個 `template` 欄位——選了這個構圖，變量欄位會自動帶入這段預設格式。
-- `visual` — 補充性的視覺要求（背景處理、視感風格等），結構同 `styles`。
+每個類型包含：
 
-新增一則模板，本質上就是在對的類型底下、對的父分類裡，塞一個 `{ zh, en, template? }` 物件。UI 會自動長出對應按鈕，不需要碰渲染邏輯。
+- `styles`：UI 顯示名稱 `zh` 與實際 Prompt 描述 `en`
+- `structures`：構圖描述及可自動帶入的 `template`
+- `visual`：背景、視感、標記、後製預留等補充要求
 
-### 共用資源
-- `SHARED_STYLES`：資料圖表與部分其他類型共用的品牌風格包（TVBS 系列、Art Deco 系列等）
-- `CARD_LAYOUT_ITEMS`：卡牌陳列的構圖模板，被 `data` 類型引用
+共用資源：
 
----
+- `SHARED_STYLES`：TVBS、ABC、CNN、CNBC、Bloomberg、Art Deco 等風格
+- `CARD_LAYOUT_ITEMS`：雙分割、三分割、四分割、半版示意圖等卡牌構圖
 
-## 四、輸出組合邏輯
-
-`buildPrompt()` 是最終組字的地方，依兩個維度變化文字骨架：
-
-1. **角色（記者 / 編輯）**：兩者用不同的文字規則（`REPORTER_TEXT_RULES` / `EDITOR_TEXT_RULES`）與安全區規則（`REPORTER_SAFE_AREA` / `EDITOR_SAFE_AREA`）。
-   - 記者模式：已改為與編輯模式一致的「中央安全區」結構（上/左/右 10–18% padding），但底部維持較大的 20% padding，作為主播提詞/字卡讓位區。禁止清單同編輯模式（NO text/logos/icons/charts/divider lines/decorative elements）。
-   - 編輯模式：四周 80% 中心安全區，標題強制兩行、字級加大，適合需要更多裝飾元素（icon、3D圖表）的場景。
-
-2. **引擎（Gemini / GPT）**：開頭祈使句式不同——
-   - Gemini：`"Create a professional international TV news infographic..."`（宣告式）
-   - GPT：`"Generate an image: a professional international TV news infographic..."`（含明確前綴）
-   - 正文（CANVAS / STYLE / STRUCTURE / VARIABLE / SAFE AREA / FINAL OUTPUT RULE）兩者共用同一套骨架。
-
-所有變量欄位（`[ ]` 標記指令、`< >` 標記強調/替換內容）在最終輸出前，會加上系統警語：`"< >" "[ ]" 是給你的指令 不要生成在結果上`，確保生成圖片不會把方括號本身畫出來。
+「人物／小檔案」是 Notion 模板庫中的大型分類，但目前尚未新增為第五個 `CHART_TYPES` 類型。
 
 ---
 
-## 五、AI 消化功能（現況與限制）
+## 四、最終 Prompt 組合
 
-`handleAIDigestion()` 讓使用者貼一段原始新聞文字，呼叫 Claude API（`api.anthropic.com/v1/messages`，model: `claude-sonnet-4-6`）自動生成 style / structure / variable 三個欄位的建議內容，會依「當前選擇的圖表類型」給出對應的佈局建議。
+`app.js` 的 `buildPrompt()` 依兩個維度組合最終圖片 Prompt：
 
-**重要限制**：這個功能目前只能在 claude.ai 的 Artifact 環境運作，因為該環境會自動代理 API 呼叫、不需要金鑰。**若部署成獨立網站（App 化），這段程式碼會失效**，因為前端直接呼叫 `api.anthropic.com` 沒有驗證機制會被拒絕。App 化時必須：
-1. 把這段呼叫移到後端
-2. 後端持有你自己申請的 Anthropic API Key
-3. 前端改成呼叫自己的後端端點，由後端代為呼叫 Claude API
+1. **角色**：記者／編輯
+2. **圖片引擎**：Gemini／GPT
 
-這是 Claude Code 階段要優先解決的技術債之一。
+角色規則：
 
----
+- 記者：上、左、右固定 15% 完全留空；底部 15～18% 完全留空
+- 編輯：四周固定 15% 完全留空；標題強制兩行並加大
+- 四周安全區只延伸背景，不得放文字、圖示、Logo、圖表、線條或裝飾元素
+- 安全區規則優先於 Style、Structure 與 Variable 內的衝突指令
 
-## 六、與 Notion 資料庫的關係（重要背景）
+引擎差異只在起手句：
 
-使用者有一個龐大的 Notion 資料庫，收藏了大量他過去嘗試過的新聞圖表 prompt，這是本工具「模板庫」的真正源頭。資料庫結構如下（供之後可能的自動化參考）：
+- Gemini：`Create a professional international TV news infographic...`
+- GPT：`Generate an image: a professional international TV news infographic...`
 
-- 頁面屬性已分類完成：`✠ 風格包`（約29種品牌/風格，如 TVBS藍經典、CNN紅、Bloomberg、Art Deco、桌遊…）、`構圖TAG`（約44種，如儀表板、長條圖、時間軸、流程軸、地圖、情境圖…）、`用途TAG`（股匯市、民調、地震、天氣、拆解流程…）
-- 每筆頁面內文裡，實際 prompt 全文固定放在一個標題為「範例完整 prompt」的摺疊區塊（`<details>`）中的程式碼區塊裡——這是一個穩定的擷取規則，只要使用者維持這個存放習慣就能被程式化讀取
+正文共用 CANVAS、Text Rules、STYLE、STRUCTURE、VARIABLE、SAFE AREA 與 FINAL OUTPUT RULE。
 
-**目前的搬移策略（已與使用者共識）**：**不做即時 API 直連**，因為工程量大（需要後端保管 Notion 金鑰、速率限制處理、內容拆解邏輯等），對目前的規模不划算。改採「半自動批次搬移」：使用者手動貼上想要收錄的 prompt（可附上截圖顯示 Notion 分類 tag），由 Claude（不論在 claude.ai 或 Claude Code）逐則分析、拆解三層、評估是否適合收錄，適合的話直接改 `app.js` 加入。
-
-完整的三階段 App 化規劃（含未來若真的要做 Notion 直連的技術路徑）見 `docs/notion-integration-plan.md`，內含：
-- 為何前端不能直連 Notion（金鑰保護）的说明
-- Notion 欄位 → 工具三層變量的對映表
-- 四大類型的自動分類規則建議
-- 階段 A（現行手動搬移）/ 階段 B（後端直連）/ 階段 C（加值功能：反向寫入、縮圖、篩選）的分工
+`[ ]` 是指令標籤，`< >` 是強調／替換標記。最終圖片不得顯示括號符號本身。
 
 ---
 
-## 七、已收錄的模板現況（V8.2）
+## 五、AI 消化功能
 
-### 資料圖表（data）
-- 風格包：標準電視（TVBS紫橘/藍黃、ABC藍金/簡明/鐵灰、CNN紅黑、CNBC藍、Bloomberg黑、**桌遊創意**）、Art Deco 系列（8種）
-- 構圖：儀表板（美股大盤/個股、物價）、統計圖（長條/折線/圓餅/對比）、**摘要卡片（要點卡片、重點摘要）**、卡牌陳列（直向雙分割/三分割、混合三分割）
-- 視覺：背景刷淡、向量/立體視感
+前端 `handleAIDigestion()` 呼叫本機 FastAPI 的 `/api/generate`。API key 只存在 `.env`，不會送到瀏覽器。
 
-### 情境示意圖（scene）
-- 風格包：寫實示意（新聞寫實、半寫實插畫、夜間/日間現場）、示意氛圍（災害、事故、天氣示意）
-- 構圖：場景全景、重點特寫、俯視示意
-- **現況：僅有初版模板，尚未有使用者實戰 prompt 驗證，建議優先收錄**
+後端目前使用 **OpenAI Responses API**：
 
-### 地圖／位置（map）
-- 風格包：新聞平面地圖、衛星擬真、暗色主題地圖、極簡示意地圖
-- 構圖：單點標示、多點標示、路線示意、範圍示意
-- **現況：僅有初版模板，尚未有使用者實戰 prompt 驗證，建議優先收錄**
+- 預設模型：`gpt-5.6-terra`
+- 可用 `OPENAI_DIGEST_MODEL` 覆寫
+- 使用 JSON Schema 強制回傳 `style`、`structure`、`variable`
+- 記者與編輯使用不同的角色規則
 
-### 3D示意／流程（process）
-- 風格包：技術示意、寫實3D、剖面透視、簡潔圖解
-- 構圖：分步序列、物理過程、時間軸重建、結構分解
-- **現況：僅有初版模板，尚未有使用者實戰 prompt 驗證，建議優先收錄**
+### 工作角色與文字密度
 
-> **給 Claude Code 的提醒**：目前只有「資料圖表」類經過使用者實戰 prompt 驗證與調整（摘要卡片、桌遊風格皆源自真實案例）。其餘三類的風格/構圖描述是我依常理推想草擬，尚未經使用者驗證，用起來效果可能需要調整措辭。下一步優先事項應是請使用者從 Notion 資料庫挑這三類的實戰 prompt 出來比對、修正。
+AI 消化有兩個獨立維度：
+
+- 角色：記者／編輯
+- 文字密度：標準／簡化
+
+上下兩處「記者／編輯」控制使用同一個狀態並雙向同步。
+
+#### 標準
+
+維持既有行為：
+
+- 記者：精簡新聞圖表內容與專業英文構圖
+- 編輯：150～180 字以內、兩行標題、條列重點及強制 `<蓋章>` 結論
+
+#### 簡化
+
+依素材動態選擇 **1～3 個重點**，不強迫湊滿三點，並選擇最適合的一種聚焦方式：
+
+1. 單一主視覺＋最多三個短標註
+2. 一個大數字或大結論＋一至兩個輔助標籤
+3. 主題大圖／地圖／場景＋集中於單一區域的少量文字
+
+簡化模式禁止多組次要卡片、重複資訊、不必要裝飾 icon、互相競爭的視覺焦點，以及為填滿版面新增的文字。
+
+編輯＋簡化模式不強迫達到 150～180 字；`<蓋章>` 改為視素材決定，且計入最多三個重點。
+
+**文字密度只影響 AI 自動消化。**手動模板、手動欄位與最終 Prompt 不會被系統刪減。
 
 ---
 
-## 八、待辦事項（依優先順序）
+## 六、圖片生成
 
-1. **驗證並修正 scene / map / process 三類的模板措辭**（見上）
-2. **持續從 Notion 資料庫搬移模板**：使用者會陸續貼真實 prompt，逐則分析拆解三層、評估適配度、收錄進 `CHART_TYPES`
-3. **AI 消化功能後端化**：若要脫離 claude.ai 環境獨立運作，需搭建後端代理 Claude API 呼叫（見第五節）
-4. **（較長期）評估是否啟動 Notion 直連的階段 B**：等模板量夠大、手動搬移變得頻繁時，考慮蓋後端直連 Notion API（詳見 `docs/notion-integration-plan.md`）
+前端確認最終 Prompt 後，可透過 `/api/images/generate` 使用 Gemini 或 GPT 生成圖片。
+
+- Gemini 預設模型：`gemini-3-pro-image`
+- Gemini 圖片尺寸：原生 `1K`
+- GPT 預設模型：`gpt-image-2`
+- GPT 圖片尺寸：`1280×720` PNG（符合模型限制的 16:9 最小尺寸）
+- OpenAI 與 Gemini 金鑰都只由後端讀取
+- 前端可預覽並下載生成圖片
+
+除非使用者明確要求，測試時不呼叫需要計費的 AI 或圖片生成 API；改用單元測試及瀏覽器請求攔截。
 
 ---
 
-## 九、使用者的固定偏好（跨對話一致）
+## 七、Notion 與模板資料庫
 
-- 一律使用繁體中文（台灣用語），非簡體
-- 度量衡單位、姓名、職稱、國家名一律用台灣慣用譯名
-- 若給的是外文稿且無特別指令，逐字翻譯，不改寫
-- 保留原始時間戳記
-- 圖表 prompt 的「[ ]」「< >」語法是內部指令標記，絕不能出現在最終生成圖片裡
+### 記者模板庫
+
+`notion-templates/templates.json` 是 2026-07-14 從 Notion「AI圖資料庫」匯出的快照：
+
+- 205 個模板
+- 195 張壓縮代表圖
+- 包含完整 Prompt、風格 TAG、構圖 TAG、用途 TAG 與來源資訊
+- `notion-templates/tools/` 保留解析、索引與代表圖產生工具
+
+### 編輯模板庫
+
+`editor-templates/` 來源為「編輯版型彙整（準時收工）」：
+
+- `PROMPTS.md`：整理小幫手、視覺小幫手等實戰 Prompt
+- `proposal/`：隊伍提案文件
+- `images/`：130 張主播鏡面版型參考圖
+
+### 四大類型現況
+
+- `data`：資料圖表、統計圖、摘要卡片、卡牌陳列等
+- `scene`：已加入 WPA Poster、UE5、軍事 UI、要件情境圖解等實戰內容
+- `map`：已加入 TVBS 向量地圖、軍事戰棋、地震速報、航跡與部署圖等實戰內容
+- `process`：已加入流程圖、時間軸、線索卡、夜藍檳金與教科書立體等實戰內容
+
+scene／map／process 已不再是通用佔位模板，但仍需持續用實際生成圖驗收措辭與安全區表現。
+
+### Notion 同步策略
+
+目前採用「批次快照／半自動整理」，不做即時 API 直連。完整階段 A／B／C 規劃見 `docs/notion-integration-plan.md`。
+
+---
+
+## 八、目前待辦
+
+1. 持續用實際生成圖驗收新版 scene／map／process 模板與四邊安全區
+2. 決定是否新增第五類「人物／小檔案」（本次功能明確不納入）
+3. 持續從 Notion 批次匯入或整理精選模板
+4. 模板更新頻率提高後，再評估 Notion 直連階段 B
+
+---
+
+## 九、固定規格
+
+- 一律使用繁體中文與台灣用語
+- 度量衡、姓名、職稱與國家名使用台灣慣用譯名
+- 圖表 Prompt 的 `[ ]`、`< >` 是內部指令標記，不得出現在生成圖片
+- 所有圖片生成與 Prompt 解析度統一為 1K
+- 新增或匯入模板時，不得重新帶入 2K、4K 或其他高解析度要求
+- `.env` 不得進入 Git；前端不得保存 API key
+
+---
+
+## 十、2026-07-14 工作紀錄
+
+### 標準／簡化 AI 消化模式
+
+- 新增獨立文字密度設定：標準／簡化
+- 密度只影響 AI 消化，不限制手動內容
+- 簡化模式動態選擇 1～3 個重點及三種視覺聚焦方式
+- 編輯＋簡化的 `<蓋章>` 改為可選並計入三點上限
+- 自動消化區與模板庫的角色控制雙向同步
+- 自動消化按鈕顯示目前角色與密度
+
+### 全部生圖規格統一為 1K
+
+- Gemini 使用原生 `image_size: 1K`
+- GPT Image 2 使用 `1280×720` PNG
+- 前端標籤、確認提示、API 請求與文件統一
+- `editor-templates/PROMPTS.md` 的 4K／1920×1080 衝突要求改為 1K
+- `notion-templates/templates.json` 的 Prompt 不再含獨立 2K／4K 規格
+
+### 安全區調整
+
+- 記者：上、左、右固定 15%；底部 15～18%
+- 編輯：四周固定 15%
+- 四側均加入逐項 NO-list、禁用詞與完全留空要求
+- rollback tag：`backup-before-symmetric-safe-area-2026-07-14`
