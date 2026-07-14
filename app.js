@@ -56,7 +56,7 @@ const CHART_TYPES = {
     'data': {
         label: '資料圖表',
         hint: '數據視覺化：股市、物價、長條/折線/圓餅等。選構圖會自動帶入對應資料格式。',
-        aspect: '16:9 / 1K',
+        aspect: '16:9',
         tabs: ['style', 'structure', 'visual'],
         styles: SHARED_STYLES,
         structures: {
@@ -112,7 +112,7 @@ const CHART_TYPES = {
     'scene': {
         label: '情境示意圖',
         hint: '事故、災害、人物場景等新聞配圖。以寫實或半寫實示意呈現事件現場，非真實照片。',
-        aspect: '16:9 / 1K',
+        aspect: '16:9',
         tabs: ['style', 'structure', 'visual'],
         styles: {
             '寫實示意': [
@@ -167,7 +167,7 @@ const CHART_TYPES = {
     'map': {
         label: '地圖／位置',
         hint: '標示地點、路線、範圍。呈現地理關係，非可導航的精確地圖。',
-        aspect: '16:9 / 1K',
+        aspect: '16:9',
         tabs: ['style', 'structure', 'visual'],
         styles: {
             '新聞地圖': [
@@ -223,7 +223,7 @@ const CHART_TYPES = {
     'process': {
         label: '3D示意／流程',
         hint: '事件經過、物理過程的分步重建。以序列或分解圖呈現「怎麼發生的」。',
-        aspect: '16:9 / 1K',
+        aspect: '16:9',
         tabs: ['style', 'structure', 'visual'],
         styles: {
             '3D風格': [
@@ -523,7 +523,6 @@ function buildPrompt({ role, engine, typeLabel, style, structure, variable }) {
 CANVAS
 ==================================================
 - Aspect ratio: 16:9
-- Resolution: 1K
 - Broadcast-safe composition
 - All elements must remain within clear safe margins
 
@@ -631,7 +630,10 @@ const REPORTER_SAFE_AREA =
 SAFE AREA (CRITICAL — MUST PRESERVE)
 ==================================================
 - These SAFE AREA rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction places content in a reserved margin, ignore that placement and keep the margin empty.
-- All core text, logos, icons, and charts must remain within a central safe area: exactly 15% padding on the top, left, and right sides (fixed margin, not a thin border).
+- All core text, logos, icons, and charts must remain within a central safe area: exactly 15% padding on the top, left, and right sides, and that margin must be COMPLETELY EMPTY on all three sides — not a thin border, not a partial inset.
+- The top 15% margin must contain: NO title text, NO headline, NO icons, NO logos, NO decorative elements.
+- The left 15% margin must contain: NO stat cards, NO numerical modules, NO icons, NO borders, NO text.
+- The right 15% margin must contain: NO indicators, NO boxes, NO icons, NO leader lines, NO text.
 - The bottom 15%–18% of the entire image must contain:
   - NO text
   - NO logos
@@ -641,16 +643,17 @@ SAFE AREA (CRITICAL — MUST PRESERVE)
   - NO decorative elements
   - NO data-source line
 - This bottom area is reserved strictly as a broadcast-safe zone (on-air anchor cue card / subtitle overlay).
-- The background color or background image from the active content area above MUST extend downward into this area.
-- The extension must be seamless and continuous — no change in color, texture, brightness, or visual tone; no hard edges, no visual breaks, no overlays, no gradients.`;
+- The background color or background image from the active content area above MUST extend seamlessly into all four reserved margins — no change in color, texture, brightness, or visual tone; no hard edges, no visual breaks, no overlays, no gradients.
+- FORBIDDEN terms/effects in the final composition: full-width, edge-to-edge, flush left, flush right, flush top, spans the entire width, corner-to-corner, bleed, touching the frame boundary.
+- SELF-CHECK before finalizing: if any text block, card, icon, or box's bounding box touches within 5% of any frame edge, you MUST redesign the layout to add visible gutter space before output.`;
 
 const EDITOR_SAFE_AREA =
 `==================================================
 SAFE AREA (CRITICAL — MUST PRESERVE)
 ==================================================
 - These SAFE AREA rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction places content in a reserved margin, ignore that placement and keep the margin empty.
-- All core text, logos, icons, and charts must remain within the central safe area, with exactly 15% padding on ALL four sides (fixed margin, not a thin border).
-- Every reserved margin must contain:
+- All core text, logos, icons, and charts must remain within the central safe area, with exactly 15% padding on ALL four sides, and every one of those four margins must be COMPLETELY EMPTY — not a thin border, not a partial inset.
+- Every reserved margin (top, bottom, left, right) must contain:
   - NO text
   - NO logos
   - NO icons
@@ -658,7 +661,10 @@ SAFE AREA (CRITICAL — MUST PRESERVE)
   - NO divider lines
   - NO decorative elements
   - NO data-source line
-- The background color or background image MUST extend seamlessly into all reserved margins — no change in color, texture, brightness, or visual tone; no hard edges, no visual breaks, no overlays, no gradients.`;
+  - NO <蓋章> stamp banner
+- The background color or background image MUST extend seamlessly into all reserved margins — no change in color, texture, brightness, or visual tone; no hard edges, no visual breaks, no overlays, no gradients.
+- FORBIDDEN terms/effects in the final composition: full-width, edge-to-edge, flush left, flush right, flush top, flush bottom, spans the entire width, corner-to-corner, bleed, touching the frame boundary.
+- SELF-CHECK before finalizing: if any text block, card, icon, or box's bounding box touches within 5% of any frame edge, you MUST redesign the layout to add visible gutter space before output.`;
 
 /* ============================================================
    AI 消化：透過本地後端代理呼叫 Claude（見 main.py）
@@ -728,7 +734,7 @@ function updateImageGenerationControls() {
     if (!hasPrompt) {
         hint.innerText = '請先填寫內容，產生最終 Prompt';
     } else if (!confirmed.checked) {
-        hint.innerText = `確認後可使用 ${providerName} 一鍵生成 16:9／1K 圖片`;
+        hint.innerText = `確認後可使用 ${providerName} 一鍵生成 16:9 圖片`;
     } else {
         hint.innerText = `將以目前顯示的 Prompt 送至 ${providerName} 生成圖片`;
     }
