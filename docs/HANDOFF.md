@@ -72,7 +72,7 @@ CHART_TYPES = {
 `buildPrompt()` 是最終組字的地方，依兩個維度變化文字骨架：
 
 1. **角色（記者 / 編輯）**：兩者用不同的文字規則（`REPORTER_TEXT_RULES` / `EDITOR_TEXT_RULES`）與安全區規則（`REPORTER_SAFE_AREA` / `EDITOR_SAFE_AREA`）。
-   - 記者模式：底部 20% 淨空，作為主播提詞/字卡讓位區。規則已於 V8.2 更新為詳細版（明確列出 NO text/logos/icons/charts/divider lines/decorative elements 六項禁止清單）。
+   - 記者模式：已改為與編輯模式一致的「中央安全區」結構（上/左/右 10–18% padding），但底部維持較大的 20% padding，作為主播提詞/字卡讓位區。禁止清單同編輯模式（NO text/logos/icons/charts/divider lines/decorative elements）。
    - 編輯模式：四周 80% 中心安全區，標題強制兩行、字級加大，適合需要更多裝飾元素（icon、3D圖表）的場景。
 
 2. **引擎（Gemini / GPT）**：開頭祈使句式不同——
