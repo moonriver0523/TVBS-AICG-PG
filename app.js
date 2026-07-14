@@ -294,6 +294,7 @@ const TAB_META = {
 let state = {
     chartType: 'data',
     currentRole: '記者',
+    digestDensity: 'standard',
     currentTab: 'style',
     engine: 'gemini',
     activeParent: null,
@@ -333,6 +334,7 @@ window.onload = () => {
     document.getElementById('field-variable').value = DEFAULT_VARIABLE_TEMPLATE;
     renderChartTypes();
     resetToType('data');
+    updateAIBtnRoleHint();
 };
 
 function renderChartTypes() {
@@ -374,14 +376,13 @@ function renderTabs() {
     });
 }
 
-function switchRole(role, el) {
+function switchRole(role) {
     state.currentRole = role;
-    document.querySelectorAll('button[onclick^="switchRole"]').forEach(btn => {
-        btn.classList.remove('role-active');
-        btn.classList.add('text-slate-500');
+    document.querySelectorAll('[data-role]').forEach(btn => {
+        const isActive = btn.dataset.role === role;
+        btn.classList.toggle('role-active', isActive);
+        btn.classList.toggle('text-slate-500', !isActive);
     });
-    el.classList.add('role-active');
-    el.classList.remove('text-slate-500');
     state.currentTab = 'style';
     state.activeParent = Object.keys(curType().styles)[0];
     renderTabs();
@@ -390,10 +391,24 @@ function switchRole(role, el) {
     showToast(`已切換至 ${role} 模式`);
 }
 
-// AI 消化按鈕上顯示目前角色，避免切錯模式消化
+function switchDigestDensity(density) {
+    state.digestDensity = density;
+    document.querySelectorAll('[data-density]').forEach(btn => {
+        const isActive = btn.dataset.density === density;
+        btn.classList.toggle('density-active', isActive);
+        btn.classList.toggle('text-slate-500', !isActive);
+    });
+    updateAIBtnRoleHint();
+    showToast(`AI 消化已切換至${density === 'simplified' ? '簡化' : '標準'}模式`);
+}
+
+// AI 消化按鈕顯示目前角色與文字密度，避免用錯模式
 function updateAIBtnRoleHint() {
-    const t = document.getElementById('aiBtnText');
-    if (t) t.innerText = `開始 AI 自動消化整理（${state.currentRole}模式）`;
+    const buttonText = document.getElementById('aiBtnText');
+    const densityLabel = state.digestDensity === 'simplified' ? '簡化' : '標準';
+    if (buttonText) {
+        buttonText.innerText = `開始 AI 自動消化整理（${state.currentRole}・${densityLabel}）`;
+    }
 }
 
 function switchTab(tab, el) {
@@ -690,7 +705,8 @@ async function handleAIDigestion() {
             body: JSON.stringify({
                 news_text: input,
                 type_label: typeLabel,
-                role: state.currentRole
+                role: state.currentRole,
+                density: state.digestDensity
             })
         });
         if (!response.ok) throw new Error("HTTP " + response.status);

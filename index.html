@@ -56,6 +56,11 @@
             color: var(--bg-dark) !important;
             box-shadow: 0 4px 12px rgba(255,255,255,0.1);
         }
+        .density-active {
+            background: #2563eb !important;
+            color: white !important;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+        }
         .parent-active {
             background: rgba(59, 130, 246, 0.2) !important;
             border-color: var(--accent-blue) !important;
@@ -129,9 +134,29 @@
                             <textarea id="aiInput"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-4 py-3 text-sm text-slate-100 input-focus-ring min-h-[100px] resize-none"
                                    placeholder="輸入原始新聞文字… AI 將依當前圖表類型，自動決定最直覺的佈局構圖，並添加圖標或示意圖指令以輔助閱讀。"></textarea>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <span class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">文字密度 / Text Density</span>
+                                    <div class="flex bg-black/40 p-1 rounded-lg">
+                                        <button data-density="standard" onclick="switchDigestDensity('standard')"
+                                                class="density-active flex-1 px-3 py-2 rounded-md text-[10px] font-black transition-all">標準</button>
+                                        <button data-density="simplified" onclick="switchDigestDensity('simplified')"
+                                                class="flex-1 px-3 py-2 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">簡化</button>
+                                    </div>
+                                </div>
+                                <div>
+                                    <span class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">工作角色 / Role Mode</span>
+                                    <div class="flex bg-black/40 p-1 rounded-lg">
+                                        <button data-role="記者" onclick="switchRole('記者')"
+                                                class="role-active flex-1 px-3 py-2 rounded-md text-[10px] font-black transition-all">記者</button>
+                                        <button data-role="編輯" onclick="switchRole('編輯')"
+                                                class="flex-1 px-3 py-2 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">編輯</button>
+                                    </div>
+                                </div>
+                            </div>
                             <button id="aiBtn" onclick="handleAIDigestion()"
                                     class="bg-red-600 hover:bg-red-500 w-full py-3 rounded-lg text-xs font-black flex items-center justify-center gap-2 transition-all shadow-lg shadow-red-600/20 active:scale-95 disabled:opacity-50 uppercase tracking-tighter">
-                                <span id="aiBtnText">開始 AI 自動消化整理（記者模式）</span>
+                                <span id="aiBtnText">開始 AI 自動消化整理（記者・標準）</span>
                                 <div id="aiLoading" class="hidden w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
                             </button>
                         </div>
@@ -144,8 +169,8 @@
                     <div class="p-4 bg-slate-900/50 flex items-center justify-between border-b border-slate-800">
                         <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest">工作角色模式 / Role Mode</span>
                         <div class="flex bg-black/40 p-1 rounded-lg">
-                            <button onclick="switchRole('記者', this)" class="role-active px-4 py-1.5 rounded-md text-[10px] font-black transition-all">記者</button>
-                            <button onclick="switchRole('編輯', this)" class="px-4 py-1.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">編輯</button>
+                            <button data-role="記者" onclick="switchRole('記者')" class="role-active px-4 py-1.5 rounded-md text-[10px] font-black transition-all">記者</button>
+                            <button data-role="編輯" onclick="switchRole('編輯')" class="px-4 py-1.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">編輯</button>
                         </div>
                     </div>
 
@@ -194,9 +219,10 @@
                     </div>
                     <button onclick="clearMatrix()" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-500 text-[9px] font-black uppercase tracking-widest rounded transition-all">Clear All Matrix Data</button>
                 </div>
+            </div>
 
-                <!-- Final Output -->
-                <div class="glass-card p-5 border-t-4 border-t-red-600">
+            <!-- Final Output — full-width below both panels -->
+            <div class="glass-card p-5 border-t-4 border-t-red-600 lg:col-span-12">
                     <div class="flex justify-between items-center mb-4">
                         <h3 class="text-[10px] font-black text-red-500 uppercase tracking-[0.2em]">Final Prompt Output</h3>
                         <div class="flex items-center gap-2">
@@ -205,7 +231,7 @@
                                 <button id="engine-gemini" onclick="switchEngine('gemini', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all bg-blue-600 text-white">Gemini</button>
                                 <button id="engine-gpt" onclick="switchEngine('gpt', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all text-slate-500 hover:text-white">GPT</button>
                             </div>
-                            <span id="aspectBadge" class="text-[9px] font-mono text-slate-500 bg-slate-800 px-2 py-0.5 rounded">16:9 / 2K</span>
+                            <span id="aspectBadge" class="text-[9px] font-mono text-slate-500 bg-slate-800 px-2 py-0.5 rounded">16:9 / 1K</span>
                         </div>
                     </div>
 
@@ -224,7 +250,7 @@
                                    class="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-900 text-blue-600 focus:ring-blue-500">
                             <span>
                                 <span class="block text-xs font-black text-slate-200">我已確認最終 Prompt</span>
-                                <span id="imageGenerationHint" class="block mt-1 text-[10px] leading-relaxed text-slate-500">確認後可使用 Gemini 一鍵生成 16:9／2K 圖片</span>
+                                <span id="imageGenerationHint" class="block mt-1 text-[10px] leading-relaxed text-slate-500">確認後可依目前引擎一鍵生成 16:9／1K 圖片</span>
                             </span>
                         </label>
                         <button id="generateImageBtn" onclick="handleImageGeneration()" disabled
@@ -236,12 +262,11 @@
 
                     <div id="generatedImageResult" class="hidden mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                         <div class="flex items-center justify-between gap-3 mb-3">
-                            <span class="text-[10px] font-black uppercase tracking-widest text-violet-400">Gemini Generated Preview</span>
+                            <span id="generatedImageProviderLabel" class="text-[10px] font-black uppercase tracking-widest text-violet-400">AI Generated Preview</span>
                             <a id="downloadGeneratedImage" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg.jpg">下載圖片</a>
                         </div>
-                        <img id="generatedImage" alt="Gemini 生成的新聞 CG 預覽" class="w-full rounded-lg border border-slate-800" />
+                        <img id="generatedImage" alt="AI 生成的新聞 CG 預覽" class="w-full rounded-lg border border-slate-800" />
                     </div>
-                </div>
             </div>
         </main>
     </div>
