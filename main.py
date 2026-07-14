@@ -1,19 +1,20 @@
 import json
 import os
 import ssl
+from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-import anthropic
 import certifi
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from openai import APIConnectionError, APIError, AuthenticationError, OpenAI, RateLimitError
 from pydantic import BaseModel, Field
 
 load_dotenv()
 
-client = anthropic.Anthropic()
+openai_client = OpenAI()
 
 app = FastAPI()
 
@@ -39,14 +40,27 @@ class GenerateResponse(BaseModel):
 
 class ImageGenerateRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=20_000)
+    provider: Literal["gemini", "gpt"] = "gemini"
     aspect_ratio: str = "16:9"
-    image_size: str = "2K"
+    image_size: str = "1K"
 
 
 class ImageGenerateResponse(BaseModel):
     image_data_base64: str
     mime_type: str
     model: str
+
+
+DIGEST_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "style": {"type": "string"},
+        "structure": {"type": "string"},
+        "variable": {"type": "string"},
+    },
+    "required": ["style", "structure", "variable"],
+    "additionalProperties": False,
+}
 
 
 def extract_image_content(result: dict) -> dict | None:
@@ -85,7 +99,7 @@ Requirements:
 3. "structure": Design the most readable, intuitive layout for a "{type_label}".
    - Propose concrete spatial arrangement and add instructions for relevant icons, technical illustrations, 3D diagrams, maps, or scene depictions that aid comprehension.
    - Written in professional English.
-   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "All content is contained within the upper 80% of the frame with 10-18% top/left/right padding; the bottom 20% of the frame is a completely empty, seamless extension of the background (broadcast-safe zone)." After that sentence, describe zones ONLY within that content area. The words "footer", "bottom edge", "anchored at bottom", "full-screen" and "full-bleed" are FORBIDDEN. Any closing banner or data-source line is the LOWEST ROW OF THE CONTENT AREA, sitting above the reserved bottom 20%, never at the frame bottom."""
+   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "All content is contained within the central safe zone with generous 15-20% top/left/right padding; the bottom 15-18% of the frame is a completely empty, seamless extension of the background (broadcast-safe zone)." After that sentence, describe zones ONLY within that content area. The words "footer", "bottom edge", "anchored at bottom", "full-screen" and "full-bleed" are FORBIDDEN. Any closing banner or data-source line is the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge."""
 
 
 # 編輯版：規範取自編輯台實戰 GEM「整理小幫手」（見 editor-templates/PROMPTS.md）
@@ -106,7 +120,7 @@ Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style
      "[標題] 聯準會三度降息\\n利率降至<4.25%>\\n[內文小標] 通膨降溫 就業穩健\\n[內文小標] 市場預期 明年再降<兩次>\\n[內文小標] 道瓊應聲<上漲350點>\\n<蓋章> 降息循環正式啟動"
 2. "style": 根據新聞調性（財經、災難、溫馨、政治）選擇主色調與畫面風格（例如：深藍色科技感、紅白色警戒感），written in professional English.
 3. "structure": Design the most readable anchor-wall CG layout for a "{type_label}", with concrete spatial arrangement and instructions for flat icons or 3D data charts that aid comprehension. Written in professional English.
-   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "All content is contained within the central 80% of the frame; the surrounding 10-18% margins on all four sides are completely empty, seamless extensions of the background (broadcast-safe zone)." After that sentence, describe zones ONLY within that content area. The words "footer", "bottom edge", "anchored at bottom", "full-screen" and "full-bleed" are FORBIDDEN. The <蓋章> stamp banner and any data-source line are the LOWEST ROW OF THE CONTENT AREA, sitting above the reserved bottom margin, never at the frame bottom or against any edge."""
+   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "All content is contained within the central safe zone; the surrounding 15-20% margins on all four sides are completely empty, seamless extensions of the background (broadcast-safe zone)." After that sentence, describe zones ONLY within that content area. The words "footer", "bottom edge", "anchored at bottom", "full-screen" and "full-bleed" are FORBIDDEN. The <蓋章> stamp banner and any data-source line are the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge."""
 
 
 @app.post("/api/generate", response_model=GenerateResponse)
@@ -116,22 +130,46 @@ def generate(req: GenerateRequest):
     )
     system_prompt = template.format(type_label=req.type_label)
 
-    response = client.messages.create(
-        model="claude-sonnet-5",
-        max_tokens=1500,
-        system=system_prompt,
-        messages=[
-            {"role": "user", "content": f'News Source Material:\n"{req.news_text}"'}
-        ],
-    )
-
-    raw = "\n".join(
-        block.text for block in response.content if block.type == "text"
-    ).strip()
-    clean = raw.replace("```json", "").replace("```", "").strip()
+    model = os.getenv("OPENAI_DIGEST_MODEL", "gpt-5.6-terra")
+    try:
+        response = openai_client.responses.create(
+            model=model,
+            instructions=system_prompt,
+            input=f'News Source Material:\n"{req.news_text}"',
+            max_output_tokens=1500,
+            store=False,
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "news_cg_digest",
+                    "strict": True,
+                    "schema": DIGEST_OUTPUT_SCHEMA,
+                }
+            },
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="OpenAI API 金鑰無效或尚未啟用 API 計費",
+        ) from exc
+    except RateLimitError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="OpenAI API 用量已達限制，請稍後再試",
+        ) from exc
+    except APIConnectionError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="無法連線至 OpenAI API，請稍後再試",
+        ) from exc
+    except APIError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="OpenAI API 處理失敗，請確認模型權限或稍後重試",
+        ) from exc
 
     try:
-        data = json.loads(clean)
+        data = json.loads(response.output_text)
     except json.JSONDecodeError:
         raise HTTPException(status_code=502, detail="AI 回傳格式無法解析")
 
@@ -144,7 +182,61 @@ def generate(req: GenerateRequest):
 
 @app.post("/api/images/generate", response_model=ImageGenerateResponse)
 def generate_image(req: ImageGenerateRequest):
-    """Generate one news CG image through Gemini without exposing the API key."""
+    """Generate one news CG image without exposing provider API keys."""
+    if req.provider == "gpt":
+        return generate_gpt_image(req)
+
+    return generate_gemini_image(req)
+
+
+def generate_gpt_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
+    model = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2")
+    quality = os.getenv("OPENAI_IMAGE_QUALITY", "medium")
+
+    try:
+        result = openai_client.images.generate(
+            model=model,
+            prompt=req.prompt,
+            size="1280x720",
+            quality=quality,
+            output_format="png",
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="OpenAI API 金鑰無效或尚未啟用 API 計費",
+        ) from exc
+    except RateLimitError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="OpenAI API 圖片用量已達限制，請稍後再試",
+        ) from exc
+    except APIConnectionError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="無法連線至 OpenAI 圖片服務，請稍後再試",
+        ) from exc
+    except APIError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="GPT 圖片生成失敗，請確認 API 額度、組織驗證或模型權限",
+        ) from exc
+
+    image_data = result.data[0].b64_json if result.data else None
+    if not image_data:
+        raise HTTPException(
+            status_code=502,
+            detail="GPT 未回傳可用圖片，請調整 Prompt 後重試",
+        )
+
+    return ImageGenerateResponse(
+        image_data_base64=image_data,
+        mime_type="image/png",
+        model=model,
+    )
+
+
+def generate_gemini_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise HTTPException(
@@ -152,7 +244,7 @@ def generate_image(req: ImageGenerateRequest):
             detail="尚未設定 GEMINI_API_KEY，無法生成圖片",
         )
 
-    model = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image")
+    model = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3-pro-image")
     payload = {
         "model": model,
         "input": [{"type": "text", "text": req.prompt}],

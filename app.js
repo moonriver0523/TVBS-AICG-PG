@@ -56,7 +56,7 @@ const CHART_TYPES = {
     'data': {
         label: '資料圖表',
         hint: '數據視覺化：股市、物價、長條/折線/圓餅等。選構圖會自動帶入對應資料格式。',
-        aspect: '16:9 / 2K',
+        aspect: '16:9 / 1K',
         tabs: ['style', 'structure', 'visual'],
         styles: SHARED_STYLES,
         structures: {
@@ -112,7 +112,7 @@ const CHART_TYPES = {
     'scene': {
         label: '情境示意圖',
         hint: '事故、災害、人物場景等新聞配圖。以寫實或半寫實示意呈現事件現場，非真實照片。',
-        aspect: '16:9 / 2K',
+        aspect: '16:9 / 1K',
         tabs: ['style', 'structure', 'visual'],
         styles: {
             '寫實示意': [
@@ -167,7 +167,7 @@ const CHART_TYPES = {
     'map': {
         label: '地圖／位置',
         hint: '標示地點、路線、範圍。呈現地理關係，非可導航的精確地圖。',
-        aspect: '16:9 / 2K',
+        aspect: '16:9 / 1K',
         tabs: ['style', 'structure', 'visual'],
         styles: {
             '新聞地圖': [
@@ -223,7 +223,7 @@ const CHART_TYPES = {
     'process': {
         label: '3D示意／流程',
         hint: '事件經過、物理過程的分步重建。以序列或分解圖呈現「怎麼發生的」。',
-        aspect: '16:9 / 2K',
+        aspect: '16:9 / 1K',
         tabs: ['style', 'structure', 'visual'],
         styles: {
             '3D風格': [
@@ -523,7 +523,7 @@ function buildPrompt({ role, engine, typeLabel, style, structure, variable }) {
 CANVAS
 ==================================================
 - Aspect ratio: 16:9
-- Resolution: 2K
+- Resolution: 1K
 - Broadcast-safe composition
 - All elements must remain within clear safe margins
 
@@ -631,8 +631,8 @@ const REPORTER_SAFE_AREA =
 SAFE AREA (CRITICAL — MUST PRESERVE)
 ==================================================
 - These SAFE AREA rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction places content in a reserved margin, ignore that placement and keep the margin empty.
-- All core text, logos, icons, and charts must remain within a central safe area: 10–18% padding on the top, left, and right sides.
-- The bottom 20% (one-fifth) of the entire image must contain:
+- All core text, logos, icons, and charts must remain within a central safe area: at least 15–20% padding on the top, left, and right sides (generous margin, not a thin border).
+- The bottom 15%–18% of the entire image must contain:
   - NO text
   - NO logos
   - NO icons
@@ -649,7 +649,7 @@ const EDITOR_SAFE_AREA =
 SAFE AREA (CRITICAL — MUST PRESERVE)
 ==================================================
 - These SAFE AREA rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction places content in a reserved margin, ignore that placement and keep the margin empty.
-- All core text, logos, icons, and charts must remain within the central 80% area, with 10–18% padding on ALL four sides.
+- All core text, logos, icons, and charts must remain within the central safe area, with at least 15–20% padding on ALL four sides (generous margin, not a thin border).
 - Every reserved margin must contain:
   - NO text
   - NO logos
@@ -681,7 +681,11 @@ async function handleAIDigestion() {
         const response = await fetch(AI_BACKEND_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ news_text: input, type_label: typeLabel })
+            body: JSON.stringify({
+                news_text: input,
+                type_label: typeLabel,
+                role: state.currentRole
+            })
         });
         if (!response.ok) throw new Error("HTTP " + response.status);
         const data = await response.json();
@@ -703,7 +707,7 @@ async function handleAIDigestion() {
 }
 
 /* ============================================================
-   Gemini 圖片生成：僅在使用者確認最終 Prompt 後呼叫後端代理
+   圖片生成：僅在使用者確認最終 Prompt 後呼叫後端代理
    ============================================================ */
 function getFinalPrompt() {
     return document.getElementById('displayPrompt').innerText.trim();
@@ -712,21 +716,21 @@ function getFinalPrompt() {
 function updateImageGenerationControls() {
     const confirmed = document.getElementById('promptConfirmed');
     const button = document.getElementById('generateImageBtn');
+    const buttonText = document.getElementById('generateImageBtnText');
     const hint = document.getElementById('imageGenerationHint');
-    if (!confirmed || !button || !hint) return;
+    if (!confirmed || !button || !buttonText || !hint) return;
 
     const hasPrompt = !getFinalPrompt().includes('Waiting for data');
-    const isGemini = state.engine === 'gemini';
-    button.disabled = !confirmed.checked || !hasPrompt || !isGemini;
+    const providerName = state.engine === 'gpt' ? 'GPT' : 'Gemini';
+    button.disabled = !confirmed.checked || !hasPrompt;
+    buttonText.innerText = `使用 ${providerName} 生成圖片`;
 
-    if (!isGemini) {
-        hint.innerText = '目前圖片生成只支援 Gemini，請切回 Gemini 後再確認 Prompt';
-    } else if (!hasPrompt) {
+    if (!hasPrompt) {
         hint.innerText = '請先填寫內容，產生最終 Prompt';
     } else if (!confirmed.checked) {
-        hint.innerText = '確認後可使用 Gemini 一鍵生成 16:9／2K 圖片';
+        hint.innerText = `確認後可使用 ${providerName} 一鍵生成 16:9／1K 圖片`;
     } else {
-        hint.innerText = '將以目前顯示的 Prompt 送至 Gemini 生成圖片';
+        hint.innerText = `將以目前顯示的 Prompt 送至 ${providerName} 生成圖片`;
     }
 }
 
@@ -746,11 +750,13 @@ function invalidateGeneratedImage() {
 async function handleImageGeneration() {
     const confirmed = document.getElementById('promptConfirmed');
     const prompt = getFinalPrompt();
-    if (!confirmed.checked || state.engine !== 'gemini' || prompt.includes('Waiting for data')) {
+    if (!confirmed.checked || prompt.includes('Waiting for data')) {
         updateImageGenerationControls();
         return;
     }
 
+    const provider = state.engine === 'gpt' ? 'gpt' : 'gemini';
+    const providerName = provider === 'gpt' ? 'GPT' : 'Gemini';
     const button = document.getElementById('generateImageBtn');
     const buttonText = document.getElementById('generateImageBtnText');
     const loading = document.getElementById('generateImageLoading');
@@ -764,8 +770,9 @@ async function handleImageGeneration() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 prompt,
+                provider,
                 aspect_ratio: '16:9',
-                image_size: '2K'
+                image_size: '1K'
             })
         });
         const data = await response.json();
@@ -774,14 +781,17 @@ async function handleImageGeneration() {
         const image = document.getElementById('generatedImage');
         const download = document.getElementById('downloadGeneratedImage');
         const result = document.getElementById('generatedImageResult');
+        const resultLabel = document.getElementById('generatedImageProviderLabel');
         const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
         const isPng = data.mime_type === 'image/png';
         image.src = imageUrl;
         download.href = imageUrl;
         download.download = `tvbs-news-cg.${isPng ? 'png' : 'jpg'}`;
         download.innerText = `下載 ${isPng ? 'PNG' : 'JPEG'}`;
+        resultLabel.innerText = `${providerName} Generated Preview`;
+        image.alt = `${providerName} 生成的新聞 CG 預覽`;
         result.classList.remove('hidden');
-        showToast('Gemini 已完成圖片生成');
+        showToast(`${providerName} 已完成圖片生成`);
     } catch (err) {
         console.error(err);
         showToast(err.message || '圖片生成失敗，請稍後再試');
