@@ -26,10 +26,14 @@ app.add_middleware(
 )
 
 
+DigestDensity = Literal["standard", "simplified"]
+
+
 class GenerateRequest(BaseModel):
     news_text: str
     type_label: str
     role: str = "記者"
+    density: DigestDensity = "standard"
 
 
 class GenerateResponse(BaseModel):
@@ -42,7 +46,7 @@ class ImageGenerateRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=20_000)
     provider: Literal["gemini", "gpt"] = "gemini"
     aspect_ratio: str = "16:9"
-    image_size: str = "2K"
+    image_size: str = "1K"
 
 
 class ImageGenerateResponse(BaseModel):
@@ -123,12 +127,42 @@ Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style
    - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "All content — including the title, icon cards, and data charts — is inset by a fixed 15% empty margin on all four sides, completely empty and seamless extensions of the background (broadcast-safe zone)." After that sentence, every element you place MUST be described with an explicit inset/gutter from its nearest edge — never described as spanning, flush, or edge-to-edge. The words "footer", "bottom edge", "anchored at bottom", "full-screen", "full-bleed", "full-width", "edge-to-edge", "flush left", "flush right", "flush top", "flush bottom", "spans the entire width", "corner-to-corner" and "bleed" are FORBIDDEN. The <蓋章> stamp banner and any data-source line are the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge."""
 
 
+SIMPLIFIED_DENSITY_RULES = """
+
+SIMPLIFIED MODE OVERRIDE — THESE RULES OVERRIDE ANY EARLIER STANDARD-MODE LENGTH OR FORMAT REQUIREMENT:
+1. From the source material, dynamically select only 1 to 3 key points. Do not force three points when one or two are enough.
+2. Each point must communicate one fact in a short, scan-friendly line. Do not repeat the same fact in the title, points, or conclusion.
+3. Remove secondary background, side facts, repeated numbers, and details that do not improve immediate understanding.
+4. Use ONE dominant visual focus and choose the best presentation for the material:
+   A. one hero map/chart/person/scene/process with up to three short callouts;
+   B. one dominant number or conclusion with one or two supporting labels;
+   C. one large thematic image/map/scene with text confined to one compact area.
+5. Do not add multiple secondary card groups, unnecessary decorative icons, competing focal points, or invented filler text.
+6. For editor role, ignore the earlier 150-180 character target. <蓋章> is optional, must appear only when the source supports a clear conclusion or quote, and counts as one of the maximum three points.
+"""
+
+
+def build_digest_instructions(
+    role: str,
+    density: DigestDensity,
+    type_label: str,
+) -> str:
+    template = (
+        EDITOR_SYSTEM_PROMPT_TEMPLATE if role == "編輯" else SYSTEM_PROMPT_TEMPLATE
+    )
+    instructions = template.format(type_label=type_label)
+    if density == "simplified":
+        instructions += SIMPLIFIED_DENSITY_RULES
+    return instructions
+
+
 @app.post("/api/generate", response_model=GenerateResponse)
 def generate(req: GenerateRequest):
-    template = (
-        EDITOR_SYSTEM_PROMPT_TEMPLATE if req.role == "編輯" else SYSTEM_PROMPT_TEMPLATE
+    system_prompt = build_digest_instructions(
+        role=req.role,
+        density=req.density,
+        type_label=req.type_label,
     )
-    system_prompt = template.format(type_label=req.type_label)
 
     model = os.getenv("OPENAI_DIGEST_MODEL", "gpt-5.6-terra")
     try:
