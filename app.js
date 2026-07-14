@@ -631,7 +631,7 @@ const REPORTER_SAFE_AREA =
 SAFE AREA (CRITICAL — MUST PRESERVE)
 ==================================================
 - These SAFE AREA rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction places content in a reserved margin, ignore that placement and keep the margin empty.
-- All core text, logos, icons, and charts must remain within a central safe area: at least 15–20% padding on the top, left, and right sides (generous margin, not a thin border).
+- All core text, logos, icons, and charts must remain within a central safe area: exactly 15% padding on the top, left, and right sides (fixed margin, not a thin border).
 - The bottom 15%–18% of the entire image must contain:
   - NO text
   - NO logos
@@ -649,7 +649,7 @@ const EDITOR_SAFE_AREA =
 SAFE AREA (CRITICAL — MUST PRESERVE)
 ==================================================
 - These SAFE AREA rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction places content in a reserved margin, ignore that placement and keep the margin empty.
-- All core text, logos, icons, and charts must remain within the central safe area, with at least 15–20% padding on ALL four sides (generous margin, not a thin border).
+- All core text, logos, icons, and charts must remain within the central safe area, with exactly 15% padding on ALL four sides (fixed margin, not a thin border).
 - Every reserved margin must contain:
   - NO text
   - NO logos
