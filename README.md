@@ -6,6 +6,8 @@
 
 **`docs/HANDOFF.md`** — 完整技術交接文件：架構說明、目前進度、待辦事項。開新對話接手開發前，先看這份。
 
+`docs/product-proposal-summary.md` — 原始「準時收工」提案的產品目的、痛點、KPI、導入階段與目前功能缺口；判斷功能優先順序時先看這份。
+
 `docs/notion-integration-plan.md` — 未來若要接 Notion 資料庫做即時同步的規劃書。
 
 ## 檔案說明
