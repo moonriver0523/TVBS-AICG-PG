@@ -40,6 +40,8 @@ class GenerateResponse(BaseModel):
     style: str
     structure: str
     variable: str
+    # 這次實際採用的圖表類型（自動判斷模式下為 AI 所選）
+    chart_type: str = ""
 
 
 class ImageGenerateRequest(BaseModel):
@@ -55,16 +57,44 @@ class ImageGenerateResponse(BaseModel):
     model: str
 
 
+# 第一頁「懶人機制」：type_label 傳這個值代表由 AI 自行判斷最適合的圖表類型
+AUTO_TYPE_LABEL = "自動判斷"
+
+# AI 可自行選擇的四大類型，需與 app.js 的 CHART_TYPES label 完全一致
+CHART_TYPE_CHOICES = ["資料圖表", "情境示意圖", "地圖／位置", "3D示意／流程"]
+
 DIGEST_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "style": {"type": "string"},
         "structure": {"type": "string"},
         "variable": {"type": "string"},
+        # 回報這次實際採用的圖表類型；自動判斷模式下前端用它顯示 AI 選了什麼
+        "chart_type": {"type": "string", "enum": CHART_TYPE_CHOICES},
     },
-    "required": ["style", "structure", "variable"],
+    "required": ["style", "structure", "variable", "chart_type"],
     "additionalProperties": False,
 }
+
+
+AUTO_TYPE_SELECTION_RULES = """
+
+CHART TYPE AUTO-SELECTION (do this first):
+No chart type was specified. Read the news material and choose the ONE most suitable type:
+- "資料圖表": the story's core is numbers to compare or track (markets, prices, polls, statistics).
+- "情境示意圖": the story's core is what a scene or incident looked like (accidents, disasters,人物場景).
+- "地圖／位置": the story's core is where something is — location, route, territory, or geographic relationship.
+- "3D示意／流程": the story's core is how something happened step by step, or how a mechanism works.
+Pick the single best fit; do not blend types. Report it in the "chart_type" field, and design "style" and
+"structure" for the type you picked.
+"""
+
+
+def chart_type_directive(type_label: str) -> str:
+    """自動判斷模式加上選型規則；指定類型則要求原樣回報。"""
+    if type_label == AUTO_TYPE_LABEL:
+        return AUTO_TYPE_SELECTION_RULES
+    return f'\n\nThe "chart_type" field MUST be exactly "{type_label}".'
 
 
 def extract_image_content(result: dict) -> dict | None:
@@ -150,7 +180,14 @@ def build_digest_instructions(
     template = (
         EDITOR_SYSTEM_PROMPT_TEMPLATE if role == "編輯" else SYSTEM_PROMPT_TEMPLATE
     )
-    instructions = template.format(type_label=type_label)
+    # 自動判斷模式下，樣板裡的類型描述改為由 AI 自選（實際選型規則見下方 directive）
+    rendered_label = (
+        "the chart type you select below"
+        if type_label == AUTO_TYPE_LABEL
+        else type_label
+    )
+    instructions = template.format(type_label=rendered_label)
+    instructions += chart_type_directive(type_label)
     if density == "simplified":
         instructions += SIMPLIFIED_DENSITY_RULES
     return instructions
@@ -207,10 +244,16 @@ def generate(req: GenerateRequest):
     except json.JSONDecodeError:
         raise HTTPException(status_code=502, detail="AI 回傳格式無法解析")
 
+    chart_type = data.get("chart_type", "")
+    if chart_type not in CHART_TYPE_CHOICES:
+        # AI 未回報或回報不在清單內；指定類型時退回原值，自動判斷時留空由前端處理
+        chart_type = "" if req.type_label == AUTO_TYPE_LABEL else req.type_label
+
     return GenerateResponse(
         style=data.get("style", ""),
         structure=data.get("structure", ""),
         variable=data.get("variable", ""),
+        chart_type=chart_type,
     )
 
 

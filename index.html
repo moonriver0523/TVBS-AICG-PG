@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>T阿模 新聞CG Prompt生成器 V8</title>
+    <title>TVBS 新聞AICG產生器</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Noto+Sans+TC:wght@400;700;900&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
     <style>
@@ -72,6 +72,20 @@
             color: white !important;
             box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);
         }
+        /* 最上方第一頁／第二頁切換 */
+        .page-tab {
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            color: #64748b;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .page-tab:hover { color: #e2e8f0; background: rgba(30, 41, 59, 0.6); }
+        .page-tab-active {
+            background: var(--accent-blue) !important;
+            border-color: rgba(255, 255, 255, 0.35) !important;
+            color: white !important;
+            box-shadow: 0 6px 20px rgba(59, 130, 246, 0.35);
+        }
         .code-font { font-family: 'Fira Code', monospace; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         @keyframes slide-up {
@@ -87,10 +101,34 @@
 <body class="p-4 md:p-6">
 
     <div class="max-w-7xl mx-auto">
-        <!-- Header -->
-        <header class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+
+        <!-- ============================================================
+             最上方：頁面切換 + 標題列
+             ============================================================ -->
+        <header class="mb-6">
+            <!-- 第一頁 / 第二頁 切換（置頂） -->
+            <div class="glass-card p-2 mb-4 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                <div class="flex-1 grid grid-cols-2 gap-2">
+                    <button id="pageTab-1" onclick="switchPage(1)"
+                            class="page-tab page-tab-active px-4 py-3 rounded-lg text-left transition-all">
+                        <span class="block text-[11px] font-black uppercase tracking-widest">第一頁 · 快速生成</span>
+                        <span class="block text-[9px] opacity-70 mt-0.5 tracking-wide">貼新聞 / 角色 / 密度 → 總 Prompt → 生成圖片</span>
+                    </button>
+                    <button id="pageTab-2" onclick="switchPage(2)"
+                            class="page-tab px-4 py-3 rounded-lg text-left transition-all">
+                        <span class="block text-[11px] font-black uppercase tracking-widest">第二頁 · 進階微調</span>
+                        <span class="block text-[9px] opacity-70 mt-0.5 tracking-wide">圖表類型 / 版型 / 矩陣 → 總 Prompt → 生成圖片</span>
+                    </button>
+                </div>
+                <button onclick="confirmReset()"
+                        class="px-4 py-3 sm:py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] font-bold rounded-lg uppercase tracking-widest transition-colors whitespace-nowrap">
+                    Reset System
+                </button>
+            </div>
+
+            <!-- 標題 -->
             <div class="flex items-center gap-4">
-                <div class="w-12 h-12 bg-red-600 rounded-lg flex items-center justify-center shadow-lg shadow-red-900/20">
+                <div class="w-12 h-12 bg-red-600 rounded-lg flex items-center justify-center shadow-lg shadow-red-900/20 shrink-0">
                     <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10l4 4v10a2 2 0 01-2 2z" />
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 2v4a2 2 0 002 2h4" />
@@ -98,82 +136,107 @@
                     </svg>
                 </div>
                 <div>
-                    <h1 class="text-xl font-black tracking-tighter text-white flex items-center gap-2 uppercase">
-                        TVBS新聞CG Prompt生成器
+                    <h1 class="text-xl font-black tracking-tighter text-white flex items-center gap-2 flex-wrap uppercase">
+                        TVBS 新聞AICG產生器
                         <span class="px-2 py-0.5 bg-red-600/10 border border-red-600/20 text-red-500 text-[10px] rounded uppercase font-bold tracking-widest">Broadcast Standard V8.2</span>
                     </h1>
                     <p class="text-slate-500 text-[11px] font-medium">專業國際電視新聞資訊圖表提示詞生成系統 · 四大圖表類型 · Gemini / GPT 雙語法</p>
                 </div>
             </div>
-            <button onclick="confirmReset()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] font-bold rounded uppercase tracking-widest transition-colors">
-                Reset System
-            </button>
         </header>
 
-        <!-- Chart Type Selector (NEW: 四大類型) -->
-        <div class="glass-card p-4 mb-6">
-            <div class="flex items-center gap-3 flex-wrap">
-                <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest mr-2">圖表類型 / Chart Type</span>
-                <div id="chartTypeSelector" class="flex gap-2 flex-wrap flex-1">
+        <!-- ============================================================
+             第一頁：貼新聞生成 Prompt + 總 Prompt + 生成圖片
+             ============================================================ -->
+        <section id="page-1">
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+
+                <!-- 貼新聞 -->
+                <div class="lg:col-span-5 glass-card p-6 border-l-4 border-l-red-600">
+                    <h2 class="text-[10px] font-black text-red-500 uppercase tracking-[0.2em] mb-1">Step 1 · 貼上新聞原文</h2>
+                    <p class="text-[10px] text-slate-500 mb-4 leading-relaxed">
+                        AI 將依下方圖表類型、角色與文字密度，自動決定最直覺的佈局構圖並生成 Prompt。此區設定與第二頁的版型調整互不影響。
+                    </p>
+
+                    <!-- 高度刻意壓低讓下方選項免捲動；文字超出時 textarea 自己捲，也可拖曳右下角放大 -->
+                    <textarea id="aiInput" oninput="updateNewsCounter()"
+                           class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-4 py-3 text-sm text-slate-100 input-focus-ring h-[140px] min-h-[96px] resize-y"
+                           placeholder="輸入原始新聞文字…"></textarea>
+                    <div class="flex items-center justify-between gap-2 mt-1.5 mb-4">
+                        <span class="text-[9px] text-slate-600">可拖曳右下角放大，或直接在框內捲動</span>
+                        <span id="newsCounter" class="text-[9px] font-mono text-slate-600">0 字</span>
+                    </div>
+
+                    <!-- 自動生成專用的圖表類型（與第二頁調版型完全獨立） -->
+                    <div class="mb-4">
+                        <span class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">圖表類型 / Chart Type（自動生成用．預設交給 AI）</span>
+                        <div id="digestTypeSelector" class="flex gap-2 flex-wrap">
+                            <!-- Rendered by JS -->
+                        </div>
+                        <p id="digestTypeHint" class="text-[10px] text-slate-500 italic mt-2"></p>
+                    </div>
+
+                    <!-- 自動消化相關設定：工作角色模式 + 文字密度 -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+                        <div>
+                            <span class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">工作角色模式 / Role Mode</span>
+                            <div class="flex bg-black/40 p-1 rounded-lg">
+                                <button data-role="記者" onclick="switchRole('記者')"
+                                        class="role-active flex-1 px-3 py-2.5 rounded-md text-[10px] font-black transition-all">記者</button>
+                                <button data-role="編輯" onclick="switchRole('編輯')"
+                                        class="flex-1 px-3 py-2.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">編輯</button>
+                            </div>
+                        </div>
+                        <div>
+                            <span class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">文字密度 / Text Density</span>
+                            <div class="flex bg-black/40 p-1 rounded-lg">
+                                <button data-density="standard" onclick="switchDigestDensity('standard')"
+                                        class="density-active flex-1 px-3 py-2.5 rounded-md text-[10px] font-black transition-all">標準</button>
+                                <button data-density="simplified" onclick="switchDigestDensity('simplified')"
+                                        class="flex-1 px-3 py-2.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">簡化</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button id="aiBtn" onclick="handleAIDigestion()"
+                            class="bg-red-600 hover:bg-red-500 w-full py-4 rounded-lg text-xs font-black flex items-center justify-center gap-2 transition-all shadow-lg shadow-red-600/20 active:scale-95 disabled:opacity-50 uppercase tracking-tighter">
+                        <span id="aiBtnText">開始 AI 自動消化整理（記者・標準）</span>
+                        <div id="aiLoading" class="hidden w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                    </button>
+
+                    <div class="mt-4 flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2">
+                        <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest">想手動挑版型？</span>
+                        <button onclick="switchPage(2)"
+                                class="text-[10px] font-black text-slate-400 hover:text-blue-400 transition-colors">
+                            前往第二頁調整版型 →
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 總 Prompt + 生成圖片（共用面板掛載點） -->
+                <div id="outputMount-1" class="lg:col-span-7"></div>
+            </div>
+        </section>
+
+        <!-- ============================================================
+             第二頁：角色 / 圖表類型 / 模板庫 / Prompt Matrix + 總 Prompt + 生成圖片
+             ============================================================ -->
+        <section id="page-2" class="hidden">
+
+            <!-- 控制列：圖表類型 -->
+            <div class="glass-card p-5 mb-6">
+                <span class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">圖表類型 / Chart Type（調版型用）</span>
+                <p class="text-[10px] text-slate-600 mb-3">決定下方模板庫可挑選的版型；與第一頁自動生成的類型互不影響。</p>
+                <div id="chartTypeSelector" class="flex gap-2 flex-wrap">
                     <!-- Rendered by JS -->
                 </div>
+                <p id="typeHint" class="text-[10px] text-slate-500 italic mt-3"></p>
             </div>
-            <p id="typeHint" class="text-[10px] text-slate-500 italic mt-3"></p>
-        </div>
 
-        <main class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start mb-6">
 
-            <!-- Left Panel -->
-            <div class="lg:col-span-7 space-y-6">
-
-                <!-- AI Smart Analysis (Digestion) -->
-                <div class="glass-card p-5 border-l-4 border-l-red-600 relative overflow-hidden">
-                    <div class="relative z-10">
-                        <label class="block text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] mb-3">讓 AI 自動消化整理 (Enter News Text)</label>
-                        <div class="flex flex-col gap-3">
-                            <textarea id="aiInput"
-                                   class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-4 py-3 text-sm text-slate-100 input-focus-ring min-h-[100px] resize-none"
-                                   placeholder="輸入原始新聞文字… AI 將依當前圖表類型，自動決定最直覺的佈局構圖，並添加圖標或示意圖指令以輔助閱讀。"></textarea>
-                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                <div>
-                                    <span class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">文字密度 / Text Density</span>
-                                    <div class="flex bg-black/40 p-1 rounded-lg">
-                                        <button data-density="standard" onclick="switchDigestDensity('standard')"
-                                                class="density-active flex-1 px-3 py-2 rounded-md text-[10px] font-black transition-all">標準</button>
-                                        <button data-density="simplified" onclick="switchDigestDensity('simplified')"
-                                                class="flex-1 px-3 py-2 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">簡化</button>
-                                    </div>
-                                </div>
-                                <div>
-                                    <span class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">工作角色 / Role Mode</span>
-                                    <div class="flex bg-black/40 p-1 rounded-lg">
-                                        <button data-role="記者" onclick="switchRole('記者')"
-                                                class="role-active flex-1 px-3 py-2 rounded-md text-[10px] font-black transition-all">記者</button>
-                                        <button data-role="編輯" onclick="switchRole('編輯')"
-                                                class="flex-1 px-3 py-2 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">編輯</button>
-                                    </div>
-                                </div>
-                            </div>
-                            <button id="aiBtn" onclick="handleAIDigestion()"
-                                    class="bg-red-600 hover:bg-red-500 w-full py-3 rounded-lg text-xs font-black flex items-center justify-center gap-2 transition-all shadow-lg shadow-red-600/20 active:scale-95 disabled:opacity-50 uppercase tracking-tighter">
-                                <span id="aiBtnText">開始 AI 自動消化整理（記者・標準）</span>
-                                <div id="aiLoading" class="hidden w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Tag Library -->
-                <div class="glass-card flex flex-col min-h-[580px]">
-                    <!-- Role Selector -->
-                    <div class="p-4 bg-slate-900/50 flex items-center justify-between border-b border-slate-800">
-                        <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest">工作角色模式 / Role Mode</span>
-                        <div class="flex bg-black/40 p-1 rounded-lg">
-                            <button data-role="記者" onclick="switchRole('記者')" class="role-active px-4 py-1.5 rounded-md text-[10px] font-black transition-all">記者</button>
-                            <button data-role="編輯" onclick="switchRole('編輯')" class="px-4 py-1.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">編輯</button>
-                        </div>
-                    </div>
-
+                <!-- 模板庫 -->
+                <div class="lg:col-span-7 glass-card flex flex-col min-h-[580px]">
                     <div id="tabBar" class="flex border-b border-slate-800 px-4 overflow-x-auto no-scrollbar">
                         <!-- Rendered by JS: tabs depend on chart type -->
                     </div>
@@ -186,18 +249,14 @@
                         <!-- Rendered by JS -->
                     </div>
 
-                    <div class="p-6 mt-auto border-t border-slate-800/50 flex justify-between items-center">
+                    <div class="p-6 mt-auto border-t border-slate-800/50 flex justify-between items-center gap-3">
                         <p id="hintText" class="text-[10px] text-slate-500 italic">提示：選取構圖項目時，系統會自動填入對應的資料格式範本。</p>
-                        <span id="selectionCounter" class="text-[9px] font-mono text-blue-500 bg-blue-500/10 px-2 py-0.5 rounded">Selected: 0</span>
+                        <span id="selectionCounter" class="text-[9px] font-mono text-blue-500 bg-blue-500/10 px-2 py-0.5 rounded whitespace-nowrap">Selected: 0</span>
                     </div>
                 </div>
-            </div>
 
-            <!-- Right Panel -->
-            <div class="lg:col-span-5 space-y-6">
-
-                <!-- Engine Matrix -->
-                <div class="glass-card p-5">
+                <!-- Prompt Matrix Components -->
+                <div class="lg:col-span-5 glass-card p-5">
                     <h3 class="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-4">Prompt Matrix Components</h3>
                     <div class="space-y-4 mb-6">
                         <div class="space-y-2">
@@ -221,54 +280,72 @@
                 </div>
             </div>
 
-            <!-- Final Output — full-width below both panels -->
-            <div class="glass-card p-5 border-t-4 border-t-red-600 lg:col-span-12">
-                    <div class="flex justify-between items-center mb-4">
-                        <h3 class="text-[10px] font-black text-red-500 uppercase tracking-[0.2em]">Final Prompt Output</h3>
-                        <div class="flex items-center gap-2">
-                            <!-- NEW: Gemini / GPT 語法切換 -->
-                            <div class="flex bg-black/40 p-1 rounded-lg">
-                                <button id="engine-gemini" onclick="switchEngine('gemini', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all bg-blue-600 text-white">Gemini</button>
-                                <button id="engine-gpt" onclick="switchEngine('gpt', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all text-slate-500 hover:text-white">GPT</button>
-                            </div>
-                            <span id="aspectBadge" class="text-[9px] font-mono text-slate-500 bg-slate-800 px-2 py-0.5 rounded">16:9 / 1K</span>
-                        </div>
-                    </div>
+            <!-- 總 Prompt + 生成圖片（共用面板掛載點） -->
+            <div id="outputMount-2"></div>
+        </section>
 
-                    <div id="displayPrompt" onclick="copyToClipboard()"
-                         class="w-full min-h-[280px] p-4 bg-slate-950 rounded-lg border border-slate-900 code-font text-[10px] leading-relaxed text-slate-300 break-words cursor-pointer hover:border-slate-700 transition-all mb-4 overflow-y-auto max-h-[400px]">
-                        Waiting for data input…
+        <!-- ============================================================
+             共用面板：Final Prompt Output + 生成圖片
+             由 switchPage() 搬移到當前頁的 outputMount
+             ============================================================ -->
+        <div id="outputPanel" class="glass-card p-5 border-t-4 border-t-red-600">
+            <div class="flex justify-between items-center mb-4 gap-3 flex-wrap">
+                <div class="flex items-center gap-2 flex-wrap">
+                    <h3 class="text-[10px] font-black text-red-500 uppercase tracking-[0.2em]">Final Prompt Output</h3>
+                    <!-- 顯示目前 Prompt 採用哪一頁的圖表類型 -->
+                    <span class="text-[9px] font-mono text-slate-500 bg-slate-800/60 px-2 py-0.5 rounded">
+                        類型 <span id="activeTypeBadge" class="text-blue-400 font-bold">資料圖表</span>
+                        <span class="text-slate-600">·來自</span><span id="activeTypeSource" class="text-slate-400">第二頁</span>
+                    </span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <!-- Gemini / GPT 語法切換 -->
+                    <div class="flex bg-black/40 p-1 rounded-lg">
+                        <button id="engine-gemini" onclick="switchEngine('gemini', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all bg-blue-600 text-white">Gemini</button>
+                        <button id="engine-gpt" onclick="switchEngine('gpt', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all text-slate-500 hover:text-white">GPT</button>
                     </div>
-
-                    <button onclick="copyToClipboard()" class="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-xl text-sm font-black transition-all flex items-center justify-center gap-2 shadow-xl active:scale-95 group uppercase tracking-widest">
-                        Copy Prompt to Clipboard
-                    </button>
-
-                    <div class="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-                        <label class="flex items-start gap-3 cursor-pointer">
-                            <input id="promptConfirmed" type="checkbox" onchange="updateImageGenerationControls()"
-                                   class="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-900 text-blue-600 focus:ring-blue-500">
-                            <span>
-                                <span class="block text-xs font-black text-slate-200">我已確認最終 Prompt</span>
-                                <span id="imageGenerationHint" class="block mt-1 text-[10px] leading-relaxed text-slate-500">確認後可依目前引擎一鍵生成 16:9／1K 圖片</span>
-                            </span>
-                        </label>
-                        <button id="generateImageBtn" onclick="handleImageGeneration()" disabled
-                                class="mt-4 w-full py-3 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed rounded-lg text-xs font-black transition-all flex items-center justify-center gap-2 shadow-lg shadow-violet-600/10 active:scale-95">
-                            <span id="generateImageBtnText">使用 Gemini 生成圖片</span>
-                            <div id="generateImageLoading" class="hidden w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
-                        </button>
-                    </div>
-
-                    <div id="generatedImageResult" class="hidden mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-                        <div class="flex items-center justify-between gap-3 mb-3">
-                            <span id="generatedImageProviderLabel" class="text-[10px] font-black uppercase tracking-widest text-violet-400">AI Generated Preview</span>
-                            <a id="downloadGeneratedImage" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg.jpg">下載圖片</a>
-                        </div>
-                        <img id="generatedImage" alt="AI 生成的新聞 CG 預覽" class="w-full rounded-lg border border-slate-800" />
-                    </div>
+                    <span id="aspectBadge" class="text-[9px] font-mono text-slate-500 bg-slate-800 px-2 py-0.5 rounded">16:9 / 1K</span>
+                </div>
             </div>
-        </main>
+
+            <div id="displayPrompt" onclick="copyToClipboard()"
+                 class="w-full min-h-[180px] max-h-[253px] resize-y p-4 bg-slate-950 rounded-lg border border-slate-900 code-font text-[10px] leading-relaxed text-slate-300 break-words cursor-pointer hover:border-slate-700 transition-all overflow-y-auto">
+                Waiting for data input…
+            </div>
+            <div class="flex items-center justify-between gap-2 mt-1.5 mb-4">
+                <span class="text-[9px] text-slate-600">點一下即可複製，可拖曳右下角放大</span>
+                <span id="promptCounter" class="text-[9px] font-mono text-slate-600">0 字元</span>
+            </div>
+
+            <button onclick="copyToClipboard()" class="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-xl text-sm font-black transition-all flex items-center justify-center gap-2 shadow-xl active:scale-95 group uppercase tracking-widest">
+                Copy Prompt to Clipboard
+            </button>
+
+            <div class="mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                <label class="flex items-start gap-3 cursor-pointer">
+                    <input id="promptConfirmed" type="checkbox" onchange="updateImageGenerationControls()"
+                           class="mt-0.5 h-4 w-4 rounded border-slate-600 bg-slate-900 text-blue-600 focus:ring-blue-500">
+                    <span>
+                        <span class="block text-xs font-black text-slate-200">我已確認最終 Prompt</span>
+                        <span id="imageGenerationHint" class="block mt-1 text-[10px] leading-relaxed text-slate-500">確認後可依目前引擎一鍵生成 16:9／1K 圖片</span>
+                    </span>
+                </label>
+                <button id="generateImageBtn" onclick="handleImageGeneration()" disabled
+                        class="mt-4 w-full py-3 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed rounded-lg text-xs font-black transition-all flex items-center justify-center gap-2 shadow-lg shadow-violet-600/10 active:scale-95">
+                    <span id="generateImageBtnText">使用 Gemini 生成圖片</span>
+                    <div id="generateImageLoading" class="hidden w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                </button>
+            </div>
+
+            <div id="generatedImageResult" class="hidden mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                <div class="flex items-center justify-between gap-3 mb-3">
+                    <span id="generatedImageProviderLabel" class="text-[10px] font-black uppercase tracking-widest text-violet-400">AI Generated Preview</span>
+                    <a id="downloadGeneratedImage" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg.jpg">下載圖片</a>
+                </div>
+                <img id="generatedImage" alt="AI 生成的新聞 CG 預覽" class="w-full rounded-lg border border-slate-800" />
+            </div>
+        </div>
+
     </div>
 
     <!-- Toast Notification -->

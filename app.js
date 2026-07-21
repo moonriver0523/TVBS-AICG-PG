@@ -1,5 +1,5 @@
 /* ============================================================
-   T阿模 新聞CG Prompt 生成器 V8
+   TVBS 新聞AICG產生器
    資料模型：頂層為「圖表類型」，各類型下有 styles / structures / visual 三層
    ============================================================ */
 
@@ -298,11 +298,51 @@ let state = {
     currentTab: 'style',
     engine: 'gemini',
     activeParent: null,
+    currentPage: 1,
+    // 第一頁「自動生成」專用的圖表類型，與第二頁模板庫的 chartType 完全獨立
+    // 'auto' = 懶人機制，交給 AI 依新聞內容自行判斷版型
+    digestChartType: 'auto',
+    // 自動判斷模式下，AI 實際選了哪一類（由後端 chart_type 回報）
+    digestResolvedType: null,
+    // 最終 Prompt 的類型標籤聽誰的：'digest'（第一頁自動生成）或 'library'（第二頁調版型）
+    // 由「最後一次動作」決定
+    promptTypeSource: 'library',
     // selected 依 chartType 分開存，避免切類型互相污染
     selectedByType: {}
 };
 
 function curType() { return CHART_TYPES[state.chartType]; }
+
+/* 第一頁「AI 自動判斷版型」的懶人選項，非真實 CHART_TYPES 成員 */
+const AUTO_TYPE_KEY = 'auto';
+const AUTO_TYPE_LABEL = '自動判斷';   // 需與 main.py 的 AUTO_TYPE_LABEL 一致
+const AUTO_TYPE = {
+    label: 'AI 自動判斷',
+    hint: '不確定用哪種就選這個：AI 會讀完新聞後，自行從四大類型挑一個最合適的來設計版型。',
+    aspect: '16:9'
+};
+
+// 第一頁自動生成所用的圖表類型
+function digestType() {
+    if (state.digestChartType === AUTO_TYPE_KEY) {
+        // AI 已判斷過就顯示它選的那一類，否則顯示「AI 自動判斷」
+        return state.digestResolvedType ? CHART_TYPES[state.digestResolvedType] : AUTO_TYPE;
+    }
+    return CHART_TYPES[state.digestChartType];
+}
+
+// 送給後端的類型標籤：自動判斷模式一律送 sentinel，由 AI 選型
+function digestTypeLabelForApi() {
+    return state.digestChartType === AUTO_TYPE_KEY ? AUTO_TYPE_LABEL : digestType().label;
+}
+
+// 目前生效於最終 Prompt 的圖表類型（依 promptTypeSource）
+function activeType() {
+    if (state.promptTypeSource !== 'digest') return curType();
+    // 選了自動判斷但 AI 還沒判斷過，沒有具體類型可寫進 Prompt，退回第二頁的類型
+    if (state.digestChartType === AUTO_TYPE_KEY && !state.digestResolvedType) return curType();
+    return digestType();
+}
 
 function curSelected() {
     if (!state.selectedByType[state.chartType]) {
@@ -333,9 +373,34 @@ function libFor(tab) {
 window.onload = () => {
     document.getElementById('field-variable').value = DEFAULT_VARIABLE_TEMPLATE;
     renderChartTypes();
+    renderDigestTypes();
     resetToType('data');
     updateAIBtnRoleHint();
+    switchPage(1);
 };
+
+/* ============================================================
+   頁面切換（第一頁 快速生成 / 第二頁 進階微調）
+   Final Prompt Output 面板為共用單一實例，切頁時搬到當前頁的掛載點，
+   避免重複 id 造成 getElementById 取到錯誤的節點
+   ============================================================ */
+function switchPage(page) {
+    state.currentPage = page;
+
+    [1, 2].forEach(n => {
+        const section = document.getElementById(`page-${n}`);
+        const tab = document.getElementById(`pageTab-${n}`);
+        section.classList.toggle('hidden', n !== page);
+        tab.classList.toggle('page-tab-active', n === page);
+    });
+
+    const panel = document.getElementById('outputPanel');
+    const mount = document.getElementById(`outputMount-${page}`);
+    if (panel && mount && panel.parentElement !== mount) mount.appendChild(panel);
+
+    updateActiveTypeBadge();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
 
 function renderChartTypes() {
     const c = document.getElementById('chartTypeSelector');
@@ -349,16 +414,92 @@ function renderChartTypes() {
     });
 }
 
+/* 第二頁：調整版型用的圖表類型（只影響模板庫，不動第一頁） */
 function resetToType(key) {
     state.chartType = key;
     state.currentTab = 'style';
     const t = curType();
     state.activeParent = Object.keys(t.styles)[0];
     document.getElementById('typeHint').innerText = t.hint;
-    document.getElementById('aspectBadge').innerText = t.aspect;
     renderChartTypes();
     renderTabs();
     renderAll();
+    // 在第二頁選類型＝以調版型為準
+    claimPromptType('library');
+}
+
+/* ============================================================
+   第一頁：自動生成專用的圖表類型（與第二頁模板庫完全脫鉤）
+   切換它不會重置第二頁已選的版型與已填的矩陣
+   ============================================================ */
+function renderDigestTypes() {
+    const c = document.getElementById('digestTypeSelector');
+    if (!c) return;
+    c.innerHTML = '';
+    // 懶人機制擺第一個並為預設
+    const entries = [[AUTO_TYPE_KEY, AUTO_TYPE], ...Object.entries(CHART_TYPES)];
+    entries.forEach(([key, t]) => {
+        const btn = document.createElement('button');
+        const isAuto = key === AUTO_TYPE_KEY;
+        const isActive = key === state.digestChartType;
+        btn.className = `px-3 py-2 rounded-lg text-[10px] font-black border transition-all tracking-wide ${isActive ? 'type-active' : 'text-slate-400 bg-slate-900/50 border-slate-700 hover:bg-slate-800'}`;
+        // 自動判斷完成後，按鈕顯示 AI 選了什麼
+        btn.innerText = (isAuto && isActive && state.digestResolvedType)
+            ? `AI 自動判斷：${CHART_TYPES[state.digestResolvedType].label}`
+            : t.label;
+        btn.onclick = () => setDigestType(key);
+        c.appendChild(btn);
+    });
+    const hint = document.getElementById('digestTypeHint');
+    if (hint) {
+        hint.innerText = (state.digestChartType === AUTO_TYPE_KEY && !state.digestResolvedType)
+            ? AUTO_TYPE.hint
+            : digestType().hint;
+    }
+}
+
+function setDigestType(key) {
+    const changed = state.digestChartType !== key;
+    state.digestChartType = key;
+    // 換選項就讓上一次 AI 的判斷結果失效
+    if (changed) state.digestResolvedType = null;
+    renderDigestTypes();
+    // 自動判斷但尚未真的生成過，還沒有具體類型可寫進 Prompt，不搶；
+    // 但仍要重算輸出，否則 Prompt 會殘留上一個類型、與徽章不一致
+    if (key === AUTO_TYPE_KEY && !state.digestResolvedType) {
+        updateActiveTypeBadge();
+        syncOutput();
+        return;
+    }
+    // 在第一頁選類型＝以自動生成為準
+    claimPromptType('digest');
+}
+
+/* 記錄「最後動作」是哪一頁，決定最終 Prompt 用哪個類型標籤 */
+function claimPromptType(source) {
+    state.promptTypeSource = source;
+    updateActiveTypeBadge();
+    syncOutput();
+}
+
+function updateActiveTypeBadge() {
+    const t = activeType();
+    const aspect = document.getElementById('aspectBadge');
+    if (aspect) aspect.innerText = t.aspect;
+    const badge = document.getElementById('activeTypeBadge');
+    if (badge) {
+        badge.innerText = t.label;
+        badge.title = state.promptTypeSource === 'digest'
+            ? '目前 Prompt 類型來自第一頁（自動生成）'
+            : '目前 Prompt 類型來自第二頁（調整版型）';
+    }
+    const source = document.getElementById('activeTypeSource');
+    if (source) {
+        // 自動判斷但尚未生成時，activeType() 已退回第二頁的類型，來源也要跟著標第二頁
+        const digestUsable = !(state.digestChartType === AUTO_TYPE_KEY && !state.digestResolvedType);
+        const fromDigest = state.promptTypeSource === 'digest' && digestUsable;
+        source.innerText = fromDigest ? '第一頁' : '第二頁';
+    }
 }
 
 /* ============================================================
@@ -400,6 +541,28 @@ function switchDigestDensity(density) {
     });
     updateAIBtnRoleHint();
     showToast(`AI 消化已切換至${density === 'simplified' ? '簡化' : '標準'}模式`);
+}
+
+// Prompt 顯示區高度壓低後，用字元數讓使用者確認 Prompt 已生成、長度多少
+function updatePromptCounter() {
+    const counter = document.getElementById('promptCounter');
+    if (!counter) return;
+    const text = document.getElementById('displayPrompt').innerText.trim();
+    const len = (text && text !== 'Waiting for data input…') ? text.length : 0;
+    counter.innerText = `${len.toLocaleString()} 字元`;
+    counter.classList.toggle('text-blue-400', len > 0);
+    counter.classList.toggle('text-slate-600', len === 0);
+}
+
+// 新聞輸入框高度壓低後，用字數提示讓使用者確認貼上的量
+function updateNewsCounter() {
+    const input = document.getElementById('aiInput');
+    const counter = document.getElementById('newsCounter');
+    if (!input || !counter) return;
+    const len = input.value.trim().length;
+    counter.innerText = `${len.toLocaleString()} 字`;
+    counter.classList.toggle('text-blue-400', len > 0);
+    counter.classList.toggle('text-slate-600', len === 0);
 }
 
 // AI 消化按鈕顯示目前角色與文字密度，避免用錯模式
@@ -469,7 +632,9 @@ function renderTags() {
             if (isSelected) delete s[state.currentTab][state.activeParent];
             else s[state.currentTab][state.activeParent] = tag;
             updateSpecificField(state.currentTab);
-            renderTags(); syncOutput(); updateCounter();
+            renderTags(); updateCounter();
+            // 在第二頁選版型＝以調版型為準（claimPromptType 內含 syncOutput）
+            claimPromptType('library');
         };
         grid.appendChild(btn);
     });
@@ -510,6 +675,7 @@ function syncOutput() {
 
     if (!style && !structure && !variableInput && !visual) {
         display.innerText = "Waiting for data input…";
+        updatePromptCounter();
         return;
     }
 
@@ -521,11 +687,12 @@ function syncOutput() {
     display.innerText = buildPrompt({
         role: state.currentRole,
         engine: state.engine,
-        typeLabel: curType().label,
+        typeLabel: activeType().label,
         style: combinedStyle,
         structure: structureContent,
         variable: processedVariable
     });
+    updatePromptCounter();
 }
 
 function buildPrompt({ role, engine, typeLabel, style, structure, variable }) {
@@ -696,7 +863,8 @@ async function handleAIDigestion() {
     const btn = document.getElementById('aiBtn');
     btn.disabled = true; btnText.classList.add('hidden'); loading.classList.remove('hidden');
 
-    const typeLabel = curType().label;
+    // 自動生成一律用第一頁自己的圖表類型（'auto' 時送 sentinel 交由 AI 選型）
+    const typeLabel = digestTypeLabelForApi();
 
     try {
         const response = await fetch(AI_BACKEND_URL, {
@@ -718,8 +886,20 @@ async function handleAIDigestion() {
         document.getElementById('field-structure').value = data.structure || '';
         document.getElementById('field-variable').value = (data.variable || '').replace(SYSTEM_DISCLAIMER, '').trim();
 
-        renderTags(); syncOutput(); updateCounter();
-        showToast("AI 已完成佈局規劃與視覺輔助設計");
+        // 自動判斷模式：記下 AI 實際選了哪一類，供徽章與按鈕顯示
+        if (state.digestChartType === AUTO_TYPE_KEY) {
+            const resolvedKey = Object.keys(CHART_TYPES)
+                .find(k => CHART_TYPES[k].label === data.chart_type);
+            state.digestResolvedType = resolvedKey || null;
+            renderDigestTypes();
+        }
+
+        renderTags(); updateCounter();
+        // 剛做完自動生成＝以第一頁的類型為準（claimPromptType 內含 syncOutput）
+        claimPromptType('digest');
+        showToast(state.digestResolvedType
+            ? `AI 判斷為「${CHART_TYPES[state.digestResolvedType].label}」並完成佈局規劃`
+            : "AI 已完成佈局規劃與視覺輔助設計");
     } catch (err) {
         console.error(err);
         showToast("AI 服務連線失敗，請稍後再試");
