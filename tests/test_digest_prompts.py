@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
+import main  # noqa: E402
 from main import (  # noqa: E402
     AUTO_TYPE_LABEL,
     CHART_TYPE_CHOICES,
@@ -12,7 +13,9 @@ from main import (  # noqa: E402
     GenerateRequest,
     GenerateResponse,
     ImageGenerateRequest,
+    ImageGenerateResponse,
     build_digest_instructions,
+    generate_image,
 )
 
 
@@ -83,6 +86,72 @@ class DigestPromptTests(unittest.TestCase):
     def test_image_request_defaults_to_1k(self):
         request = ImageGenerateRequest(prompt="test")
         self.assertEqual(request.image_size, "1K")
+
+
+class ImageBackendRoutingTests(unittest.TestCase):
+    """驗證 backend 開關與模型對應，不呼叫任何付費 API。"""
+
+    def setUp(self):
+        # 攔截真正的 OpenRouter / 原生呼叫，只記錄被指派的模型
+        self.calls = {}
+
+        def fake_openrouter(model, req):
+            self.calls["openrouter"] = model
+            return ImageGenerateResponse(image_data_base64="x", mime_type="image/png", model=model)
+
+        def fake_gpt(req):
+            self.calls["native"] = "gpt"
+            return ImageGenerateResponse(image_data_base64="x", mime_type="image/png", model="native-gpt")
+
+        def fake_gemini(req):
+            self.calls["native"] = "gemini"
+            return ImageGenerateResponse(image_data_base64="x", mime_type="image/png", model="native-gemini")
+
+        self._orig = (main.generate_via_openrouter, main.generate_gpt_image, main.generate_gemini_image)
+        main.generate_via_openrouter = fake_openrouter
+        main.generate_gpt_image = fake_gpt
+        main.generate_gemini_image = fake_gemini
+        self._saved_env = {k: os.environ.get(k) for k in
+                           ("IMAGE_BACKEND", "OPENROUTER_API_KEY", "OPENROUTER_GPT_MODEL", "OPENROUTER_GEMINI_MODEL")}
+
+    def tearDown(self):
+        main.generate_via_openrouter, main.generate_gpt_image, main.generate_gemini_image = self._orig
+        for k, v in self._saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def _run(self, provider):
+        return generate_image(ImageGenerateRequest(prompt="p", provider=provider))
+
+    def test_openrouter_backend_maps_gpt_to_5_4_image_2(self):
+        os.environ["IMAGE_BACKEND"] = "openrouter"
+        os.environ["OPENROUTER_API_KEY"] = "test-or-key"
+        os.environ.pop("OPENROUTER_GPT_MODEL", None)
+        self._run("gpt")
+        self.assertEqual(self.calls.get("openrouter"), "openai/gpt-5.4-image-2")
+
+    def test_openrouter_backend_maps_gemini_to_pro(self):
+        os.environ["IMAGE_BACKEND"] = "openrouter"
+        os.environ["OPENROUTER_API_KEY"] = "test-or-key"
+        os.environ.pop("OPENROUTER_GEMINI_MODEL", None)
+        self._run("gemini")
+        self.assertEqual(self.calls.get("openrouter"), "google/gemini-3-pro-image")
+
+    def test_native_backend_bypasses_openrouter(self):
+        os.environ["IMAGE_BACKEND"] = "native"
+        os.environ["OPENROUTER_API_KEY"] = "test-or-key"
+        self._run("gpt")
+        self.assertNotIn("openrouter", self.calls)
+        self.assertEqual(self.calls.get("native"), "gpt")
+
+    def test_openrouter_without_key_falls_back_to_native(self):
+        os.environ["IMAGE_BACKEND"] = "openrouter"
+        os.environ.pop("OPENROUTER_API_KEY", None)
+        self._run("gemini")
+        self.assertNotIn("openrouter", self.calls)
+        self.assertEqual(self.calls.get("native"), "gemini")
 
 
 if __name__ == "__main__":

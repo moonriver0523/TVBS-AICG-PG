@@ -134,7 +134,7 @@ Requirements:
 3. "structure": Design the most readable, intuitive layout for a "{type_label}".
    - Propose concrete spatial arrangement and add instructions for relevant icons, technical illustrations, 3D diagrams, maps, or scene depictions that aid comprehension.
    - Written in professional English.
-   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "All content — including the title, icon cards, and side panels — sits within a wide empty margin on the top, left, and right edges, with a deeper empty band along the bottom; across these margins the background continues completely unchanged." After that sentence, every element you place (headline, stat cards, indicators, icons) MUST be described with an explicit inset/gutter from its nearest edge — never described as spanning, flush, or edge-to-edge. The words "footer", "bottom edge", "anchored at bottom", "full-screen", "full-bleed", "full-width", "edge-to-edge", "flush left", "flush right", "spans the entire width", "corner-to-corner" and "bleed" are FORBIDDEN. Any closing banner or data-source line is the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge."""
+   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "The entire infographic — including the title, icon cards, and side panels — is treated as one group and scaled down so it occupies only the central region of the frame, surrounded by a thick, clearly visible empty margin of unchanged background on the top, left and right, and an even deeper empty band along the bottom; every element stays well inside this central zone and nothing reaches into the surrounding empty border." After that sentence, every element you place (headline, stat cards, indicators, icons) MUST be positioned using ONLY qualitative spatial words (e.g. "in the upper-left area", "centred", "along the right side well clear of the edge", "with generous empty space around it"). NEVER express any position, inset, gutter, margin, or size as a percentage, pixel, ratio, or number of any kind — those figures get drawn as visible text labels in the final image. Never describe anything as spanning, flush, or edge-to-edge. The words "footer", "bottom edge", "anchored at bottom", "full-screen", "full-bleed", "full-width", "edge-to-edge", "flush left", "flush right", "spans the entire width", "corner-to-corner" and "bleed" are FORBIDDEN. Any closing banner or data-source line is the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge."""
 
 
 # 編輯版：規範取自編輯台實戰 GEM「整理小幫手」（見 editor-templates/PROMPTS.md）
@@ -156,7 +156,7 @@ Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style
      "[標題] 聯準會三度降息\\n利率降至<4.25%>\\n[內文小標] 通膨降溫 就業穩健\\n[內文小標] 市場預期 明年再降<兩次>\\n[內文小標] 道瓊應聲<上漲350點>\\n<蓋章> 降息循環正式啟動"
 2. "style": 根據新聞調性（財經、災難、溫馨、政治）選擇主色調與畫面風格（例如：深藍色科技感、紅白色警戒感），written in professional English.
 3. "structure": Design the most readable anchor-wall CG layout for a "{type_label}", with concrete spatial arrangement and instructions for flat icons or 3D data charts that aid comprehension. Written in professional English.
-   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "All content — including the title, icon cards, and data charts — sits within a wide empty margin on the top, left, and right edges, with a deeper empty band along the bottom; across these margins the background continues completely unchanged." After that sentence, every element you place MUST be described with an explicit inset/gutter from its nearest edge — never described as spanning, flush, or edge-to-edge. The words "footer", "bottom edge", "anchored at bottom", "full-screen", "full-bleed", "full-width", "edge-to-edge", "flush left", "flush right", "flush top", "flush bottom", "spans the entire width", "corner-to-corner" and "bleed" are FORBIDDEN. The <蓋章> stamp banner and any data-source line are the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge."""
+   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "The entire infographic — including the title, icon cards, and data charts — is treated as one group and scaled down so it occupies only the central region of the frame, surrounded by a thick, clearly visible empty margin of unchanged background on the top, left and right, and an even deeper empty band along the bottom; every element stays well inside this central zone and nothing reaches into the surrounding empty border." After that sentence, every element you place MUST be positioned using ONLY qualitative spatial words (e.g. "in the upper-left area", "centred", "along the right side well clear of the edge", "with generous empty space around it"). NEVER express any position, inset, gutter, margin, or size as a percentage, pixel, ratio, or number of any kind — those figures get drawn as visible text labels in the final image. Never describe anything as spanning, flush, or edge-to-edge. The words "footer", "bottom edge", "anchored at bottom", "full-screen", "full-bleed", "full-width", "edge-to-edge", "flush left", "flush right", "flush top", "flush bottom", "spans the entire width", "corner-to-corner" and "bleed" are FORBIDDEN. The <蓋章> stamp banner and any data-source line are the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge."""
 
 
 SIMPLIFIED_DENSITY_RULES = """
@@ -261,11 +261,91 @@ def generate(req: GenerateRequest):
 
 @app.post("/api/images/generate", response_model=ImageGenerateResponse)
 def generate_image(req: ImageGenerateRequest):
-    """Generate one news CG image without exposing provider API keys."""
+    """Generate one news CG image without exposing provider API keys.
+
+    IMAGE_BACKEND=openrouter（預設）時，兩家都改走 OpenRouter：
+    GPT 用 OPENROUTER_GPT_MODEL、Gemini 用 OPENROUTER_GEMINI_MODEL。
+    設 IMAGE_BACKEND=native 可切回原生 OpenAI / Gemini 直連。
+    """
+    backend = os.getenv("IMAGE_BACKEND", "openrouter")
+    if backend == "openrouter" and os.getenv("OPENROUTER_API_KEY"):
+        if req.provider == "gpt":
+            model = os.getenv("OPENROUTER_GPT_MODEL", "openai/gpt-5.4-image-2")
+        else:
+            model = os.getenv("OPENROUTER_GEMINI_MODEL", "google/gemini-3-pro-image")
+        return generate_via_openrouter(model, req)
+
     if req.provider == "gpt":
         return generate_gpt_image(req)
 
     return generate_gemini_image(req)
+
+
+def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGenerateResponse:
+    """透過 OpenRouter 統一圖片端點生成，一把 OPENROUTER_API_KEY 涵蓋多家模型。"""
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="尚未設定 OPENROUTER_API_KEY，無法生成圖片",
+        )
+
+    payload = {
+        "model": model,
+        "prompt": req.prompt,
+        "aspect_ratio": req.aspect_ratio,
+    }
+    # 只有支援 resolution enum 的模型才帶 resolution（Gemini / Seedream / Riverflow）；
+    # GPT 系列不吃 resolution，帶了會 400。
+    if any(tag in model for tag in ("gemini", "seedream", "riverflow")):
+        payload["resolution"] = req.image_size
+
+    request = Request(
+        "https://openrouter.ai/api/v1/images",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+
+    try:
+        with urlopen(request, timeout=180, context=ssl_context) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            body = ""
+        print(f"[OpenRouter image HTTPError] {exc.code}: {body}", flush=True)
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenRouter 圖片生成失敗（{exc.code}）：{body}"
+            if body
+            else "OpenRouter 圖片生成失敗，請確認金鑰、模型權限或稍後重試",
+        ) from exc
+    except (URLError, TimeoutError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="無法連線至 OpenRouter 圖片服務，請稍後再試",
+        ) from exc
+
+    data = result.get("data") or []
+    item = data[0] if data else {}
+    image_data = item.get("b64_json")
+    if not image_data:
+        raise HTTPException(
+            status_code=502,
+            detail="OpenRouter 未回傳可用圖片，請調整 Prompt 後重試",
+        )
+
+    return ImageGenerateResponse(
+        image_data_base64=image_data,
+        mime_type=item.get("media_type", "image/png"),
+        model=model,
+    )
 
 
 def generate_gpt_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
