@@ -297,6 +297,7 @@ let state = {
     digestDensity: 'standard',
     currentTab: 'style',
     engine: 'gemini',
+    imageSize: '1K',
     activeParent: null,
     currentPage: 1,
     // 第一頁「自動生成」專用的圖表類型，與第二頁模板庫的 chartType 完全獨立
@@ -588,7 +589,22 @@ function switchEngine(engine, el) {
     state.engine = engine;
     document.getElementById('engine-gemini').className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (engine === 'gemini' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-white');
     document.getElementById('engine-gpt').className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (engine === 'gpt' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-white');
+    updateAspectBadge();
     syncOutput();
+}
+
+function switchImageSize(size, el) {
+    state.imageSize = size;
+    document.getElementById('size-1K').className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (size === '1K' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-white');
+    document.getElementById('size-2K').className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (size === '2K' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-white');
+    updateAspectBadge();
+}
+
+// GPT 固定 1280×720（忽略解析度切換）；Gemini 才依 1K／2K 變動
+function updateAspectBadge() {
+    const badge = document.getElementById('aspectBadge');
+    if (!badge) return;
+    badge.innerText = state.engine === 'gpt' ? '16:9 / 720p' : `16:9 / ${state.imageSize}`;
 }
 
 /* ============================================================
@@ -705,8 +721,8 @@ function buildPrompt({ role, engine, typeLabel, style, structure, variable }) {
 CANVAS
 ==================================================
 - Aspect ratio: 16:9
-- Broadcast-safe composition
-- All elements must remain within clear safe margins
+- Centred composition, single continuous full-frame background
+- Keep all elements within the central area with wide empty margins
 
 ${textRules}
 
@@ -809,14 +825,15 @@ Visual Elements:
 
 const REPORTER_SAFE_AREA =
 `==================================================
-SAFE AREA (CRITICAL — MUST PRESERVE)
+EMPTY MARGIN RULES (CRITICAL — MUST PRESERVE)
 ==================================================
-- These SAFE AREA rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction places content in a reserved margin, ignore that placement and keep the margin empty.
-- All core text, logos, icons, and charts must remain within a central safe area: exactly 15% padding on the top, left, and right sides, and that margin must be COMPLETELY EMPTY on all three sides — not a thin border, not a partial inset.
-- The top 15% margin must contain: NO title text, NO headline, NO icons, NO logos, NO decorative elements.
-- The left 15% margin must contain: NO stat cards, NO numerical modules, NO icons, NO borders, NO text.
-- The right 15% margin must contain: NO indicators, NO boxes, NO icons, NO leader lines, NO text.
-- The bottom 15%–18% of the entire image must contain:
+- These are layout guides only. The final image is ONE single continuous background with the subject centred; the margins are visually identical to the centre — same colour, tone and brightness everywhere. Do NOT render any frame, rectangle, outline, border line, guide line, crop mark, corner bracket, or dimmed / tinted / shaded band to mark the empty area. The empty margin must be completely invisible.
+- These empty-margin rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction places content in a reserved margin, ignore that placement and keep the margin empty.
+- All core text, logos, icons, and charts must stay inside the central area, leaving a wide, even empty margin on the top, left, and right sides; that margin must be COMPLETELY EMPTY on all three sides — not a thin border, not a partial inset.
+- The top margin must contain: NO title text, NO headline, NO icons, NO logos, NO decorative elements.
+- The left margin must contain: NO stat cards, NO numerical modules, NO icons, NO borders, NO text.
+- The right margin must contain: NO indicators, NO boxes, NO icons, NO leader lines, NO text.
+- The bottom margin, kept noticeably deeper than the side margins, must contain:
   - NO text
   - NO logos
   - NO icons
@@ -824,17 +841,18 @@ SAFE AREA (CRITICAL — MUST PRESERVE)
   - NO divider lines
   - NO decorative elements
   - NO data-source line
-- This bottom area is reserved strictly as a broadcast-safe zone (on-air anchor cue card / subtitle overlay).
+- This bottom strip simply stays empty so on-air lower-third graphics never cover any content.
 - The background color or background image from the active content area above MUST extend seamlessly into all four reserved margins — no change in color, texture, brightness, or visual tone; no hard edges, no visual breaks, no overlays, no gradients.
 - FORBIDDEN terms/effects in the final composition: full-width, edge-to-edge, flush left, flush right, flush top, spans the entire width, corner-to-corner, bleed, touching the frame boundary.
-- SELF-CHECK before finalizing: if any text block, card, icon, or box's bounding box touches within 5% of any frame edge, you MUST redesign the layout to add visible gutter space before output.`;
+- SELF-CHECK before finalizing: if any text block, card, icon, or box touches or comes close to any frame edge, you MUST redesign the layout to add visible gutter space before output.`;
 
 const EDITOR_SAFE_AREA =
 `==================================================
-SAFE AREA (CRITICAL — MUST PRESERVE)
+EMPTY MARGIN RULES (CRITICAL — MUST PRESERVE)
 ==================================================
-- These SAFE AREA rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction places content in a reserved margin, ignore that placement and keep the margin empty.
-- All core text, logos, icons, and charts must remain within the central safe area, with exactly 15% padding on ALL four sides, and every one of those four margins must be COMPLETELY EMPTY — not a thin border, not a partial inset.
+- These are layout guides only. The final image is ONE single continuous background with the subject centred; the margins are visually identical to the centre — same colour, tone and brightness everywhere. Do NOT render any frame, rectangle, outline, border line, guide line, crop mark, corner bracket, or dimmed / tinted / shaded band to mark the empty area. The empty margin must be completely invisible.
+- These empty-margin rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction places content in a reserved margin, ignore that placement and keep the margin empty.
+- All core text, logos, icons, and charts must stay inside the central area, leaving a wide, even empty margin on all four sides (with the bottom margin kept a little deeper), and every one of those four margins must be COMPLETELY EMPTY — not a thin border, not a partial inset.
 - Every reserved margin (top, bottom, left, right) must contain:
   - NO text
   - NO logos
@@ -846,7 +864,7 @@ SAFE AREA (CRITICAL — MUST PRESERVE)
   - NO <蓋章> stamp banner
 - The background color or background image MUST extend seamlessly into all reserved margins — no change in color, texture, brightness, or visual tone; no hard edges, no visual breaks, no overlays, no gradients.
 - FORBIDDEN terms/effects in the final composition: full-width, edge-to-edge, flush left, flush right, flush top, flush bottom, spans the entire width, corner-to-corner, bleed, touching the frame boundary.
-- SELF-CHECK before finalizing: if any text block, card, icon, or box's bounding box touches within 5% of any frame edge, you MUST redesign the layout to add visible gutter space before output.`;
+- SELF-CHECK before finalizing: if any text block, card, icon, or box touches or comes close to any frame edge, you MUST redesign the layout to add visible gutter space before output.`;
 
 /* ============================================================
    AI 消化：透過本地後端代理呼叫 Claude（見 main.py）
@@ -974,7 +992,7 @@ async function handleImageGeneration() {
                 prompt,
                 provider,
                 aspect_ratio: '16:9',
-                image_size: '1K'
+                image_size: state.imageSize
             })
         });
         const data = await response.json();

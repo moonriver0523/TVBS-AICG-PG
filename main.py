@@ -129,11 +129,12 @@ Requirements:
 1. "variable": Extract key points. Format using [標題], [內文小標], <強調文字>.
    - CONTENT MUST BE IN TRADITIONAL CHINESE (Taiwan standard).
    - Concise phrases, no punctuation.
+   - NUMERAL FORMAT: Use Arabic numerals (0-9) for any value naturally read as a figure — percentages, statistics, money, counts, measurements, dates, times, scores, index points (e.g. 10%, 4.25%, 350點, 2萬, 3公里). NEVER spell such figures out as Chinese numerals (write 10% not 十成/百分之十; write 350 not 三百五十). Chinese numerals are allowed only for idiomatic / non-quantitative words (e.g. 三度, 兩次, 第一). Use your own judgement on which category a number falls into.
 2. "style": Choose a professional visual style appropriate for a "{type_label}", written in professional English.
 3. "structure": Design the most readable, intuitive layout for a "{type_label}".
    - Propose concrete spatial arrangement and add instructions for relevant icons, technical illustrations, 3D diagrams, maps, or scene depictions that aid comprehension.
    - Written in professional English.
-   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "All content — including the title, icon cards, and side panels — is inset by a fixed 15% empty margin from the top, left, and right edges; the bottom 15-18% of the frame is a completely empty, seamless extension of the background (broadcast-safe zone)." After that sentence, every element you place (headline, stat cards, indicators, icons) MUST be described with an explicit inset/gutter from its nearest edge — never described as spanning, flush, or edge-to-edge. The words "footer", "bottom edge", "anchored at bottom", "full-screen", "full-bleed", "full-width", "edge-to-edge", "flush left", "flush right", "spans the entire width", "corner-to-corner" and "bleed" are FORBIDDEN. Any closing banner or data-source line is the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge."""
+   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "All content — including the title, icon cards, and side panels — sits within a wide empty margin on the top, left, and right edges, with a deeper empty band along the bottom; across these margins the background continues completely unchanged." After that sentence, every element you place (headline, stat cards, indicators, icons) MUST be described with an explicit inset/gutter from its nearest edge — never described as spanning, flush, or edge-to-edge. The words "footer", "bottom edge", "anchored at bottom", "full-screen", "full-bleed", "full-width", "edge-to-edge", "flush left", "flush right", "spans the entire width", "corner-to-corner" and "bleed" are FORBIDDEN. Any closing banner or data-source line is the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge."""
 
 
 # 編輯版：規範取自編輯台實戰 GEM「整理小幫手」（見 editor-templates/PROMPTS.md）
@@ -150,11 +151,12 @@ Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style
      最後一行必須是 <蓋章> 開頭，標示整張 CG 最核心的結論或金句（精簡有力）
    - 需要變色或加框的關鍵詞（數據、人名）用 <文字> 標示。
    - 若原始資訊包含統計數據，優先列入重點。
+   - 數字格式：凡本質上以數值呈現的資訊（百分比、統計數據、金額、點數、次數、度量、日期時間），一律使用阿拉伯數字（例如 10%、4.25%、350點、2萬、3公里），嚴禁改寫成中文數字（須寫 10% 而非「十成」「百分之十」；須寫 350 而非「三百五十」）。中文數字僅限慣用語或非計量詞（例如「三度」「兩次」「第一」）。需要時自行判斷該數字屬於哪一類。
    - variable 格式範例（示意，內容依實際新聞）：
      "[標題] 聯準會三度降息\\n利率降至<4.25%>\\n[內文小標] 通膨降溫 就業穩健\\n[內文小標] 市場預期 明年再降<兩次>\\n[內文小標] 道瓊應聲<上漲350點>\\n<蓋章> 降息循環正式啟動"
 2. "style": 根據新聞調性（財經、災難、溫馨、政治）選擇主色調與畫面風格（例如：深藍色科技感、紅白色警戒感），written in professional English.
 3. "structure": Design the most readable anchor-wall CG layout for a "{type_label}", with concrete spatial arrangement and instructions for flat icons or 3D data charts that aid comprehension. Written in professional English.
-   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "All content — including the title, icon cards, and data charts — is inset by a fixed 15% empty margin on all four sides, completely empty and seamless extensions of the background (broadcast-safe zone)." After that sentence, every element you place MUST be described with an explicit inset/gutter from its nearest edge — never described as spanning, flush, or edge-to-edge. The words "footer", "bottom edge", "anchored at bottom", "full-screen", "full-bleed", "full-width", "edge-to-edge", "flush left", "flush right", "flush top", "flush bottom", "spans the entire width", "corner-to-corner" and "bleed" are FORBIDDEN. The <蓋章> stamp banner and any data-source line are the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge."""
+   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "All content — including the title, icon cards, and data charts — sits within a wide empty margin on the top, left, and right edges, with a deeper empty band along the bottom; across these margins the background continues completely unchanged." After that sentence, every element you place MUST be described with an explicit inset/gutter from its nearest edge — never described as spanning, flush, or edge-to-edge. The words "footer", "bottom edge", "anchored at bottom", "full-screen", "full-bleed", "full-width", "edge-to-edge", "flush left", "flush right", "flush top", "flush bottom", "spans the entire width", "corner-to-corner" and "bleed" are FORBIDDEN. The <蓋章> stamp banner and any data-source line are the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge."""
 
 
 SIMPLIFIED_DENSITY_RULES = """
@@ -294,9 +296,11 @@ def generate_gpt_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
             detail="無法連線至 OpenAI 圖片服務，請稍後再試",
         ) from exc
     except APIError as exc:
+        reason = str(getattr(exc, "message", "") or exc)[:300]
+        print(f"[GPT image APIError] {type(exc).__name__}: {reason}", flush=True)
         raise HTTPException(
             status_code=502,
-            detail="GPT 圖片生成失敗，請確認 API 額度、組織驗證或模型權限",
+            detail=f"GPT 圖片生成失敗：{reason}",
         ) from exc
 
     image_data = result.data[0].b64_json if result.data else None
@@ -347,9 +351,14 @@ def generate_gemini_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
         with urlopen(request, timeout=120, context=ssl_context) as response:
             result = json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", "replace")[:300]
+        except Exception:
+            body = ""
+        print(f"[Gemini image HTTPError] {exc.code}: {body}", flush=True)
         raise HTTPException(
             status_code=502,
-            detail="Gemini 圖片生成失敗，請確認金鑰、模型權限或稍後重試",
+            detail=f"Gemini 圖片生成失敗（{exc.code}）：{body}" if body else "Gemini 圖片生成失敗，請確認金鑰、模型權限或稍後重試",
         ) from exc
     except (URLError, TimeoutError) as exc:
         raise HTTPException(
