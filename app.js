@@ -746,10 +746,12 @@ ${safeArea}
 ==================================================
 FINAL OUTPUT RULE
 ==================================================
-- The final generated image must NOT contain any "[" "]" or "<" ">" characters.
-- All bracketed variable fields are instructions only.
+- The final generated image must NOT contain any "[" "]" or "<" ">" characters — every bracket in this prompt is a markup delimiter, never content.
+- The markup tag words themselves (標題, 內文小標, 蓋章) are instructions, NEVER content: none of them may appear anywhere in the image.
+- No English instruction text from this prompt may appear in the image; the only visible text is the actual content from VARIABLE FIELDS.
 - Use only Traditional Chinese (Taiwan standard).
-- Ensure all characters are correct with proper stroke forms.`;
+- Ensure all characters are correct with proper stroke forms.
+- SELF-CHECK before finalizing: if any bracket character or any markup tag word is visible anywhere in the image, remove it and re-render that text before output.`;
 
     // 依引擎切換開頭語法
     if (engine === 'gpt') {
@@ -780,17 +782,14 @@ Body Text:
 - Do NOT use any commas or periods
 - Use spaces only to separate phrases
 
-Subtitles ([內文小標]):
-- If the text length is fewer than 6 full-width characters (中文字), use a "Tag" (Label) visual representation (e.g., pill-shaped background, high-contrast block).
+Text Markup Rules (apply to VARIABLE FIELDS):
+- The user text uses inline markup. Bracket characters are markup delimiters ONLY and are NEVER drawn in the image.
+- Line-type tags: a line may START with a tag word wrapped in square brackets (the tag words are 標題 and 內文小標). The tag only declares the line's role (title line / subtitle line). Drop the tag and its brackets completely — the tag word itself must NEVER appear in the image; render only the text that follows it.
+- Emphasis marks: a word or phrase wrapped in angle brackets INSIDE a line is emphasized content. Drop the brackets, keep the inner text, and apply a highlight color such as yellow gold or cyan, with optional glow effect.
+- Stamp command: a line starting with the word 蓋章 wrapped in angle brackets is a command line. The word 蓋章 must NEVER appear in the image. Apply a strong full-box highlight style to the text that follows on that line: solid background color (e.g. red background with white text).
 
-Text Styling Rules:
-- Any text written as [text] or <text>:
-  -> Remove brackets or symbols
-  -> Apply highlight color such as yellow gold or cyan
-  -> Optional glow effect for emphasis
-- Any <蓋章> marker:
-  -> Apply strong full-box highlight style to the following text
-  -> Use solid background color (e.g. red background with white text)`;
+Subtitles:
+- A subtitle line (tagged 內文小標 in the markup) whose text is fewer than 6 full-width characters (中文字) should be rendered as a "Tag" (Label) visual representation (e.g., pill-shaped background, high-contrast block).`;
 
 const EDITOR_TEXT_RULES =
 `==================================================
@@ -807,24 +806,21 @@ Body Text:
 - Do NOT use any commas or periods
 - Use spaces only to separate phrases
 
-Subtitles ([內文小標]):
-- If the text length is fewer than 6 full-width characters (中文字), use a "Tag" (Label) visual representation.
+Text Markup Rules (apply to VARIABLE FIELDS):
+- The user text uses inline markup. Bracket characters are markup delimiters ONLY and are NEVER drawn in the image.
+- Line-type tags: a line may START with a tag word wrapped in square brackets (the tag words are 標題 and 內文小標). The tag only declares the line's role (title line / subtitle line). Drop the tag and its brackets completely — the tag word itself must NEVER appear in the image; render only the text that follows it.
+- Emphasis marks: a word or phrase wrapped in angle brackets INSIDE a line is emphasized content. Drop the brackets, keep the inner text, and apply a highlight color such as yellow gold or cyan, with optional glow effect.
+- Stamp command: a line starting with the word 蓋章 wrapped in angle brackets is a command line. The word 蓋章 must NEVER appear in the image. Apply a strong full-box highlight style to the text that follows on that line: solid background color (e.g. red background with white text).
 
-Text Styling Rules:
-- Any text written as [text] or <text>:
-  -> Remove brackets or symbols
-  -> Apply highlight color such as yellow gold or cyan
-  -> Optional glow effect for emphasis
-- Any <蓋章> marker:
-  -> Apply strong full-box highlight style to the following text
-  -> Use solid background color (e.g. red background with white text)
+Subtitles:
+- A subtitle line (tagged 內文小標 in the markup) whose text is fewer than 6 full-width characters (中文字) should be rendered as a "Tag" (Label) visual representation.
 
 Visual Elements:
 - Include high-quality flat icons or 3D data charts relevant to the content
 - Background: professional broadcast news style, subtle glow / tech lines, strictly NO plain gradients`;
 
 /* 安全框百分比設定（實驗中，feat/percent-safe-area）：調整數值只需改這裡 */
-const SAFE_MARGIN_PCT = { side: '8–10%', top: '8–10%', bottom: '18–22%', zoneW: '80–84%', zoneH: '68–74%' };
+const SAFE_MARGIN_PCT = { side: '8–10%', top: '8–10%', bottom: '22–26%', zoneW: '80–84%', zoneH: '64–70%' };
 
 const SAFE_PCT_HEADER =
 `- PROPORTIONAL MARGIN REFERENCE: the margins below are proportions of the frame dimensions. These percentage values are internal layout measurements ONLY — they are instructions, NEVER content: do NOT draw, print, or render any of these numbers, the "%" character, or any measurement annotation anywhere in the final image.
@@ -833,7 +829,7 @@ const SAFE_PCT_HEADER =
   - Right margin: approximately ${SAFE_MARGIN_PCT.side} of frame width — completely empty
   - Top margin: approximately ${SAFE_MARGIN_PCT.top} of frame height — completely empty
   - Bottom reserved band: approximately ${SAFE_MARGIN_PCT.bottom} of frame height (deliberately deeper than the sides) — completely empty
-  - The bottom reserved band is the lowest slice of the frame: EVERYTHING — including any closing banner, summary strip, or lowest row of content — must end well above it, within roughly the upper three quarters of the frame height. Nothing may sit in, touch, or overlap the lowest quarter of the frame.
+  - The bottom reserved band is the lowest slice of the frame: treat it as if it will be physically cropped away after generation, so design the ENTIRE layout for only the remaining upper portion of the canvas. EVERYTHING — including any closing banner, summary strip, stamp banner, or lowest row of content — must end well above the band, within roughly the upper 70 percent of the frame height. The closing/summary banner is the element that most often violates this rule: deliberately place it noticeably HIGHER than feels visually natural. Nothing may sit in, touch, or overlap the band.
 - CENTRAL CONTENT ZONE: all content must fit entirely inside the remaining central zone (approximately ${SAFE_MARGIN_PCT.zoneW} of frame width, ${SAFE_MARGIN_PCT.zoneH} of frame height).
 - MARGINS ARE BOUNDED ON BOTH SIDES, AND THE MINIMUM WINS: first guarantee every margin meets its stated minimum — this takes absolute priority over everything else. Only after the minimum margins are secured, size the content group to use the central content zone well; do not leave the design floating small in the middle with borders far thicker than the stated ranges. If filling the zone would ever conflict with the minimum margins, KEEP THE MARGINS and shrink the content instead.`;
 
@@ -877,7 +873,7 @@ ${SAFE_PCT_HEADER}
   - NO divider lines
   - NO decorative elements
   - NO data-source line
-  - NO <蓋章> stamp banner
+  - NO stamp banner (the full-box highlight banner produced by the stamp command)
 - The background color or background image MUST extend seamlessly into all reserved margins — no change in color, texture, brightness, or visual tone; no hard edges, no visual breaks, no overlays, no gradients.
 - FORBIDDEN terms/effects in the final composition: full-width, edge-to-edge, flush left, flush right, flush top, flush bottom, spans the entire width, corner-to-corner, bleed, touching the frame boundary.
 - SELF-CHECK before finalizing: if any text block, card, icon, or box crosses into any reserved margin defined above, you MUST redesign the layout so everything fits the central content zone before output.`;
