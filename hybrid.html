@@ -38,6 +38,7 @@
     width: 100%; padding: 10px; border: none; border-radius: 8px; font-size: 14px;
     font-family: inherit; font-weight: bold; cursor: pointer; margin-top: 8px;
   }
+  #btnAuto { background: linear-gradient(135deg, #ff7a3d, #ff3d77); color: #fff; }
   #btnBg { background: linear-gradient(135deg, #3d6bff, #7a3dff); color: #fff; }
   #btnExport { background: var(--accent); color: #1a1a1a; }
   button:disabled { opacity: .45; cursor: wait; }
@@ -58,6 +59,12 @@
 </header>
 <div class="layout">
   <aside class="controls">
+    <div class="card">
+      <h2>AI 一鍵成圖（記者外勤模式）</h2>
+      <label>貼上新聞原文</label>
+      <textarea id="f-news" style="min-height:96px" placeholder="貼新聞文字後按下方按鈕：AI 自動消化 → 填入卡片 → 生成背景 → 自動下載 PNG。完成後仍可手動微調再匯出。"></textarea>
+      <button id="btnAuto">AI 一鍵成圖</button>
+    </div>
     <div class="card">
       <h2>內容（APP 繪製，保證正確）</h2>
       <label>主標題</label>

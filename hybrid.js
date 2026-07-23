@@ -150,14 +150,20 @@ function render() {
       x: cx, y: y + 76, 'font-size': 30, 'font-weight': 'bold',
       fill: '#dfe7f7', 'text-anchor': 'middle'
     }));
+    // 長數值自動縮字級，避免撐出卡片（文字溢位精細檢查留待階段1）
+    const vLen = it.value.length;
+    const vSize = vLen > 12 ? 28 : vLen > 8 ? 36 : 48;
+    const hasChange = it.change || it.direction !== 'flat';
     cards.appendChild(textEl(it.value, {
-      x: cx, y: y + 172, 'font-size': 48, 'font-weight': 'bold',
-      fill: '#ffffff', 'text-anchor': 'middle'
+      x: cx, y: hasChange ? y + 172 : y + 190, 'font-size': vSize,
+      'font-weight': 'bold', fill: '#ffffff', 'text-anchor': 'middle'
     }));
-    cards.appendChild(textEl(`${dir.arrow} ${it.change}`, {
-      x: cx, y: y + 252, 'font-size': 34, 'font-weight': 'bold',
-      fill: dir.color, 'text-anchor': 'middle'
-    }));
+    if (hasChange) {
+      cards.appendChild(textEl(`${dir.arrow} ${it.change}`.trim(), {
+        x: cx, y: y + 252, 'font-size': 34, 'font-weight': 'bold',
+        fill: dir.color, 'text-anchor': 'middle'
+      }));
+    }
   });
   svg.appendChild(cards);
 
@@ -284,10 +290,62 @@ async function exportPNG() {
   status.textContent = '已匯出 ' + a.download;
 }
 
+/* ---- AI 一鍵成圖：新聞原文 → 消化 → 填格 → 背景 → 自動下載 ----
+   使用情境：記者外勤只有手機，貼文字下令，不做細部調整。 */
+
+const DIGEST_BACKEND_URL = 'http://127.0.0.1:8787/api/hybrid/digest';
+
+function fillContent(d) {
+  document.getElementById('f-title').value = d.title || '';
+  document.getElementById('f-subtitle').value = d.subtitle || '';
+  document.getElementById('f-source').value = d.source || '';
+  document.getElementById('f-visual').value = d.visual_subject || '';
+  (d.items || []).slice(0, 3).forEach((it, i) => {
+    const set = (k, v) => { document.querySelector(`[data-k="${k}"][data-i="${i}"]`).value = v; };
+    set('label', it.label || '');
+    set('value', it.value || '');
+    set('change', it.change || '');
+    set('direction', ['up', 'down', 'flat'].includes(it.direction) ? it.direction : 'flat');
+  });
+}
+
+async function autoPilot() {
+  const btn = document.getElementById('btnAuto');
+  const status = document.getElementById('status');
+  const news = document.getElementById('f-news').value.trim();
+  if (!news) { status.textContent = '請先貼上新聞原文'; return; }
+  btn.disabled = true;
+  try {
+    status.textContent = '1/3 AI 消化新聞中…';
+    const res = await fetch(DIGEST_BACKEND_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ news_text: news })
+    });
+    if (!res.ok) throw new Error('消化失敗 HTTP ' + res.status);
+    fillContent(await res.json());
+    render();
+
+    status.textContent = '2/3 內容就緒，生成背景中…';
+    state.bgDataUri = null;
+    await generateBackground();
+    if (!state.bgDataUri) throw new Error('背景生成失敗');
+
+    status.textContent = '3/3 匯出中…';
+    await exportPNG();
+    status.textContent = '✅ 完成！PNG 已下載（內容可再手動微調後重新匯出）';
+  } catch (e) {
+    status.textContent = '一鍵成圖失敗：' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 /* ---- 啟動 ---- */
 
 buildItemRows();
 render();
+document.getElementById('btnAuto').addEventListener('click', autoPilot);
 document.getElementById('btnBg').addEventListener('click', generateBackground);
 document.getElementById('btnExport').addEventListener('click', () => {
   exportPNG().catch(e => { document.getElementById('status').textContent = '匯出失敗：' + e.message; });
