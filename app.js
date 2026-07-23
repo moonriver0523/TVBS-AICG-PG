@@ -834,7 +834,7 @@ const SAFE_PCT_HEADER =
   - Top margin: approximately ${SAFE_MARGIN_PCT.top} of frame height — completely empty
   - Bottom reserved band: approximately ${SAFE_MARGIN_PCT.bottom} of frame height (deliberately deeper than the sides) — completely empty
 - CENTRAL CONTENT ZONE: all content must fit entirely inside the remaining central zone (approximately ${SAFE_MARGIN_PCT.zoneW} of frame width, ${SAFE_MARGIN_PCT.zoneH} of frame height).
-- MARGINS ARE BOUNDED ON BOTH SIDES: stay within the stated ranges. Margins must never be thinner than the minimum, and must never exceed roughly one and a half times the maximum. DO NOT over-shrink the design: the content group must fill the central content zone generously — a design floating small in the middle of the frame with oversized empty borders is WRONG and must be redesigned to fill the central zone.`;
+- MARGINS ARE BOUNDED ON BOTH SIDES, AND THE MINIMUM WINS: first guarantee every margin meets its stated minimum — this takes absolute priority over everything else. Only after the minimum margins are secured, size the content group to use the central content zone well; do not leave the design floating small in the middle with borders far thicker than the stated ranges. If filling the zone would ever conflict with the minimum margins, KEEP THE MARGINS and shrink the content instead.`;
 
 const REPORTER_SAFE_AREA =
 `==================================================
