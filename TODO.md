@@ -1,5 +1,13 @@
 # TODO
 
+## /api/generate 缺重試機制（2026-07-23 實測發現）
+
+主流程 digest 端點無重試，上游（OpenRouter 多 provider 輪替）偶發 502／不合 schema
+回傳時直接失敗——R4 對照實驗連續兩次被打斷。`/api/hybrid/digest` 已有
+「呼叫＋解析全包」3 次×1.5s 重試（`main.py` hybrid_digest）可直接作範本移植。
+
+- [ ] 把 hybrid 的重試迴圈套用到 `/api/generate`（預估 15 分鐘）
+
 ## 地圖／位置圖：自動生成 Prompt 缺乏地理準確規則（2026-07-23 清查）
 
 **現象**：自動生成的地圖類 CG，島嶼／地點位置常與真實地理位置有明顯落差。
