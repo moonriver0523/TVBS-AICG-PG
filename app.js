@@ -722,7 +722,7 @@ CANVAS
 ==================================================
 - Aspect ratio: 16:9
 - Centred composition, single continuous full-frame background
-- Scale the whole design down so it fills only the central region, surrounded by a thick empty margin on every side (deeper at the bottom); when unsure, make the margin bigger, never smaller
+- Scale the whole design so it fills the central content zone defined in EMPTY MARGIN RULES generously — margins stay within their stated ranges, neither thinner nor dramatically thicker
 
 ${textRules}
 
@@ -833,7 +833,8 @@ const SAFE_PCT_HEADER =
   - Right margin: approximately ${SAFE_MARGIN_PCT.side} of frame width — completely empty
   - Top margin: approximately ${SAFE_MARGIN_PCT.top} of frame height — completely empty
   - Bottom reserved band: approximately ${SAFE_MARGIN_PCT.bottom} of frame height (deliberately deeper than the sides) — completely empty
-- CENTRAL CONTENT ZONE: all content must fit entirely inside the remaining central zone (approximately ${SAFE_MARGIN_PCT.zoneW} of frame width, ${SAFE_MARGIN_PCT.zoneH} of frame height). When in doubt, make the margins bigger, never smaller.`;
+- CENTRAL CONTENT ZONE: all content must fit entirely inside the remaining central zone (approximately ${SAFE_MARGIN_PCT.zoneW} of frame width, ${SAFE_MARGIN_PCT.zoneH} of frame height).
+- MARGINS ARE BOUNDED ON BOTH SIDES: stay within the stated ranges. Margins must never be thinner than the minimum, and must never exceed roughly one and a half times the maximum. DO NOT over-shrink the design: the content group must fill the central content zone generously — a design floating small in the middle of the frame with oversized empty borders is WRONG and must be redesigned to fill the central zone.`;
 
 const REPORTER_SAFE_AREA =
 `==================================================
