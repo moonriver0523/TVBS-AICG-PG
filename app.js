@@ -833,6 +833,7 @@ const SAFE_PCT_HEADER =
   - Right margin: approximately ${SAFE_MARGIN_PCT.side} of frame width — completely empty
   - Top margin: approximately ${SAFE_MARGIN_PCT.top} of frame height — completely empty
   - Bottom reserved band: approximately ${SAFE_MARGIN_PCT.bottom} of frame height (deliberately deeper than the sides) — completely empty
+  - The bottom reserved band is the lowest slice of the frame: EVERYTHING — including any closing banner, summary strip, or lowest row of content — must end well above it, within roughly the upper three quarters of the frame height. Nothing may sit in, touch, or overlap the lowest quarter of the frame.
 - CENTRAL CONTENT ZONE: all content must fit entirely inside the remaining central zone (approximately ${SAFE_MARGIN_PCT.zoneW} of frame width, ${SAFE_MARGIN_PCT.zoneH} of frame height).
 - MARGINS ARE BOUNDED ON BOTH SIDES, AND THE MINIMUM WINS: first guarantee every margin meets its stated minimum — this takes absolute priority over everything else. Only after the minimum margins are secured, size the content group to use the central content zone well; do not leave the design floating small in the middle with borders far thicker than the stated ranges. If filling the zone would ever conflict with the minimum margins, KEEP THE MARGINS and shrink the content instead.`;
 
