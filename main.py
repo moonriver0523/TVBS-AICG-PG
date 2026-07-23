@@ -14,7 +14,17 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
-openai_client = OpenAI()
+# Digest（生成 Prompt）預設走 OpenRouter，與生圖共用同一把 OPENROUTER_API_KEY；
+# 未設定 OPENROUTER_API_KEY 時退回 OpenAI 原生直連。
+_openrouter_key = os.getenv("OPENROUTER_API_KEY")
+if _openrouter_key:
+    openai_client = OpenAI(
+        base_url="https://openrouter.ai/api/v1", api_key=_openrouter_key
+    )
+    DEFAULT_DIGEST_MODEL = "anthropic/claude-sonnet-5"
+else:
+    openai_client = OpenAI()
+    DEFAULT_DIGEST_MODEL = "gpt-5.6-terra"
 
 app = FastAPI()
 
@@ -203,47 +213,57 @@ def generate(req: GenerateRequest):
         type_label=req.type_label,
     )
 
-    model = os.getenv("OPENAI_DIGEST_MODEL", "gpt-5.6-terra")
+    # DIGEST_MODEL 可覆寫；沿用舊環境變數 OPENAI_DIGEST_MODEL 作為次要相容
+    model = (
+        os.getenv("DIGEST_MODEL")
+        or os.getenv("OPENAI_DIGEST_MODEL")
+        or DEFAULT_DIGEST_MODEL
+    )
     try:
-        response = openai_client.responses.create(
+        # Chat Completions 介面 OpenRouter 與 OpenAI 原生皆通用
+        response = openai_client.chat.completions.create(
             model=model,
-            instructions=system_prompt,
-            input=f'News Source Material:\n"{req.news_text}"',
-            max_output_tokens=1500,
-            store=False,
-            text={
-                "format": {
-                    "type": "json_schema",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": f'News Source Material:\n"{req.news_text}"',
+                },
+            ],
+            max_tokens=1500,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
                     "name": "news_cg_digest",
                     "strict": True,
                     "schema": DIGEST_OUTPUT_SCHEMA,
-                }
+                },
             },
         )
     except AuthenticationError as exc:
         raise HTTPException(
             status_code=503,
-            detail="OpenAI API 金鑰無效或尚未啟用 API 計費",
+            detail="AI 服務金鑰無效或尚未啟用計費",
         ) from exc
     except RateLimitError as exc:
         raise HTTPException(
             status_code=429,
-            detail="OpenAI API 用量已達限制，請稍後再試",
+            detail="AI 服務用量已達限制，請稍後再試",
         ) from exc
     except APIConnectionError as exc:
         raise HTTPException(
             status_code=502,
-            detail="無法連線至 OpenAI API，請稍後再試",
+            detail="無法連線至 AI 服務，請稍後再試",
         ) from exc
     except APIError as exc:
         raise HTTPException(
             status_code=502,
-            detail="OpenAI API 處理失敗，請確認模型權限或稍後重試",
+            detail="AI 服務處理失敗，請確認模型權限或稍後重試",
         ) from exc
 
     try:
-        data = json.loads(response.output_text)
-    except json.JSONDecodeError:
+        data = json.loads(response.choices[0].message.content or "")
+    except (json.JSONDecodeError, IndexError):
         raise HTTPException(status_code=502, detail="AI 回傳格式無法解析")
 
     chart_type = data.get("chart_type", "")
