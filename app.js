@@ -746,10 +746,12 @@ ${safeArea}
 ==================================================
 FINAL OUTPUT RULE
 ==================================================
-- The final generated image must NOT contain any "[" "]" or "<" ">" characters.
-- All bracketed variable fields are instructions only.
+- The final generated image must NOT contain any "[" "]" or "<" ">" characters — every bracket in this prompt is a markup delimiter, never content.
+- The markup tag words themselves (標題, 內文小標, 蓋章) are instructions, NEVER content: none of them may appear anywhere in the image.
+- No English instruction text from this prompt may appear in the image; the only visible text is the actual content from VARIABLE FIELDS.
 - Use only Traditional Chinese (Taiwan standard).
-- Ensure all characters are correct with proper stroke forms.`;
+- Ensure all characters are correct with proper stroke forms.
+- SELF-CHECK before finalizing: if any bracket character or any markup tag word is visible anywhere in the image, remove it and re-render that text before output.`;
 
     // 依引擎切換開頭語法
     if (engine === 'gpt') {
@@ -780,17 +782,14 @@ Body Text:
 - Do NOT use any commas or periods
 - Use spaces only to separate phrases
 
-Subtitles ([內文小標]):
-- If the text length is fewer than 6 full-width characters (中文字), use a "Tag" (Label) visual representation (e.g., pill-shaped background, high-contrast block).
+Text Markup Rules (apply to VARIABLE FIELDS):
+- The user text uses inline markup. Bracket characters are markup delimiters ONLY and are NEVER drawn in the image.
+- Line-type tags: a line may START with a tag word wrapped in square brackets (the tag words are 標題 and 內文小標). The tag only declares the line's role (title line / subtitle line). Drop the tag and its brackets completely — the tag word itself must NEVER appear in the image; render only the text that follows it.
+- Emphasis marks: a word or phrase wrapped in angle brackets INSIDE a line is emphasized content. Drop the brackets, keep the inner text, and apply a highlight color such as yellow gold or cyan, with optional glow effect.
+- Stamp command: a line starting with the word 蓋章 wrapped in angle brackets is a command line. The word 蓋章 must NEVER appear in the image. Apply a strong full-box highlight style to the text that follows on that line: solid background color (e.g. red background with white text).
 
-Text Styling Rules:
-- Any text written as [text] or <text>:
-  -> Remove brackets or symbols
-  -> Apply highlight color such as yellow gold or cyan
-  -> Optional glow effect for emphasis
-- Any <蓋章> marker:
-  -> Apply strong full-box highlight style to the following text
-  -> Use solid background color (e.g. red background with white text)`;
+Subtitles:
+- A subtitle line (tagged 內文小標 in the markup) whose text is fewer than 6 full-width characters (中文字) should be rendered as a "Tag" (Label) visual representation (e.g., pill-shaped background, high-contrast block).`;
 
 const EDITOR_TEXT_RULES =
 `==================================================
@@ -807,17 +806,14 @@ Body Text:
 - Do NOT use any commas or periods
 - Use spaces only to separate phrases
 
-Subtitles ([內文小標]):
-- If the text length is fewer than 6 full-width characters (中文字), use a "Tag" (Label) visual representation.
+Text Markup Rules (apply to VARIABLE FIELDS):
+- The user text uses inline markup. Bracket characters are markup delimiters ONLY and are NEVER drawn in the image.
+- Line-type tags: a line may START with a tag word wrapped in square brackets (the tag words are 標題 and 內文小標). The tag only declares the line's role (title line / subtitle line). Drop the tag and its brackets completely — the tag word itself must NEVER appear in the image; render only the text that follows it.
+- Emphasis marks: a word or phrase wrapped in angle brackets INSIDE a line is emphasized content. Drop the brackets, keep the inner text, and apply a highlight color such as yellow gold or cyan, with optional glow effect.
+- Stamp command: a line starting with the word 蓋章 wrapped in angle brackets is a command line. The word 蓋章 must NEVER appear in the image. Apply a strong full-box highlight style to the text that follows on that line: solid background color (e.g. red background with white text).
 
-Text Styling Rules:
-- Any text written as [text] or <text>:
-  -> Remove brackets or symbols
-  -> Apply highlight color such as yellow gold or cyan
-  -> Optional glow effect for emphasis
-- Any <蓋章> marker:
-  -> Apply strong full-box highlight style to the following text
-  -> Use solid background color (e.g. red background with white text)
+Subtitles:
+- A subtitle line (tagged 內文小標 in the markup) whose text is fewer than 6 full-width characters (中文字) should be rendered as a "Tag" (Label) visual representation.
 
 Visual Elements:
 - Include high-quality flat icons or 3D data charts relevant to the content
@@ -834,7 +830,7 @@ EMPTY MARGIN RULES (CRITICAL — MUST PRESERVE)
 - The top margin must contain: NO title text, NO headline, NO icons, NO logos, NO decorative elements.
 - The left margin must contain: NO stat cards, NO numerical modules, NO icons, NO borders, NO text.
 - The right margin must contain: NO indicators, NO boxes, NO icons, NO leader lines, NO text.
-- The bottom margin, kept noticeably deeper than the side margins, must contain:
+- The bottom margin is kept noticeably deeper than the side margins. Treat it as if it will be physically cropped away after generation: design the ENTIRE layout for only the remaining upper portion of the frame, so EVERYTHING — including any closing banner, summary strip, or lowest row of content — ends within roughly the upper three quarters of the frame height. The closing/summary banner is the element that most often violates this rule: deliberately place it noticeably HIGHER than feels visually natural. The bottom margin must contain:
   - NO text
   - NO logos
   - NO icons
@@ -855,6 +851,7 @@ EMPTY MARGIN RULES (CRITICAL — MUST PRESERVE)
 - SCALE THE WHOLE LAYOUT INWARD: treat the entire infographic as one group and shrink it so it is clearly smaller than the frame, leaving a thick empty border of plain background on all sides (deeper at the bottom). The content group must NOT fill the frame. When in doubt, make the margin bigger, never smaller.
 - These empty-margin rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction places content in a reserved margin, ignore that placement and keep the margin empty.
 - All core text, logos, icons, and charts must stay inside the central area, leaving a wide, even empty margin on all four sides (with the bottom margin kept a little deeper), and every one of those four margins must be COMPLETELY EMPTY — not a thin border, not a partial inset.
+- Treat the bottom margin as if it will be physically cropped away after generation: design the ENTIRE layout for only the remaining upper portion of the frame, so EVERYTHING — including any closing banner, summary strip, or stamp banner — ends within roughly the upper three quarters of the frame height, placed noticeably HIGHER than feels visually natural.
 - Every reserved margin (top, bottom, left, right) must contain:
   - NO text
   - NO logos
@@ -863,7 +860,7 @@ EMPTY MARGIN RULES (CRITICAL — MUST PRESERVE)
   - NO divider lines
   - NO decorative elements
   - NO data-source line
-  - NO <蓋章> stamp banner
+  - NO stamp banner (the full-box highlight banner produced by the stamp command)
 - The background color or background image MUST extend seamlessly into all reserved margins — no change in color, texture, brightness, or visual tone; no hard edges, no visual breaks, no overlays, no gradients.
 - FORBIDDEN terms/effects in the final composition: full-width, edge-to-edge, flush left, flush right, flush top, flush bottom, spans the entire width, corner-to-corner, bleed, touching the frame boundary.
 - SELF-CHECK before finalizing: if any text block, card, icon, or box touches or comes close to any frame edge, you MUST redesign the layout to add visible gutter space before output.`;
