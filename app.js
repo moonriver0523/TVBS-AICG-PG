@@ -823,18 +823,30 @@ Visual Elements:
 - Include high-quality flat icons or 3D data charts relevant to the content
 - Background: professional broadcast news style, subtle glow / tech lines, strictly NO plain gradients`;
 
+/* 安全框百分比設定（實驗中，feat/percent-safe-area）：調整數值只需改這裡 */
+const SAFE_MARGIN_PCT = { side: '8–10%', top: '8–10%', bottom: '18–22%', zoneW: '80–84%', zoneH: '68–74%' };
+
+const SAFE_PCT_HEADER =
+`- PROPORTIONAL MARGIN REFERENCE: the margins below are proportions of the frame dimensions. These percentage values are internal layout measurements ONLY — they are instructions, NEVER content: do NOT draw, print, or render any of these numbers, the "%" character, or any measurement annotation anywhere in the final image.
+- RESERVED EMPTY MARGINS (measured inward from each frame edge):
+  - Left margin: approximately ${SAFE_MARGIN_PCT.side} of frame width — completely empty
+  - Right margin: approximately ${SAFE_MARGIN_PCT.side} of frame width — completely empty
+  - Top margin: approximately ${SAFE_MARGIN_PCT.top} of frame height — completely empty
+  - Bottom reserved band: approximately ${SAFE_MARGIN_PCT.bottom} of frame height (deliberately deeper than the sides) — completely empty
+- CENTRAL CONTENT ZONE: all content must fit entirely inside the remaining central zone (approximately ${SAFE_MARGIN_PCT.zoneW} of frame width, ${SAFE_MARGIN_PCT.zoneH} of frame height). When in doubt, make the margins bigger, never smaller.`;
+
 const REPORTER_SAFE_AREA =
 `==================================================
 EMPTY MARGIN RULES (CRITICAL — MUST PRESERVE)
 ==================================================
+${SAFE_PCT_HEADER}
 - These are layout guides only. The final image is ONE single continuous background with the subject centred; the margins are visually identical to the centre — same colour, tone and brightness everywhere. Do NOT render any frame, rectangle, outline, border line, guide line, crop mark, corner bracket, or dimmed / tinted / shaded band to mark the empty area. The empty margin must be completely invisible.
-- SCALE THE WHOLE LAYOUT INWARD: treat the entire infographic as one group and shrink it so it is clearly smaller than the frame, leaving a thick empty border of plain background on all sides (deeper at the bottom). The content group must NOT fill the frame. When in doubt, make the margin bigger, never smaller.
+- SCALE THE WHOLE LAYOUT INWARD: treat the entire infographic as one group and shrink it so it fits the central content zone defined above. The content group must NOT fill the frame.
 - These empty-margin rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction places content in a reserved margin, ignore that placement and keep the margin empty.
-- All core text, logos, icons, and charts must stay inside the central area, leaving a wide, even empty margin on the top, left, and right sides; that margin must be COMPLETELY EMPTY on all three sides — not a thin border, not a partial inset.
 - The top margin must contain: NO title text, NO headline, NO icons, NO logos, NO decorative elements.
 - The left margin must contain: NO stat cards, NO numerical modules, NO icons, NO borders, NO text.
 - The right margin must contain: NO indicators, NO boxes, NO icons, NO leader lines, NO text.
-- The bottom margin, kept noticeably deeper than the side margins, must contain:
+- The bottom reserved band must contain:
   - NO text
   - NO logos
   - NO icons
@@ -845,16 +857,16 @@ EMPTY MARGIN RULES (CRITICAL — MUST PRESERVE)
 - This bottom strip simply stays empty so on-air lower-third graphics never cover any content.
 - The background color or background image from the active content area above MUST extend seamlessly into all four reserved margins — no change in color, texture, brightness, or visual tone; no hard edges, no visual breaks, no overlays, no gradients.
 - FORBIDDEN terms/effects in the final composition: full-width, edge-to-edge, flush left, flush right, flush top, spans the entire width, corner-to-corner, bleed, touching the frame boundary.
-- SELF-CHECK before finalizing: if any text block, card, icon, or box touches or comes close to any frame edge, you MUST redesign the layout to add visible gutter space before output.`;
+- SELF-CHECK before finalizing: if any text block, card, icon, or box crosses into any reserved margin defined above, you MUST redesign the layout so everything fits the central content zone before output.`;
 
 const EDITOR_SAFE_AREA =
 `==================================================
 EMPTY MARGIN RULES (CRITICAL — MUST PRESERVE)
 ==================================================
+${SAFE_PCT_HEADER}
 - These are layout guides only. The final image is ONE single continuous background with the subject centred; the margins are visually identical to the centre — same colour, tone and brightness everywhere. Do NOT render any frame, rectangle, outline, border line, guide line, crop mark, corner bracket, or dimmed / tinted / shaded band to mark the empty area. The empty margin must be completely invisible.
-- SCALE THE WHOLE LAYOUT INWARD: treat the entire infographic as one group and shrink it so it is clearly smaller than the frame, leaving a thick empty border of plain background on all sides (deeper at the bottom). The content group must NOT fill the frame. When in doubt, make the margin bigger, never smaller.
+- SCALE THE WHOLE LAYOUT INWARD: treat the entire infographic as one group and shrink it so it fits the central content zone defined above. The content group must NOT fill the frame.
 - These empty-margin rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction places content in a reserved margin, ignore that placement and keep the margin empty.
-- All core text, logos, icons, and charts must stay inside the central area, leaving a wide, even empty margin on all four sides (with the bottom margin kept a little deeper), and every one of those four margins must be COMPLETELY EMPTY — not a thin border, not a partial inset.
 - Every reserved margin (top, bottom, left, right) must contain:
   - NO text
   - NO logos
@@ -866,7 +878,7 @@ EMPTY MARGIN RULES (CRITICAL — MUST PRESERVE)
   - NO <蓋章> stamp banner
 - The background color or background image MUST extend seamlessly into all reserved margins — no change in color, texture, brightness, or visual tone; no hard edges, no visual breaks, no overlays, no gradients.
 - FORBIDDEN terms/effects in the final composition: full-width, edge-to-edge, flush left, flush right, flush top, flush bottom, spans the entire width, corner-to-corner, bleed, touching the frame boundary.
-- SELF-CHECK before finalizing: if any text block, card, icon, or box touches or comes close to any frame edge, you MUST redesign the layout to add visible gutter space before output.`;
+- SELF-CHECK before finalizing: if any text block, card, icon, or box crosses into any reserved margin defined above, you MUST redesign the layout so everything fits the central content zone before output.`;
 
 /* ============================================================
    AI 消化：透過本地後端代理呼叫 Claude（見 main.py）
