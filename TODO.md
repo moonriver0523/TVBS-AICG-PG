@@ -28,6 +28,6 @@
 - [ ] SAFE AREA 禁數字條款加豁免：「地理座標、距離數值、比例尺」不在禁止之列
 - [ ] （進階）最穩定路線：GIS／官方底圖作為參考圖上傳，模型只處理配色、資訊卡、標題與風格，不得改動陸地輪廓與標記座標 — 參見 `docs/hybrid-rendering-proposal.md`
 
-**參考資料**：`docs/map-accuracy-analysis-okinotorishima.md`（完整分析，含可直接替換的 MAP ACCURACY RULES prompt 段落與 STRUCTURE 改寫範例）。
+**參考資料**：`docs/error-cases/2026-07-23-沖之鳥島-位置偏移-分析.md`（完整分析，含可直接替換的 MAP ACCURACY RULES prompt 段落與 STRUCTURE 改寫範例）＋同名 `.jpg` 錯誤案例圖。
 
 預估工時：約 20 分鐘（含一次生圖測試驗證）。
