@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>混合版型原型 — AI 背景 × APP 資訊層</title>
+<style>
+  :root {
+    --bg: #0d1424; --panel: #141d33; --border: #26314d;
+    --text: #e8ecf5; --muted: #8a94ad; --accent: #ffc843;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Microsoft JhengHei", "Noto Sans TC", sans-serif;
+    background: var(--bg); color: var(--text); min-height: 100vh;
+  }
+  header {
+    padding: 14px 24px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: baseline; gap: 14px;
+  }
+  header h1 { font-size: 18px; }
+  header .tag { font-size: 12px; color: var(--muted); }
+  header a { color: var(--muted); font-size: 13px; margin-left: auto; }
+  .layout { display: flex; gap: 20px; padding: 20px 24px; align-items: flex-start; }
+  .controls { width: 340px; flex-shrink: 0; display: flex; flex-direction: column; gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .card h2 { font-size: 13px; color: var(--accent); margin-bottom: 10px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+  input[type=text], textarea, select {
+    width: 100%; background: #0b1120; color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; font-size: 13px;
+    font-family: inherit;
+  }
+  textarea { resize: vertical; min-height: 56px; }
+  .item-row { display: grid; grid-template-columns: 1fr 1.2fr 1fr 62px; gap: 6px; margin-bottom: 6px; }
+  .item-row input, .item-row select { padding: 6px 7px; font-size: 12px; }
+  button {
+    width: 100%; padding: 10px; border: none; border-radius: 8px; font-size: 14px;
+    font-family: inherit; font-weight: bold; cursor: pointer; margin-top: 8px;
+  }
+  #btnBg { background: linear-gradient(135deg, #3d6bff, #7a3dff); color: #fff; }
+  #btnExport { background: var(--accent); color: #1a1a1a; }
+  button:disabled { opacity: .45; cursor: wait; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row label { margin: 0; }
+  #status { font-size: 12px; color: var(--muted); margin-top: 8px; min-height: 16px; }
+  .preview-wrap { flex: 1; min-width: 0; }
+  #svgHost { width: 100%; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #000; }
+  #svgHost svg { display: block; width: 100%; height: auto; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<header>
+  <h1>混合版型原型</h1>
+  <span class="tag">階段0 技術驗證 — AI 生背景，APP 疊資訊 · 1280×720</span>
+  <a href="index.html">← 回主工具</a>
+</header>
+<div class="layout">
+  <aside class="controls">
+    <div class="card">
+      <h2>內容（APP 繪製，保證正確）</h2>
+      <label>主標題</label>
+      <input type="text" id="f-title" value="美股三大指數收黑">
+      <label>次標題</label>
+      <input type="text" id="f-subtitle" value="7月22日收盤">
+      <label>三欄數據（名稱／數值／漲跌／方向）</label>
+      <div id="items"></div>
+      <label>資料來源</label>
+      <input type="text" id="f-source" value="資料來源：Reuters">
+    </div>
+    <div class="card">
+      <h2>AI 背景（僅視覺，禁文字）</h2>
+      <label>視覺主題描述</label>
+      <textarea id="f-visual">紐約證交所交易大廳，下跌的金融市場氣氛，深藍色調，微弱紅色下行光影</textarea>
+      <div class="row" style="margin-top:8px">
+        <select id="f-provider" style="flex:1">
+          <option value="gemini">Gemini</option>
+          <option value="gpt">GPT</option>
+        </select>
+        <label class="row" style="gap:4px; font-size:12px; color:var(--muted)">
+          <input type="checkbox" id="f-guides"> 安全區
+        </label>
+      </div>
+      <button id="btnBg">生成 AI 背景</button>
+      <button id="btnExport">匯出 PNG（1280×720）</button>
+      <div id="status"></div>
+    </div>
+    <div class="hint">
+      流程：改內容 → 即時預覽 → 生成背景 → 匯出。<br>
+      重新生成背景不會動到已填的文字與數字。
+    </div>
+  </aside>
+  <main class="preview-wrap">
+    <div id="svgHost"></div>
+  </main>
+</div>
+<script src="hybrid.js"></script>
+</body>
+</html>
