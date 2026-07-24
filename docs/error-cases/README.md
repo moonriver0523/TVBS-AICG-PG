@@ -2,6 +2,10 @@
 
 生圖結果與預期不符的案例集中存放處，供日後修 prompt／驗證改進效果用。
 
+## 安全框驗收基準
+
+判定生圖是否「邊距無視／貼邊／壓帶」等安全框類錯誤時，一律以 [`docs/examples/tvbs-safe-frame-locked-tool.md`](../examples/tvbs-safe-frame-locked-tool.md) 第四節的官方數值為準（上10.09%／左7.29%／右7.60%／下20.37%），不要另外自訂比例。
+
 ## 命名規則
 
 ```
