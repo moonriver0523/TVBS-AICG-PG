@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>新聞 CG 產生器 — 成果報告</title>
+<meta name="hz:slide-selector" content=".slide">
+<meta name="hz:canvas-width" content="1920">
+<meta name="hz:canvas-height" content="1080">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --ink: #0b1220;
+  --ink-2: #131d33;
+  --line: #26324f;
+  --white: #f4f7ff;
+  --muted: #93a1c0;
+  --red: #e8263c;
+  --gold: #ffc843;
+  --green: #2ee06e;
+}
+
+body {
+  background: #05070d;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  overflow: hidden;
+  font-family: "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif;
+}
+
+.deck-stage {
+  position: relative;
+  width: 1920px;
+  height: 1080px;
+  flex: none;
+  transform-origin: center center;
+}
+
+.slide {
+  position: absolute;
+  inset: 0;
+  width: 1920px;
+  height: 1080px;
+  background: var(--ink);
+  color: var(--white);
+  overflow: hidden;
+  display: none;
+}
+.slide.is-active { display: block; }
+
+/* ---- 共用文字階層（每頁沿用同一組 role class） ---- */
+.kicker {
+  position: absolute;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  color: var(--red);
+}
+.headline {
+  position: absolute;
+  font-size: 68px;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  line-height: 1.15;
+}
+.display { font-size: 118px; font-weight: 900; letter-spacing: -0.02em; line-height: 1.05; }
+.lead { font-size: 38px; font-weight: 700; line-height: 1.5; }
+.body { font-size: 27px; font-weight: 400; line-height: 1.75; color: #d3dcf0; }
+.caption { font-size: 21px; font-weight: 400; line-height: 1.6; color: var(--muted); }
+.stat { font-size: 92px; font-weight: 900; color: var(--gold); line-height: 1; }
+.hl-red { color: var(--red); }
+.hl-gold { color: var(--gold); }
+.hl-green { color: var(--green); }
+
+.rule { position: absolute; height: 6px; width: 96px; background: var(--red); }
+
+/* ---- S1 封面 ---- */
+.cover-glow {
+  position: absolute; right: -260px; top: -300px;
+  width: 1100px; height: 1100px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(232,38,60,0.22) 0%, rgba(232,38,60,0) 68%);
+}
+.goal-box {
+  position: absolute; left: 128px; top: 792px; width: 1470px;
+  border: 1px solid var(--line); border-left: 6px solid var(--gold);
+  background: rgba(19,29,51,0.75); padding: 30px 40px;
+}
+
+/* ---- 圖卡（踩雷牆） ---- */
+.shot { position: absolute; border: 1px solid var(--line); background: #000; }
+.shot img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.shot-tag {
+  position: absolute; left: 0; top: 100%;
+  background: var(--red); color: #fff;
+  font-size: 24px; font-weight: 900; padding: 10px 20px;
+  letter-spacing: 0.02em;
+}
+
+.tally {
+  position: absolute; left: 128px; bottom: 62px; width: 1664px;
+  border-top: 1px solid var(--line); padding-top: 26px;
+  display: flex; align-items: baseline; gap: 56px;
+}
+.tally b { font-size: 46px; font-weight: 900; color: var(--gold); }
+
+/* ---- 條列 ---- */
+.point { position: absolute; display: flex; gap: 22px; align-items: flex-start; }
+.point-no {
+  flex: none; width: 46px; height: 46px; border-radius: 50%;
+  border: 2px solid var(--red); color: var(--red);
+  font-size: 24px; font-weight: 900;
+  display: flex; align-items: center; justify-content: center;
+}
+
+/* ---- 三欄卡 ---- */
+.col {
+  position: absolute; top: 340px; width: 500px; height: 520px;
+  background: var(--ink-2); border: 1px solid var(--line); padding: 38px 34px;
+}
+.col-h { font-size: 30px; font-weight: 900; margin-bottom: 22px; }
+.col li { font-size: 25px; line-height: 1.62; color: #d3dcf0; margin-bottom: 16px; list-style: none; padding-left: 24px; position: relative; }
+.col li::before { content: "▸"; position: absolute; left: 0; color: var(--muted); }
+
+/* ---- 導覽（在 slide 之外，不與版面重疊） ---- */
+.deck-controls {
+  position: fixed; right: 26px; bottom: 20px;
+  display: flex; align-items: center; gap: 16px;
+  font-family: "Microsoft JhengHei", sans-serif;
+  color: #6b7a99; font-size: 15px; z-index: 10;
+}
+.deck-controls button {
+  background: rgba(255,255,255,0.07); color: #c8d4ec;
+  border: 1px solid #2b3550; border-radius: 6px;
+  width: 34px; height: 30px; font-size: 15px; cursor: pointer;
+}
+.deck-controls button:hover { background: rgba(255,255,255,0.16); }
+.deck-progress { position: fixed; left: 0; top: 0; height: 3px; background: var(--red); z-index: 10; transition: width .2s; }
+</style>
+</head>
+<body>
+
+<div class="deck-progress" id="progress"></div>
+
+<div class="deck-stage" id="stage">
+
+  <!-- ================= S1 封面／目標 ================= -->
+  <section class="slide is-active">
+    <div class="cover-glow"></div>
+    <div class="kicker" style="left:128px; top:150px;">TVBS AI CHAMPION ・ 成果報告 ・ 2026.07.29</div>
+    <div class="rule" style="left:128px; top:214px;"></div>
+
+    <div class="display" style="position:absolute; left:128px; top:286px;">
+      新聞 CG 產生器
+    </div>
+    <div class="lead" style="position:absolute; left:132px; top:474px; width:1300px; color:#c9d5ee;">
+      從「想辦法教 AI 把版面畫準」<br>
+      到「<span class="hl-gold">乾脆不讓 AI 畫字</span>」
+    </div>
+
+    <div class="goal-box">
+      <div class="caption" style="letter-spacing:0.2em; margin-bottom:10px;">當初設定的目標</div>
+      <div style="font-size:34px; font-weight:700; line-height:1.5;">
+        讓記者與編輯共用同一套流程，<span class="hl-gold">一擊即中</span>做出可直接上鏡的新聞 CG
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= S2 踩雷：像素版 ================= -->
+  <section class="slide">
+    <div class="kicker" style="left:100px; top:74px;">過程中發生什麼事 ・ 第一輪</div>
+    <div class="headline" style="left:100px; top:118px;">
+      我叫它「上下左右各留 288 像素」
+    </div>
+
+    <div class="shot" style="left:100px; top:280px; width:832px; height:468px;">
+      <img src="{{IMG1}}" alt="像素安全框失敗案例：模型把 288px 當文字畫進圖">
+      <div class="shot-tag">它把「288px」當美術字畫進畫面</div>
+    </div>
+    <div class="shot" style="left:988px; top:280px; width:832px; height:468px;">
+      <img src="{{IMG2}}" alt="像素安全框失敗案例：畫成工程標註圖">
+      <div class="shot-tag">整張變成有標註線的工程圖</div>
+    </div>
+
+    <div class="lead" style="position:absolute; left:100px; top:876px; font-size:36px;">
+      我加了「不准把數字畫出來」的防護條款 ── <span class="hl-red">擋不住</span>
+    </div>
+    <div class="caption" style="position:absolute; left:100px; top:952px; font-size:25px;">
+      像素版 4 張全數失敗：2 張把尺寸標進畫面，另外 2 張乾脆完全無視邊距。
+    </div>
+  </section>
+
+  <!-- ================= S3 踩雷：百分比版 ================= -->
+  <section class="slide">
+    <div class="kicker" style="left:100px; top:74px;">過程中發生什麼事 ・ 第二、三輪</div>
+    <div class="headline" style="left:100px; top:118px;">
+      改成「大約留 8%」，數字不見了 ── <span class="hl-red">版面亂了</span>
+    </div>
+
+    <div class="shot" style="left:100px; top:280px; width:832px; height:468px;">
+      <img src="{{IMG6}}" alt="百分比安全框失敗案例：指令括號被畫進圖">
+      <div class="shot-tag">改畫我給它的指令括號 &lt; &gt; 和 [ ]</div>
+    </div>
+    <div class="shot" style="left:988px; top:280px; width:832px; height:468px;">
+      <img src="{{IMG5}}" alt="百分比安全框失敗案例：標題貼頂、底部壓到跑馬燈區">
+      <div class="shot-tag">最漂亮的一張 ── 也是最不能用的一張</div>
+    </div>
+
+    <div class="tally" style="top:876px;">
+      <span><b>3</b> <span class="caption" style="font-size:25px;">輪調參</span></span>
+      <span><b>19</b> <span class="caption" style="font-size:25px;">張實測圖</span></span>
+      <span><b>0</b> <span class="caption" style="font-size:25px;">次穩定達標</span></span>
+      <span class="caption" style="font-size:24px; margin-left:auto; max-width:900px;">
+        右圖標題貼到畫面上緣、底部資訊條壓進下標區 ── 上鏡就會被蓋掉。<br>
+        修一項冒一項：過縮 → 貼邊 → 底部壓帶 → 括號入圖。
+      </span>
+    </div>
+  </section>
+
+  <!-- ================= S3 地理雷 ================= -->
+  <section class="slide">
+    <div class="kicker" style="left:100px; top:74px;">同一個根因，另一種症狀</div>
+    <div class="headline" style="left:100px; top:118px;">
+      換個題目，<span class="hl-red">雷還在</span>
+    </div>
+
+    <div class="shot" style="left:100px; top:268px; width:1000px; height:562px;">
+      <img src="{{IMG8}}" alt="沖之鳥島 EEZ 圖：島嶼位置畫錯、日文漢字混入">
+      <div class="shot-tag">看起來完全可以上鏡的一張圖</div>
+    </div>
+
+    <div style="position:absolute; left:1176px; top:268px; width:644px;">
+      <div style="border-left:6px solid var(--red); padding-left:26px; margin-bottom:52px;">
+        <div class="lead" style="margin-bottom:14px;">位置錯了</div>
+        <div class="body">
+          沖之鳥島實際在東京<span class="hl-gold">南方約 1,700 公里</span>的太平洋上，
+          圖上卻被畫到日本本土旁邊。地理位置對新聞來說不是細節，是事實。
+        </div>
+      </div>
+      <div style="border-left:6px solid var(--red); padding-left:26px; margin-bottom:52px;">
+        <div class="lead" style="margin-bottom:14px;">字也錯了</div>
+        <div class="body">
+          圖中寫的是「專屬<span class="hl-gold">経済</span>區」──混進日文漢字，
+          不是繁體中文。繁中錯字與亂碼是生圖模型的老問題。
+        </div>
+      </div>
+      <div class="caption" style="font-size:24px; line-height:1.7;">
+        版面畫不準、地點畫不準、字寫不對 ──<br>看似三種毛病，其實同一個根因。
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= S4 為什麼 ================= -->
+  <section class="slide">
+    <div class="kicker" style="left:100px; top:74px;">學到的東西</div>
+    <div class="headline" style="left:100px; top:118px;">
+      不是提示詞不夠好，是模型<span class="hl-red">量不出來</span>
+    </div>
+
+    <div class="point" style="left:100px; top:284px; width:960px;">
+      <div class="point-no">1</div>
+      <div>
+        <div class="lead" style="font-size:33px; margin-bottom:10px;">數字在 prompt 裡只是「一串可能被畫出來的文字」</div>
+        <div class="body">對模型來說 288px 和 15% 沒有差別，都不是可以量測的指令。</div>
+      </div>
+    </div>
+
+    <div class="point" style="left:100px; top:474px; width:960px;">
+      <div class="point-no">2</div>
+      <div>
+        <div class="lead" style="font-size:33px; margin-bottom:10px;">提示詞工程有天花板</div>
+        <div class="body">要做到像素級精準，通用作法都是換一條通道去下指令，而不是把話講得更清楚。</div>
+      </div>
+    </div>
+
+    <div class="point" style="left:100px; top:664px; width:960px;">
+      <div class="point-no">3</div>
+      <div>
+        <div class="lead" style="font-size:33px; margin-bottom:10px;">公司既有工具早就這樣做了</div>
+        <div class="body">Studio Locked-Frame 的安全框，是網頁自己用畫布疊一層半透明黑、再把安全區挖空畫出來的 ── 完全沒有交給生成模型。</div>
+      </div>
+    </div>
+
+    <svg style="position:absolute; left:1116px; top:300px;" width="704" height="510" viewBox="0 0 704 510">
+      <rect x="0" y="34" width="704" height="396" fill="#1a2440" stroke="#26324f"/>
+      <rect x="0" y="34" width="704" height="396" fill="rgba(0,0,0,0.55)"/>
+      <rect x="51" y="74" width="599" height="275" fill="#243356" stroke="#ffc843" stroke-width="2" stroke-dasharray="9 6"/>
+      <text x="352" y="20" fill="#93a1c0" font-size="19" text-anchor="middle" font-family="Microsoft JhengHei">TVBS 官方安全框（1920×1080 基準）</text>
+      <text x="352" y="200" fill="#ffc843" font-size="27" font-weight="bold" text-anchor="middle" font-family="Microsoft JhengHei">安全區</text>
+      <text x="352" y="236" fill="#93a1c0" font-size="18" text-anchor="middle" font-family="Microsoft JhengHei">X=140  Y=109  W=1634  H=751</text>
+      <text x="352" y="398" fill="#e8697a" font-size="18" text-anchor="middle" font-family="Microsoft JhengHei">下方 20.37%：下標與跑馬燈蓋台區</text>
+      <text x="352" y="470" fill="#f4f7ff" font-size="21" text-anchor="middle" font-family="Microsoft JhengHei">四邊不對稱，且由前端即時畫出</text>
+      <text x="352" y="500" fill="#93a1c0" font-size="18" text-anchor="middle" font-family="Microsoft JhengHei">這組數字現在是我們的驗收基準</text>
+    </svg>
+  </section>
+
+  <!-- ================= S5 轉向 ================= -->
+  <section class="slide">
+    <div class="kicker" style="left:100px; top:74px;">目標沒變，作法變了</div>
+    <div class="headline" style="left:100px; top:118px;">
+      那就<span class="hl-red">別讓 AI 畫字</span>
+    </div>
+
+    <div class="lead" style="position:absolute; left:100px; top:252px; font-size:44px;">
+      AI 負責<span class="hl-gold">視覺創意</span>，APP 負責<span class="hl-gold">資訊正確性</span>
+    </div>
+
+    <svg style="position:absolute; left:100px; top:360px;" width="1720" height="330" viewBox="0 0 1720 330">
+      <rect x="0" y="40" width="480" height="230" rx="10" fill="#131d33" stroke="#26324f"/>
+      <text x="240" y="104" fill="#7aa2ff" font-size="24" font-weight="bold" text-anchor="middle" font-family="Microsoft JhengHei">AI 生成</text>
+      <text x="240" y="156" fill="#f4f7ff" font-size="31" font-weight="bold" text-anchor="middle" font-family="Microsoft JhengHei">無文字背景</text>
+      <text x="240" y="206" fill="#93a1c0" font-size="20" text-anchor="middle" font-family="Microsoft JhengHei">氛圍、光影、場景</text>
+      <text x="240" y="238" fill="#93a1c0" font-size="20" text-anchor="middle" font-family="Microsoft JhengHei">不出現任何文字與數字</text>
+
+      <text x="558" y="170" fill="#ffc843" font-size="54" text-anchor="middle" font-family="Microsoft JhengHei">＋</text>
+
+      <rect x="620" y="40" width="480" height="230" rx="10" fill="#131d33" stroke="#26324f"/>
+      <text x="860" y="104" fill="#2ee06e" font-size="24" font-weight="bold" text-anchor="middle" font-family="Microsoft JhengHei">APP 繪製</text>
+      <text x="860" y="156" fill="#f4f7ff" font-size="31" font-weight="bold" text-anchor="middle" font-family="Microsoft JhengHei">文字資訊層</text>
+      <text x="860" y="206" fill="#93a1c0" font-size="20" text-anchor="middle" font-family="Microsoft JhengHei">真字型、固定座標</text>
+      <text x="860" y="238" fill="#93a1c0" font-size="20" text-anchor="middle" font-family="Microsoft JhengHei">標題、數字、資料來源</text>
+
+      <text x="1178" y="170" fill="#ffc843" font-size="54" text-anchor="middle" font-family="Microsoft JhengHei">＝</text>
+
+      <rect x="1240" y="40" width="480" height="230" rx="10" fill="#1c2a1f" stroke="#2ee06e"/>
+      <text x="1480" y="104" fill="#2ee06e" font-size="24" font-weight="bold" text-anchor="middle" font-family="Microsoft JhengHei">成品</text>
+      <text x="1480" y="156" fill="#f4f7ff" font-size="31" font-weight="bold" text-anchor="middle" font-family="Microsoft JhengHei">1280×720 PNG</text>
+      <text x="1480" y="206" fill="#93a1c0" font-size="20" text-anchor="middle" font-family="Microsoft JhengHei">字一定對、位置一定準</text>
+      <text x="1480" y="238" fill="#93a1c0" font-size="20" text-anchor="middle" font-family="Microsoft JhengHei">可直接上鏡</text>
+    </svg>
+
+    <div style="position:absolute; left:100px; top:760px; width:1720px; border-top:1px solid var(--line); padding-top:34px;">
+      <div class="caption" style="font-size:24px; letter-spacing:0.16em; margin-bottom:20px;">這一刀同時解掉三個痛點</div>
+      <div style="display:flex; gap:64px;">
+        <div class="lead" style="font-size:32px;"><span class="hl-green">✓</span> 繁中錯字亂碼</div>
+        <div class="lead" style="font-size:32px;"><span class="hl-green">✓</span> 安全框失控</div>
+        <div class="lead" style="font-size:32px;"><span class="hl-green">✓</span> 地圖位置偏移（配底圖）</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= S6 LIVE DEMO ================= -->
+  <section class="slide" style="background:#05070d;">
+    <div class="cover-glow" style="left:50%; top:50%; transform:translate(-50%,-50%); right:auto;"></div>
+    <div class="kicker" style="left:50%; top:300px; transform:translateX(-50%); letter-spacing:0.5em;">主工具 ・ 第三分頁</div>
+    <div class="display" style="position:absolute; left:50%; top:360px; transform:translateX(-50%); font-size:158px;">
+      LIVE DEMO
+    </div>
+    <div style="position:absolute; left:50%; top:600px; transform:translateX(-50%); display:flex; gap:40px; align-items:center;">
+      <div class="lead" style="font-size:34px;">貼上新聞原文</div>
+      <div class="lead" style="font-size:34px; color:var(--red);">→</div>
+      <div class="lead" style="font-size:34px;">按一鍵成圖</div>
+      <div class="lead" style="font-size:34px; color:var(--red);">→</div>
+      <div class="lead" style="font-size:34px;">PNG 落地</div>
+    </div>
+    <div class="caption" style="position:absolute; left:50%; top:700px; transform:translateX(-50%); font-size:24px;">
+      全程無人值守，記者在外勤用手機貼一段文字就能出圖
+    </div>
+  </section>
+
+  <!-- ================= S7 現況與後續 ================= -->
+  <section class="slide">
+    <div class="kicker" style="left:100px; top:74px;">目前完成到哪裡・還差多遠</div>
+    <div class="headline" style="left:100px; top:118px;">
+      能用了，但還沒<span class="hl-red">夠用</span>
+    </div>
+
+    <div class="col" style="left:100px; border-top:5px solid var(--green);">
+      <div class="col-h hl-green">已完成</div>
+      <ul>
+        <li>混合版型引擎（背景＋真字型資訊層）</li>
+        <li>一鍵成圖：新聞原文直接出 PNG</li>
+        <li>整併進主工具第三分頁</li>
+        <li>三輪安全框實驗與錯誤案例庫</li>
+        <li>安全框驗收基準（對齊公司官方數值）</li>
+      </ul>
+    </div>
+
+    <div class="col" style="left:710px; border-top:5px solid var(--gold);">
+      <div class="col-h hl-gold">距離目標還差</div>
+      <ul>
+        <li>目前只有 <b>1</b> 個版型（三欄數據卡）</li>
+        <li>版型要靠人選，還不會自動判斷</li>
+        <li>地圖類尚未收斂</li>
+        <li>長文字溢位仍需人工檢查</li>
+        <li>尚未進實際新聞產線試跑</li>
+      </ul>
+    </div>
+
+    <div class="col" style="left:1320px; border-top:5px solid var(--red);">
+      <div class="col-h hl-red">後續規劃</div>
+      <ul>
+        <li>版型擴充到 4–6 種，AI 自動選版</li>
+        <li>地圖類改走 GIS 底圖合成</li>
+        <li>接上重試機制，穩定度優先</li>
+        <li>找 2–3 位記者實測，收回饋</li>
+        <li>錯誤案例庫持續累積</li>
+      </ul>
+    </div>
+
+    <div class="caption" style="position:absolute; left:100px; bottom:56px; font-size:26px;">
+      最大的收穫不是做出工具，是<span class="hl-gold">確認了哪條路走不通</span>──而且有 19 張圖可以證明。
+    </div>
+  </section>
+
+  <!-- ================= S8 備用頁 ================= -->
+  <section class="slide">
+    <div class="kicker" style="left:100px; top:74px;">備用 ・ Q&amp;A 用</div>
+    <div class="headline" style="left:100px; top:118px; font-size:58px;">開發過程的其他坑</div>
+
+    <div style="position:absolute; left:100px; top:268px; width:820px;">
+      <div class="lead" style="font-size:31px; margin-bottom:14px;">結構化輸出的隱藏限制</div>
+      <div class="body" style="margin-bottom:44px;">
+        要 AI 回傳固定格式的三欄資料，schema 不支援 minItems／maxItems，
+        欄位數量只能靠後端自己補齊與截斷。
+      </div>
+      <div class="lead" style="font-size:31px; margin-bottom:14px;">上游偶發失敗是常態</div>
+      <div class="body" style="margin-bottom:44px;">
+        外部模型服務會間歇性回傳錯誤或不合格式的內容，
+        重試機制必須涵蓋「呼叫＋解析」全程，只重試呼叫沒有用。
+      </div>
+      <div class="lead" style="font-size:31px; margin-bottom:14px;">兩支程式合流的撞名</div>
+      <div class="body">
+        混合版型併進主工具時，兩邊各有同名的全域變數，
+        同頁載入直接整頁停擺 ── 用模組化隔離解決。
+      </div>
+    </div>
+
+    <div style="position:absolute; left:1020px; top:268px; width:800px; background:var(--ink-2); border:1px solid var(--line); padding:36px 40px;">
+      <div class="col-h" style="margin-bottom:26px;">三輪安全框實驗總表</div>
+      <table style="width:100%; border-collapse:collapse; font-size:24px;">
+        <tr style="color:var(--muted); font-size:20px; text-align:left;">
+          <th style="padding-bottom:14px;">路線</th><th>張數</th><th>數字入圖</th><th>版面達標</th>
+        </tr>
+        <tr style="border-top:1px solid var(--line);">
+          <td style="padding:16px 0;">像素版</td><td>4</td><td class="hl-red">2 張</td><td class="hl-red">0</td>
+        </tr>
+        <tr style="border-top:1px solid var(--line);">
+          <td style="padding:16px 0;">百分比版</td><td>15</td><td class="hl-green">0 張</td><td class="hl-red">不穩定</td>
+        </tr>
+        <tr style="border-top:1px solid var(--line);">
+          <td style="padding:16px 0;">純文字修正版</td><td>4</td><td class="hl-green">0 張</td><td class="hl-red">比原版更差</td>
+        </tr>
+      </table>
+      <div class="caption" style="margin-top:28px; font-size:21px; line-height:1.7;">
+        百分比版成功壓住「數字被畫進圖」，但版面精度變成打地鼠：
+        過縮 → 貼邊 → 底部壓帶 → 括號入圖，修一項冒一項。
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<div class="deck-controls">
+  <button id="prev" title="上一頁">‹</button>
+  <span id="counter">1 / 8</span>
+  <button id="next" title="下一頁">›</button>
+  <span style="opacity:.65; margin-left:8px;">← → 翻頁 ・ F 全螢幕</span>
+</div>
+
+<script>
+(function () {
+  const stage = document.getElementById('stage');
+  const slides = [...document.querySelectorAll('.slide')];
+  const counter = document.getElementById('counter');
+  const progress = document.getElementById('progress');
+  let i = 0;
+
+  function fit() {
+    const s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+    stage.style.transform = 'scale(' + s + ')';
+  }
+
+  function show(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((s, k) => s.classList.toggle('is-active', k === i));
+    counter.textContent = (i + 1) + ' / ' + slides.length;
+    progress.style.width = ((i + 1) / slides.length * 100) + '%';
+  }
+
+  document.getElementById('next').onclick = () => show(i + 1);
+  document.getElementById('prev').onclick = () => show(i - 1);
+
+  document.addEventListener('keydown', (e) => {
+    if (['ArrowRight', 'PageDown', ' ', 'Enter'].includes(e.key)) { show(i + 1); e.preventDefault(); }
+    else if (['ArrowLeft', 'PageUp'].includes(e.key)) { show(i - 1); e.preventDefault(); }
+    else if (e.key === 'Home') show(0);
+    else if (e.key === 'End') show(slides.length - 1);
+    else if (e.key === 'f' || e.key === 'F') {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen();
+    }
+  });
+
+  window.addEventListener('resize', fit);
+  fit();
+  show(0);
+})();
+</script>
+</body>
+</html>

@@ -220,64 +220,80 @@ def generate(req: GenerateRequest):
         or os.getenv("OPENAI_DIGEST_MODEL")
         or DEFAULT_DIGEST_MODEL
     )
-    try:
-        # Chat Completions 介面 OpenRouter 與 OpenAI 原生皆通用
-        response = openai_client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": f'News Source Material:\n"{req.news_text}"',
+    # 上游（OpenRouter 多 provider 輪替）偶發 502、輸出截斷或不合 schema 的回傳是常態，
+    # 重試圈必須涵蓋「呼叫＋解析」全程——只重試呼叫，解析失敗一樣會把錯誤丟給使用者。
+    # 作法比照 hybrid_digest：金鑰／用量問題不重試（重試也沒用），其餘 3 次 × 1.5 秒。
+    last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
+    for attempt in range(3):
+        try:
+            # Chat Completions 介面 OpenRouter 與 OpenAI 原生皆通用
+            response = openai_client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": f'News Source Material:\n"{req.news_text}"',
+                    },
+                ],
+                max_tokens=1500,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "news_cg_digest",
+                        "strict": True,
+                        "schema": DIGEST_OUTPUT_SCHEMA,
+                    },
                 },
-            ],
-            max_tokens=1500,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "news_cg_digest",
-                    "strict": True,
-                    "schema": DIGEST_OUTPUT_SCHEMA,
-                },
-            },
+            )
+        except AuthenticationError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="AI 服務金鑰無效或尚未啟用計費",
+            ) from exc
+        except RateLimitError as exc:
+            raise HTTPException(
+                status_code=429,
+                detail="AI 服務用量已達限制，請稍後再試",
+            ) from exc
+        except (APIConnectionError, APIError) as exc:
+            last_detail = (
+                "無法連線至 AI 服務，請稍後再試"
+                if isinstance(exc, APIConnectionError)
+                else "AI 服務處理失敗，請確認模型權限或稍後重試"
+            )
+            print(f"[generate] attempt {attempt + 1}/3 API error: {exc}", flush=True)
+            time.sleep(1.5)
+            continue
+
+        raw_content = response.choices[0].message.content or ""
+        finish_reason = response.choices[0].finish_reason if response.choices else "?"
+        try:
+            data = json.loads(raw_content)
+        except (json.JSONDecodeError, IndexError, TypeError) as exc:
+            last_detail = "AI 回傳格式無法解析"
+            print(
+                f"[generate] attempt {attempt + 1}/3 parse failed "
+                f"(finish_reason={finish_reason}): {exc}\n"
+                f"[generate] raw content: {raw_content[:800]}",
+                flush=True,
+            )
+            time.sleep(1.5)
+            continue
+
+        chart_type = data.get("chart_type", "")
+        if chart_type not in CHART_TYPE_CHOICES:
+            # AI 未回報或回報不在清單內；指定類型時退回原值，自動判斷時留空由前端處理
+            chart_type = "" if req.type_label == AUTO_TYPE_LABEL else req.type_label
+
+        return GenerateResponse(
+            style=data.get("style", ""),
+            structure=data.get("structure", ""),
+            variable=data.get("variable", ""),
+            chart_type=chart_type,
         )
-    except AuthenticationError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="AI 服務金鑰無效或尚未啟用計費",
-        ) from exc
-    except RateLimitError as exc:
-        raise HTTPException(
-            status_code=429,
-            detail="AI 服務用量已達限制，請稍後再試",
-        ) from exc
-    except APIConnectionError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="無法連線至 AI 服務，請稍後再試",
-        ) from exc
-    except APIError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="AI 服務處理失敗，請確認模型權限或稍後重試",
-        ) from exc
 
-    try:
-        data = json.loads(response.choices[0].message.content or "")
-    except (json.JSONDecodeError, IndexError):
-        raise HTTPException(status_code=502, detail="AI 回傳格式無法解析")
-
-    chart_type = data.get("chart_type", "")
-    if chart_type not in CHART_TYPE_CHOICES:
-        # AI 未回報或回報不在清單內；指定類型時退回原值，自動判斷時留空由前端處理
-        chart_type = "" if req.type_label == AUTO_TYPE_LABEL else req.type_label
-
-    return GenerateResponse(
-        style=data.get("style", ""),
-        structure=data.get("structure", ""),
-        variable=data.get("variable", ""),
-        chart_type=chart_type,
-    )
+    raise HTTPException(status_code=502, detail=last_detail)
 
 
 # ---- 混合版型：新聞原文 → 結構化內容（文字數字由 APP 繪製，AI 不碰像素文字）----
