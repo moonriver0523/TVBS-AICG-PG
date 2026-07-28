@@ -21,9 +21,9 @@ IMAGES = {
     "IMG2": "error-cases/2026-07-23-像素安全框-GEMINI2-工程圖標註.png",
     "IMG5": "error-cases/2026-07-23-百分比安全框-R1-GPT1-標題貼頂底部壓帶.png",
     "IMG6": "error-cases/2026-07-23-百分比安全框-R2-GEMINI1-括號入圖.png",
-    "IMG8": "error-cases/2026-07-23-沖之鳥島-位置偏移.jpg",
+    "IMG8": "error-cases/2026-07-22-繁中標題亂碼-關稅資料圖-OpenRouter.png",
     # 現行純文字版的可接受產出（不是錯誤案例，另存 demo/assets）
-    "OK1": "demo/assets/2026-07-23-純文字版-可接受-波音售機協議.png",
+    "OK1": "demo/assets/2026-07-22-純文字版-可接受-美國臨時關稅底部留白足.png",
     "OK2": "demo/assets/2026-07-24-純文字版-可接受-伊朗軍援葉門.png",
 }
 

@@ -11,6 +11,14 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# 清掉殘留在 8787 的舊後端（pull 後常見：舊 process 卡住 port，害新 main.py 起不來）
+STALE_PID=$(lsof -nP -tiTCP:8787 -sTCP:LISTEN 2>/dev/null || true)
+if [ -n "$STALE_PID" ]; then
+    echo "偵測到 8787 殘留後端 (PID $STALE_PID)，先關閉..."
+    kill $STALE_PID 2>/dev/null || true
+    sleep 1
+fi
+
 echo "啟動後端代理 (http://127.0.0.1:8787) ..."
 uv run uvicorn main:app --host 127.0.0.1 --port 8787 &
 UVICORN_PID=$!
