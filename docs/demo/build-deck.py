@@ -13,15 +13,18 @@ import sys
 import tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
-CASES = HERE.parent / "error-cases"
+DOCS = HERE.parent
 
-# 佔位符 -> 原始檔名
+# 佔位符 -> 相對於 docs/ 的來源圖路徑
 IMAGES = {
-    "IMG1": "2026-07-23-像素安全框-GEMINI1-數字入圖.png",
-    "IMG2": "2026-07-23-像素安全框-GEMINI2-工程圖標註.png",
-    "IMG5": "2026-07-23-百分比安全框-R1-GPT1-標題貼頂底部壓帶.png",
-    "IMG6": "2026-07-23-百分比安全框-R2-GEMINI1-括號入圖.png",
-    "IMG8": "2026-07-23-沖之鳥島-位置偏移.jpg",
+    "IMG1": "error-cases/2026-07-23-像素安全框-GEMINI1-數字入圖.png",
+    "IMG2": "error-cases/2026-07-23-像素安全框-GEMINI2-工程圖標註.png",
+    "IMG5": "error-cases/2026-07-23-百分比安全框-R1-GPT1-標題貼頂底部壓帶.png",
+    "IMG6": "error-cases/2026-07-23-百分比安全框-R2-GEMINI1-括號入圖.png",
+    "IMG8": "error-cases/2026-07-23-沖之鳥島-位置偏移.jpg",
+    # 現行純文字版的可接受產出（不是錯誤案例，另存 demo/assets）
+    "OK1": "demo/assets/2026-07-23-純文字版-可接受-波音售機協議.png",
+    "OK2": "demo/assets/2026-07-24-純文字版-可接受-伊朗軍援葉門.png",
 }
 
 WIDTH = 960
@@ -46,8 +49,8 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as td:
         tmpdir = pathlib.Path(td)
-        for token, filename in IMAGES.items():
-            src = CASES / filename
+        for token, relpath in IMAGES.items():
+            src = DOCS / relpath
             if not src.exists():
                 print(f"找不到來源圖：{src}", file=sys.stderr)
                 return 1
