@@ -1,6 +1,7 @@
 import json
 import os
 import ssl
+import time
 from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -277,6 +278,148 @@ def generate(req: GenerateRequest):
         variable=data.get("variable", ""),
         chart_type=chart_type,
     )
+
+
+# ---- 混合版型：新聞原文 → 結構化內容（文字數字由 APP 繪製，AI 不碰像素文字）----
+
+class HybridDigestRequest(BaseModel):
+    news_text: str = Field(min_length=1, max_length=20_000)
+
+
+class HybridItem(BaseModel):
+    label: str
+    value: str
+    change: str
+    direction: Literal["up", "down", "flat"]
+
+
+class HybridDigestResponse(BaseModel):
+    title: str
+    subtitle: str
+    items: list[HybridItem]
+    source: str
+    visual_subject: str
+
+
+HYBRID_DIGEST_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "subtitle": {"type": "string"},
+        # Anthropic 結構化輸出不支援 minItems/maxItems（0/1 除外），
+        # 「恰好 3 項」由 system prompt 要求＋端點內正規化保證
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string"},
+                    "value": {"type": "string"},
+                    "change": {"type": "string"},
+                    "direction": {"type": "string", "enum": ["up", "down", "flat"]},
+                },
+                "required": ["label", "value", "change", "direction"],
+                "additionalProperties": False,
+            },
+        },
+        "source": {"type": "string"},
+        "visual_subject": {"type": "string"},
+    },
+    "required": ["title", "subtitle", "items", "source", "visual_subject"],
+    "additionalProperties": False,
+}
+
+HYBRID_SYSTEM_PROMPT = """You are a Taiwanese TV news graphics editor. Digest the news material into structured data for a fixed-layout 3-column comparison news card. The APP renders all text itself, so your output IS the on-screen text — accuracy is everything.
+
+Rules:
+- All text in Traditional Chinese (Taiwan standard, 台灣慣用語). NEVER Simplified Chinese. Keep proper nouns customarily shown in original language as-is (e.g. NASDAQ, S&P 500, B-1).
+- title: 電視新聞主標題, punchy, at most 12 full-width characters, no punctuation.
+- subtitle: 補充副標（時間、範圍等）, at most 12 full-width characters; empty string if nothing suitable.
+- items: EXACTLY 3 key data points, the most newsworthy numbers in the material.
+  - label: at most 6 full-width characters.
+  - value: the number with its unit (e.g. 44,023.29 / 3.2萬人 / 24枚). Numbers must come from the source material — NEVER invent or estimate missing figures.
+  - change: magnitude of change without any arrow symbol (e.g. 0.98% / 267點); empty string when not applicable.
+  - direction: up = 上漲/上升/增加, down = 下跌/下降/減少, flat = 持平或無漲跌方向.
+- Convert units for Taiwan audience when needed: currency to 新台幣或美元, °F to °C, miles to 公里.
+- source: data source line formatted like 資料來源：Reuters, from the material; empty string if unknown.
+- visual_subject: one Traditional Chinese sentence describing a TEXT-FREE background scene for the card (place, mood, lighting; dark navy broadcast tone preferred). Describe imagery only — never mention any text, numbers or logos."""
+
+
+@app.post("/api/hybrid/digest", response_model=HybridDigestResponse)
+def hybrid_digest(req: HybridDigestRequest):
+    model = (
+        os.getenv("DIGEST_MODEL")
+        or os.getenv("OPENAI_DIGEST_MODEL")
+        or DEFAULT_DIGEST_MODEL
+    )
+    # 一鍵成圖是無人值守流程：上游偶發失敗（provider 輪替錯誤、輸出截斷、
+    # 不合 schema 的回傳）都必須在後端自動吸收重試，不能丟回給外勤記者
+    last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
+    for attempt in range(3):
+        try:
+            response = openai_client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": HYBRID_SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": f'News Source Material:\n"{req.news_text}"',
+                    },
+                ],
+                max_tokens=1200,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "hybrid_card_digest",
+                        "strict": True,
+                        "schema": HYBRID_DIGEST_SCHEMA,
+                    },
+                },
+            )
+        except AuthenticationError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="AI 服務金鑰無效或尚未啟用計費",
+            ) from exc
+        except RateLimitError as exc:
+            raise HTTPException(
+                status_code=429,
+                detail="AI 服務用量已達限制，請稍後再試",
+            ) from exc
+        except (APIConnectionError, APIError) as exc:
+            last_detail = (
+                "無法連線至 AI 服務，請稍後再試"
+                if isinstance(exc, APIConnectionError)
+                else "AI 服務處理失敗，請確認模型權限或稍後重試"
+            )
+            print(f"[hybrid] attempt {attempt + 1}/3 API error: {exc}", flush=True)
+            time.sleep(1.5)
+            continue
+
+        raw_content = response.choices[0].message.content or ""
+        finish_reason = response.choices[0].finish_reason if response.choices else "?"
+        try:
+            data = json.loads(raw_content)
+            items = data.get("items") or []
+            if len(items) > 3:
+                items = items[:3]
+            while len(items) < 3:
+                items.append(
+                    {"label": "", "value": "", "change": "", "direction": "flat"}
+                )
+            data["items"] = items
+            return HybridDigestResponse(**data)
+        except (json.JSONDecodeError, IndexError, TypeError, ValueError) as exc:
+            last_detail = "AI 回傳格式無法解析"
+            print(
+                f"[hybrid] attempt {attempt + 1}/3 parse failed "
+                f"(finish_reason={finish_reason}): {exc}\n"
+                f"[hybrid] raw content: {raw_content[:800]}",
+                flush=True,
+            )
+            time.sleep(1.5)
+
+    raise HTTPException(status_code=502, detail=last_detail)
 
 
 @app.post("/api/images/generate", response_model=ImageGenerateResponse)
