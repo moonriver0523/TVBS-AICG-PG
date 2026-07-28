@@ -93,6 +93,28 @@
             to { transform: translate(-50%, 0); opacity: 1; }
         }
         .toast-animate { animation: slide-up 0.3s ease-out forwards; }
+
+        /* 第三頁（混合版型）：三欄數據列由 hybrid.js 動態產生、沒有 class，
+           因此以區塊範圍的元素選擇器承接樣式，避免污染第一／二頁 */
+        #page-3 .item-row { display: grid; grid-template-columns: 1fr 1.2fr 1fr 64px; gap: 6px; margin-bottom: 6px; }
+        #page-3 input[type=text], #page-3 select, #page-3 textarea:not(#f-news) {
+            width: 100%;
+            background: rgba(2, 6, 23, 0.8);
+            color: #f1f5f9;
+            border: 1px solid #1e293b;
+            border-radius: 6px;
+            padding: 7px 9px;
+            font-size: 12px;
+            font-family: inherit;
+        }
+        #page-3 .item-row input, #page-3 .item-row select { padding: 6px 7px; font-size: 11px; }
+        #page-3 input[type=text]:focus, #page-3 select:focus, #page-3 textarea:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+        }
+        #page-3 #svgHost { border: 1px solid #1e293b; border-radius: 12px; overflow: hidden; background: #000; }
+        #page-3 #svgHost svg { display: block; width: 100%; height: auto; }
         textarea::-webkit-scrollbar { width: 4px; }
         textarea::-webkit-scrollbar-track { background: transparent; }
         textarea::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
@@ -108,7 +130,7 @@
         <header class="mb-6">
             <!-- 第一頁 / 第二頁 切換（置頂） -->
             <div class="glass-card p-2 mb-4 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                <div class="flex-1 grid grid-cols-2 gap-2">
+                <div class="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <button id="pageTab-1" onclick="switchPage(1)"
                             class="page-tab page-tab-active px-4 py-3 rounded-lg text-left transition-all">
                         <span class="block text-[11px] font-black uppercase tracking-widest">第一頁 · 快速生成</span>
@@ -118,6 +140,11 @@
                             class="page-tab px-4 py-3 rounded-lg text-left transition-all">
                         <span class="block text-[11px] font-black uppercase tracking-widest">第二頁 · 進階微調</span>
                         <span class="block text-[9px] opacity-70 mt-0.5 tracking-wide">圖表類型 / 版型 / 矩陣 → 總 Prompt → 生成圖片</span>
+                    </button>
+                    <button id="pageTab-3" onclick="switchPage(3)"
+                            class="page-tab px-4 py-3 rounded-lg text-left transition-all">
+                        <span class="block text-[11px] font-black uppercase tracking-widest">第三頁 · 混合版型</span>
+                        <span class="block text-[9px] opacity-70 mt-0.5 tracking-wide">AI 只生背景 / 文字數字由 APP 繪製 → 直接匯出 PNG</span>
                     </button>
                 </div>
                 <button onclick="confirmReset()"
@@ -285,6 +312,102 @@
         </section>
 
         <!-- ============================================================
+             第三頁：混合版型（AI 生無文字背景 + APP 用 SVG 疊真字型資訊層）
+             不走 Prompt 流程，因此沒有 outputMount；共用面板留在前兩頁
+             元素 id 與獨立頁 hybrid.html 完全一致，同一支 hybrid.js 兩邊通用
+             ============================================================ -->
+        <section id="page-3" class="hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+
+                <!-- 控制區（class="controls" 是 hybrid.js 綁 input 事件的掛勾，勿改名） -->
+                <aside class="controls lg:col-span-5 flex flex-col gap-4">
+
+                    <div class="glass-card p-6 border-l-4 border-l-red-600">
+                        <h2 class="text-[10px] font-black text-red-500 uppercase tracking-[0.2em] mb-1">AI 一鍵成圖（記者外勤模式）</h2>
+                        <p class="text-[10px] text-slate-500 mb-4 leading-relaxed">
+                            貼新聞原文 → AI 自動消化 → 填入卡片 → 生成背景 → 自動下載 PNG。完成後仍可手動微調再匯出。
+                        </p>
+                        <textarea id="f-news"
+                                  class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-4 py-3 text-sm text-slate-100 input-focus-ring h-[120px] min-h-[96px] resize-y"
+                                  placeholder="輸入原始新聞文字…"></textarea>
+                        <button id="btnAuto"
+                                class="mt-3 bg-red-600 hover:bg-red-500 w-full py-4 rounded-lg text-xs font-black transition-all shadow-lg shadow-red-600/20 active:scale-95 disabled:opacity-50 uppercase tracking-tighter">
+                            AI 一鍵成圖
+                        </button>
+                    </div>
+
+                    <div class="glass-card p-6">
+                        <h2 class="text-[10px] font-black text-blue-400 uppercase tracking-[0.2em] mb-1">內容（APP 繪製，保證正確）</h2>
+                        <p class="text-[10px] text-slate-500 mb-4 leading-relaxed">
+                            這一區的每個字都由網頁用真字型畫出來，不經生圖模型，沒有錯字與亂碼問題。
+                        </p>
+
+                        <label class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1.5">主標題</label>
+                        <input type="text" id="f-title" value="美股三大指數收黑">
+
+                        <label class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mt-3 mb-1.5">次標題</label>
+                        <input type="text" id="f-subtitle" value="7月22日收盤">
+
+                        <label class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mt-3 mb-1.5">三欄數據（名稱／數值／漲跌／方向）</label>
+                        <div id="items"></div>
+
+                        <label class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mt-3 mb-1.5">資料來源</label>
+                        <input type="text" id="f-source" value="資料來源：Reuters">
+                    </div>
+
+                    <div class="glass-card p-6">
+                        <h2 class="text-[10px] font-black text-violet-400 uppercase tracking-[0.2em] mb-1">AI 背景（僅視覺，禁文字）</h2>
+                        <p class="text-[10px] text-slate-500 mb-4 leading-relaxed">
+                            只描述畫面氛圍即可；Prompt 已內建「不得出現任何文字、數字、Logo」鐵律。
+                        </p>
+
+                        <label class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1.5">視覺主題描述</label>
+                        <textarea id="f-visual" class="resize-y min-h-[72px]">紐約證交所交易大廳，下跌的金融市場氣氛，深藍色調，微弱紅色下行光影</textarea>
+
+                        <div class="flex items-center gap-3 mt-3">
+                            <select id="f-provider" class="flex-1">
+                                <option value="gemini">Gemini</option>
+                                <option value="gpt">GPT</option>
+                            </select>
+                            <label class="flex items-center gap-2 text-[10px] font-black text-slate-400 whitespace-nowrap cursor-pointer">
+                                <input id="f-guides" type="checkbox"
+                                       class="h-4 w-4 rounded border-slate-600 bg-slate-900 text-blue-600 focus:ring-blue-500">
+                                安全區
+                            </label>
+                        </div>
+
+                        <button id="btnBg"
+                                class="mt-4 w-full py-3 bg-violet-600 hover:bg-violet-500 rounded-lg text-xs font-black transition-all shadow-lg shadow-violet-600/10 active:scale-95 disabled:opacity-50 uppercase tracking-widest">
+                            生成 AI 背景
+                        </button>
+                        <button id="btnExport"
+                                class="mt-2 w-full py-3 bg-amber-400 hover:bg-amber-300 text-slate-900 rounded-lg text-xs font-black transition-all active:scale-95 uppercase tracking-widest">
+                            匯出 PNG（1280×720）
+                        </button>
+
+                        <div id="status" class="text-[10px] text-slate-500 mt-3 min-h-[16px] leading-relaxed"></div>
+                    </div>
+
+                    <p class="text-[10px] text-slate-600 leading-relaxed px-1">
+                        流程：改內容 → 即時預覽 → 生成背景 → 匯出。重新生成背景不會動到已填的文字與數字。
+                    </p>
+                </aside>
+
+                <!-- 即時預覽 -->
+                <div class="lg:col-span-7 glass-card p-5">
+                    <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
+                        <h3 class="text-[10px] font-black text-red-500 uppercase tracking-[0.2em]">Live Preview · 1280×720</h3>
+                        <span class="text-[9px] font-mono text-slate-500 bg-slate-800/60 px-2 py-0.5 rounded">版型 market-three-column</span>
+                    </div>
+                    <div id="svgHost"></div>
+                    <p class="text-[10px] text-slate-600 mt-3 leading-relaxed">
+                        預覽即最終輸出：匯出的 PNG 與上圖逐像素相同（安全區輔助線匯出時會自動移除）。
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================
              共用面板：Final Prompt Output + 生成圖片
              由 switchPage() 搬移到當前頁的 outputMount
              ============================================================ -->
@@ -359,5 +482,7 @@
     </div>
 
     <script src="app.js"></script>
+    <!-- 第三頁（混合版型）；內部包 IIFE，只對外露出 initHybrid()，由 switchPage(3) 首次切頁時呼叫 -->
+    <script src="hybrid.js"></script>
 </body>
 </html>

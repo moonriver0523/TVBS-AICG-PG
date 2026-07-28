@@ -381,14 +381,15 @@ window.onload = () => {
 };
 
 /* ============================================================
-   頁面切換（第一頁 快速生成 / 第二頁 進階微調）
+   頁面切換（第一頁 快速生成 / 第二頁 進階微調 / 第三頁 混合版型）
    Final Prompt Output 面板為共用單一實例，切頁時搬到當前頁的掛載點，
-   避免重複 id 造成 getElementById 取到錯誤的節點
+   避免重複 id 造成 getElementById 取到錯誤的節點。
+   第三頁不走 Prompt 流程，沒有 outputMount-3，面板會留在隱藏的前頁裡
    ============================================================ */
 function switchPage(page) {
     state.currentPage = page;
 
-    [1, 2].forEach(n => {
+    [1, 2, 3].forEach(n => {
         const section = document.getElementById(`page-${n}`);
         const tab = document.getElementById(`pageTab-${n}`);
         section.classList.toggle('hidden', n !== page);
@@ -398,6 +399,9 @@ function switchPage(page) {
     const panel = document.getElementById('outputPanel');
     const mount = document.getElementById(`outputMount-${page}`);
     if (panel && mount && panel.parentElement !== mount) mount.appendChild(panel);
+
+    // 混合版型延後初始化：hidden 狀態下先 render 沒有意義，重複呼叫由 initHybrid 自行擋掉
+    if (page === 3 && typeof window.initHybrid === 'function') window.initHybrid();
 
     updateActiveTypeBadge();
     window.scrollTo({ top: 0, behavior: 'smooth' });

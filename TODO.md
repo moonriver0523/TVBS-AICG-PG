@@ -76,6 +76,9 @@ AI 只生成無文字背景／插圖；所有中文、數字、圖表、單位�
   - 提案 §15 六項驗證全過
 - [x] **一鍵成圖完成（2026-07-23，`0660c18`）**——記者外勤情境：手機貼新聞原文 → `/api/hybrid/digest`（strict schema 結構化消化）→ 自動填格 → 生背景 → 自動下載 PNG，全程無人值守。B-1 非財經新聞實測通過（質性欄位如「起飛基地：英國空軍基地」也能成卡）
   - 踩坑紀錄：Anthropic 結構化輸出不支援 minItems/maxItems（0/1 除外）；上游偶發失敗＋不合 schema 回傳是常態，重試圈須涵蓋「呼叫＋解析」全程
+- [x] **併入 main 並整進主頁面（2026-07-28）**——`feat/hybrid-rendering` 合併回 main；主工具最上方分頁列新增「第三頁 · 混合版型」，介面改用主站 Tailwind 樣式但元素 id 與獨立頁完全一致，`hybrid.html` 保留可單獨開啟
+  - 踩坑紀錄：`hybrid.js` 與 `app.js` 都有頂層 `state`／`IMAGE_BACKEND_URL`，同頁載入會直接 SyntaxError → hybrid.js 整段包 IIFE，只對外露出 `window.initHybrid()`，由 `switchPage(3)` 首次切頁時才初始化（重複呼叫自行擋掉，避免三欄欄位長出第二組）
+  - 第三頁不走 Prompt 流程，故無 `outputMount-3`；共用的 Final Prompt 面板留在隱藏的前兩頁，切回去仍正常
 - [ ] 與地圖修法方案的關係：地圖類直接跳過 prompt 修補、走底圖合成？還是兩者都做？（仍待決策）
 - [ ] 下一步：使用者實際試用原型 → 決定是否進階段1（4–6 版型＋AI 自選版型＋文字溢位精細檢查；一鍵成圖已提前做掉結構化 digest）
 

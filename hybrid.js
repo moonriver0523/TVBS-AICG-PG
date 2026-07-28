@@ -1,5 +1,10 @@
 /* 混合版型原型（階段0）：AI 生成無文字背景，APP 用 SVG 繪製全部文字與數字。
-   驗證目標：繁中字型清晰度、版面/安全區穩定、1280×720 PNG 匯出。 */
+   驗證目標：繁中字型清晰度、版面/安全區穩定、1280×720 PNG 匯出。
+
+   整段包在 IIFE 內：本檔與 app.js 在 index.html 第三分頁會同時載入，
+   兩邊都有 state / IMAGE_BACKEND_URL 等頂層宣告，不隔離會直接 SyntaxError。
+   對外只露出 window.initHybrid()（重複呼叫安全，元素不存在時直接跳過）。 */
+(function () {
 
 const IMAGE_BACKEND_URL = 'http://127.0.0.1:8787/api/images/generate';
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -341,16 +346,30 @@ async function autoPilot() {
   }
 }
 
-/* ---- 啟動 ---- */
+/* ---- 啟動 ----
+   獨立頁 hybrid.html 載入後立即呼叫；index.html 第三分頁則等使用者第一次
+   切過去才呼叫（首次切頁前 section 是 hidden，提早 render 沒意義）。 */
 
-buildItemRows();
-render();
-document.getElementById('btnAuto').addEventListener('click', autoPilot);
-document.getElementById('btnBg').addEventListener('click', generateBackground);
-document.getElementById('btnExport').addEventListener('click', () => {
-  exportPNG().catch(e => { document.getElementById('status').textContent = '匯出失敗：' + e.message; });
-});
-document.getElementById('f-guides').addEventListener('change', render);
-document.querySelector('.controls').addEventListener('input', (e) => {
-  if (e.target.id !== 'f-guides') render();
-});
+let booted = false;
+
+function init() {
+  if (booted) return;
+  if (!document.getElementById('svgHost')) return;   // 頁面沒有混合版型區塊
+  booted = true;
+
+  buildItemRows();
+  render();
+  document.getElementById('btnAuto').addEventListener('click', autoPilot);
+  document.getElementById('btnBg').addEventListener('click', generateBackground);
+  document.getElementById('btnExport').addEventListener('click', () => {
+    exportPNG().catch(e => { document.getElementById('status').textContent = '匯出失敗：' + e.message; });
+  });
+  document.getElementById('f-guides').addEventListener('change', render);
+  document.querySelector('.controls').addEventListener('input', (e) => {
+    if (e.target.id !== 'f-guides') render();
+  });
+}
+
+window.initHybrid = init;
+
+})();
