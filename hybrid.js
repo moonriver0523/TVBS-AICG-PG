@@ -81,7 +81,9 @@ function el(name, attrs, children) {
 
 function textEl(str, attrs) {
   const t = el('text', Object.assign({
-    'font-family': '"Microsoft JhengHei", "Noto Sans TC", sans-serif'
+    // PingFang TC 是 macOS 內建，缺了它在 Mac 上匯出的 PNG 會掉到系統預設字型，
+    // 與 Windows 的輸出長得不一樣——這是跨機器示範時實際會踩到的差異
+    'font-family': '"Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif'
   }, attrs));
   t.textContent = str;
   return t;
