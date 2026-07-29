@@ -121,3 +121,29 @@ AI 只生成無文字背景／插圖；所有中文、數字、圖表、單位�
 但版面精度打地鼠——過縮→貼邊→底部壓帶→括號入圖，每修一項冒一項，
 prompt-only 收斂不到廣播級。完整紀錄 `docs/error-cases/2026-07-23-百分比安全框-分析.md`。
 再度佐證混合版型為正解。
+
+## LINE Bot 永久化：改雲端部署（2026-07-29 決議，demo 後執行）
+
+原型跑通後暴露兩個痛點，常被混為一談：
+
+1. **重開網址就變** — cloudflared 快速隧道每次隨機給網址，得回 LINE Console 重貼 webhook
+2. **依賴筆電開著** — 後端跑本機，闔蓋／斷網就死；這才是 5–15 人內測的真正阻礙
+
+原訂用 cloudflared **具名隧道**取得固定網址，實查後否決：帳號
+（Moonriver0523@gmail.com）Cloudflare 上**沒有任何網域**，而具名隧道要綁 DNS、
+需要一個託管在 Cloudflare 的 zone；且它只解決問題 1，仍要筆電 24 小時開機。
+
+**改採 Render 免費層**：平台本身配固定子網域（`xxx.onrender.com`），
+不必買網域，並一併解決問題 2。免費層閒置會休眠、冷啟動 30–60 秒；
+首次 webhook 可能逾時但 LINE 會自動重送，且生圖本來就要 30–120 秒，影響有限。
+要免休眠約 US$7/月。
+
+- [ ] **先確認公司政策**：是否允許 `OPENROUTER_API_KEY`、LINE token 放外部雲端平台。
+      本 repo 含電視台內部 prompt 資產（已轉 Private），不逕行決定；
+      可沿用 TVBS-Aigent-Fable 已訂的「測試期雲端、正式期搬公司內網 NAS」原則。
+- [ ] 部署到 Render：Procfile／start command、環境變數搬移、確認 `static/generated/`
+      在免費層的檔案系統是暫存性質（重啟即消失，但圖只需存活到 LINE 抓取完畢）
+- [ ] 換 LINE webhook URL 為 Render 固定網址（最後一次重貼）
+- [ ] 部署後把 `dev-line.sh` 定位改為「純本機開發用」，正式流量走雲端
+
+**相關**：`docs/line-bot-setup.md`「永久化方案」段落有同一份決議紀錄。

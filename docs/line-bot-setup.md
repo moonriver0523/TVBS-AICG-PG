@@ -71,6 +71,25 @@ https://xxxx.trycloudflare.com/line/webhook
 - `static/generated/` 的圖超過 24 小時會在下次請求時自動清掉
 - 沒有重複訊息去重：LINE 重送時可能重複生成
 
+## 永久化方案（2026-07-29 決議：demo 後執行）
+
+現況痛點有兩個，常被混為一談：
+
+1. **重開網址就變** —— cloudflared 快速隧道每次隨機給網址，得回 LINE Console 重貼
+2. **依賴筆電開著** —— 後端跑本機，闔蓋／斷網就死；這才是 5–15 人內測的真正阻礙
+
+原本打算用 cloudflared **具名隧道**取得固定網址，但查過帳號後發現
+**Cloudflare 上沒有任何網域**（具名隧道要綁 DNS，需要一個託管在 Cloudflare 的 zone），
+此路不通，且它也只解決問題 1。
+
+**改採雲端部署（Render 免費層）**：平台本身就配固定子網域（`xxx.onrender.com`），
+不必買網域，且一併解決問題 2。免費層閒置會休眠、冷啟動 30–60 秒；
+首次 webhook 可能逾時但 LINE 會重送，且生圖本來就要 30–120 秒，影響有限。
+
+**執行前必須先確認**：公司是否允許把 `OPENROUTER_API_KEY` 與 LINE token 放到外部雲端平台。
+本 repo 含電視台內部 prompt 資產（已轉 Private），這一步不該逕行決定；
+另一個專案（TVBS-Aigent-Fable）已訂下「測試期雲端、正式期搬公司內網 NAS」，可沿用同一原則。
+
 ## 已知的技術債
 
 `news_prompt.py` 的規則字串是從前端 `app.js` 移植的**第二份來源**。
