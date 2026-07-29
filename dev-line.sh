@@ -57,8 +57,9 @@ else
     echo "PUBLIC_BASE_URL=${PUBLIC_URL}" >> .env
 fi
 
+# --reload：改程式時只重載後端，隧道不動，網址不會變（換網址就得重貼 webhook）
 echo "啟動後端 (127.0.0.1:8787) ..."
-uv run uvicorn main:app --host 127.0.0.1 --port 8787 &
+uv run uvicorn main:app --host 127.0.0.1 --port 8787 --reload &
 BACKEND_PID=$!
 
 sleep 3

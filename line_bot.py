@@ -149,13 +149,17 @@ def generate_and_push(reply_token: str, to: str, news_text: str) -> None:
         print(f"[line] ack reply failed: {exc}", flush=True)
 
     try:
-        # 原型階段固定：記者角色、標準密度、圖表類型仍由 AI 自動判斷
+        # 原型階段固定記者角色、圖表類型仍由 AI 自動判斷；
+        # 密度預設簡化版（手機上更好讀），可用 LINE_DIGEST_DENSITY 切回 standard
+        density = os.getenv("LINE_DIGEST_DENSITY", "simplified").strip()
+        if density not in ("standard", "simplified"):
+            density = "simplified"
         digest = generate(
             GenerateRequest(
                 news_text=news_text,
                 type_label=AUTO_TYPE_LABEL,
                 role="記者",
-                density="standard",
+                density=density,
             )
         )
         provider = os.getenv("LINE_IMAGE_PROVIDER", "gemini")
