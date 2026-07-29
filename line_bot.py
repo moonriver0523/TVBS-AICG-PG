@@ -31,8 +31,11 @@ LINE_MESSAGE_API = "https://api.line.me/v2/bot/message"
 STATIC_ROOT = pathlib.Path(__file__).resolve().parent / "static"
 GENERATED_DIR = STATIC_ROOT / "generated"
 
-# LINE 規定 previewImageUrl 上限 1MB，原圖動輒 1-2MB，一律另存縮圖
-PREVIEW_WIDTH = 480
+# LINE 規定 previewImageUrl 上限 1MB。原圖是 PNG（1-2MB）會超標，所以另存 JPEG；
+# 但同一張圖轉成 JPEG q80 後，即使維持原解析度也只有 ~110KB，遠低於上限——
+# 對話框顯示的就是這張，沒有必要縮小，縮了只是白白讓聊天視窗裡變糊。
+PREVIEW_MAX_WIDTH = 1280
+PREVIEW_QUALITY = 88
 # 原型階段沒有儲存體管理，超過這個時數的舊圖在每次請求時順手清掉
 KEEP_FILES_HOURS = 24
 
@@ -122,9 +125,13 @@ def save_image(raw: bytes, mime_type: str) -> tuple[str, str]:
     preview = GENERATED_DIR / f"{stem}-preview.jpg"
     with Image.open(io.BytesIO(raw)) as image:
         image = image.convert("RGB")
-        ratio = PREVIEW_WIDTH / image.width
-        image = image.resize((PREVIEW_WIDTH, max(1, round(image.height * ratio))))
-        image.save(preview, "JPEG", quality=80)
+        # 只在超過上限寬度時縮小，絕不放大（放大只會變糊又變大）
+        if image.width > PREVIEW_MAX_WIDTH:
+            ratio = PREVIEW_MAX_WIDTH / image.width
+            image = image.resize(
+                (PREVIEW_MAX_WIDTH, max(1, round(image.height * ratio)))
+            )
+        image.save(preview, "JPEG", quality=PREVIEW_QUALITY)
 
     return original.name, preview.name
 
