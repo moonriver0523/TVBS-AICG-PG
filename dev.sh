@@ -24,7 +24,7 @@ uv run uvicorn main:app --host 127.0.0.1 --port 8787 &
 UVICORN_PID=$!
 
 echo "啟動前端即時預覽 (http://localhost:3000) ..."
-npx --yes browser-sync start --server --files "index.html, app.js" --port 3000 &
+npx --yes browser-sync start --server --files "index.html, app.js, hybrid.html, hybrid.js" --port 3000 &
 BROWSERSYNC_PID=$!
 
 echo ""

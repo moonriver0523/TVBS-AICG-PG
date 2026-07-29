@@ -61,8 +61,10 @@ function readContent() {
     const g = (k) => document.querySelector(`[data-k="${k}"][data-i="${i}"]`).value.trim();
     return { label: g('label'), value: g('value'), change: g('change'), direction: g('direction') };
   });
+  const keyField = document.getElementById('f-title-key');
   return {
     title: document.getElementById('f-title').value.trim(),
+    titleKey: keyField ? keyField.value.trim() : '',
     subtitle: document.getElementById('f-subtitle').value.trim(),
     items,
     source: document.getElementById('f-source').value.trim(),
@@ -89,12 +91,69 @@ function textEl(str, attrs) {
   return t;
 }
 
-/* 台灣新聞慣例：紅漲綠跌 */
-const DIR_STYLE = {
-  up:   { color: '#ff4d4d', arrow: '▲' },
-  down: { color: '#2ee06e', arrow: '▼' },
-  flat: { color: '#b9c2d8', arrow: '—' }
+/* 語意 → 顏色。AI 只回報「哪個詞是重點」，配色一律在這裡決定，
+   與「AI 不得產生座標」同一原則：語意歸 AI，視覺歸 APP。
+   使用者可在 UI 調整，改完存 localStorage，下次開啟沿用。 */
+const DEFAULT_PALETTE = {
+  base:  '#ffffff',   // 標題一般字
+  key:   '#ffc843',   // 標題重點詞
+  sub:   '#ffc843',   // 次標題
+  noun:  '#7fd7ff',   // 項目名（專有名詞）
+  value: '#ffffff',   // 數值
+  up:    '#ff4d4d',   // 漲（台灣慣例紅漲）
+  down:  '#2ee06e',   // 跌（綠跌）
+  flat:  '#b9c2d8'    // 持平
 };
+
+const PALETTE_STORE = 'hybrid-palette-v1';
+
+function loadPalette() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(PALETTE_STORE) || '{}');
+    // 用預設值打底，日後新增顏色角色時舊的存檔不會缺鍵
+    return Object.assign({}, DEFAULT_PALETTE, saved);
+  } catch (e) {
+    return Object.assign({}, DEFAULT_PALETTE);
+  }
+}
+
+function savePalette() {
+  try {
+    localStorage.setItem(PALETTE_STORE, JSON.stringify(PALETTE));
+  } catch (e) {
+    /* 隱私模式等寫入失敗：顏色仍可用，只是不記憶 */
+  }
+}
+
+const PALETTE = loadPalette();
+
+/* 標題：把重點詞那段換成 key 色，其餘白字。
+   tspan 不設 x，讓它們沿用父層 text-anchor 一起置中，不會破壞置中對齊。 */
+function titleEl(title, key, attrs) {
+  const t = textEl('', attrs);
+  const at = key ? title.indexOf(key) : -1;
+  const segs = at < 0
+    ? [{ s: title, c: PALETTE.base }]
+    : [
+        { s: title.slice(0, at),             c: PALETTE.base },
+        { s: key,                            c: PALETTE.key  },
+        { s: title.slice(at + key.length),   c: PALETTE.base }
+      ];
+  segs.filter(g => g.s).forEach(g => {
+    const sp = el('tspan', { fill: g.c });
+    sp.textContent = g.s;
+    t.appendChild(sp);
+  });
+  return t;
+}
+
+/* 台灣新聞慣例：紅漲綠跌。箭頭固定，顏色跟著調色盤走 */
+const DIR_ARROW = { up: '▲', down: '▼', flat: '—' };
+
+function dirStyle(direction) {
+  const d = DIR_ARROW[direction] ? direction : 'flat';
+  return { color: PALETTE[d], arrow: DIR_ARROW[d] };
+}
 
 function render() {
   const c = state.content = readContent();
@@ -146,7 +205,7 @@ function render() {
   c.items.forEach((it, i) => {
     const x = S.cards.x + i * (cardW + S.cards.gap);
     const y = S.cards.y;
-    const dir = DIR_STYLE[it.direction] || DIR_STYLE.flat;
+    const dir = dirStyle(it.direction);
     const cx = x + cardW / 2;
     cards.appendChild(el('rect', {
       x, y, width: cardW, height: S.cards.height, rx: 14,
@@ -155,7 +214,7 @@ function render() {
     cards.appendChild(el('rect', { x, y, width: cardW, height: 5, rx: 2.5, fill: dir.color }));
     cards.appendChild(textEl(it.label, {
       x: cx, y: y + 76, 'font-size': 30, 'font-weight': 'bold',
-      fill: '#dfe7f7', 'text-anchor': 'middle'
+      fill: PALETTE.noun, 'text-anchor': 'middle'
     }));
     // 長數值自動縮字級，避免撐出卡片（文字溢位精細檢查留待階段1）
     const vLen = it.value.length;
@@ -163,7 +222,7 @@ function render() {
     const hasChange = it.change || it.direction !== 'flat';
     cards.appendChild(textEl(it.value, {
       x: cx, y: hasChange ? y + 172 : y + 190, 'font-size': vSize,
-      'font-weight': 'bold', fill: '#ffffff', 'text-anchor': 'middle'
+      'font-weight': 'bold', fill: PALETTE.value, 'text-anchor': 'middle'
     }));
     if (hasChange) {
       cards.appendChild(textEl(`${dir.arrow} ${it.change}`.trim(), {
@@ -176,15 +235,15 @@ function render() {
 
   // Layer 4：標題／次標題／資料來源（全部真字型，非 AI 像素）
   const texts = el('g', { id: 'layer-text' });
-  texts.appendChild(textEl(c.title, {
+  texts.appendChild(titleEl(c.title, c.titleKey, {
     x: S.title.cx, y: S.title.baseline, 'font-size': S.title.fontSize,
-    'font-weight': 'bold', fill: '#ffffff', 'text-anchor': 'middle',
+    'font-weight': 'bold', fill: PALETTE.base, 'text-anchor': 'middle',
     filter: 'url(#f-shadow)'
   }));
   if (c.subtitle) {
     texts.appendChild(textEl(c.subtitle, {
       x: S.subtitle.cx, y: S.subtitle.baseline, 'font-size': S.subtitle.fontSize,
-      fill: '#ffc843', 'text-anchor': 'middle', filter: 'url(#f-shadow)'
+      fill: PALETTE.sub, 'text-anchor': 'middle', filter: 'url(#f-shadow)'
     }));
   }
   if (c.source) {
@@ -304,6 +363,9 @@ const DIGEST_BACKEND_URL = 'http://127.0.0.1:8787/api/hybrid/digest';
 
 function fillContent(d) {
   document.getElementById('f-title').value = d.title || '';
+  // 一律覆寫（含空字串）：AI 沒給重點詞時要清掉，否則會沿用上一則新聞的舊詞
+  const keyField = document.getElementById('f-title-key');
+  if (keyField) keyField.value = d.title_key || '';
   document.getElementById('f-subtitle').value = d.subtitle || '';
   document.getElementById('f-source').value = d.source || '';
   document.getElementById('f-visual').value = d.visual_subject || '';
@@ -348,6 +410,40 @@ async function autoPilot() {
   }
 }
 
+/* ---- 調色盤 UI ----
+   色票 id 一律是 c-<角色>，缺任何一個都不影響其他色（獨立頁與主工具可各自取用）。 */
+
+function syncPaletteInputs() {
+  Object.keys(DEFAULT_PALETTE).forEach(role => {
+    const input = document.getElementById('c-' + role);
+    if (input) input.value = PALETTE[role];
+  });
+}
+
+function bindPaletteInputs() {
+  Object.keys(DEFAULT_PALETTE).forEach(role => {
+    const input = document.getElementById('c-' + role);
+    if (!input) return;
+    // 色票自己先更新調色盤，再讓 .controls 的委派監聽觸發重繪
+    input.addEventListener('input', () => {
+      PALETTE[role] = input.value;
+      savePalette();
+    });
+  });
+
+  const reset = document.getElementById('btnPaletteReset');
+  if (reset) {
+    reset.addEventListener('click', () => {
+      Object.assign(PALETTE, DEFAULT_PALETTE);
+      savePalette();
+      syncPaletteInputs();
+      render();
+    });
+  }
+
+  syncPaletteInputs();
+}
+
 /* ---- 啟動 ----
    獨立頁 hybrid.html 載入後立即呼叫；index.html 第三分頁則等使用者第一次
    切過去才呼叫（首次切頁前 section 是 hidden，提早 render 沒意義）。 */
@@ -360,6 +456,7 @@ function init() {
   booted = true;
 
   buildItemRows();
+  bindPaletteInputs();
   render();
   document.getElementById('btnAuto').addEventListener('click', autoPilot);
   document.getElementById('btnBg').addEventListener('click', generateBackground);

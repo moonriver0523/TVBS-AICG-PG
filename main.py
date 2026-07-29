@@ -311,6 +311,9 @@ class HybridItem(BaseModel):
 
 class HybridDigestResponse(BaseModel):
     title: str
+    # 標題裡要上色的關鍵詞。AI 只指出「哪個詞是重點」，配色由前端決定——
+    # 與「AI 不得產生座標」同一原則：語意歸 AI，視覺歸 APP
+    title_key: str = ""
     subtitle: str
     items: list[HybridItem]
     source: str
@@ -321,6 +324,7 @@ HYBRID_DIGEST_SCHEMA = {
     "type": "object",
     "properties": {
         "title": {"type": "string"},
+        "title_key": {"type": "string"},
         "subtitle": {"type": "string"},
         # Anthropic 結構化輸出不支援 minItems/maxItems（0/1 除外），
         # 「恰好 3 項」由 system prompt 要求＋端點內正規化保證
@@ -341,7 +345,14 @@ HYBRID_DIGEST_SCHEMA = {
         "source": {"type": "string"},
         "visual_subject": {"type": "string"},
     },
-    "required": ["title", "subtitle", "items", "source", "visual_subject"],
+    "required": [
+        "title",
+        "title_key",
+        "subtitle",
+        "items",
+        "source",
+        "visual_subject",
+    ],
     "additionalProperties": False,
 }
 
@@ -350,6 +361,7 @@ HYBRID_SYSTEM_PROMPT = """You are a Taiwanese TV news graphics editor. Digest th
 Rules:
 - All text in Traditional Chinese (Taiwan standard, 台灣慣用語). NEVER Simplified Chinese. Keep proper nouns customarily shown in original language as-is (e.g. NASDAQ, S&P 500, B-1).
 - title: 電視新聞主標題, punchy, at most 12 full-width characters, no punctuation.
+- title_key: the single focal word inside title that deserves visual emphasis, 2-4 full-width characters (e.g. title 美國臨時關稅將到期 → title_key 關稅; title 美股三大指數收黑 → title_key 收黑). It MUST be copied verbatim from title as an exact substring — never rephrase it, never wrap it in brackets or any markup. Empty string if the title has no single focal word.
 - subtitle: 補充副標（時間、範圍等）, at most 12 full-width characters; empty string if nothing suitable.
 - items: EXACTLY 3 key data points, the most newsworthy numbers in the material.
   - label: at most 6 full-width characters.
@@ -424,6 +436,10 @@ def hybrid_digest(req: HybridDigestRequest):
                     {"label": "", "value": "", "change": "", "direction": "flat"}
                 )
             data["items"] = items
+            # 模型偶爾會改寫或加標記，導致 key 不是 title 的子字串；
+            # 前端靠字串比對定位上色，對不上就整條標題失去強調，故此處直接丟棄
+            key = (data.get("title_key") or "").strip()
+            data["title_key"] = key if key and key in (data.get("title") or "") else ""
             return HybridDigestResponse(**data)
         except (json.JSONDecodeError, IndexError, TypeError, ValueError) as exc:
             last_detail = "AI 回傳格式無法解析"

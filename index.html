@@ -113,6 +113,21 @@
             border-color: var(--accent-blue);
             box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
         }
+        #page-3 .palette { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+        #page-3 .palette label {
+            display: flex; align-items: center; justify-content: space-between;
+            gap: 8px; margin: 0; font-size: 11px; color: #94a3b8;
+        }
+        #page-3 .palette input[type=color] {
+            width: 40px; height: 26px; flex-shrink: 0; padding: 0; cursor: pointer;
+            background: rgba(2, 6, 23, 0.8); border: 1px solid #1e293b; border-radius: 5px;
+        }
+        #page-3 #btnPaletteReset {
+            width: 100%; margin-top: 10px; padding: 7px; border-radius: 6px;
+            background: transparent; border: 1px solid #1e293b; color: #94a3b8;
+            font-size: 11px; font-family: inherit; font-weight: bold; cursor: pointer;
+        }
+        #page-3 #btnPaletteReset:hover { border-color: var(--accent-blue); color: #e2e8f0; }
         #page-3 #svgHost { border: 1px solid #1e293b; border-radius: 12px; overflow: hidden; background: #000; }
         #page-3 #svgHost svg { display: block; width: 100%; height: auto; }
         textarea::-webkit-scrollbar { width: 4px; }
@@ -345,6 +360,9 @@
                         <label class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1.5">主標題</label>
                         <input type="text" id="f-title" value="美股三大指數收黑">
 
+                        <label class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mt-3 mb-1.5">標題重點詞（上色，AI 會自動帶）</label>
+                        <input type="text" id="f-title-key" value="收黑" placeholder="須為主標題裡的字；留空＝整條白字">
+
                         <label class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mt-3 mb-1.5">次標題</label>
                         <input type="text" id="f-subtitle" value="7月22日收盤">
 
@@ -353,6 +371,24 @@
 
                         <label class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mt-3 mb-1.5">資料來源</label>
                         <input type="text" id="f-source" value="資料來源：Reuters">
+                    </div>
+
+                    <div class="glass-card p-6">
+                        <h2 class="text-[10px] font-black text-amber-400 uppercase tracking-[0.2em] mb-1">文字顏色</h2>
+                        <p class="text-[10px] text-slate-500 mb-4 leading-relaxed">
+                            調整後會記住設定，下次開啟沿用；漲跌預設為台灣慣例紅漲綠跌。
+                        </p>
+                        <div class="palette">
+                            <label>標題<input type="color" id="c-base"></label>
+                            <label>重點詞<input type="color" id="c-key"></label>
+                            <label>次標題<input type="color" id="c-sub"></label>
+                            <label>項目名<input type="color" id="c-noun"></label>
+                            <label>數值<input type="color" id="c-value"></label>
+                            <label>持平<input type="color" id="c-flat"></label>
+                            <label>漲<input type="color" id="c-up"></label>
+                            <label>跌<input type="color" id="c-down"></label>
+                        </div>
+                        <button id="btnPaletteReset">還原預設配色</button>
                     </div>
 
                     <div class="glass-card p-6">

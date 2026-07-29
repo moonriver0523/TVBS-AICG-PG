@@ -49,6 +49,16 @@
   #svgHost { width: 100%; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #000; }
   #svgHost svg { display: block; width: 100%; height: auto; }
   .hint { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.6; }
+  .palette { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+  .palette label {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin: 0; font-size: 12px;
+  }
+  .palette input[type=color] {
+    width: 40px; height: 26px; flex-shrink: 0; padding: 0; cursor: pointer;
+    background: #0b1120; border: 1px solid var(--border); border-radius: 5px;
+  }
+  #btnPaletteReset { background: transparent; border: 1px solid var(--border); color: var(--muted); font-size: 12px; padding: 7px; }
 </style>
 </head>
 <body>
@@ -69,12 +79,28 @@
       <h2>內容（APP 繪製，保證正確）</h2>
       <label>主標題</label>
       <input type="text" id="f-title" value="美股三大指數收黑">
+      <label>標題重點詞（上色，AI 會自動帶）</label>
+      <input type="text" id="f-title-key" value="收黑" placeholder="須為主標題裡的字；留空＝整條白字">
       <label>次標題</label>
       <input type="text" id="f-subtitle" value="7月22日收盤">
       <label>三欄數據（名稱／數值／漲跌／方向）</label>
       <div id="items"></div>
       <label>資料來源</label>
       <input type="text" id="f-source" value="資料來源：Reuters">
+    </div>
+    <div class="card">
+      <h2>文字顏色（會記住設定）</h2>
+      <div class="palette">
+        <label>標題<input type="color" id="c-base"></label>
+        <label>重點詞<input type="color" id="c-key"></label>
+        <label>次標題<input type="color" id="c-sub"></label>
+        <label>項目名<input type="color" id="c-noun"></label>
+        <label>數值<input type="color" id="c-value"></label>
+        <label>持平<input type="color" id="c-flat"></label>
+        <label>漲<input type="color" id="c-up"></label>
+        <label>跌<input type="color" id="c-down"></label>
+      </div>
+      <button id="btnPaletteReset">還原預設配色</button>
     </div>
     <div class="card">
       <h2>AI 背景（僅視覺，禁文字）</h2>
