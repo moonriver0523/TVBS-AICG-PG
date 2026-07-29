@@ -243,6 +243,52 @@ body {
     </div>
   </section>
 
+  <!-- ================= S4.5 LINE Bot：折衷版延伸到聊天室 ================= -->
+  <section class="slide">
+    <div class="kicker" style="left:100px; top:74px;">同一個折衷版 ・ 今天早上剛跑通</div>
+    <div class="headline" style="left:100px; top:118px;">
+      不用開電腦 ── 在 <span class="hl-green">LINE 貼一段文字</span>就出圖
+    </div>
+
+    <div class="shot" style="left:100px; top:270px; width:960px; height:540px;">
+      <img src="{{LINE1}}" alt="LINE Bot 實測產出：克雷頓通過參院表決 出任美國情報總監">
+      <div class="shot-tag" style="background:#1f7a45;">在 LINE 貼上外電原文，回傳的就是這張</div>
+    </div>
+
+    <div style="position:absolute; left:1140px; top:268px; width:680px;">
+      <div class="point" style="position:relative; margin-bottom:30px;">
+        <div class="point-no">1</div>
+        <div class="body" style="padding-top:6px;">記者在 LINE 貼上新聞原文</div>
+      </div>
+      <div class="point" style="position:relative; margin-bottom:30px;">
+        <div class="point-no">2</div>
+        <div class="body" style="padding-top:6px;">Bot 秒回「收到，生成中」</div>
+      </div>
+      <div class="point" style="position:relative; margin-bottom:30px;">
+        <div class="point-no">3</div>
+        <div class="body" style="padding-top:6px;">後端跑<span class="hl-gold">上一頁那套折衷版</span>流程</div>
+      </div>
+      <div class="point" style="position:relative; margin-bottom:38px;">
+        <div class="point-no">4</div>
+        <div class="body" style="padding-top:6px;">圖片直接回貼到對話裡</div>
+      </div>
+
+      <div style="border-left:6px solid var(--green); padding-left:26px;">
+        <div class="lead" style="font-size:32px; margin-bottom:12px;">為什麼這一步重要</div>
+        <div class="body" style="font-size:25px;">
+          記者不必開電腦、不必進工具、不必學介面 ──
+          <span class="hl-green">聊天室就是介面</span>。
+          這也先驗證了 WORKCORD 助理的產品形態。
+        </div>
+      </div>
+    </div>
+
+    <div class="caption" style="position:absolute; left:100px; bottom:52px; font-size:23px; width:1720px;">
+      跑的是<span class="hl-gold">現行折衷版</span>（AI 連文字一起畫），不是後面要談的混合版型 ──
+      所以後面那些文字風險，這裡一樣存在。現況為原型：生成需 30–120 秒，尚未接佇列與重試，仍待雲端部署。
+    </div>
+  </section>
+
   <!-- ================= S5 文字雷：版面過關、繁中亂碼 ================= -->
   <section class="slide">
     <div class="kicker" style="left:100px; top:74px;">而且這個版本仍然會錯</div>
@@ -398,6 +444,7 @@ body {
         <li>混合版型引擎（背景＋真字型資訊層）</li>
         <li>一鍵成圖：新聞原文直接出 PNG</li>
         <li>整併進主工具第三分頁</li>
+        <li><b>LINE Bot 端到端跑通</b>（今日）</li>
         <li>三輪實驗與錯誤案例庫、安全框驗收基準</li>
       </ul>
     </div>
@@ -409,6 +456,7 @@ body {
         <li>版型要靠人選，還不會自動判斷</li>
         <li>地圖類尚未收斂</li>
         <li>長文字溢位仍需人工檢查</li>
+        <li>LINE Bot 仍跑在本機，未上雲</li>
         <li>尚未進實際新聞產線試跑</li>
       </ul>
     </div>

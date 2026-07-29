@@ -25,6 +25,8 @@ IMAGES = {
     # 現行純文字版的可接受產出（不是錯誤案例，另存 demo/assets）
     "OK1": "demo/assets/2026-07-22-純文字版-可接受-美國臨時關稅底部留白足.png",
     "OK2": "demo/assets/2026-07-24-純文字版-可接受-伊朗軍援葉門.png",
+    # LINE Bot 實測產出（2026-07-29 早上跑通的第一張）
+    "LINE1": "demo/assets/2026-07-29-LINE-Bot-實測產出.png",
 }
 
 WIDTH = 960
