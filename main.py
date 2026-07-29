@@ -1,5 +1,7 @@
+import hmac
 import json
 import os
+import re
 import ssl
 import time
 from typing import Literal
@@ -8,10 +10,12 @@ from urllib.request import Request, urlopen
 
 import certifi
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from openai import APIConnectionError, APIError, AuthenticationError, OpenAI, RateLimitError
 from pydantic import BaseModel, Field
+
+from news_prompt import PROMPT_VERSION, build_prompt, compose_variable
 
 load_dotenv()
 
@@ -653,6 +657,92 @@ def generate_gemini_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
         mime_type=output_image.get("mime_type", "image/jpeg"),
         model=model,
     )
+
+
+# ============================================================
+# 一次到位端點：新聞文字 -> AI 消化 -> 套安全框/文字規則組 prompt -> 生圖
+# 給外部整合方（如 WorkCord Agent）呼叫，避免呼叫端自己重組
+# /api/generate 結果與 /api/images/generate 之間的規則——那段目前只存在
+# news_prompt.py，若外部各自重做一次容易日後漂移、且容易漏掉安全框規則。
+# LINE Bot 與這支端點共用同一個 generate_news_image()，兩邊不會各自維護
+# 一份邏輯。
+# ============================================================
+
+
+class NewsImageGenerateRequest(BaseModel):
+    news_text: str = Field(min_length=1, max_length=20_000)
+    type_label: str = AUTO_TYPE_LABEL
+    role: str = "記者"
+    density: DigestDensity = "standard"
+    provider: Literal["gemini", "gpt"] = "gemini"
+    aspect_ratio: str = "16:9"
+    image_size: str = "1K"
+
+
+class NewsImageGenerateResponse(BaseModel):
+    image_data_base64: str
+    mime_type: str
+    model: str
+    title: str = ""
+    prompt_version: str = PROMPT_VERSION
+
+
+def _extract_title(variable: str) -> str:
+    """從消化結果的 [標題] 那行取出標題，純粹方便呼叫端顯示用；抓不到就回空字串。"""
+    match = re.search(r"\[標題\]\s*([^\n]+)", variable)
+    return match.group(1).strip() if match else ""
+
+
+def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateResponse:
+    digest = generate(
+        GenerateRequest(
+            news_text=req.news_text,
+            type_label=req.type_label,
+            role=req.role,
+            density=req.density,
+        )
+    )
+    prompt = build_prompt(
+        role=req.role,
+        engine=req.provider,
+        type_label=digest.chart_type or req.type_label,
+        style=digest.style,
+        structure=digest.structure,
+        variable=compose_variable(digest.variable),
+    )
+    image = generate_image(
+        ImageGenerateRequest(
+            prompt=prompt,
+            provider=req.provider,
+            aspect_ratio=req.aspect_ratio,
+            image_size=req.image_size,
+        )
+    )
+    return NewsImageGenerateResponse(
+        image_data_base64=image.image_data_base64,
+        mime_type=image.mime_type,
+        model=image.model,
+        title=_extract_title(digest.variable),
+    )
+
+
+def verify_news_image_api_key(x_api_key: str = Header(default="")) -> None:
+    # 未設定金鑰時 fail-closed（與 LINE webhook 的驗簽同一原則），
+    # 避免忘記設定就把端點裸奔給外部呼叫。
+    expected = os.getenv("NEWS_IMAGE_API_KEY", "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="尚未設定 NEWS_IMAGE_API_KEY")
+    if not hmac.compare_digest(x_api_key, expected):
+        raise HTTPException(status_code=401, detail="API Key 無效")
+
+
+@app.post(
+    "/api/news-image/generate",
+    response_model=NewsImageGenerateResponse,
+    dependencies=[Depends(verify_news_image_api_key)],
+)
+def news_image_generate(req: NewsImageGenerateRequest) -> NewsImageGenerateResponse:
+    return generate_news_image(req)
 
 
 # LINE Bot：webhook 與生成圖的靜態出口。

@@ -147,3 +147,30 @@ prompt-only 收斂不到廣播級。完整紀錄 `docs/error-cases/2026-07-23-�
 - [ ] 部署後把 `dev-line.sh` 定位改為「純本機開發用」，正式流量走雲端
 
 **相關**：`docs/line-bot-setup.md`「永久化方案」段落有同一份決議紀錄。
+
+## dev-line.sh 的 --reload 會被 git commit 弄死（2026-07-29 實際發生）
+
+**現象**：demo 前約 100 分鐘，LINE Bot 後端無預警停止（uvicorn exit 144），
+`/line/webhook` 完全無回應，但 cloudflared 隧道仍活著——**從外面看不出來，
+只有實際發訊息才會發現失效**。
+
+**根因**：`dev-line.sh` 啟動 uvicorn 時帶 `--reload`，其 WatchFiles 監看整個專案目錄；
+執行 `git commit` 時 pre-commit（gitleaks）會把未暫存檔案 stash 到 ~/.cache 再 restore，
+造成短時間內大量檔案增刪，reloader 因此崩潰並終止整個 uvicorn 行程。
+log 尾端可見 `Stopping reloader process`。
+
+**當下處置**：改用不帶 `--reload` 的方式重啟（隧道未受影響，webhook URL 得以保留）。
+
+**待辦**：
+
+- [ ] `dev-line.sh` 預設**不要**帶 `--reload`；要熱重載時另用參數開啟
+      （例如 `./dev-line.sh --watch`），避免正式測試時被 commit 打斷
+- [ ] 若仍要用 --reload，加 `--reload-exclude` 排除 `.git/**`、`static/**`、`.omc/**`
+- [ ] 加一個健康檢查（例如每分鐘 curl 一次 `/openapi.json`，掛了自動重啟或發通知）——
+      這次是靠背景任務的失敗通知才發現，若在 demo 中發生就來不及
+- [ ] 雲端部署後這個問題自然消失（平台自帶 process 監管與重啟），
+      見「LINE Bot 永久化：改雲端部署」
+
+**教訓**：本機跑的服務「沒有人在看」，失效是靜默的。任何 demo 前的既定流程
+（commit、安裝套件、改設定）都可能連帶弄停它，上台前必須實際發一則訊息驗收，
+而不是只看 process 還在不在。

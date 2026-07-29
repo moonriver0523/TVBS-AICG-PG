@@ -1,7 +1,9 @@
 """LINE Bot：使用者在 LINE 貼新聞文字 → AI 消化 → 生圖 → 回貼圖片。
 
 流程與第一頁（網頁版）相同，差別在完全跑在後端：
-    文字 → /api/generate 的消化邏輯 → news_prompt.build_prompt → 生圖 → 存檔 → push
+    文字 → main.generate_news_image()（消化＋安全框規則＋生圖，一次到位）→ 存檔 → push
+本模組與 /api/news-image/generate 端點共用同一個 generate_news_image()，
+不會各自維護一份消化/組 prompt 邏輯。
 
 三個 LINE 平台限制決定了這個設計：
 1. 圖片訊息只吃「公開 HTTPS 網址」，不能傳 base64 → 生成後存到 static/ 由 PUBLIC_BASE_URL 對外。
@@ -22,8 +24,6 @@ import uuid
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 from PIL import Image
-
-from news_prompt import build_prompt, compose_variable
 
 LINE_MESSAGE_API = "https://api.line.me/v2/bot/message"
 
@@ -141,14 +141,12 @@ def generate_and_push(reply_token: str, to: str, news_text: str) -> None:
 
     main 匯入本模組的 router，這裡若在頂層 import main 會形成循環匯入，
     故延後到實際執行時才 import。
+
+    實際生成邏輯呼叫 main.generate_news_image()——同一個函式也是
+    /api/news-image/generate 端點在用的，兩邊共用一份消化+安全框+生圖
+    邏輯，不會各自為政、日後彼此漂移。
     """
-    from main import (
-        AUTO_TYPE_LABEL,
-        GenerateRequest,
-        ImageGenerateRequest,
-        generate,
-        generate_image,
-    )
+    from main import NewsImageGenerateRequest, generate_news_image
 
     try:
         reply_text(reply_token, "收到！AI 消化與生圖中，約 30-120 秒，完成後回傳圖片。")
@@ -161,26 +159,17 @@ def generate_and_push(reply_token: str, to: str, news_text: str) -> None:
         density = os.getenv("LINE_DIGEST_DENSITY", "simplified").strip()
         if density not in ("standard", "simplified"):
             density = "simplified"
-        digest = generate(
-            GenerateRequest(
+        provider = os.getenv("LINE_IMAGE_PROVIDER", "gemini")
+        result = generate_news_image(
+            NewsImageGenerateRequest(
                 news_text=news_text,
-                type_label=AUTO_TYPE_LABEL,
                 role="記者",
                 density=density,
+                provider=provider,
             )
         )
-        provider = os.getenv("LINE_IMAGE_PROVIDER", "gemini")
-        prompt = build_prompt(
-            role="記者",
-            engine=provider,
-            type_label=digest.chart_type or "資料圖表",
-            style=digest.style,
-            structure=digest.structure,
-            variable=compose_variable(digest.variable),
-        )
-        image = generate_image(ImageGenerateRequest(prompt=prompt, provider=provider))
-        raw = base64.b64decode(image.image_data_base64)
-        original_name, preview_name = save_image(raw, image.mime_type)
+        raw = base64.b64decode(result.image_data_base64)
+        original_name, preview_name = save_image(raw, result.mime_type)
 
         base_url = _env("PUBLIC_BASE_URL").rstrip("/")
         push_image(
