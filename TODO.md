@@ -161,15 +161,29 @@ log 尾端可見 `Stopping reloader process`。
 
 **當下處置**：改用不帶 `--reload` 的方式重啟（隧道未受影響，webhook URL 得以保留）。
 
-**待辦**：
+**待辦（2026-07-29 已修，見下方查證與結果）**：
 
-- [ ] `dev-line.sh` 預設**不要**帶 `--reload`；要熱重載時另用參數開啟
-      （例如 `./dev-line.sh --watch`），避免正式測試時被 commit 打斷
-- [ ] 若仍要用 --reload，加 `--reload-exclude` 排除 `.git/**`、`static/**`、`.omc/**`
-- [ ] 加一個健康檢查（例如每分鐘 curl 一次 `/openapi.json`，掛了自動重啟或發通知）——
-      這次是靠背景任務的失敗通知才發現，若在 demo 中發生就來不及
+- [x] `dev-line.sh` 預設**不要**帶 `--reload`；要熱重載時另用參數開啟
+      （`./dev-line.sh --watch`），避免正式測試時被 commit 打斷
+- [x] ~~加 `--reload-exclude` 排除 `.git/**`、`static/**`、`.omc/**`~~
+      **查證後發現這條無效、已移除**：watchfiles 的 `DefaultFilter` 本來就
+      內建忽略 `.git`（`ignore_dirs` 含 `.git`），而 uvicorn `--reload` 預設
+      只監看 `*.py`，`static/`、`.omc/` 裡本來就沒有會觸發重載的檔案——
+      三個排除規則全是空氣，並未真正防到當初的崩潰。真正病灶是
+      pre-commit 把**一般 `.py` 檔本身**（例如 `main.py`）stash 再 restore，
+      短時間內兩次寫入同一個被監看的檔案，沒有乾淨的 exclude 能擋這個。
+      `--watch` 模式仍保留這個殘餘風險，靠下面的健康檢查兜底。
+- [x] 加健康檢查：每 15 秒 ping `/openapi.json`，連續 2 次失敗（～30 秒）
+      自動重啟並印警告；`cleanup()` 改用「照 port 找目前 PID」而非
+      `$BACKEND_PID`（看門狗重啟過的話那個變數在主 shell 是舊的，
+      靠 port 查詢才不會殺錯／殺不到）。**已實測**：手動 kill -9 後端，
+      8 秒內偵測到並自動重啟成功，隧道網址不受影響、cleanup 也正確
+      收乾淨（8787 port 完全釋放）。
 - [ ] 雲端部署後這個問題自然消失（平台自帶 process 監管與重啟），
-      見「LINE Bot 永久化：改雲端部署」
+      見「LINE Bot 永久化：改雲端部署」——**已跟使用者確認過**：不一定
+      要雲端部署，買網域＋cloudflared 具名隧道也能解決「網址重開會變」
+      （但不解決「依賴筆電開著」），使用者今天先選擇處理這項而非雲端／
+      具名隧道，兩案都還沒動
 
 **教訓**：本機跑的服務「沒有人在看」，失效是靜默的。任何 demo 前的既定流程
 （commit、安裝套件、改設定）都可能連帶弄停它，上台前必須實際發一則訊息驗收，
