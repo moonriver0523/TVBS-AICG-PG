@@ -7,3 +7,6 @@ __pycache__/
 dist/
 build/
 .superpowers/
+
+# LINE Bot 生成的圖片（執行期產物）
+static/generated/

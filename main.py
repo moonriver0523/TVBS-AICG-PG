@@ -32,7 +32,7 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["POST"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -653,6 +653,16 @@ def generate_gemini_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
         mime_type=output_image.get("mime_type", "image/jpeg"),
         model=model,
     )
+
+
+# LINE Bot：webhook 與生成圖的靜態出口。
+# 放在檔案最後掛載，確保 line_bot 延後匯入 main 時本模組已完成定義。
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+from line_bot import GENERATED_DIR, STATIC_ROOT, router as line_router  # noqa: E402
+
+GENERATED_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
+app.include_router(line_router)
 
 
 def main():
