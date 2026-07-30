@@ -88,11 +88,12 @@ class MeasurementTests(unittest.TestCase):
     def test_detects_known_content_box(self):
         result = self.measure_synthetic((200, 150, 900, 500))
         left, top, right, bottom = result["content_bbox"]
-        # 邊緣濾波會讓邊界落在方塊輪廓上，容許 ±2 像素
-        self.assertAlmostEqual(left, 200, delta=2)
-        self.assertAlmostEqual(top, 150, delta=2)
-        self.assertAlmostEqual(right, 900, delta=2)
-        self.assertAlmostEqual(bottom, 500, delta=2)
+        # 高頻能量是「原圖與模糊之差」，邊界會外擴約一個模糊半徑，故容許值與半徑掛勾
+        delta = measure_safe_area.SHARPNESS_BLUR_RADIUS + 2
+        self.assertAlmostEqual(left, 200, delta=delta)
+        self.assertAlmostEqual(top, 150, delta=delta)
+        self.assertAlmostEqual(right, 900, delta=delta)
+        self.assertAlmostEqual(bottom, 500, delta=delta)
 
     def test_content_inside_safe_rect_passes_all_edges(self):
         x0, y0, x1, y1 = safe_area_spec.safe_rect(1280, 720)
@@ -104,6 +105,34 @@ class MeasurementTests(unittest.TestCase):
         result = self.measure_synthetic((x0 + 5, y0 + 5, x1 - 5, 700))
         self.assertEqual(result["verdicts"]["bottom"], "fail")
         self.assertEqual(result["overall"], "fail")
+
+    def test_smooth_bright_margin_is_not_mistaken_for_content(self):
+        """blur-fill 補出來的模糊亮斑不得被判成內容。
+
+        2026-07-30 實測踩到：舊版用邊緣強度（FIND_EDGES），把置框後上緣的模糊亮斑
+        判成內容、上方留白誤報 0.09%（實際置框正確）。梯度大小分不出「平滑的大落差」
+        與「銳利的小落差」，改用高頻能量才分得出來。這是驗收儀器的回歸測試——
+        儀器誤報會讓人誤以為置框壞了，低報則會讓不合格的圖過關。
+        """
+        width, height = 1920, 1080
+        img = Image.new("RGB", (width, height), (10, 10, 10))
+        draw = ImageDraw.Draw(img)
+        # 上緣一片平滑的亮→暗漸層，模擬 blur-fill 的亮斑
+        for y in range(260):
+            value = int(235 * (1 - y / 260))
+            draw.line([(0, y), (width, y)], fill=(value, value, value))
+        # 安全區內放一塊銳利內容
+        x0, y0, x1, y1 = safe_area_spec.safe_rect(width, height)
+        draw.rectangle([x0 + 40, y0 + 40, x1 - 40, y1 - 40], fill=(250, 250, 250))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "smooth-margin.png"
+            img.save(path)
+            result = measure_safe_area.measure(path)
+
+        self.assertEqual(result["failed_edges"], [], result["measured_pct"])
+        # 上緣量到的應該是那塊銳利內容，不是漸層
+        self.assertAlmostEqual(result["content_bbox"][1], y0 + 40, delta=3)
 
     def test_blank_image_reports_error_instead_of_bogus_numbers(self):
         img = Image.new("RGB", (640, 360), (20, 20, 20))

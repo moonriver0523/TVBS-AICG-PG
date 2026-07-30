@@ -3,12 +3,17 @@
 為什麼需要這支：過去四輪實驗的邊距都是「目測比例」（見 error-cases 各分析文件的
 「數字為目測比例」註記），不同輪之間不可比、也容易誤判。這支用固定演算法給出可重現的數字。
 
-原理：資訊圖表的內容（文字、卡片、圖示）邊緣對比強烈，背景（漸層、光暈）平滑。
-因此取邊緣強度圖二值化，再逐列／逐行統計強邊緣像素密度，密度超過門檻的第一與最後
-一列／行即為內容邊界。
+原理：內容（文字、卡片、圖示）有**銳利**的邊；背景（漸層、光暈、blur-fill 補底）
+即使明暗落差很大也是**平滑**的。因此取「原圖與輕微模糊後之差」當高頻能量圖，
+二值化後逐列／逐行統計密度，密度超過門檻的第一與最後一列／行即為內容邊界。
 
-⚠️ 這是啟發式量測，不是像素級真值：背景若含明顯格線、掃描線或邊框裝飾，會被算成內容。
+為什麼不用邊緣強度（FIND_EDGES）：實測會把 blur-fill 背景的模糊亮斑判成內容
+（2026-07-30 GPT 置框圖上緣誤報 0.09%，實際置框正確）。梯度大小分不出
+「平滑的大落差」與「銳利的小落差」，高頻能量可以。
+
+⚠️ 仍是啟發式量測，不是像素級真值：背景若含清晰格線、掃描線或邊框裝飾，會被算成內容。
 **務必搭配 `--overlay` 產生的疊圖目視確認**，再採用數字。
+置框輸出的合格性另有確定性驗證（`tests/test_safe_frame.py` 逐像素斷言），不必靠這支。
 """
 
 import argparse
@@ -16,14 +21,17 @@ import json
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import safe_area_spec  # noqa: E402  （需先加入專案根目錄到 sys.path）
 
-# 邊緣強度二值化門檻（0-255）。調高＝只認很銳利的邊，較不會把背景紋理當內容。
-DEFAULT_EDGE_THRESHOLD = 60
+# 高頻能量二值化門檻（0-255）。調高＝只認很銳利的邊，較不會把背景紋理當內容。
+DEFAULT_EDGE_THRESHOLD = 24
+
+# 求高頻能量時的模糊半徑：只要蓋過一兩個像素的細節即可，太大會把中等筆畫也算成平滑。
+SHARPNESS_BLUR_RADIUS = 2
 # 一列／行中強邊緣像素佔該列長度的比例，超過才算「有內容」。用來濾掉零星雜訊。
 DEFAULT_DENSITY = 0.01
 
@@ -53,11 +61,13 @@ def measure(
         img = opened.convert("RGB")
     width, height = img.size
 
-    # FIND_EDGES 會在最外圈 1 像素產生假邊緣，先內縮再分析，之後把座標補回去。
+    # 濾波在最外圈 1 像素會產生假訊號，先內縮再分析，之後把座標補回去。
     inset = 1
     core = img.crop((inset, inset, width - inset, height - inset)).convert("L")
-    edges = core.filter(ImageFilter.FIND_EDGES)
-    binary = edges.point(lambda v: 255 if v >= edge_threshold else 0)
+    # 高頻能量＝原圖與輕微模糊之差。平滑的背景（含 blur-fill）趨近 0，銳利的內容留下。
+    smoothed = core.filter(ImageFilter.GaussianBlur(radius=SHARPNESS_BLUR_RADIUS))
+    high_frequency = ImageChops.difference(core, smoothed)
+    binary = high_frequency.point(lambda v: 255 if v >= edge_threshold else 0)
 
     row_counts, col_counts = _strong_edge_counts(binary)
     core_w, core_h = binary.size
