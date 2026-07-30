@@ -938,7 +938,10 @@ async function handleAIDigestion() {
                 news_text: input,
                 type_label: typeLabel,
                 role: state.currentRole,
-                density: state.digestDensity
+                density: state.digestDensity,
+                // 安全框 ON 時消化要出滿版版面，否則 STRUCTURE 的「縮小置中」
+                // 開頭句會跟最終 prompt 的 FULL-FRAME RULES 互相打架
+                safe_frame: state.safeFrame
             })
         });
         if (!response.ok) throw new Error("HTTP " + response.status);
