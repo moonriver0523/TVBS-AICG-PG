@@ -1,3 +1,4 @@
+import base64
 import hmac
 import json
 import os
@@ -12,9 +13,17 @@ import certifi
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from openai import APIConnectionError, APIError, AuthenticationError, OpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    APIError,
+    AuthenticationError,
+    BadRequestError,
+    OpenAI,
+    RateLimitError,
+)
 from pydantic import BaseModel, Field
 
+import safe_frame
 from news_prompt import PROMPT_VERSION, build_prompt, compose_variable
 
 load_dotenv()
@@ -49,6 +58,8 @@ class GenerateRequest(BaseModel):
     type_label: str
     role: str = "記者"
     density: DigestDensity = "standard"
+    # True＝留白改由後端 safe_frame 置框，消化階段要出滿版版面而非縮小置中
+    safe_frame: bool = False
 
 
 class GenerateResponse(BaseModel):
@@ -64,6 +75,8 @@ class ImageGenerateRequest(BaseModel):
     provider: Literal["gemini", "gpt"] = "gemini"
     aspect_ratio: str = "16:9"
     image_size: str = "1K"
+    # True＝生成後用 safe_frame 把整張圖置入 TVBS 安全框並補背景
+    safe_frame: bool = False
 
 
 class ImageGenerateResponse(BaseModel):
@@ -134,6 +147,19 @@ def extract_image_content(result: dict) -> dict | None:
     return None
 
 
+# structure 的版面規則。安全框模式維持原本「縮小置中留厚邊」；滿版模式（safe_frame）
+# 改成用滿畫布，留白交由後端 safe_frame.py 數學置框——四輪實驗證實模型量不出比例，
+# 底部安全區 0 次合格，但「畫滿」它做得很好。兩種模式都嚴禁出現任何數字：
+# 數字會被模型當文字畫進圖裡（見 docs/error-cases/2026-07-23-像素安全框-分析.md）。
+REPORTER_LAYOUT_SAFE_AREA = """   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "The entire infographic — including the title, icon cards, and side panels — is treated as one group and scaled down so it occupies only the central region of the frame, surrounded by a thick, clearly visible empty margin of unchanged background on the top, left and right, and an even deeper empty band along the bottom; every element stays well inside this central zone and nothing reaches into the surrounding empty border." After that sentence, every element you place (headline, stat cards, indicators, icons) MUST be positioned using ONLY qualitative spatial words (e.g. "in the upper-left area", "centred", "along the right side well clear of the edge", "with generous empty space around it"). NEVER express any position, inset, gutter, margin, or size as a percentage, pixel, ratio, or number of any kind — those figures get drawn as visible text labels in the final image. Never describe anything as spanning, flush, or edge-to-edge. The words "footer", "bottom edge", "anchored at bottom", "full-screen", "full-bleed", "full-width", "edge-to-edge", "flush left", "flush right", "spans the entire width", "corner-to-corner" and "bleed" are FORBIDDEN. Any closing banner or data-source line is the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge."""
+
+EDITOR_LAYOUT_SAFE_AREA = """   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "The entire infographic — including the title, icon cards, and data charts — is treated as one group and scaled down so it occupies only the central region of the frame, surrounded by a thick, clearly visible empty margin of unchanged background on the top, left and right, and an even deeper empty band along the bottom; every element stays well inside this central zone and nothing reaches into the surrounding empty border." After that sentence, every element you place MUST be positioned using ONLY qualitative spatial words (e.g. "in the upper-left area", "centred", "along the right side well clear of the edge", "with generous empty space around it"). NEVER express any position, inset, gutter, margin, or size as a percentage, pixel, ratio, or number of any kind — those figures get drawn as visible text labels in the final image. Never describe anything as spanning, flush, or edge-to-edge. The words "footer", "bottom edge", "anchored at bottom", "full-screen", "full-bleed", "full-width", "edge-to-edge", "flush left", "flush right", "flush top", "flush bottom", "spans the entire width", "corner-to-corner" and "bleed" are FORBIDDEN. The <蓋章> stamp banner and any data-source line are the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge."""
+
+REPORTER_LAYOUT_FULL_BLEED = """   - FULL-FRAME LAYOUT (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "The infographic uses the entire frame edge to edge, with only a slim even breathing space just inside the frame border so that no element is clipped; the background is one single continuous image covering the whole canvas." After that sentence, every element you place (headline, stat cards, indicators, icons) MUST be positioned using ONLY qualitative spatial words (e.g. "across the upper area", "centred", "along the right side", "with clear separation from its neighbours"). NEVER express any position, inset, gutter, margin, or size as a percentage, pixel, ratio, or number of any kind — those figures get drawn as visible text labels in the final image. Never reserve an empty margin, empty band, or letterboxed area, and never scale the design down into a smaller central region. Any closing banner or data-source line is the LOWEST ROW OF THE DESIGN, sitting just inside the frame border rather than reserved away from it."""
+
+EDITOR_LAYOUT_FULL_BLEED = """   - FULL-FRAME LAYOUT (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "The infographic uses the entire frame edge to edge, with only a slim even breathing space just inside the frame border so that no element is clipped; the background is one single continuous image covering the whole canvas." After that sentence, every element you place MUST be positioned using ONLY qualitative spatial words (e.g. "across the upper area", "centred", "along the right side", "with clear separation from its neighbours"). NEVER express any position, inset, gutter, margin, or size as a percentage, pixel, ratio, or number of any kind — those figures get drawn as visible text labels in the final image. Never reserve an empty margin, empty band, or letterboxed area, and never scale the design down into a smaller central region. The <蓋章> stamp banner and any data-source line are the LOWEST ROW OF THE DESIGN, sitting just inside the frame border rather than reserved away from it."""
+
+
 SYSTEM_PROMPT_TEMPLATE = """You are an elite broadcast news graphics director for a Taiwanese international news desk.
 The current chart type is: "{type_label}".
 Digest the raw news text and organize it into a structured infographic specification suited to this chart type.
@@ -149,7 +175,7 @@ Requirements:
 3. "structure": Design the most readable, intuitive layout for a "{type_label}".
    - Propose concrete spatial arrangement and add instructions for relevant icons, technical illustrations, 3D diagrams, maps, or scene depictions that aid comprehension.
    - Written in professional English.
-   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "The entire infographic — including the title, icon cards, and side panels — is treated as one group and scaled down so it occupies only the central region of the frame, surrounded by a thick, clearly visible empty margin of unchanged background on the top, left and right, and an even deeper empty band along the bottom; every element stays well inside this central zone and nothing reaches into the surrounding empty border." After that sentence, every element you place (headline, stat cards, indicators, icons) MUST be positioned using ONLY qualitative spatial words (e.g. "in the upper-left area", "centred", "along the right side well clear of the edge", "with generous empty space around it"). NEVER express any position, inset, gutter, margin, or size as a percentage, pixel, ratio, or number of any kind — those figures get drawn as visible text labels in the final image. Never describe anything as spanning, flush, or edge-to-edge. The words "footer", "bottom edge", "anchored at bottom", "full-screen", "full-bleed", "full-width", "edge-to-edge", "flush left", "flush right", "spans the entire width", "corner-to-corner" and "bleed" are FORBIDDEN. Any closing banner or data-source line is the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge."""
+{layout_rule}"""
 
 
 # 編輯版：規範取自編輯台實戰 GEM「整理小幫手」（見 editor-templates/PROMPTS.md）
@@ -171,7 +197,7 @@ Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style
      "[標題] 聯準會三度降息\\n利率降至<4.25%>\\n[內文小標] 通膨降溫 就業穩健\\n[內文小標] 市場預期 明年再降<兩次>\\n[內文小標] 道瓊應聲<上漲350點>\\n<蓋章> 降息循環正式啟動"
 2. "style": 根據新聞調性（財經、災難、溫馨、政治）選擇主色調與畫面風格（例如：深藍色科技感、紅白色警戒感），written in professional English.
 3. "structure": Design the most readable anchor-wall CG layout for a "{type_label}", with concrete spatial arrangement and instructions for flat icons or 3D data charts that aid comprehension. Written in professional English.
-   - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "The entire infographic — including the title, icon cards, and data charts — is treated as one group and scaled down so it occupies only the central region of the frame, surrounded by a thick, clearly visible empty margin of unchanged background on the top, left and right, and an even deeper empty band along the bottom; every element stays well inside this central zone and nothing reaches into the surrounding empty border." After that sentence, every element you place MUST be positioned using ONLY qualitative spatial words (e.g. "in the upper-left area", "centred", "along the right side well clear of the edge", "with generous empty space around it"). NEVER express any position, inset, gutter, margin, or size as a percentage, pixel, ratio, or number of any kind — those figures get drawn as visible text labels in the final image. Never describe anything as spanning, flush, or edge-to-edge. The words "footer", "bottom edge", "anchored at bottom", "full-screen", "full-bleed", "full-width", "edge-to-edge", "flush left", "flush right", "flush top", "flush bottom", "spans the entire width", "corner-to-corner" and "bleed" are FORBIDDEN. The <蓋章> stamp banner and any data-source line are the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge."""
+{layout_rule}"""
 
 
 SIMPLIFIED_DENSITY_RULES = """
@@ -193,21 +219,64 @@ def build_digest_instructions(
     role: str,
     density: DigestDensity,
     type_label: str,
+    full_bleed: bool = False,
 ) -> str:
-    template = (
-        EDITOR_SYSTEM_PROMPT_TEMPLATE if role == "編輯" else SYSTEM_PROMPT_TEMPLATE
-    )
+    is_editor = role == "編輯"
+    template = EDITOR_SYSTEM_PROMPT_TEMPLATE if is_editor else SYSTEM_PROMPT_TEMPLATE
+    if full_bleed:
+        layout_rule = EDITOR_LAYOUT_FULL_BLEED if is_editor else REPORTER_LAYOUT_FULL_BLEED
+    else:
+        layout_rule = EDITOR_LAYOUT_SAFE_AREA if is_editor else REPORTER_LAYOUT_SAFE_AREA
     # 自動判斷模式下，樣板裡的類型描述改為由 AI 自選（實際選型規則見下方 directive）
     rendered_label = (
         "the chart type you select below"
         if type_label == AUTO_TYPE_LABEL
         else type_label
     )
-    instructions = template.format(type_label=rendered_label)
+    instructions = template.format(type_label=rendered_label, layout_rule=layout_rule)
     instructions += chart_type_directive(type_label)
     if density == "simplified":
         instructions += SIMPLIFIED_DENSITY_RULES
     return instructions
+
+
+def digest_completion(
+    *,
+    model: str,
+    system_prompt: str,
+    news_text: str,
+    max_output_tokens: int,
+    schema_name: str,
+    schema: dict,
+):
+    """呼叫 Chat Completions 取結構化消化結果。
+
+    輸出長度上限的參數名兩邊不同：OpenRouter 吃 max_tokens，OpenAI 原生的新模型
+    （如 gpt-5.6-terra）只吃 max_completion_tokens，送錯直接 400。因此先送
+    max_tokens，被明確拒絕時再改用 max_completion_tokens——否則沒設
+    OPENROUTER_API_KEY 時的原生退路等於是壞的（實測 2026-07-30 撞到）。
+    """
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f'News Source Material:\n"{news_text}"'},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": schema_name, "strict": True, "schema": schema},
+        },
+    }
+    try:
+        return openai_client.chat.completions.create(
+            **payload, max_tokens=max_output_tokens
+        )
+    except BadRequestError as exc:
+        if "max_completion_tokens" not in str(exc):
+            raise
+        return openai_client.chat.completions.create(
+            **payload, max_completion_tokens=max_output_tokens
+        )
 
 
 @app.post("/api/generate", response_model=GenerateResponse)
@@ -216,6 +285,7 @@ def generate(req: GenerateRequest):
         role=req.role,
         density=req.density,
         type_label=req.type_label,
+        full_bleed=req.safe_frame,
     )
 
     # DIGEST_MODEL 可覆寫；沿用舊環境變數 OPENAI_DIGEST_MODEL 作為次要相容
@@ -230,25 +300,13 @@ def generate(req: GenerateRequest):
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
     for attempt in range(3):
         try:
-            # Chat Completions 介面 OpenRouter 與 OpenAI 原生皆通用
-            response = openai_client.chat.completions.create(
+            response = digest_completion(
                 model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": f'News Source Material:\n"{req.news_text}"',
-                    },
-                ],
-                max_tokens=1500,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "news_cg_digest",
-                        "strict": True,
-                        "schema": DIGEST_OUTPUT_SCHEMA,
-                    },
-                },
+                system_prompt=system_prompt,
+                news_text=req.news_text,
+                max_output_tokens=1500,
+                schema_name="news_cg_digest",
+                schema=DIGEST_OUTPUT_SCHEMA,
             )
         except AuthenticationError as exc:
             raise HTTPException(
@@ -389,24 +447,13 @@ def hybrid_digest(req: HybridDigestRequest):
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
     for attempt in range(3):
         try:
-            response = openai_client.chat.completions.create(
+            response = digest_completion(
                 model=model,
-                messages=[
-                    {"role": "system", "content": HYBRID_SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": f'News Source Material:\n"{req.news_text}"',
-                    },
-                ],
-                max_tokens=1200,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "hybrid_card_digest",
-                        "strict": True,
-                        "schema": HYBRID_DIGEST_SCHEMA,
-                    },
-                },
+                system_prompt=HYBRID_SYSTEM_PROMPT,
+                news_text=req.news_text,
+                max_output_tokens=1200,
+                schema_name="hybrid_card_digest",
+                schema=HYBRID_DIGEST_SCHEMA,
             )
         except AuthenticationError as exc:
             raise HTTPException(
@@ -465,7 +512,16 @@ def generate_image(req: ImageGenerateRequest):
     IMAGE_BACKEND=openrouter（預設）時，兩家都改走 OpenRouter：
     GPT 用 OPENROUTER_GPT_MODEL、Gemini 用 OPENROUTER_GEMINI_MODEL。
     設 IMAGE_BACKEND=native 可切回原生 OpenAI / Gemini 直連。
+
+    req.safe_frame=True 時，生成後再由 safe_frame 置入 TVBS 安全框。
     """
+    result = generate_image_raw(req)
+    if req.safe_frame:
+        result = frame_image_response(result)
+    return result
+
+
+def generate_image_raw(req: ImageGenerateRequest) -> ImageGenerateResponse:
     backend = os.getenv("IMAGE_BACKEND", "openrouter")
     if backend == "openrouter" and os.getenv("OPENROUTER_API_KEY"):
         if req.provider == "gpt":
@@ -478,6 +534,28 @@ def generate_image(req: ImageGenerateRequest):
         return generate_gpt_image(req)
 
     return generate_gemini_image(req)
+
+
+def frame_image_response(result: ImageGenerateResponse) -> ImageGenerateResponse:
+    """把回傳圖置入安全框。
+
+    置框失敗就整支失敗，不默默回傳沒置框的圖——呼叫端要的是「保證合格」，
+    悄悄降級成不合格的圖會直接播出去。
+    """
+    try:
+        framed = safe_frame.apply_safe_frame(base64.b64decode(result.image_data_base64))
+    except Exception as exc:  # noqa: BLE001 — 任何影像處理失敗都必須讓呼叫端知道
+        print(f"[safe_frame] 置框失敗：{type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"安全框置框失敗：{exc}",
+        ) from exc
+
+    return ImageGenerateResponse(
+        image_data_base64=base64.b64encode(framed).decode("ascii"),
+        mime_type="image/png",
+        model=result.model,
+    )
 
 
 def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGenerateResponse:
@@ -677,6 +755,8 @@ class NewsImageGenerateRequest(BaseModel):
     provider: Literal["gemini", "gpt"] = "gemini"
     aspect_ratio: str = "16:9"
     image_size: str = "1K"
+    # True＝滿版生成＋後端置框（安全框由數學保證，不靠模型自律）
+    safe_frame: bool = False
 
 
 class NewsImageGenerateResponse(BaseModel):
@@ -700,6 +780,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             type_label=req.type_label,
             role=req.role,
             density=req.density,
+            safe_frame=req.safe_frame,
         )
     )
     prompt = build_prompt(
@@ -709,6 +790,8 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
         style=digest.style,
         structure=digest.structure,
         variable=compose_variable(digest.variable),
+        safe_frame=req.safe_frame,
+        aspect_ratio=req.aspect_ratio,
     )
     image = generate_image(
         ImageGenerateRequest(
@@ -716,6 +799,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             provider=req.provider,
             aspect_ratio=req.aspect_ratio,
             image_size=req.image_size,
+            safe_frame=req.safe_frame,
         )
     )
     return NewsImageGenerateResponse(

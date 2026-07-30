@@ -112,6 +112,32 @@ EMPTY MARGIN RULES (CRITICAL — MUST PRESERVE)
 - SELF-CHECK before finalizing: if any text block, card, icon, or box touches or comes close to any frame edge, you MUST redesign the layout to add visible gutter space before output."""
 
 
+# ============================================================
+# 滿版模式（safe_frame=True）：留白改由後端 safe_frame.py 用數學置框，
+# 不再要求模型自己留邊。
+#
+# 為什麼要有這個模式：四輪實驗（像素／百分比／純文字／參考圖與遮罩）證實模型
+# 量不出比例，底部安全區 0 次合格；但「把畫面畫滿」它做得非常好。因此把要求
+# 從「精準留 10/7.3/7.6/20.4%」（做不到）換成「別把自己的內容切掉」（很容易），
+# 精準度交給程式。詳見 docs/error-cases/。
+# ============================================================
+
+CANVAS_MARGIN_LINE = "- Scale the whole design down so it fills only the central region, surrounded by a thick empty margin on every side (deeper at the bottom); when unsure, make the margin bigger, never smaller"
+
+CANVAS_FULL_BLEED_LINE = "- Use the whole frame: the design fills the canvas completely, with only a slim even breathing space inside the frame edge so that no element is clipped"
+
+FULL_BLEED_RULES = """==================================================
+FULL-FRAME RULES (CRITICAL — MUST PRESERVE)
+==================================================
+- Use the entire canvas. The design fills the frame; there is no reserved margin, no empty band, and no letterboxing anywhere.
+- Leave only a slim, even breathing space just inside the frame edge, enough that no letter, icon, card border, or chart element is cut off by the edge. Do not turn that breathing space into a thick border.
+- Keep the breathing space roughly even on all four sides. Do NOT make the bottom deeper than the other sides.
+- These full-frame rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction asks you to scale the design down, centre it in a smaller region, or reserve an empty margin or band, ignore that instruction and use the whole frame instead.
+- The background is ONE single continuous image covering the whole canvas. Do NOT render any frame, rectangle, outline, border line, guide line, crop mark, corner bracket, or dimmed / tinted / shaded band anywhere.
+- Every element must be fully inside the canvas: nothing may run off the edge or be sliced by it.
+- SELF-CHECK before finalizing: if any element is clipped by the frame edge, nudge it inward; if a wide empty band has appeared along any edge, enlarge the design to fill it."""
+
+
 def build_prompt(
     *,
     role: str,
@@ -120,17 +146,27 @@ def build_prompt(
     style: str,
     structure: str,
     variable: str,
+    safe_frame: bool = False,
+    aspect_ratio: str = "16:9",
 ) -> str:
-    """對應 app.js 的 buildPrompt()。role: 記者／編輯，engine: gemini／gpt。"""
+    """對應 app.js 的 buildPrompt()。role: 記者／編輯，engine: gemini／gpt。
+
+    safe_frame=True 時輸出滿版指示（留白由後端 safe_frame.py 置框處理）。
+    """
     text_rules = EDITOR_TEXT_RULES if role == "編輯" else REPORTER_TEXT_RULES
-    safe_area = EDITOR_SAFE_AREA if role == "編輯" else REPORTER_SAFE_AREA
+    if safe_frame:
+        margin_rules = FULL_BLEED_RULES
+        canvas_line = CANVAS_FULL_BLEED_LINE
+    else:
+        margin_rules = EDITOR_SAFE_AREA if role == "編輯" else REPORTER_SAFE_AREA
+        canvas_line = CANVAS_MARGIN_LINE
 
     body = f"""==================================================
 CANVAS
 ==================================================
-- Aspect ratio: 16:9
+- Aspect ratio: {aspect_ratio}
 - Centred composition, single continuous full-frame background
-- Scale the whole design down so it fills only the central region, surrounded by a thick empty margin on every side (deeper at the bottom); when unsure, make the margin bigger, never smaller
+{canvas_line}
 
 {text_rules}
 
@@ -149,7 +185,7 @@ VARIABLE FIELDS (USER INPUT)
 ==================================================
 {variable}
 
-{safe_area}
+{margin_rules}
 
 ==================================================
 FINAL OUTPUT RULE

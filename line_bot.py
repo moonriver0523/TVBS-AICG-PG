@@ -160,12 +160,17 @@ def generate_and_push(reply_token: str, to: str, news_text: str) -> None:
         if density not in ("standard", "simplified"):
             density = "simplified"
         provider = os.getenv("LINE_IMAGE_PROVIDER", "gemini")
+        # 安全框置框：預設開啟。實測 GPT／Gemini 都無法自己留出合格留白
+        # （docs/error-cases/ 四輪實驗，底部安全區 0 次合格），改由後端數學置框。
+        # 要看未置框的原始生成圖可設 LINE_SAFE_FRAME=0。
+        safe_frame_enabled = os.getenv("LINE_SAFE_FRAME", "1").strip() not in ("0", "false", "False")
         result = generate_news_image(
             NewsImageGenerateRequest(
                 news_text=news_text,
                 role="記者",
                 density=density,
                 provider=provider,
+                safe_frame=safe_frame_enabled,
             )
         )
         raw = base64.b64decode(result.image_data_base64)

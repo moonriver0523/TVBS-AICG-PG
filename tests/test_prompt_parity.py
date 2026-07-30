@@ -50,6 +50,17 @@ class ConstantParityTests(unittest.TestCase):
     def test_editor_safe_area(self):
         self.assert_same("EDITOR_SAFE_AREA", news_prompt.EDITOR_SAFE_AREA)
 
+    def test_full_bleed_rules(self):
+        self.assert_same("FULL_BLEED_RULES", news_prompt.FULL_BLEED_RULES)
+
+    def test_canvas_lines(self):
+        for name, value in (
+            ("CANVAS_MARGIN_LINE", news_prompt.CANVAS_MARGIN_LINE),
+            ("CANVAS_FULL_BLEED_LINE", news_prompt.CANVAS_FULL_BLEED_LINE),
+        ):
+            with self.subTest(name=name):
+                self.assert_same(name, value)
+
     def test_system_disclaimer(self):
         match = re.search(r"const SYSTEM_DISCLAIMER = '(.*?)';", self.source)
         self.assertIsNotNone(match, "app.js 裡找不到 SYSTEM_DISCLAIMER")
@@ -96,6 +107,54 @@ class BuiltPromptShapeTests(unittest.TestCase):
         editor = self.build(role="編輯")
         self.assertIn("Must be split into exactly two lines", editor)
         self.assertNotIn("Must be split into exactly two lines", self.build())
+
+    def test_safe_frame_mode_swaps_margin_rules_for_full_bleed(self):
+        framed = news_prompt.build_prompt(
+            role="記者",
+            engine="gemini",
+            type_label="資料圖表",
+            style="S",
+            structure="T",
+            variable="V",
+            safe_frame=True,
+        )
+        self.assertIn("FULL-FRAME RULES", framed)
+        self.assertNotIn("EMPTY MARGIN RULES", framed)
+        self.assertNotIn(news_prompt.CANVAS_MARGIN_LINE, framed)
+        self.assertIn(news_prompt.CANVAS_FULL_BLEED_LINE, framed)
+
+    def test_safe_frame_mode_has_no_numeric_margin_spec(self):
+        """滿版規則同樣不得出現任何比例數字：數字會被模型畫進圖裡。"""
+        self.assertFalse(
+            any(ch.isdigit() for ch in news_prompt.FULL_BLEED_RULES),
+        )
+
+    def test_default_mode_output_unchanged_by_new_parameter(self):
+        """新增參數不得改動既有預設輸出，否則現行流程會靜默漂移。"""
+        kwargs = dict(
+            role="記者",
+            engine="gemini",
+            type_label="資料圖表",
+            style="S",
+            structure="T",
+            variable="V",
+        )
+        self.assertEqual(
+            news_prompt.build_prompt(**kwargs),
+            news_prompt.build_prompt(**kwargs, safe_frame=False, aspect_ratio="16:9"),
+        )
+
+    def test_aspect_ratio_is_configurable(self):
+        prompt = news_prompt.build_prompt(
+            role="記者",
+            engine="gemini",
+            type_label="資料圖表",
+            style="S",
+            structure="T",
+            variable="V",
+            aspect_ratio="21:9",
+        )
+        self.assertIn("- Aspect ratio: 21:9", prompt)
 
     def test_compose_variable_prefixes_disclaimer(self):
         composed = news_prompt.compose_variable("[標題]")

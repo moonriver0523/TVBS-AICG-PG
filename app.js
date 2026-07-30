@@ -298,6 +298,8 @@ let state = {
     currentTab: 'style',
     engine: 'gemini',
     imageSize: '1K',
+    // 安全框置框：滿版生成後由後端 safe_frame.py 數學置入 TVBS 安全框
+    safeFrame: false,
     activeParent: null,
     currentPage: 1,
     // 第一頁「自動生成」專用的圖表類型，與第二頁模板庫的 chartType 完全獨立
@@ -604,11 +606,24 @@ function switchImageSize(size, el) {
     updateAspectBadge();
 }
 
+function toggleSafeFrame() {
+    state.safeFrame = !state.safeFrame;
+    const btn = document.getElementById('btnSafeFrame');
+    if (btn) {
+        btn.className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (state.safeFrame ? 'bg-emerald-600 text-white' : 'text-slate-500 hover:text-white');
+        btn.innerText = state.safeFrame ? '安全框 ON' : '安全框 OFF';
+    }
+    updateAspectBadge();
+    syncOutput();
+}
+
 // GPT 固定 1280×720（忽略解析度切換）；Gemini 才依 1K／2K 變動
 function updateAspectBadge() {
     const badge = document.getElementById('aspectBadge');
     if (!badge) return;
-    badge.innerText = state.engine === 'gpt' ? '16:9 / 720p' : `16:9 / ${state.imageSize}`;
+    const base = state.engine === 'gpt' ? '16:9 / 720p' : `16:9 / ${state.imageSize}`;
+    // 置框後輸出固定為官方基準畫布 1920×1080
+    badge.innerText = state.safeFrame ? `${base} → 置框 1920×1080` : base;
 }
 
 /* ============================================================
@@ -710,23 +725,28 @@ function syncOutput() {
         typeLabel: activeType().label,
         style: combinedStyle,
         structure: structureContent,
-        variable: processedVariable
+        variable: processedVariable,
+        safeFrame: state.safeFrame
     });
     updatePromptCounter();
 }
 
-function buildPrompt({ role, engine, typeLabel, style, structure, variable }) {
+function buildPrompt({ role, engine, typeLabel, style, structure, variable, safeFrame = false, aspectRatio = '16:9' }) {
     // 共用的正文區塊（style / structure / variable）
     const textRules = role === '編輯' ? EDITOR_TEXT_RULES : REPORTER_TEXT_RULES;
-    const safeArea = role === '編輯' ? EDITOR_SAFE_AREA : REPORTER_SAFE_AREA;
+    // safeFrame=true：留白改由後端 safe_frame.py 數學置框，這裡改下滿版指示
+    const marginRules = safeFrame
+        ? FULL_BLEED_RULES
+        : (role === '編輯' ? EDITOR_SAFE_AREA : REPORTER_SAFE_AREA);
+    const canvasLine = safeFrame ? CANVAS_FULL_BLEED_LINE : CANVAS_MARGIN_LINE;
 
     const body =
 `==================================================
 CANVAS
 ==================================================
-- Aspect ratio: 16:9
+- Aspect ratio: ${aspectRatio}
 - Centred composition, single continuous full-frame background
-- Scale the whole design down so it fills only the central region, surrounded by a thick empty margin on every side (deeper at the bottom); when unsure, make the margin bigger, never smaller
+${canvasLine}
 
 ${textRules}
 
@@ -745,7 +765,7 @@ VARIABLE FIELDS (USER INPUT)
 ==================================================
 ${variable}
 
-${safeArea}
+${marginRules}
 
 ==================================================
 FINAL OUTPUT RULE
@@ -769,6 +789,26 @@ Current Operating Context: ${role} Workflow.
 
 ${body}`;
 }
+
+/* ---- 滿版模式常數（safe_frame=true）----
+   四輪實驗證實模型量不出比例、底部安全區 0 次合格，但「畫滿」做得很好。
+   所以要求從「精準留邊」換成「別切到自己的內容」，精準留白交給 safe_frame.py。
+   ⚠️ 這三個常數與 news_prompt.py 必須逐字一致（tests/test_prompt_parity.py 會驗）。*/
+const CANVAS_MARGIN_LINE = `- Scale the whole design down so it fills only the central region, surrounded by a thick empty margin on every side (deeper at the bottom); when unsure, make the margin bigger, never smaller`;
+
+const CANVAS_FULL_BLEED_LINE = `- Use the whole frame: the design fills the canvas completely, with only a slim even breathing space inside the frame edge so that no element is clipped`;
+
+const FULL_BLEED_RULES =
+`==================================================
+FULL-FRAME RULES (CRITICAL — MUST PRESERVE)
+==================================================
+- Use the entire canvas. The design fills the frame; there is no reserved margin, no empty band, and no letterboxing anywhere.
+- Leave only a slim, even breathing space just inside the frame edge, enough that no letter, icon, card border, or chart element is cut off by the edge. Do not turn that breathing space into a thick border.
+- Keep the breathing space roughly even on all four sides. Do NOT make the bottom deeper than the other sides.
+- These full-frame rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction asks you to scale the design down, centre it in a smaller region, or reserve an empty margin or band, ignore that instruction and use the whole frame instead.
+- The background is ONE single continuous image covering the whole canvas. Do NOT render any frame, rectangle, outline, border line, guide line, crop mark, corner bracket, or dimmed / tinted / shaded band anywhere.
+- Every element must be fully inside the canvas: nothing may run off the edge or be sliced by it.
+- SELF-CHECK before finalizing: if any element is clipped by the frame edge, nudge it inward; if a wide empty band has appeared along any edge, enlarge the design to fill it.`;
 
 /* ---- 文字規則 / 安全區 常數 ---- */
 const REPORTER_TEXT_RULES =
@@ -998,7 +1038,8 @@ async function handleImageGeneration() {
                 prompt,
                 provider,
                 aspect_ratio: '16:9',
-                image_size: state.imageSize
+                image_size: state.imageSize,
+                safe_frame: state.safeFrame
             })
         });
         const data = await response.json();
