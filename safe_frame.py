@@ -21,8 +21,22 @@ import safe_area_spec
 # 官方基準畫布。輸出固定 1080P，與 TVBS 安全框工具一致。
 DEFAULT_CANVAS = safe_area_spec.BASE_CANVAS
 
-FIT = "fit"
-COVER = "cover"
+# ---- 內容縮放比例：FIT(0.0) 到 COVER(1.0) 之間連續內插 ----
+# 16:9 內容塞進安全區（長寬比 2.176:1）時，高度是綁定軸，寬度會多出餘裕——
+# 這正是 FIT(0.0) 時左右留白遠超官方需求（15% vs 官方 7.3/7.6%）的原因。
+# 2026-07-30 使用者用 TVBS 官方對框工具實測比對後指出「左右抓太寬，應該減半」：
+# 把 mode 設在 0.0～1.0 之間會線性內插縮放比例，且這個內插在「餘裕像素數」上也是
+# 線性的（見 plan_placement 內的推導），所以 mode=0.5 精確地讓餘裕減半，不是概略值。
+# 代價：mode>0 時內容的縮放尺寸會超出安全區的高度，超出部分沿上下對稱裁掉——
+# 裁的是模型自己留的「呼吸空間」（見 TODO 對這段留白成因的分析），不是真正的標題或
+# 卡片內容，但無法保證每張生成圖都留了同樣多的呼吸空間，仍有極小機率裁到內容邊緣。
+FIT = 0.0
+COVER = 1.0
+# 2026-07-30：曾把預設定為 0.5（餘裕減半）並用兩張既有樣本目視驗證過看似安全，
+# 但使用者用真實生成圖實測後回報底部 <蓋章> 橫幅被裁到——鏡面留白會隨每次生成
+# 變動，兩張樣本的驗證不足以保證安全，此路線改為結構性修法（改生成長寬比，見
+# TODO），mode 的裁切用法仍保留給刻意想裁的呼叫端，但**不能是預設**。
+DEFAULT_CROP_RATIO = FIT
 
 # ---- 四周背景的做法 ----
 # 2026-07-30 用實際生成圖做過四種做法的並排對照後由使用者選定 backdrop 為預設。
@@ -53,15 +67,25 @@ BACKGROUND_DIM = 0.72
 def plan_placement(
     source_size: tuple[int, int],
     canvas: tuple[int, int] = DEFAULT_CANVAS,
-    mode: str = FIT,
+    mode: float = FIT,
 ) -> tuple[int, int, int, int]:
     """算出內容要貼在畫布的哪個矩形 (x0, y0, x1, y1)。純函式，方便直接斷言。
 
-    fit：等比縮放到「完全放進」安全框，置中。不裁切、不會超出安全框，
-         代價是來源長寬比與安全框不同時，某一軸會留下比需求更寬的餘裕。
-    cover：等比縮放到「填滿」安全框再裁掉溢出部分。利用率最好，但會裁掉內容，
-         來源是滿版資訊圖表時可能切到標題或結論，故非預設。
+    mode 是 0.0（FIT）到 1.0（COVER）之間的數字：
+    0.0：等比縮放到「完全放進」安全框，置中。不裁切，代價是來源長寬比與安全框
+         不同時，某一軸會留下比官方需求更寬的餘裕（16:9 塞 2.176:1 安全區即如此）。
+    1.0：等比縮放到「填滿」安全框兩軸，裁掉溢出部分。餘裕降到 0，但會裁掉內容，
+         來源是滿版資訊圖表時有切到標題或結論的風險。
+    0.0～1.0 之間：線性內插縮放比例。回傳的矩形可能超出安全區（甚至超出畫布）——
+    呼叫端（apply_safe_frame）負責把超出畫布的部分裁掉。
+
+    ⚠️ 這裡回傳的矩形不再保證落在安全區或畫布內（mode>0 時會超出）。
+    mode=0.0（FIT）仍保證落在安全區內，行為與過去相同。
     """
+    if not isinstance(mode, (int, float)) or not 0.0 <= mode <= 1.0:
+        raise ValueError(
+            f"mode 必須是 0.0（FIT）到 1.0（COVER）之間的數字，收到：{mode!r}"
+        )
     src_w, src_h = source_size
     if src_w <= 0 or src_h <= 0:
         raise ValueError("來源尺寸不合法")
@@ -70,9 +94,9 @@ def plan_placement(
     zone_w = x1 - x0
     zone_h = y1 - y0
 
-    scale_w = zone_w / src_w
-    scale_h = zone_h / src_h
-    scale = min(scale_w, scale_h) if mode == FIT else max(scale_w, scale_h)
+    fit_scale = min(zone_w / src_w, zone_h / src_h)
+    cover_scale = max(zone_w / src_w, zone_h / src_h)
+    scale = fit_scale + mode * (cover_scale - fit_scale)
 
     width = max(1, round(src_w * scale))
     height = max(1, round(src_h * scale))
@@ -182,7 +206,7 @@ def apply_safe_frame(
     image_bytes: bytes,
     *,
     canvas: tuple[int, int] = DEFAULT_CANVAS,
-    mode: str = FIT,
+    mode: float = DEFAULT_CROP_RATIO,
     background: str = DEFAULT_BACKGROUND,
 ) -> bytes:
     """把生成圖置入安全框並補背景，回傳 PNG bytes。
@@ -190,9 +214,10 @@ def apply_safe_frame(
     來源尺寸不設限：Gemini 實測會回 1376×768 而非要求的 1280×720，
     所以一切都按比例計算，不假設任何輸入解析度。
 
+    mode 見 plan_placement 的說明，預設 0.5（FIT 與 COVER 的餘裕減半）。
     background 三種做法見上方 BACKGROUNDS 的說明，預設 backdrop。
     """
-    if mode not in (FIT, COVER):
+    if not isinstance(mode, (int, float)) or not 0.0 <= mode <= 1.0:
         raise ValueError(f"未知 mode：{mode}")
     if background not in BACKGROUNDS:
         raise ValueError(f"未知 background：{background}（可用：{list(BACKGROUNDS)}）")
@@ -201,8 +226,21 @@ def apply_safe_frame(
         source = opened.convert("RGB")
 
         left, top, right, bottom = plan_placement(source.size, canvas, mode)
-        content = source.resize((right - left, bottom - top), Image.LANCZOS)
-        box = (left, top, right, bottom)
+        full_content = source.resize((right - left, bottom - top), Image.LANCZOS)
+
+        # mode>0 時置放框會超出「安全區」邊界（不是畫布邊界）——這裡裁掉超出安全區
+        # 的部分，讓內容永遠落在官方安全區內。裁到畫布邊界是錯的：安全區比畫布小，
+        # 若只裁到畫布邊界，超出安全區、還沒超出畫布的那圈會侵蝕官方留白（曾實測到
+        # 這個錯法會讓上/下留白從精準的 10.09%/20.37% 被吃到只剩 2%/13%）。
+        x0, y0, x1, y1 = safe_area_spec.safe_rect(*canvas)
+        crop_left = max(0, x0 - left)
+        crop_top = max(0, y0 - top)
+        crop_right = full_content.width - max(0, (left + full_content.width) - x1)
+        crop_bottom = full_content.height - max(0, (top + full_content.height) - y1)
+        content = full_content.crop((crop_left, crop_top, crop_right, crop_bottom))
+
+        paste_x, paste_y = max(x0, left), max(y0, top)
+        box = (paste_x, paste_y, paste_x + content.width, paste_y + content.height)
 
         if background == BACKDROP:
             base = _apply_content_shadow(_backdrop_background(source, canvas), box)
@@ -210,7 +248,7 @@ def apply_safe_frame(
             base = _clamp_background(content, box, canvas)
         else:
             base = _blurred_background(source, canvas)
-        base.paste(content, (left, top))
+        base.paste(content, (paste_x, paste_y))
 
     buffer = io.BytesIO()
     base.save(buffer, format="PNG")

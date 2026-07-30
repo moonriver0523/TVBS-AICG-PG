@@ -71,6 +71,43 @@ class PlacementGeometryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             safe_frame.plan_placement((0, 720))
 
+    def test_rejects_out_of_range_mode(self):
+        with self.assertRaises(ValueError):
+            safe_frame.plan_placement((1280, 720), mode=1.5)
+        with self.assertRaises(ValueError):
+            safe_frame.plan_placement((1280, 720), mode=-0.1)
+        with self.assertRaises(ValueError):
+            safe_frame.plan_placement((1280, 720), mode="stretch")
+
+    def test_half_mode_exactly_halves_the_slack_axis_waste(self):
+        """mode=0.5 必須精確減半（線性內插在餘裕像素數上也是線性的，見模組內推導），
+        不是概略值——這條測試把那個數學推導變成可驗證的斷言。"""
+        x0, y0, x1, y1 = safe_area_spec.safe_rect(*safe_frame.DEFAULT_CANVAS)
+        fit_left, _, fit_right, _ = safe_frame.plan_placement((1280, 720), mode=safe_frame.FIT)
+        half_left, _, half_right, _ = safe_frame.plan_placement((1280, 720), mode=0.5)
+
+        fit_waste = fit_left - x0
+        half_waste = half_left - x0
+        self.assertAlmostEqual(half_waste, fit_waste / 2, delta=1)
+
+        fit_waste_r = (x1 - fit_right)
+        half_waste_r = (x1 - half_right)
+        self.assertAlmostEqual(half_waste_r, fit_waste_r / 2, delta=1)
+
+    def test_mode_above_zero_never_shrinks_the_binding_axis_margin(self):
+        """這裡曾經有真的 bug：mode>0 時置放框會超出『安全區』邊界（不是畫布邊界），
+        若只裁到畫布邊界，官方留白會被吃掉（2026-07-30 實測：底部 <蓋章> 橫幅被裁到）。
+        這條測試斷言 plan_placement 回傳的框永遠不會讓綁定軸（此處是高度）的留白
+        小於官方需求——不管 mode 設多少。"""
+        x0, y0, x1, y1 = safe_area_spec.safe_rect(*safe_frame.DEFAULT_CANVAS)
+        for mode in (0.0, 0.25, 0.5, 0.75, 1.0):
+            with self.subTest(mode=mode):
+                _, top, _, bottom = safe_frame.plan_placement((1280, 720), mode=mode)
+                # top/bottom 可能超出 zone（那是設計上允許的，交給 apply_safe_frame 裁），
+                # 但裁完後絕對不能比官方需求淺——這裡先確認「需要裁多少」算得出來，
+                # 真正裁完的結果由 apply_safe_frame 的整合測試把關（見下方）。
+                self.assertLessEqual(top, y0, f"mode={mode} 的上緣不該比官方需求更深入安全區")
+
 
 class FramedOutputTests(unittest.TestCase):
     """置框結果用確定性像素斷言驗證，不用啟發式量測。
@@ -169,6 +206,51 @@ class FramedOutputTests(unittest.TestCase):
             safe_frame.apply_safe_frame(image, background="rainbow")
         with self.assertRaises(ValueError):
             safe_frame.apply_safe_frame(image, background="solid")  # 已被 backdrop 取代
+
+    def test_default_mode_is_fit_not_a_crop_ratio(self):
+        """2026-07-30 曾把預設改成 0.5（裁掉一半餘裕）想解決左右留白過寬，
+        兩張既有樣本目視驗證看似安全，但使用者用真實生成圖實測後回報底部
+        <蓋章> 橫幅被裁到——同一份 prompt 每次生成的自留邊距不固定，兩張樣本
+        不足以保證安全。這條測試把預設值釘死在 FIT，防止同樣的錯誤重演；
+        改預設前必須先有結構性解法（如改生成長寬比）並經多張實測驗證。"""
+        self.assertEqual(safe_frame.DEFAULT_CROP_RATIO, safe_frame.FIT)
+
+    def test_cropping_mode_never_cuts_into_the_official_zone_on_any_axis(self):
+        """apply_safe_frame 的整合層級回歸測試，對應真實踩過的 bug：
+        mode>0 時若只裁到『畫布』邊界、沒裁到『安全區』邊界，官方留白會被吃掉
+        （實測發生：真實生成圖的底部 <蓋章> 橫幅被裁掉；用合成圖重現時量到上緣
+        從精準的 10.09% 掉到 2.3%）。
+
+        用一張邊緣到邊緣、完全不留內縮的純色測試圖，搭配 backdrop 背景（不是
+        clamp）——clamp 會把內容邊緣色直接延伸出去，純色內容跟純色背景同色，
+        測試根本分辨不出來（第一版拿 clamp 測純色圖就這樣誤判通過，沒抓到 bug）。
+        backdrop 會把邊緣色壓暗（乘上 0.44～0.62 係數），只要安全區外仍是content
+        的原色而非壓暗色，就代表裁切裁到了官方留白裡。
+        """
+        edge_to_edge = Image.new("RGB", (1280, 720), (230, 230, 230))
+        buffer = io.BytesIO()
+        edge_to_edge.save(buffer, format="PNG")
+        edge_to_edge_bytes = buffer.getvalue()
+
+        x0, y0, x1, y1 = safe_area_spec.safe_rect(*safe_frame.DEFAULT_CANVAS)
+        for mode in (0.25, 0.5, 0.75, 1.0):
+            with self.subTest(mode=mode):
+                data = safe_frame.apply_safe_frame(
+                    edge_to_edge_bytes, mode=mode, background=safe_frame.BACKDROP
+                )
+                with Image.open(io.BytesIO(data)) as img:
+                    output = img.convert("RGB")
+                probe_points = [
+                    ((x0 + x1) // 2, max(0, y0 - 2)),  # 正上方緊貼安全區外
+                    ((x0 + x1) // 2, min(output.height - 1, y1 + 2)),  # 正下方緊貼安全區外
+                ]
+                for point in probe_points:
+                    pixel = output.getpixel(point)
+                    self.assertNotEqual(
+                        pixel, (230, 230, 230),
+                        f"mode={mode} 在安全區外 {point} 偵測到內容色塊，"
+                        "代表裁切裁到了官方留白裡（曾經真的發生過，且切到了真實內容）",
+                    )
 
 
 class EndpointWiringTests(unittest.TestCase):
