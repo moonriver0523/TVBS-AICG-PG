@@ -753,7 +753,13 @@ FINAL OUTPUT RULE
 - The final generated image must NOT contain any "[" "]" or "<" ">" characters.
 - All bracketed variable fields are instructions only.
 - Use only Traditional Chinese (Taiwan standard).
-- Ensure all characters are correct with proper stroke forms.`;
+- Ensure all characters are correct with proper stroke forms.
+- CONTENT FIDELITY (NON-NEGOTIABLE): render ONLY the words, figures and facts supplied in VARIABLE FIELDS. You are a renderer, not an author.
+  -> NEVER invent additional numbers, percentages, dates, quarters, years, axis values, data points, or trend series that are not written in VARIABLE FIELDS.
+  -> If a chart or graph is called for but no series of values was supplied, draw it as a plain schematic shape (a simple rising or falling line, an arrow, a bar silhouette) with NO numeric labels and NO axis tick values.
+  -> NEVER add a data-source line, organisation name, agency, publisher, wire service, logo, watermark, URL, timestamp, or "updated on" note unless that exact text appears in VARIABLE FIELDS.
+  -> NEVER add extra captions, bullet points, sub-headings, or explanatory sentences of your own.
+  -> Empty space is correct and acceptable. If the layout looks sparse, enlarge or space out the supplied elements — do NOT fill the gap with invented content.`;
 
     // 依引擎切換開頭語法
     if (engine === 'gpt') {

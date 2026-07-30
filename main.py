@@ -196,6 +196,22 @@ SIMPLIFIED MODE OVERRIDE — THESE RULES OVERRIDE ANY EARLIER STANDARD-MODE LENG
 """
 
 
+# 消化階段的內容忠實度規則。生圖階段一律不得添加內容（那條在 news_prompt.py 的
+# FINAL OUTPUT RULE）；補充只能發生在這一層，而且只有使用者原文明確要求時才可以。
+# 起因：2026-07-30 實測 GPT 自行畫出來源沒有的完整季線數值與「資料來源 ICE／
+# Trading Economics／USDA／ICO」。新聞產品不得出現模型發明的數據與來源。
+CONTENT_FIDELITY_RULES = """
+
+CONTENT FIDELITY (NON-NEGOTIABLE — OVERRIDES ANY LAYOUT OR LENGTH PREFERENCE ABOVE):
+1. Use ONLY facts, figures, names, dates and quotes that appear in the source material. You are condensing, not researching or writing.
+2. NEVER invent or infer: extra data points, a series of values over time, quarters or years, axis scales, rankings, totals, percentages, currency conversions, casualty or headcount figures, or any statistic not stated in the source.
+3. NEVER invent a data source, agency, wire service, publisher, institution, analyst name, or "as of" date. If the source material does not name one, do not supply one, and do not ask for one to be drawn.
+4. If the source material is thin, produce fewer points. A short, wholly accurate specification is correct; padding it with plausible-sounding detail is a defect, not a service.
+5. Do not upgrade hedged wording into certainty (e.g. "約"/"可能"/"預估" must not become a flat assertion), and do not sharpen a rounded figure into a precise one.
+6. EXCEPTION — supplementation is allowed ONLY when the source material itself explicitly asks for it (e.g. it contains an instruction such as 「幫我補充」「請補充」「幫我加上」「請加入背景說明」). In that case you may add widely-established background, and only within the scope requested. Absent such an instruction, add nothing.
+"""
+
+
 def build_digest_instructions(
     role: str,
     density: DigestDensity,
@@ -212,6 +228,7 @@ def build_digest_instructions(
     )
     instructions = template.format(type_label=rendered_label)
     instructions += chart_type_directive(type_label)
+    instructions += CONTENT_FIDELITY_RULES
     if density == "simplified":
         instructions += SIMPLIFIED_DENSITY_RULES
     return instructions
