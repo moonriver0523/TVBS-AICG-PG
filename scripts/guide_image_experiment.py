@@ -266,14 +266,77 @@ def call_openrouter(model: str, prompt: str, guide: Path | None, image_size: str
     return item["b64_json"], item.get("media_type", "image/png")
 
 
-def call_openai_edit(prompt: str) -> tuple[str, str, str]:
-    """OpenAI native images.edit＋遮罩。回傳 (base64 圖, media_type, model)。"""
+def call_gemini_native(
+    prompt: str, guide: Path | None, image_size: str
+) -> tuple[str, str, str]:
+    """原生 Gemini interactions API，附圖走 input 陣列裡的 image 區塊。
+
+    存在理由：OpenRouter 有週用量上限，撞到就整輪停擺。原生走 GEMINI_API_KEY，
+    模型仍是 gemini-3-pro-image（與 production 的 google/gemini-3-pro-image 同一個），
+    因此只換傳輸層、不換模型。
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("缺 GEMINI_API_KEY")
+
+    model = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3-pro-image")
+    content: list[dict[str, object]] = [{"type": "text", "text": prompt}]
+    if guide is not None:
+        content.append(
+            {
+                "type": "image",
+                "mime_type": "image/png",
+                "data": base64.b64encode(guide.read_bytes()).decode("ascii"),
+            }
+        )
+    payload = {
+        "model": model,
+        "input": content,
+        "response_format": {
+            "type": "image",
+            "mime_type": "image/jpeg",
+            "aspect_ratio": "16:9",
+            "image_size": image_size,
+        },
+    }
+    request = Request(
+        "https://generativelanguage.googleapis.com/v1beta/interactions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+        method="POST",
+    )
+    context = ssl.create_default_context(cafile=certifi.where())
+    try:
+        with urlopen(request, timeout=240, context=context) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")[:400]
+        raise RuntimeError(f"Gemini 原生失敗 {exc.code}：{body}") from exc
+    except (URLError, TimeoutError) as exc:
+        raise RuntimeError(f"Gemini 原生連線失敗：{exc}") from exc
+
+    from main import extract_image_content  # 沿用 production 的多形狀解析
+
+    image = extract_image_content(result)
+    if not image or not image.get("data"):
+        raise RuntimeError(f"Gemini 原生未回傳圖片：{json.dumps(result)[:400]}")
+    return image["data"], image.get("mime_type", "image/jpeg"), model
+
+
+def call_openai_edit(prompt: str, input_fidelity: str | None = None) -> tuple[str, str, str]:
+    """OpenAI native images.edit＋遮罩。回傳 (base64 圖, media_type, model)。
+
+    注意：gpt-image 系列的遮罩是「軟遮罩＋整張重繪」，不做像素級替換
+    （OpenAI 已承認的已知限制）。input_fidelity="high" 是唯一可能提升保留度的旋鈕，
+    但社群回報在 gpt-image-1 上與遮罩併用會失效，故做成可選參數而非預設。
+    """
     from openai import OpenAI
 
     model = os.getenv("OPENAI_EDIT_MODEL", os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2"))
     base = guide_path("edit-base")
     mask = guide_path("edit-mask")
     client = OpenAI()
+    extra = {"input_fidelity": input_fidelity} if input_fidelity else {}
     with base.open("rb") as image_file, mask.open("rb") as mask_file:
         result = client.images.edit(
             model=model,
@@ -283,20 +346,38 @@ def call_openai_edit(prompt: str) -> tuple[str, str, str]:
             size=f"{CANVAS[0]}x{CANVAS[1]}",
             quality=os.getenv("OPENAI_IMAGE_QUALITY", "medium"),
             output_format="png",
+            **extra,
         )
     if not result.data or not result.data[0].b64_json:
         raise SystemExit("OpenAI images.edit 未回傳圖片")
     return result.data[0].b64_json, "image/png", model
 
 
-def run_arm(arm: str, digest: dict[str, str], out_dir: Path, image_size: str) -> dict[str, object]:
+def run_arm(
+    arm: str,
+    digest: dict[str, str],
+    out_dir: Path,
+    image_size: str,
+    input_fidelity: str | None = None,
+    transport: str = "openrouter",
+) -> dict[str, object]:
     config = ARMS[arm]
     prompt = build_arm_prompt(digest, arm)
+    guide = guide_path(config["guide"]) if config["guide"] else None
     started = time.time()
 
     if config["mechanism"] == "mask":
-        b64, media_type, model = call_openai_edit(prompt)
+        used_transport = "openai-native"
+        b64, media_type, model = call_openai_edit(prompt, input_fidelity)
+    elif transport == "native":
+        if config["provider"] != "gemini":
+            raise RuntimeError(
+                f"{arm}：native 傳輸目前只支援 gemini（GPT 原生沒有等效的附參考圖端點）"
+            )
+        used_transport = "gemini-native"
+        b64, media_type, model = call_gemini_native(prompt, guide, image_size)
     else:
+        used_transport = "openrouter"
         env_key = "OPENROUTER_GPT_MODEL" if config["provider"] == "gpt" else "OPENROUTER_GEMINI_MODEL"
         default = (
             "openai/gpt-5.4-image-2"
@@ -304,11 +385,11 @@ def run_arm(arm: str, digest: dict[str, str], out_dir: Path, image_size: str) ->
             else "google/gemini-3-pro-image"
         )
         model = os.getenv(env_key, default)
-        guide = guide_path(config["guide"]) if config["guide"] else None
         b64, media_type = call_openrouter(model, prompt, guide, image_size)
 
     suffix = "jpg" if "jpeg" in media_type else "png"
-    stem = f"{date.today().isoformat()}-guide-{arm}"
+    tag = f"-fid{input_fidelity}" if input_fidelity else ""
+    stem = f"{date.today().isoformat()}-guide-{arm}{tag}"
     image_path = out_dir / f"{stem}.{suffix}"
     image_path.write_bytes(base64.b64decode(b64))
     (out_dir / f"{stem}.prompt.txt").write_text(prompt, encoding="utf-8")
@@ -319,8 +400,10 @@ def run_arm(arm: str, digest: dict[str, str], out_dir: Path, image_size: str) ->
         "provider": config["provider"],
         "guide": config["guide"],
         "model": model,
+        "transport": used_transport,
         "image": str(image_path),
         "prompt_chars": len(prompt),
+        "input_fidelity": input_fidelity,
         "elapsed_sec": round(time.time() - started, 1),
     }
 
@@ -332,6 +415,17 @@ def main() -> None:
     parser.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--image-size", default="1K")
+    parser.add_argument(
+        "--input-fidelity",
+        choices=("high", "low"),
+        help="只對 mask arm 有效：要求 API 更努力保留輸入圖（含遮罩保護區）",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=("openrouter", "native"),
+        default="openrouter",
+        help="guide／baseline 走哪個傳輸層。OpenRouter 撞週用量上限時改用 native（僅 gemini）",
+    )
     parser.add_argument("--go", action="store_true", help="真的呼叫付費 API（預設只乾跑）")
     parser.add_argument("--capture-digest", metavar="NEWS_TEXT", help="擷取真實 digest 存成 fixture")
     parser.add_argument("--role", default="記者")
@@ -377,15 +471,26 @@ def main() -> None:
         "prompt_version": news_prompt.PROMPT_VERSION,
         "canvas": list(CANVAS),
         "image_size": args.image_size,
+        "input_fidelity": args.input_fidelity,
+        "transport": args.transport,
         "runs": [],
     }
     for arm in arms:
         print(f"\n▶ {arm} …", flush=True)
         try:
-            record = run_arm(arm, digest, args.out_dir, args.image_size)
-        except SystemExit as exc:  # 單一 arm 失敗不該讓整輪白跑
-            print(f"  ✗ {exc}")
-            manifest["runs"].append({"arm": arm, "error": str(exc)})
+            record = run_arm(
+                arm,
+                digest,
+                args.out_dir,
+                args.image_size,
+                args.input_fidelity,
+                args.transport,
+            )
+        except Exception as exc:  # 單一 arm 失敗不該讓整輪白跑（含上游 4xx／配額用盡）
+            print(f"  ✗ {type(exc).__name__}: {exc}")
+            manifest["runs"].append(
+                {"arm": arm, "error": f"{type(exc).__name__}: {exc}"}
+            )
             continue
         print(f"  ✓ {record['image']}（{record['elapsed_sec']}s，{record['model']}）")
         manifest["runs"].append(record)
