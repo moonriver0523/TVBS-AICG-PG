@@ -12,7 +12,14 @@ import certifi
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from openai import APIConnectionError, APIError, AuthenticationError, OpenAI, RateLimitError
+from openai import (
+    APIConnectionError,
+    APIError,
+    AuthenticationError,
+    BadRequestError,
+    OpenAI,
+    RateLimitError,
+)
 from pydantic import BaseModel, Field
 
 from news_prompt import PROMPT_VERSION, build_prompt, compose_variable
@@ -210,6 +217,45 @@ def build_digest_instructions(
     return instructions
 
 
+def digest_completion(
+    *,
+    model: str,
+    system_prompt: str,
+    news_text: str,
+    max_output_tokens: int,
+    schema_name: str,
+    schema: dict,
+):
+    """呼叫 Chat Completions 取結構化消化結果。
+
+    輸出長度上限的參數名兩邊不同：OpenRouter 吃 max_tokens，OpenAI 原生的新模型
+    （如 gpt-5.6-terra）只吃 max_completion_tokens，送錯直接 400。因此先送
+    max_tokens，被明確拒絕時再改用 max_completion_tokens——否則沒設
+    OPENROUTER_API_KEY 時的原生退路等於是壞的（實測 2026-07-30 撞到）。
+    """
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f'News Source Material:\n"{news_text}"'},
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": schema_name, "strict": True, "schema": schema},
+        },
+    }
+    try:
+        return openai_client.chat.completions.create(
+            **payload, max_tokens=max_output_tokens
+        )
+    except BadRequestError as exc:
+        if "max_completion_tokens" not in str(exc):
+            raise
+        return openai_client.chat.completions.create(
+            **payload, max_completion_tokens=max_output_tokens
+        )
+
+
 @app.post("/api/generate", response_model=GenerateResponse)
 def generate(req: GenerateRequest):
     system_prompt = build_digest_instructions(
@@ -230,25 +276,13 @@ def generate(req: GenerateRequest):
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
     for attempt in range(3):
         try:
-            # Chat Completions 介面 OpenRouter 與 OpenAI 原生皆通用
-            response = openai_client.chat.completions.create(
+            response = digest_completion(
                 model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {
-                        "role": "user",
-                        "content": f'News Source Material:\n"{req.news_text}"',
-                    },
-                ],
-                max_tokens=1500,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "news_cg_digest",
-                        "strict": True,
-                        "schema": DIGEST_OUTPUT_SCHEMA,
-                    },
-                },
+                system_prompt=system_prompt,
+                news_text=req.news_text,
+                max_output_tokens=1500,
+                schema_name="news_cg_digest",
+                schema=DIGEST_OUTPUT_SCHEMA,
             )
         except AuthenticationError as exc:
             raise HTTPException(
@@ -389,24 +423,13 @@ def hybrid_digest(req: HybridDigestRequest):
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
     for attempt in range(3):
         try:
-            response = openai_client.chat.completions.create(
+            response = digest_completion(
                 model=model,
-                messages=[
-                    {"role": "system", "content": HYBRID_SYSTEM_PROMPT},
-                    {
-                        "role": "user",
-                        "content": f'News Source Material:\n"{req.news_text}"',
-                    },
-                ],
-                max_tokens=1200,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "hybrid_card_digest",
-                        "strict": True,
-                        "schema": HYBRID_DIGEST_SCHEMA,
-                    },
-                },
+                system_prompt=HYBRID_SYSTEM_PROMPT,
+                news_text=req.news_text,
+                max_output_tokens=1200,
+                schema_name="hybrid_card_digest",
+                schema=HYBRID_DIGEST_SCHEMA,
             )
         except AuthenticationError as exc:
             raise HTTPException(
