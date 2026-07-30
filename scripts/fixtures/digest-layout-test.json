@@ -1,0 +1,11 @@
+{
+  "_note": "B 階段參考圖引導實驗的固定 digest。內容為版面測試示意用途，數據是虛構的圓整數字，不得播出、不得當成真實新聞。",
+  "_why_fixed": "四輪歷史實驗的教訓是模型隨機性極大（見 docs/error-cases/2026-07-23-純文字安全框-R4對照-分析.md 結論 2），因此各 arm 必須共用同一份 digest，否則差異會被內容差異淹沒。要換成真實素材時用 --capture-digest 覆寫本檔。",
+  "_pattern": "刻意採用歷史失敗率最高的版型：三張並排資訊卡＋底部總結橫幅（底部壓帶是四輪實驗中唯一從未被 prompt 修好的失敗型態）。",
+  "role": "記者",
+  "type_label": "資料圖表",
+  "chart_type": "資料圖表",
+  "style": "Modern broadcast data-visualization style with a deep navy gradient backdrop, restrained cyan and amber accent lighting, brushed-metal card edges, soft volumetric glow behind key figures, and crisp high-contrast typography suitable for on-air legibility.",
+  "structure": "The entire infographic — including the title, icon cards, and side panels — is treated as one group and scaled down so it occupies only the central region of the frame, surrounded by a thick, clearly visible empty margin of unchanged background on the top, left and right, and an even deeper empty band along the bottom; every element stays well inside this central zone and nothing reaches into the surrounding empty border. The two-line headline sits across the upper portion of the central zone, centred, with generous empty space above it. Directly beneath the headline runs a thin horizontal accent rule, noticeably narrower than the headline block. Three equal information cards are arranged side by side across the middle of the central zone, each separated by a clear gutter, each card carrying a small pill-shaped label at its top, one dominant figure in the middle, and one short supporting phrase below. A simple line-chart motif with an upward trend and a few plotted nodes sits inside the rightmost card, well clear of that card's edges. A compact flat icon sits inside each of the other two cards, centred above its figure. The closing conclusion strip is the lowest row of the content area, kept short rather than wide, positioned well above the reserved bottom margin with clear empty space between the strip and the content area's lower limit.",
+  "variable": "[標題] 全球咖啡豆行情\n連續3季走高\n[內文小標] 期貨均價 每磅<3.8美元>\n[內文小標] 主要產區減產<12%>\n[內文小標] 零售端反映 約落後<2個月>\n<蓋章> 成本壓力尚未見頂"
+}
