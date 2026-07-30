@@ -30,8 +30,30 @@ load_dotenv()
 
 # Digest（生成 Prompt）預設走 OpenRouter，與生圖共用同一把 OPENROUTER_API_KEY；
 # 未設定 OPENROUTER_API_KEY 時退回 OpenAI 原生直連。
+#
+# DIGEST_BACKEND=gemini（2026-07-30 暫時啟用）：OpenRouter 的「Key limit exceeded
+# (weekly limit)」是整把 key 的帳號等級週配額，不分底層請求的是 GPT 還是 Gemini
+# 模型——實測透過 OpenRouter 打 google/gemini-3.5-flash 一樣被 403 擋下，
+# 「OpenRouter 的 Gemini 額度還能用」不成立。真正繞得過去的路是用 GEMINI_API_KEY
+# 直連 Google 官方 OpenAI 相容端點（與 OpenRouter 完全獨立的一把 key、一條配額）。
+# 端點與模型名稱已用結構化 JSON schema 實測驗證可用：v1beta/openai/、
+# gemini-3.5-flash／gemini-3.6-flash 皆可正確回傳 strict JSON。
+# OpenRouter 恢復後，把 .env 的 DIGEST_BACKEND 拿掉或設回 openrouter 即可切回。
+_gemini_key = os.getenv("GEMINI_API_KEY")
 _openrouter_key = os.getenv("OPENROUTER_API_KEY")
-if _openrouter_key:
+DIGEST_BACKEND = os.getenv(
+    "DIGEST_BACKEND", "openrouter" if _openrouter_key else "native"
+).strip()
+
+if DIGEST_BACKEND == "gemini":
+    if not _gemini_key:
+        raise RuntimeError("DIGEST_BACKEND=gemini 但未設定 GEMINI_API_KEY")
+    openai_client = OpenAI(
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        api_key=_gemini_key,
+    )
+    DEFAULT_DIGEST_MODEL = os.getenv("GEMINI_DIGEST_MODEL", "gemini-3.6-flash")
+elif _openrouter_key:
     openai_client = OpenAI(
         base_url="https://openrouter.ai/api/v1", api_key=_openrouter_key
     )
@@ -39,6 +61,14 @@ if _openrouter_key:
 else:
     openai_client = OpenAI()
     DEFAULT_DIGEST_MODEL = "gpt-5.6-terra"
+
+# Gemini 的 OpenAI 相容端點有大量『看不見』的內部思考 token——實測一個一句話的
+# 玩具範例，可見的 completion_tokens 只有 51，但 total_tokens 高達 613
+# （差額都是思考 token）。用平常給 OpenRouter/原生 OpenAI 的 max_tokens
+# （1200-1500）打 Gemini 幾乎必然被思考 token 吃光、正文遭截斷、JSON 解析失敗。
+# 真實消化內容（含完整格式化的 style/structure/variable 文字）遠比玩具範例長，
+# 這裡抓一個寬裕的下限，只在走 Gemini 這條路徑時生效，不影響其他 backend。
+GEMINI_DIGEST_MIN_TOKENS = 6000
 
 app = FastAPI()
 
@@ -272,7 +302,12 @@ def digest_completion(
     （如 gpt-5.6-terra）只吃 max_completion_tokens，送錯直接 400。因此先送
     max_tokens，被明確拒絕時再改用 max_completion_tokens——否則沒設
     OPENROUTER_API_KEY 時的原生退路等於是壞的（實測 2026-07-30 撞到）。
+
+    走 Gemini 時把呼叫端要求的上限拉到 GEMINI_DIGEST_MIN_TOKENS 以上——Gemini
+    的隱藏思考 token 用一般上限（1200-1500）幾乎必然截斷正文（同日實測撞到）。
     """
+    if DIGEST_BACKEND == "gemini":
+        max_output_tokens = max(max_output_tokens, GEMINI_DIGEST_MIN_TOKENS)
     payload = {
         "model": model,
         "messages": [
@@ -783,7 +818,8 @@ class NewsImageGenerateRequest(BaseModel):
     role: str = "記者"
     density: DigestDensity = "standard"
     provider: Literal["gemini", "gpt"] = "gemini"
-    aspect_ratio: str = "16:9"
+    # None＝依 safe_frame 自動選擇（見 generate_news_image）；呼叫端仍可明確指定覆寫。
+    aspect_ratio: str | None = None
     image_size: str = "1K"
     # True＝滿版生成＋後端置框（安全框由數學保證，不靠模型自律）
     safe_frame: bool = False
@@ -803,7 +839,23 @@ def _extract_title(variable: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+# 2026-07-30：safe_frame 模式下 21:9 已用 4 個真實生成樣本驗證幾何穩定
+# （左右留白 4/4 落在官方需求 ±1pp 內，取代 16:9 慣性多出的一倍左右留白）。
+# 內容瑕疵（括號滲入、捏造來源）發生率約 50%，但與 16:9 同樣存在、非 21:9 新增，
+# 使用者拍板接受現狀切換。safe_frame=False 時維持 16:9——21:9 只在搭配後端
+# 置框時才有幾何優勢，未置框的畫面沒有理由跟著改。
+SAFE_FRAME_ASPECT_RATIO = "21:9"
+DEFAULT_ASPECT_RATIO = "16:9"
+
+
+def resolve_aspect_ratio(requested: str | None, safe_frame: bool) -> str:
+    if requested:
+        return requested
+    return SAFE_FRAME_ASPECT_RATIO if safe_frame else DEFAULT_ASPECT_RATIO
+
+
 def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateResponse:
+    aspect_ratio = resolve_aspect_ratio(req.aspect_ratio, req.safe_frame)
     digest = generate(
         GenerateRequest(
             news_text=req.news_text,
@@ -821,13 +873,13 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
         structure=digest.structure,
         variable=compose_variable(digest.variable),
         safe_frame=req.safe_frame,
-        aspect_ratio=req.aspect_ratio,
+        aspect_ratio=aspect_ratio,
     )
     image = generate_image(
         ImageGenerateRequest(
             prompt=prompt,
             provider=req.provider,
-            aspect_ratio=req.aspect_ratio,
+            aspect_ratio=aspect_ratio,
             image_size=req.image_size,
             safe_frame=req.safe_frame,
         )

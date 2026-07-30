@@ -80,6 +80,29 @@ class GenerateNewsImageTests(unittest.TestCase):
         self.assertEqual(sent_req.provider, "gpt")
         self.assertTrue(sent_req.prompt.startswith("Generate an image:"))
 
+    def test_safe_frame_defaults_to_21x9(self):
+        """2026-07-30：用 4 個真實生成樣本驗證過——safe_frame 開啟時 21:9 的左右
+        留白穩定落在官方需求 ±1pp 內，取代 16:9 慣性多出一倍的左右留白，
+        使用者已拍板接受切換。這裡釘住『沒有明確指定時』的自動選擇邏輯。"""
+        generate_news_image(NewsImageGenerateRequest(news_text="素材", safe_frame=True))
+        sent_req = self.mock_image.call_args[0][0]
+        self.assertEqual(sent_req.aspect_ratio, "21:9")
+        self.assertIn("Aspect ratio: 21:9", sent_req.prompt)
+
+    def test_non_safe_frame_stays_at_16x9(self):
+        """safe_frame=False 時沒有後端置框，21:9 的幾何優勢不適用，不該跟著改。"""
+        generate_news_image(NewsImageGenerateRequest(news_text="素材", safe_frame=False))
+        sent_req = self.mock_image.call_args[0][0]
+        self.assertEqual(sent_req.aspect_ratio, "16:9")
+
+    def test_explicit_aspect_ratio_overrides_the_safe_frame_default(self):
+        """呼叫端明確指定時必須尊重那個值，自動選擇只在沒指定時生效。"""
+        generate_news_image(
+            NewsImageGenerateRequest(news_text="素材", safe_frame=True, aspect_ratio="4:3")
+        )
+        sent_req = self.mock_image.call_args[0][0]
+        self.assertEqual(sent_req.aspect_ratio, "4:3")
+
 
 class EndpointAuthTests(unittest.TestCase):
     def setUp(self):
