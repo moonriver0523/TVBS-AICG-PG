@@ -124,13 +124,37 @@ class FramedOutputTests(unittest.TestCase):
         canvas_h = safe_frame.DEFAULT_CANVAS[1]
         self.assertGreater(canvas_h - bottom, top)
 
-    def test_margins_are_not_left_blank_by_either_background_mode(self):
-        """留白區必須有底（背景無縫延伸），不能是純黑或未填的空白。"""
-        for background in ("blur", "solid"):
+    def test_every_background_mode_fills_the_margins(self):
+        """留白區必須有底，不能是純黑或未填的空白（看起來會像黑邊）。"""
+        for background in safe_frame.BACKGROUNDS:
             with self.subTest(background=background):
                 output = self.framed((1280, 720), background=background)
                 corner = output.getpixel((5, 5))
                 self.assertGreater(sum(corner), 30, "四角過黑，看起來會像黑邊")
+
+    def test_default_background_is_backdrop(self):
+        """預設值是使用者 2026-07-30 看實圖對照後選定的；改動要有人明確決定。"""
+        self.assertEqual(safe_frame.DEFAULT_BACKGROUND, safe_frame.BACKDROP)
+        self.assertEqual(
+            self.framed((1280, 720)).tobytes(),
+            self.framed((1280, 720), background=safe_frame.BACKDROP).tobytes(),
+        )
+
+    def test_clamp_margin_matches_content_edge_exactly(self):
+        """clamp 的賣點是接縫不可見——邊界外一像素必須等於邊界內一像素。"""
+        output = self.framed((1280, 720), background=safe_frame.CLAMP)
+        left, top, right, bottom = safe_frame.plan_placement((1280, 720))
+        mid_y = (top + bottom) // 2
+        self.assertEqual(output.getpixel((left - 1, mid_y)), output.getpixel((left, mid_y)))
+        self.assertEqual(output.getpixel((right, mid_y)), output.getpixel((right - 1, mid_y)))
+
+    def test_backdrop_is_darker_at_the_bottom(self):
+        """襯底是上亮下暗的漸層；反了會讓下方字卡區搶視覺。"""
+        output = self.framed((1280, 720), background=safe_frame.BACKDROP)
+        width, height = output.size
+        top_strip = sum(output.getpixel((width // 2, 4)))
+        bottom_strip = sum(output.getpixel((width // 2, height - 5)))
+        self.assertGreater(top_strip, bottom_strip)
 
     def test_cover_mode_uses_more_of_the_safe_area_than_fit(self):
         fit = safe_frame.plan_placement((1280, 720), mode=safe_frame.FIT)
@@ -143,6 +167,8 @@ class FramedOutputTests(unittest.TestCase):
             safe_frame.apply_safe_frame(image, mode="stretch")
         with self.assertRaises(ValueError):
             safe_frame.apply_safe_frame(image, background="rainbow")
+        with self.assertRaises(ValueError):
+            safe_frame.apply_safe_frame(image, background="solid")  # 已被 backdrop 取代
 
 
 class EndpointWiringTests(unittest.TestCase):

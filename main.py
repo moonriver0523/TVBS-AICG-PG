@@ -559,8 +559,21 @@ def frame_image_response(result: ImageGenerateResponse) -> ImageGenerateResponse
     置框失敗就整支失敗，不默默回傳沒置框的圖——呼叫端要的是「保證合格」，
     悄悄降級成不合格的圖會直接播出去。
     """
+    # 背景做法預設 backdrop（2026-07-30 使用者實圖對照後選定）。
+    # SAFE_FRAME_BACKGROUND 可切成 clamp（無縫邊緣延伸）或 blur（舊做法）。
+    background = os.getenv("SAFE_FRAME_BACKGROUND", safe_frame.DEFAULT_BACKGROUND).strip()
+    if background not in safe_frame.BACKGROUNDS:
+        print(
+            f"[safe_frame] SAFE_FRAME_BACKGROUND={background!r} 不是可用值，"
+            f"改用預設 {safe_frame.DEFAULT_BACKGROUND}",
+            flush=True,
+        )
+        background = safe_frame.DEFAULT_BACKGROUND
+
     try:
-        framed = safe_frame.apply_safe_frame(base64.b64decode(result.image_data_base64))
+        framed = safe_frame.apply_safe_frame(
+            base64.b64decode(result.image_data_base64), background=background
+        )
     except Exception as exc:  # noqa: BLE001 — 任何影像處理失敗都必須讓呼叫端知道
         print(f"[safe_frame] 置框失敗：{type(exc).__name__}: {exc}", flush=True)
         raise HTTPException(
