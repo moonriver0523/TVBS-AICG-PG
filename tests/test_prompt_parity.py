@@ -1,16 +1,26 @@
-"""news_prompt.py 與 app.js 的 Prompt 規則必須逐字一致。
+"""後端與 app.js 之間「兩份來源必須同步」的守門測試。
 
-這兩份是同一套規則的兩個實作（網頁版在前端組、LINE Bot 在後端組）。
-只改一邊會讓 LINE 出的圖與網頁版不同，且不會有任何執行期錯誤——
+涵蓋兩組：
+1. Prompt 規則：news_prompt.py ↔ app.js（同一套規則的兩個實作，
+   網頁版在前端組、LINE Bot 在後端組）。
+2. 置框長寬比：main.py ↔ app.js（**不同的呼叫路徑**——main.py 那組是
+   LINE Bot 與 WorkCord 端點在用，app.js 那組是網頁版第一頁在用）。
+
+兩組的共同問題是：只改一邊不會有任何執行期錯誤，只會讓兩條路徑悄悄出不一樣的圖。
 所以用測試把「不同步」變成看得見的失敗。
 """
 
 import io
+import os
 import pathlib
 import re
 import unittest
 
 import news_prompt
+
+os.environ.setdefault("OPENAI_API_KEY", "test-key")
+
+import main  # noqa: E402
 
 APP_JS = pathlib.Path(__file__).resolve().parent.parent / "app.js"
 
@@ -23,6 +33,14 @@ def js_template_literal(name: str, source: str) -> str | None:
     """取出 app.js 裡 const NAME = `...`; 的內容。"""
     match = re.search(r"const " + name + r"\s*=\s*\n?`(.*?)`;", source, re.S)
     return match.group(1) if match else None
+
+
+def js_quoted_const(name: str, source: str) -> str | None:
+    """取出 app.js 裡 const NAME = '...'; 或 "..."; 的內容（單/雙引號皆可）。"""
+    match = re.search(
+        r"const " + name + r"\s*=\s*(['\"])(.*?)\1\s*;", source
+    )
+    return match.group(2) if match else None
 
 
 class ConstantParityTests(unittest.TestCase):
@@ -162,6 +180,80 @@ class BuiltPromptShapeTests(unittest.TestCase):
         self.assertEqual(
             news_prompt.compose_variable(""), "[No Variables Defined]"
         )
+
+
+class AspectRatioParityTests(unittest.TestCase):
+    """置框長寬比：main.py 與 app.js 是兩條不同呼叫路徑，值必須一致。
+
+    背景：2026-07-30 把 safe_frame 的預設長寬比切成 21:9 時只改了 main.py
+    （LINE Bot／WorkCord 用的那條），網頁版第一頁走 app.js 自組 prompt 直打
+    /api/images/generate 的另一條路徑、aspect_ratio 仍寫死 16:9——安全框開了
+    但左右還是多出一倍留白，隔天才發現。這組測試就是把那次的漏改變成看得見的失敗。
+    """
+
+    def setUp(self):
+        self.source = js_source()
+
+    def test_safe_frame_aspect_ratio_matches(self):
+        js_value = js_quoted_const("SAFE_FRAME_ASPECT_RATIO", self.source)
+        self.assertIsNotNone(js_value, "app.js 裡找不到 SAFE_FRAME_ASPECT_RATIO")
+        self.assertEqual(
+            js_value,
+            main.SAFE_FRAME_ASPECT_RATIO,
+            "置框長寬比兩邊不一致：LINE／WorkCord 與網頁版會出不一樣比例的圖",
+        )
+
+    def test_default_aspect_ratio_matches(self):
+        js_value = js_quoted_const("DEFAULT_ASPECT_RATIO", self.source)
+        self.assertIsNotNone(js_value, "app.js 裡找不到 DEFAULT_ASPECT_RATIO")
+        self.assertEqual(
+            js_value,
+            main.DEFAULT_ASPECT_RATIO,
+            "未置框長寬比兩邊不一致",
+        )
+
+    def test_values_are_the_validated_ones(self):
+        """釘住實測驗證過的值：21:9 是用 4 張真實生成圖驗過左右留白 4/4 落在
+        官方需求 ±1pp 內才選定的。要改成別的比例得有人重跑驗證、明確決定，
+        不能兩邊一起改就悄悄過關。"""
+        self.assertEqual(main.SAFE_FRAME_ASPECT_RATIO, "21:9")
+        self.assertEqual(main.DEFAULT_ASPECT_RATIO, "16:9")
+
+    def test_backend_resolver_uses_the_constants(self):
+        """resolve_aspect_ratio 必須真的回傳這兩個常數，不能另外寫死字面值。"""
+        self.assertEqual(
+            main.resolve_aspect_ratio(None, safe_frame=True),
+            main.SAFE_FRAME_ASPECT_RATIO,
+        )
+        self.assertEqual(
+            main.resolve_aspect_ratio(None, safe_frame=False),
+            main.DEFAULT_ASPECT_RATIO,
+        )
+        self.assertEqual(
+            main.resolve_aspect_ratio("4:3", safe_frame=True),
+            "4:3",
+            "呼叫端明確指定時必須尊重覆寫",
+        )
+
+    def test_frontend_sends_the_resolved_ratio_not_a_hardcoded_one(self):
+        """網頁版送出的 payload 必須用 currentAspectRatio()，不能又退回寫死。
+
+        這正是當初漏改的形態：常數定義好了、函式也寫了，但 fetch 裡仍是
+        aspect_ratio: '16:9'，於是整組機制形同虛設。
+        """
+        self.assertIn("aspect_ratio: currentAspectRatio()", self.source)
+        self.assertNotIn("aspect_ratio: '16:9'", self.source)
+
+    def test_frontend_resolver_branches_on_safe_frame(self):
+        """currentAspectRatio() 必須依 safeFrame 切換，且用的是那兩個常數。"""
+        match = re.search(
+            r"function currentAspectRatio\(\)\s*\{(.*?)\}", self.source, re.S
+        )
+        self.assertIsNotNone(match, "app.js 裡找不到 currentAspectRatio()")
+        body = match.group(1)
+        self.assertIn("state.safeFrame", body)
+        self.assertIn("SAFE_FRAME_ASPECT_RATIO", body)
+        self.assertIn("DEFAULT_ASPECT_RATIO", body)
 
 
 if __name__ == "__main__":
