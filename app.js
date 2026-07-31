@@ -853,10 +853,10 @@ const REAL_WORLD_RENDERING_RULES =
 `==================================================
 REAL-WORLD ACCURACY (CRITICAL)
 ==================================================
-- Real, verifiable places and objects (satellite or aerial views, skylines, specific buildings, highways and interchanges, airports, factories, and specific models of aircraft, ship, vehicle or equipment) must be drawn as clearly schematic illustration. Do not imitate a photograph or a satellite photo, and do not add photoreal texture, lens blur or camera grain to them.
-- Do not invent identifying detail: no particular skyline, no particular interchange layout, no particular facade, no particular equipment silhouette beyond what STRUCTURE describes. A generic member of the category is correct.
+- Real, verifiable places and objects (skylines, specific buildings, highways and interchanges, airports, facilities, and specific models of aircraft, ship, vehicle or equipment) must look like the real thing: correct shape, layout, proportions and distinguishing features as far as they are known. Faithful, realistic rendering is welcome — do not distort reality for style.
+- Do not fabricate identifying detail you do not know and present it as real. If the rendering is a generic stand-in or a reconstruction rather than the real thing, the 示意圖 label supplied in VARIABLE FIELDS must be clearly visible — never drop or hide it.
 - NO UNSOURCED BRANDS: every sign, storefront, banner, package, product body, vehicle livery, screen, badge and building facade must be blank or carry a generic non-readable mark. Do NOT draw any real company logo, wordmark, trademark, ticker symbol, exchange name or brand text — not even a small, faint, distant or background one. A brand name may appear only if that exact text is supplied in VARIABLE FIELDS, and then only as plain typeset text, never as a reproduced logotype.
-- NAMED REAL PEOPLE: do not attempt a likeness of any real person. Draw people as silhouettes, back views, generic figures or icons with no distinguishing facial features. Never render a recognisable face, and never make an identifiable-looking person the subject of a negative scene.
+- NAMED REAL PEOPLE: a faithful portrait is allowed, including a front-facing likeness. Make the face resemble the real person as closely as you can; never caricature or distort, and never show the person in a scene, action or context that STRUCTURE does not describe.
 - SELF-CHECK before finalizing: look at every surface in the image for text or marks you added yourself. If any sign, screen, package or vehicle carries readable branding, blank it.`;
 
 const TW_DIRECTIONAL_COLOR_RULES =
