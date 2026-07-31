@@ -24,7 +24,8 @@ from openai import (
 from pydantic import BaseModel, Field
 
 import safe_frame
-from news_prompt import PROMPT_VERSION, build_prompt, compose_variable
+from input_filter import check_input, note_accepted
+from news_prompt import MAP_TYPE_LABEL, PROMPT_VERSION, build_prompt, compose_variable
 
 load_dotenv()
 
@@ -119,7 +120,7 @@ class ImageGenerateResponse(BaseModel):
 AUTO_TYPE_LABEL = "自動判斷"
 
 # AI 可自行選擇的四大類型，需與 app.js 的 CHART_TYPES label 完全一致
-CHART_TYPE_CHOICES = ["資料圖表", "情境示意圖", "地圖／位置", "3D示意／流程"]
+CHART_TYPE_CHOICES = ["資料圖表", "情境示意圖", MAP_TYPE_LABEL, "3D示意／流程"]
 
 DIGEST_OUTPUT_SCHEMA = {
     "type": "object",
@@ -261,6 +262,72 @@ CONTENT FIDELITY (NON-NEGOTIABLE — OVERRIDES ANY LAYOUT OR LENGTH PREFERENCE A
 """
 
 
+# 視覺忠實度：CONTENT_FIDELITY_RULES 只管 variable 的文字與數字，管不到
+# style/structure 委製的「畫面」——憑空天際線、品牌 LOGO、真實人物長相都是
+# 從這個洞進來的（樣板甚至主動要求模型加插圖指示）。本區塊補上這個洞。
+# 2026-07-31 起以新區塊追加，刻意不修改 CONTENT_FIDELITY_RULES（另案檢視）。
+REAL_WORLD_FIDELITY_RULES = """
+
+REAL-WORLD ACCURACY (governs "style" and "structure" — the pictures you commission, which CONTENT FIDELITY above does not reach):
+1. CONTENT FIDELITY governs the words and figures in "variable". This block governs the imagery. Never ask for a visual you cannot ground in the source material. An invented picture is as serious a defect as an invented number.
+2. Verifiable real places and objects — satellite or aerial views, skylines, specific buildings, highways and interchanges, airports, factories, and specific models of aircraft, ship, vehicle or equipment — must be requested as clearly schematic illustration (flat vector, diagrammatic, 示意), never as photoreal imagery. Do not use the words photorealistic, photograph, satellite photo, real footage or documentary photo in "style"; write "schematic illustration" instead. Never claim photographic accuracy for something you are reconstructing.
+3. Do not specify identifying detail you do not have. Do not describe the shape of a particular skyline, the layout of a particular interchange, the facade of a particular building or the silhouette of a particular equipment model unless the source describes it. Ask for a generic representative of the category.
+4. NO UNSOURCED BRANDS. Signage, storefronts, banners, packaging, product bodies, vehicle liveries, screens, jerseys, badges and building facades must be de-identified: blank surfaces or generic abstract marks, no readable brand text, no trademark, no ticker symbol, no exchange name. A brand may appear ONLY if its name is in the source material, and then only as plain typeset text, never as a reproduced logotype. Whenever the scene contains any object that would normally carry a brand, write this requirement into "structure" explicitly — do not assume the renderer will infer it.
+5. NAMED REAL PEOPLE. When the source names a real person, do NOT ask for a portrait or a likeness. Ask for a de-identified figure — silhouette, back view, generic figure or icon with no distinguishing facial features — or leave the person out of the imagery and carry them in text only. Never ask for a recognisable face, and never place an identifiable-looking figure in a criminal, accident, scandal or other negative context. A guessed likeness carries portrait-rights and defamation exposure; a generic figure is always the safe answer.
+6. If the graphic is a reconstruction rather than a documented view, the schematic style itself is the signal. Only put the word 示意 into "variable" when you have judged it necessary to prevent the viewer reading the image as documentary; the renderer may draw no text you did not supply.
+"""
+
+
+# 台灣漲跌配色慣例（漲紅跌綠，與西方相反）。第 3 條同時回答 TODO 的疑問：
+# 禁數字條款只管畫布幾何，顏色語意與箭頭方向屬於內容、不受該條款拘束。
+DIRECTIONAL_COLOR_RULES = """
+
+DIRECTIONAL COLOUR CONVENTION (Taiwan convention — the Western one is wrong here):
+1. Whenever the material contains a rise/fall, gain/loss, increase/decrease or positive/negative direction (indices, share prices, exchange rates, prices, inflation, polls, counts, approval ratings), state in "style" and in "structure": 上漲／增加／正向 = red, 下跌／減少／負向 = green. Never green for a rise, never red for a fall.
+2. Keep the pairing consistent across every element — arrows, triangles, bars, lines, sparklines, highlight blocks and the emphasised figure itself. If one graphic shows both a riser and a faller, they must be red and green respectively in the same image.
+3. Colour semantics and arrow direction are CONTENT, not layout geometry. The ban above on percentages, pixels, ratios and numbers applies only to positions and sizes on the canvas. It does NOT stop you from saying that a value rose or fell, from asking for an up arrow or a down arrow, or from naming a colour. State the direction plainly; being vague about direction to avoid "numbers" is a defect.
+4. In a graphic that shows a rise or a fall, do not use red or green decoratively for anything unrelated, so the pairing cannot be misread.
+"""
+
+
+# 地圖準確性。對「禁數字」與「內容忠實度」各開一個範圍受限的豁免：
+# 座標／距離／方位角只做定位資料、永不印在畫面上，畫布幾何禁數字仍全面生效。
+# 座標來自模型記憶、冷門地點可能錯（沖之鳥島案例）——沒把握就改用座標網格；
+# 真正的解法是以圖生圖落地後改走 GIS 底圖路線（見 TODO.md）。
+# 措辭沿用 docs/error-cases/2026-07-23-沖之鳥島-位置偏移-分析.md 的通則化版本。
+MAP_ACCURACY_RULES = """
+
+MAP ACCURACY RULES (apply ONLY when the graphic you are specifying is a 地圖／位置 map graphic; if it is not, ignore this whole block):
+1. Geographic accuracy outranks visual balance. Never ask for a place, island, coastline, border, route or marker to be moved, compressed, rotated, enlarged or rearranged so the composition fits. If everything will not fit truthfully on one map, use two maps (rule 8), never a distorted one.
+2. Require a north-up orientation: north at the top, east on the right, west on the left, south at the bottom. Ask for a north arrow and a scale bar.
+3. SCOPED EXCEPTION TO THE NO-NUMBERS RULE ABOVE. That rule bans percentages, pixels, ratios and numbers used for LAYOUT geometry — positions, insets, gutters and sizes on the canvas — and it still binds in full; never describe canvas geometry with a number. It does NOT cover real-world geography. For a map you MUST write into "structure": the latitude and longitude of every named place you are confident about, the coverage window of each map in degrees, real distances in kilometres, and true bearings in degrees.
+4. Those geographic figures are POSITIONING DATA, not caption text. State explicitly in "structure" that coordinates, degree values and bearings must NOT be printed as visible labels anywhere in the image. The only text on the map is place names and any callout wording that already appears in "variable".
+5. SCOPED EXCEPTION TO CONTENT FIDELITY ABOVE. Rule 2 there bans inventing figures. The latitude and longitude of an existing named place are not invented figures — they are fixed properties of that place, like its name, and here they are used only to put a marker in the right spot. You may therefore supply coordinates from your own geographic knowledge for that purpose alone. Everything else in CONTENT FIDELITY still binds without exception: never invent casualty counts, distances, radii, dates, areas or any other quantity the source did not state, and never put a coordinate into "variable".
+6. If you are not confident of a place's real coordinates, say so in "structure" and ask for a plain coordinate grid with a labelled point marker instead of drawn coastlines. Never invent islands, coastlines, landmasses or maritime boundaries.
+7. Any distance the source states must be drawn to the same scale as the rest of the map and along a stated true bearing — not as an arbitrary line with a figure attached to it.
+8. When the story spans a wide area, ask for two map levels: a small north-up locator overview showing the true relative positions of the places involved, and a larger detail map centred on the incident. One map rarely serves both, and forcing it is what makes models drag distant places closer together.
+9. Disputed or claimed zones (EEZ, 主張海域, 爭議邊界) must be drawn as a thin schematic boundary, never as a settled international border, and must carry the label 主張範圍 示意. Because the renderer may only draw text that was supplied to it, write that label text into "variable" as well.
+10. "Simplified" applies to line styling and visual detail ONLY. Never simplify geographic positions, distances, bearings or relative scale. Use the phrase "geographically accurate simplified cartography" in "style".
+"""
+
+
+# 訊息內夾帶指令與逐字模式。放在指令組裝的最後：逐字指令必須壓過
+# SIMPLIFIED_DENSITY_RULES（LINE 端 density 預設就是 simplified，衝突每次都會發生），
+# 本 repo 慣例是「位置＋明文 OVERRIDE」雙重表達優先序，兩者須同向。
+# 「先讀指令」由區塊開頭句承擔——那是步驟順序，不是文字順序。
+USER_INSTRUCTION_RULES = """
+
+USER INSTRUCTIONS INSIDE THE MATERIAL (DO THIS FIRST, BEFORE APPLYING ANY RULE ABOVE):
+1. Before digesting anything, read the whole input once and split it into (a) the news material and (b) any instruction the user has written to you. An instruction is usually on its own line and may be marked 「指示:」「指令:」「備註:」, but it may also be plain prose. Typical forms: a visual style request (「用手繪風」「不要科技藍」), a layout request (「標題放左邊」「只要一張大圖」), a length request, or a verbatim-preservation request (「完全依照文字」「不要刪減」「不要添加文字或數字」「逐字保留」「這是完稿」).
+2. Any line beginning 「指示:」or「指令:」is entirely an instruction to you and is never news content, no matter what it says.
+3. Obey the instruction — carry a style or layout request into "style" and "structure" in professional English. Acknowledging it without acting on it is a failure.
+4. The instruction text is NEVER content. It must not appear in "variable", must never be drawn in the graphic, and must not be described in the graphic either.
+5. VERBATIM MODE. If the user asks for the wording to be kept, or supplies material that is already a finished CG script, then "variable" must reproduce the supplied wording exactly: same characters, same order, same figures, same line breaks. Do not summarise, shorten, lengthen, re-order, re-word, translate, correct or add one single character. Add the [標題] / [內文小標] / <蓋章> markers only where the user's own structure already implies them, and add nothing else. VERBATIM MODE OVERRIDES EVERY LENGTH, CHARACTER-COUNT AND POINT-COUNT REQUIREMENT ABOVE, INCLUDING THE SIMPLIFIED MODE OVERRIDE AND THE 150-180 CHARACTER TARGET. In verbatim mode your job is layout and visual design only.
+6. If an instruction would require facts or figures the source does not contain, CONTENT FIDELITY above still wins: do not invent them, and carry out the rest of the instruction.
+7. If the input contains no instruction, this block changes nothing — digest normally.
+"""
+
+
 def build_digest_instructions(
     role: str,
     density: DigestDensity,
@@ -282,8 +349,16 @@ def build_digest_instructions(
     instructions = template.format(type_label=rendered_label, layout_rule=layout_rule)
     instructions += chart_type_directive(type_label)
     instructions += CONTENT_FIDELITY_RULES
+    instructions += REAL_WORLD_FIDELITY_RULES
+    instructions += DIRECTIONAL_COLOR_RULES
+    # 自動判斷模式組 prompt 時還不知道 AI 會選哪一類，也要注入；
+    # 區塊開頭自我限縮「非地圖類整段忽略」。明確指定非地圖類型時完全不注入。
+    if type_label in (MAP_TYPE_LABEL, AUTO_TYPE_LABEL):
+        instructions += MAP_ACCURACY_RULES
     if density == "simplified":
         instructions += SIMPLIFIED_DENSITY_RULES
+    # 固定放最後：逐字模式必須壓過 SIMPLIFIED_DENSITY_RULES（位置＋明文 OVERRIDE 同向）
+    instructions += USER_INSTRUCTION_RULES
     return instructions
 
 
@@ -816,6 +891,10 @@ class NewsImageGenerateRequest(BaseModel):
     news_text: str = Field(min_length=1, max_length=20_000)
     type_label: str = AUTO_TYPE_LABEL
     role: str = "記者"
+    # 呼叫端身分，給 input_filter 的頻率限制用。空字串＝不做頻率限制、只做內容
+    # 檢查。LINE 端已在 line_bot 自己做過頻率限制，刻意不傳；WorkCord 等其他
+    # 入口可傳自己的識別值選擇加入。
+    client_id: str = ""
     density: DigestDensity = "standard"
     provider: Literal["gemini", "gpt"] = "gemini"
     # None＝依 safe_frame 自動選擇（見 generate_news_image）；呼叫端仍可明確指定覆寫。
@@ -855,6 +934,14 @@ def resolve_aspect_ratio(requested: str | None, safe_frame: bool) -> str:
 
 
 def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateResponse:
+    # 前置過濾（縱深防禦）：擋垃圾／亂碼／注入輸入，避免燒掉付費呼叫。
+    # LINE 路徑在 line_bot 已含頻率限制地查過一次，這裡 client_id 為空時
+    # 只做內容檢查、不重複觸發頻率限制。
+    verdict = check_input(req.news_text, client_id=req.client_id)
+    if not verdict.accepted:
+        raise HTTPException(status_code=400, detail=verdict.user_message)
+    if req.client_id:
+        note_accepted(req.news_text, client_id=req.client_id)
     aspect_ratio = resolve_aspect_ratio(req.aspect_ratio, req.safe_frame)
     digest = generate(
         GenerateRequest(

@@ -108,6 +108,64 @@ class WebhookTests(unittest.TestCase):
         self.assertEqual(self.task.call_count, 2)
 
 
+class InputFilterWiringTests(unittest.TestCase):
+    """generate_and_push 的前置過濾：被擋訊息回覆原因、跳過付費呼叫、不 push。"""
+
+    def setUp(self):
+        import input_filter
+
+        input_filter.reset_state()
+        self.addCleanup(input_filter.reset_state)
+
+    def test_rejected_message_replies_and_skips_generation(self):
+        with (
+            patch.object(line_bot, "reply_text") as reply,
+            patch.object(line_bot, "push_image") as push_img,
+            patch.object(line_bot, "push_text") as push_txt,
+            patch("main.generate_news_image") as generate,
+        ):
+            line_bot.generate_and_push("rt", "U123", "短")
+        generate.assert_not_called()
+        push_img.assert_not_called()
+        push_txt.assert_not_called()
+        reply.assert_called_once()
+        self.assertIn("太短", reply.call_args.args[1])
+
+    def test_accepted_message_still_acks_then_generates(self):
+        from main import NewsImageGenerateResponse
+
+        fake = NewsImageGenerateResponse(
+            image_data_base64=base64.b64encode(b"img").decode(), mime_type="image/png", model="m"
+        )
+        with (
+            patch.object(line_bot, "reply_text") as reply,
+            patch.object(line_bot, "push_image"),
+            patch.object(line_bot, "save_image", return_value=("a.png", "b.jpg")),
+            patch("main.generate_news_image", return_value=fake) as generate,
+        ):
+            line_bot.generate_and_push("rt", "U123", "台積電法說會宣布擴廠 資本支出上調至新高")
+        generate.assert_called_once()
+        self.assertIn("收到", reply.call_args.args[1])
+
+    def test_duplicate_within_60s_is_rejected_second_time(self):
+        from main import NewsImageGenerateResponse
+
+        fake = NewsImageGenerateResponse(
+            image_data_base64=base64.b64encode(b"img").decode(), mime_type="image/png", model="m"
+        )
+        text = "台積電法說會宣布擴廠 資本支出上調至新高"
+        with (
+            patch.object(line_bot, "reply_text") as reply,
+            patch.object(line_bot, "push_image"),
+            patch.object(line_bot, "save_image", return_value=("a.png", "b.jpg")),
+            patch("main.generate_news_image", return_value=fake) as generate,
+        ):
+            line_bot.generate_and_push("rt1", "U123", text)
+            line_bot.generate_and_push("rt2", "U123", text)
+        generate.assert_called_once()  # 第二次被 dedup 擋下
+        self.assertIn("重骰", reply.call_args.args[1])
+
+
 class TargetTests(unittest.TestCase):
     def test_room_id_used_when_no_user_or_group(self):
         self.assertEqual(line_bot.target_of({"source": {"roomId": "R1"}}), "R1")

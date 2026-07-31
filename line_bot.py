@@ -25,6 +25,8 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 from PIL import Image
 
+from input_filter import check_input, note_accepted
+
 LINE_MESSAGE_API = "https://api.line.me/v2/bot/message"
 
 # 生成圖的落地位置；由 main.py 掛成 /static 對外
@@ -147,6 +149,18 @@ def generate_and_push(reply_token: str, to: str, news_text: str) -> None:
     邏輯，不會各自為政、日後彼此漂移。
     """
     from main import NewsImageGenerateRequest, generate_news_image
+
+    # 前置過濾：在任何付費呼叫（digest／生圖）之前把關。被擋的訊息用同一個
+    # 免費 replyToken 回覆原因後直接結束——不進 ack+push 流程、不消耗 push 額度。
+    # client_id 用聊天對象（群組回到群、1:1 回個人），頻率限制以聊天室為單位。
+    verdict = check_input(news_text, client_id=to)
+    if not verdict.accepted:
+        try:
+            reply_text(reply_token, verdict.user_message)
+        except Exception as exc:  # noqa: BLE001 - 回絕訊息失敗只記 log
+            print(f"[line] reject reply failed: {exc}", flush=True)
+        return
+    note_accepted(news_text, client_id=to)
 
     try:
         reply_text(reply_token, "收到！AI 消化與生圖中，約 30-120 秒，完成後回傳圖片。")

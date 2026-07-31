@@ -136,9 +136,13 @@ class DualSourceParityTests(unittest.TestCase):
         ).split("FINAL OUTPUT RULE\n" + "=" * 50 + "\n")[1]
         self.assertEqual(js_rules, python_rules, "兩份來源的忠實度規則不同步")
 
+    # 已退役的版本字串：每次實質改動 prompt 規則時把舊值加進來再 bump，
+    # 讓「忘記 bump」在測試就會炸，而不是停在上一版靜默通過。
+    RETIRED_PROMPT_VERSIONS = {"v1-2026-07-29", "v2-2026-07-30"}
+
     def test_prompt_version_was_bumped(self):
         """外部整合方（WorkCord）靠 PROMPT_VERSION 追規則版本，實質改動要遞增。"""
-        self.assertNotEqual(news_prompt.PROMPT_VERSION, "v1-2026-07-29")
+        self.assertNotIn(news_prompt.PROMPT_VERSION, self.RETIRED_PROMPT_VERSIONS)
 
 
 if __name__ == "__main__":

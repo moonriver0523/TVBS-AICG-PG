@@ -10,7 +10,13 @@ LINE Bot 是純後端流程、沒有瀏覽器，因此在這裡有一份對應�
 
 # 供外部整合（如 /api/news-image/generate 的呼叫端）追蹤這批規則的版本；
 # 這裡或對應的 app.js 常數只要有實質修改，就手動遞增這個字串。
-PROMPT_VERSION = "v2-2026-07-30"
+PROMPT_VERSION = "v3-2026-07-31"
+
+# 地圖類型的標籤字面值。定義在本模組（而非 main.py）是因為匯入方向是
+# main → news_prompt：build_prompt() 要用它決定是否注入地圖規則，
+# main.py 的 CHART_TYPE_CHOICES 與消化端條件注入則 import 這裡的定義。
+# app.js 端的 '地圖／位置' 字面值由 tests/test_prompt_parity.py 釘住一致。
+MAP_TYPE_LABEL = "地圖／位置"
 
 SYSTEM_DISCLAIMER = '"< >" "[ ]" 是給你的指令 不要生成在結果上'
 
@@ -138,6 +144,41 @@ FULL-FRAME RULES (CRITICAL — MUST PRESERVE)
 - SELF-CHECK before finalizing: if any element is clipped by the frame edge, nudge it inward; if a wide empty band has appeared along any edge, enlarge the design to fill it."""
 
 
+# ============================================================
+# 視覺忠實度區塊（2026-07-31）。與 app.js 逐字同步（tests/test_prompt_parity.py）。
+# 插在 margin_rules 與 FINAL OUTPUT RULE 之間——放在該標頭之後會汙染
+# test_content_fidelity 的雙源逐字比對。
+# ============================================================
+
+REAL_WORLD_RENDERING_RULES = """==================================================
+REAL-WORLD ACCURACY (CRITICAL)
+==================================================
+- Real, verifiable places and objects (satellite or aerial views, skylines, specific buildings, highways and interchanges, airports, factories, and specific models of aircraft, ship, vehicle or equipment) must be drawn as clearly schematic illustration. Do not imitate a photograph or a satellite photo, and do not add photoreal texture, lens blur or camera grain to them.
+- Do not invent identifying detail: no particular skyline, no particular interchange layout, no particular facade, no particular equipment silhouette beyond what STRUCTURE describes. A generic member of the category is correct.
+- NO UNSOURCED BRANDS: every sign, storefront, banner, package, product body, vehicle livery, screen, badge and building facade must be blank or carry a generic non-readable mark. Do NOT draw any real company logo, wordmark, trademark, ticker symbol, exchange name or brand text — not even a small, faint, distant or background one. A brand name may appear only if that exact text is supplied in VARIABLE FIELDS, and then only as plain typeset text, never as a reproduced logotype.
+- NAMED REAL PEOPLE: do not attempt a likeness of any real person. Draw people as silhouettes, back views, generic figures or icons with no distinguishing facial features. Never render a recognisable face, and never make an identifiable-looking person the subject of a negative scene.
+- SELF-CHECK before finalizing: look at every surface in the image for text or marks you added yourself. If any sign, screen, package or vehicle carries readable branding, blank it."""
+
+TW_DIRECTIONAL_COLOR_RULES = """==================================================
+DIRECTIONAL COLOUR CONVENTION (TAIWAN)
+==================================================
+- Rise, gain, increase, positive = RED. Fall, loss, decrease, negative = GREEN. This is the Taiwanese market convention and it is the opposite of the Western one. Never render a rise in green or a fall in red.
+- Apply the same pairing to every arrow, triangle, bar, line, highlight block and emphasised figure in the graphic, including when one graphic shows a riser and a faller side by side.
+- An up arrow means up and a down arrow means down: match every arrow to the direction stated in VARIABLE FIELDS.
+- Do not use red and green decoratively for unrelated purposes in a graphic that shows a rise or a fall."""
+
+MAP_ACCURACY_IMAGE_RULES = """==================================================
+MAP ACCURACY RULES (CRITICAL)
+==================================================
+- Geographic accuracy overrides visual balance. Do not relocate, compress, distort, rotate or rearrange any coastline, island, border, city or marker to improve the composition.
+- North is up, east is right, west is left, south is at the bottom. Include a north arrow and a scale bar.
+- Coordinates, degree values and bearings given in STRUCTURE are positioning instructions. Put the markers at those positions and do NOT print any coordinate, degree value or bearing anywhere in the image.
+- Distances stated in STRUCTURE must be drawn proportionally to the map scale and along the stated bearing.
+- Simplify coastline styling only. Never simplify or alter geographic positions, distances, bearings or relative scale.
+- Do not invent islands, coastlines, landmasses or maritime boundaries. If an accurate coastline cannot be maintained, draw a clean ocean coordinate grid with accurate point markers rather than fabricated geography.
+- Claimed or disputed zones must read as schematic and carry only the label supplied in VARIABLE FIELDS, never as a settled international border."""
+
+
 def build_prompt(
     *,
     role: str,
@@ -160,6 +201,13 @@ def build_prompt(
     else:
         margin_rules = EDITOR_SAFE_AREA if role == "編輯" else REPORTER_SAFE_AREA
         canvas_line = CANVAS_MARGIN_LINE
+
+    # 視覺忠實度區塊：地圖規則只在已解析的類型是地圖時注入
+    # （這裡的 type_label 已是 digest 解析後的具體類型，非「自動判斷」sentinel）
+    extra_blocks = [REAL_WORLD_RENDERING_RULES, TW_DIRECTIONAL_COLOR_RULES]
+    if type_label == MAP_TYPE_LABEL:
+        extra_blocks.append(MAP_ACCURACY_IMAGE_RULES)
+    extras = "\n\n".join(extra_blocks)
 
     body = f"""==================================================
 CANVAS
@@ -186,6 +234,8 @@ VARIABLE FIELDS (USER INPUT)
 {variable}
 
 {margin_rules}
+
+{extras}
 
 ==================================================
 FINAL OUTPUT RULE

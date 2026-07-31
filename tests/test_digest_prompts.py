@@ -34,7 +34,10 @@ class DigestPromptTests(unittest.TestCase):
 
     def test_reporter_standard_does_not_include_simplified_override(self):
         prompt = build_digest_instructions("記者", "standard", "資料圖表")
-        self.assertNotIn("SIMPLIFIED MODE OVERRIDE", prompt)
+        # 不能只斷言「SIMPLIFIED MODE OVERRIDE」字樣不存在——USER_INSTRUCTION_RULES
+        # 的逐字模式明文引用它宣告優先序（每種模式都在）。改斷言簡化區塊
+        # 本身的獨特條款沒被注入。
+        self.assertNotIn("dynamically select only 1 to 3 key points", prompt)
         self.assertIn("The current chart type is", prompt)
 
     def test_reporter_simplified_includes_focus_rules(self):
