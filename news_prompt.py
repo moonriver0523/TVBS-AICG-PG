@@ -172,7 +172,7 @@ MAP ACCURACY RULES (CRITICAL)
 ==================================================
 - Geographic accuracy overrides visual balance. Do not relocate, compress, distort, rotate or rearrange any coastline, island, border, city or marker to improve the composition.
 - North is up, east is right, west is left, south is at the bottom. Include a north arrow and a scale bar.
-- Coordinates, degree values and bearings given in STRUCTURE are positioning instructions. Put the markers at those positions and do NOT print any coordinate, degree value or bearing anywhere in the image.
+- Coordinates, degree values and bearings given in STRUCTURE are positioning instructions: put the markers at those positions. You are not asked to print them as labels; place-name text and supplied callout wording are the labels that matter.
 - Distances stated in STRUCTURE must be drawn proportionally to the map scale and along the stated bearing.
 - Simplify coastline styling only. Never simplify or alter geographic positions, distances, bearings or relative scale.
 - Do not invent islands, coastlines, landmasses or maritime boundaries. If an accurate coastline cannot be maintained, draw a clean ocean coordinate grid with accurate point markers rather than fabricated geography.

@@ -63,8 +63,12 @@ class ExemptionScopeTests(unittest.TestCase):
         self.assertIn("positions, insets, gutters and sizes on the canvas", prompt)
         self.assertIn("SCOPED EXCEPTION TO CONTENT FIDELITY", prompt)
 
-    def test_coordinates_must_not_be_rendered_as_labels(self):
-        self.assertIn("must NOT be printed as visible labels", digest(MAP_TYPE_LABEL))
+    def test_prompt_does_not_actively_request_coordinate_labels(self):
+        # 2026-07-31 使用者裁決：座標入圖可以接受，但 prompt 不得主動要求列出。
+        # 措辭是中性的「不要求」而非硬禁止——digest 不得指示 renderer 顯示座標。
+        prompt = digest(MAP_TYPE_LABEL)
+        self.assertIn("printing them is neither required nor requested", prompt)
+        self.assertIn('"structure" must not instruct the renderer to display them', prompt)
 
     def test_layout_number_ban_survives_in_the_same_prompt(self):
         # 豁免的迴歸護欄：畫布幾何禁數字句必須原封不動仍在
@@ -110,8 +114,9 @@ class ImageStageTests(unittest.TestCase):
                 self.assertNotIn("MAP ACCURACY RULES", image_prompt(type_label))
 
     def test_coordinates_are_positioning_only_at_image_stage(self):
+        # 中性措辭：座標是定位指令、不要求印成標籤（但也不硬禁止，使用者裁決）
         prompt = image_prompt(MAP_TYPE_LABEL)
-        self.assertIn("do NOT print any coordinate", prompt)
+        self.assertIn("You are not asked to print them as labels", prompt)
 
     def test_map_type_label_constant_matches_choices(self):
         self.assertIn(news_prompt.MAP_TYPE_LABEL, CHART_TYPE_CHOICES)
