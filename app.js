@@ -617,13 +617,30 @@ function toggleSafeFrame() {
     syncOutput();
 }
 
+/* 置框模式送 21:9 生成：官方安全區本身是 2.176:1，用 21:9（2.333）去塞，
+   FIT 零裁切下左右留白就會落在官方需求（7.29/7.60%）附近；沿用 16:9 則左右
+   會多出一倍留白。已用 4 張真實生成圖驗證（左右 4/4 落在需求 ±1pp 內）。
+   ⚠️ 這兩個值與 main.py 的 SAFE_FRAME_ASPECT_RATIO／DEFAULT_ASPECT_RATIO 同義，
+   改動要同步——後端那條是 LINE／WorkCord 用的，這條是網頁版第一頁用的。 */
+const SAFE_FRAME_ASPECT_RATIO = '21:9';
+const DEFAULT_ASPECT_RATIO = '16:9';
+
+function currentAspectRatio() {
+    return state.safeFrame ? SAFE_FRAME_ASPECT_RATIO : DEFAULT_ASPECT_RATIO;
+}
+
 // GPT 固定 1280×720（忽略解析度切換）；Gemini 才依 1K／2K 變動
 function updateAspectBadge() {
     const badge = document.getElementById('aspectBadge');
     if (!badge) return;
-    const base = state.engine === 'gpt' ? '16:9 / 720p' : `16:9 / ${state.imageSize}`;
-    // 置框後輸出固定為官方基準畫布 1920×1080
-    badge.innerText = state.safeFrame ? `${base} → 置框 1920×1080` : base;
+    if (state.safeFrame) {
+        // 置框模式：不論引擎與解析度，最終一律置入官方基準畫布 1920×1080
+        badge.innerText = `${SAFE_FRAME_ASPECT_RATIO} → 置框 1920×1080`;
+        return;
+    }
+    badge.innerText = state.engine === 'gpt'
+        ? `${DEFAULT_ASPECT_RATIO} / 720p`
+        : `${DEFAULT_ASPECT_RATIO} / ${state.imageSize}`;
 }
 
 /* ============================================================
@@ -726,7 +743,8 @@ function syncOutput() {
         style: combinedStyle,
         structure: structureContent,
         variable: processedVariable,
-        safeFrame: state.safeFrame
+        safeFrame: state.safeFrame,
+        aspectRatio: currentAspectRatio()
     });
     updatePromptCounter();
 }
@@ -1046,7 +1064,7 @@ async function handleImageGeneration() {
             body: JSON.stringify({
                 prompt,
                 provider,
-                aspect_ratio: '16:9',
+                aspect_ratio: currentAspectRatio(),
                 image_size: state.imageSize,
                 safe_frame: state.safeFrame
             })
