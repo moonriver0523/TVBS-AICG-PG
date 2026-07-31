@@ -27,6 +27,9 @@ from main import (  # noqa: E402
 
 client = TestClient(app)
 
+# 長度須通過 input_filter 的最短門檻（15 個資訊性字元）
+NEWS = "熊本強震重創九州 當地疏散逾21萬人 多處道路中斷"
+
 FAKE_DIGEST = GenerateResponse(
     style="S",
     structure="T",
@@ -56,7 +59,7 @@ class GenerateNewsImageTests(unittest.TestCase):
         self.addCleanup(patcher_image.stop)
 
     def test_response_fields_populated(self):
-        result = generate_news_image(NewsImageGenerateRequest(news_text="素材"))
+        result = generate_news_image(NewsImageGenerateRequest(news_text=NEWS))
         self.assertEqual(result.image_data_base64, "ZmFrZQ==")
         self.assertEqual(result.mime_type, "image/png")
         self.assertEqual(result.model, "fake-model")
@@ -64,18 +67,18 @@ class GenerateNewsImageTests(unittest.TestCase):
         self.assertTrue(result.prompt_version)
 
     def test_prompt_sent_to_image_gen_includes_safe_area_rules(self):
-        generate_news_image(NewsImageGenerateRequest(news_text="素材"))
+        generate_news_image(NewsImageGenerateRequest(news_text=NEWS))
         sent_prompt = self.mock_image.call_args[0][0].prompt
         self.assertIn("EMPTY MARGIN RULES", sent_prompt)
         self.assertIn("FORBIDDEN terms/effects", sent_prompt)
 
     def test_editor_role_uses_editor_text_rules(self):
-        generate_news_image(NewsImageGenerateRequest(news_text="素材", role="編輯"))
+        generate_news_image(NewsImageGenerateRequest(news_text=NEWS, role="編輯"))
         sent_prompt = self.mock_image.call_args[0][0].prompt
         self.assertIn("Must be split into exactly two lines", sent_prompt)
 
     def test_provider_is_forwarded_to_image_request(self):
-        generate_news_image(NewsImageGenerateRequest(news_text="素材", provider="gpt"))
+        generate_news_image(NewsImageGenerateRequest(news_text=NEWS, provider="gpt"))
         sent_req = self.mock_image.call_args[0][0]
         self.assertEqual(sent_req.provider, "gpt")
         self.assertTrue(sent_req.prompt.startswith("Generate an image:"))
@@ -84,24 +87,65 @@ class GenerateNewsImageTests(unittest.TestCase):
         """2026-07-30：用 4 個真實生成樣本驗證過——safe_frame 開啟時 21:9 的左右
         留白穩定落在官方需求 ±1pp 內，取代 16:9 慣性多出一倍的左右留白，
         使用者已拍板接受切換。這裡釘住『沒有明確指定時』的自動選擇邏輯。"""
-        generate_news_image(NewsImageGenerateRequest(news_text="素材", safe_frame=True))
+        generate_news_image(NewsImageGenerateRequest(news_text=NEWS, safe_frame=True))
         sent_req = self.mock_image.call_args[0][0]
         self.assertEqual(sent_req.aspect_ratio, "21:9")
         self.assertIn("Aspect ratio: 21:9", sent_req.prompt)
 
     def test_non_safe_frame_stays_at_16x9(self):
         """safe_frame=False 時沒有後端置框，21:9 的幾何優勢不適用，不該跟著改。"""
-        generate_news_image(NewsImageGenerateRequest(news_text="素材", safe_frame=False))
+        generate_news_image(NewsImageGenerateRequest(news_text=NEWS, safe_frame=False))
         sent_req = self.mock_image.call_args[0][0]
         self.assertEqual(sent_req.aspect_ratio, "16:9")
 
     def test_explicit_aspect_ratio_overrides_the_safe_frame_default(self):
         """呼叫端明確指定時必須尊重那個值，自動選擇只在沒指定時生效。"""
         generate_news_image(
-            NewsImageGenerateRequest(news_text="素材", safe_frame=True, aspect_ratio="4:3")
+            NewsImageGenerateRequest(news_text=NEWS, safe_frame=True, aspect_ratio="4:3")
         )
         sent_req = self.mock_image.call_args[0][0]
         self.assertEqual(sent_req.aspect_ratio, "4:3")
+
+
+class InputFilterGuardTests(unittest.TestCase):
+    """垃圾輸入必須在任何付費呼叫（digest／生圖）之前就被 400 擋下。"""
+
+    def setUp(self):
+        import input_filter
+
+        input_filter.reset_state()
+        self.addCleanup(input_filter.reset_state)
+        patcher_generate = patch.object(main, "generate", return_value=FAKE_DIGEST)
+        patcher_image = patch.object(main, "generate_image", return_value=FAKE_IMAGE)
+        self.mock_generate = patcher_generate.start()
+        patcher_image.start()
+        self.addCleanup(patcher_generate.stop)
+        self.addCleanup(patcher_image.stop)
+
+    def test_garbage_input_is_rejected_before_any_paid_call(self):
+        from fastapi import HTTPException
+
+        for bad in ("短", "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(HTTPException) as ctx:
+                    generate_news_image(NewsImageGenerateRequest(news_text=bad))
+                self.assertEqual(ctx.exception.status_code, 400)
+        self.mock_generate.assert_not_called()
+
+    def test_no_client_id_means_no_rate_limit(self):
+        # LINE 路徑刻意不傳 client_id（已在 line_bot 做過頻率限制），連打不受限
+        generate_news_image(NewsImageGenerateRequest(news_text=NEWS))
+        generate_news_image(NewsImageGenerateRequest(news_text=NEWS))
+        self.assertEqual(self.mock_generate.call_count, 2)
+
+    def test_client_id_opts_into_rate_limiting(self):
+        from fastapi import HTTPException
+
+        generate_news_image(NewsImageGenerateRequest(news_text=NEWS, client_id="workcord"))
+        with self.assertRaises(HTTPException) as ctx:
+            generate_news_image(NewsImageGenerateRequest(news_text=NEWS, client_id="workcord"))
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.mock_generate.assert_called_once()
 
 
 class EndpointAuthTests(unittest.TestCase):
@@ -123,7 +167,7 @@ class EndpointAuthTests(unittest.TestCase):
     def call(self, headers=None):
         return client.post(
             "/api/news-image/generate",
-            json={"news_text": "素材"},
+            json={"news_text": NEWS},
             headers=headers or {},
         )
 

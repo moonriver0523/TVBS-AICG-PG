@@ -758,6 +758,14 @@ function buildPrompt({ role, engine, typeLabel, style, structure, variable, safe
         : (role === '編輯' ? EDITOR_SAFE_AREA : REPORTER_SAFE_AREA);
     const canvasLine = safeFrame ? CANVAS_FULL_BLEED_LINE : CANVAS_MARGIN_LINE;
 
+    // 視覺忠實度區塊：地圖規則只在已解析的類型是地圖時注入
+    // （typeLabel 來自 activeType()，自動判斷模式下已是 AI 解析後的具體類型）
+    const extraBlocks = [REAL_WORLD_RENDERING_RULES, TW_DIRECTIONAL_COLOR_RULES];
+    if (typeLabel === MAP_TYPE_LABEL) {
+        extraBlocks.push(MAP_ACCURACY_IMAGE_RULES);
+    }
+    const extras = extraBlocks.join('\n\n');
+
     const body =
 `==================================================
 CANVAS
@@ -784,6 +792,8 @@ VARIABLE FIELDS (USER INPUT)
 ${variable}
 
 ${marginRules}
+
+${extras}
 
 ==================================================
 FINAL OUTPUT RULE
@@ -833,6 +843,42 @@ FULL-FRAME RULES (CRITICAL — MUST PRESERVE)
 - The background is ONE single continuous image covering the whole canvas. Do NOT render any frame, rectangle, outline, border line, guide line, crop mark, corner bracket, or dimmed / tinted / shaded band anywhere.
 - Every element must be fully inside the canvas: nothing may run off the edge or be sliced by it.
 - SELF-CHECK before finalizing: if any element is clipped by the frame edge, nudge it inward; if a wide empty band has appeared along any edge, enlarge the design to fill it.`;
+
+/* ---- 視覺忠實度常數（2026-07-31）----
+   ⚠️ 與 news_prompt.py 必須逐字一致（tests/test_prompt_parity.py 會驗）。
+   MAP_TYPE_LABEL 對應 news_prompt.MAP_TYPE_LABEL，同樣由 parity 測試釘住。*/
+const MAP_TYPE_LABEL = '地圖／位置';
+
+const REAL_WORLD_RENDERING_RULES =
+`==================================================
+REAL-WORLD ACCURACY (CRITICAL)
+==================================================
+- Real, verifiable places and objects (skylines, specific buildings, highways and interchanges, airports, facilities, and specific models of aircraft, ship, vehicle or equipment) must look like the real thing: correct shape, layout, proportions and distinguishing features as far as they are known. Faithful, realistic rendering is welcome — do not distort reality for style.
+- Do not fabricate identifying detail you do not know and present it as real. If the rendering is a generic stand-in or a reconstruction rather than the real thing, the 示意圖 label supplied in VARIABLE FIELDS must be clearly visible — never drop or hide it.
+- NO UNSOURCED BRANDS: every sign, storefront, banner, package, product body, vehicle livery, screen, badge and building facade must be blank or carry a generic non-readable mark. Do NOT draw any real company logo, wordmark, trademark, ticker symbol, exchange name or brand text — not even a small, faint, distant or background one. A brand name may appear only if that exact text is supplied in VARIABLE FIELDS, and then only as plain typeset text, never as a reproduced logotype.
+- NAMED REAL PEOPLE: a faithful portrait is allowed, including a front-facing likeness. Make the face resemble the real person as closely as you can; never caricature or distort, and never show the person in a scene, action or context that STRUCTURE does not describe.
+- SELF-CHECK before finalizing: look at every surface in the image for text or marks you added yourself. If any sign, screen, package or vehicle carries readable branding, blank it.`;
+
+const TW_DIRECTIONAL_COLOR_RULES =
+`==================================================
+DIRECTIONAL COLOUR CONVENTION (TAIWAN)
+==================================================
+- Rise, gain, increase, positive = RED. Fall, loss, decrease, negative = GREEN. This is the Taiwanese market convention and it is the opposite of the Western one. Never render a rise in green or a fall in red.
+- Apply the same pairing to every arrow, triangle, bar, line, highlight block and emphasised figure in the graphic, including when one graphic shows a riser and a faller side by side.
+- An up arrow means up and a down arrow means down: match every arrow to the direction stated in VARIABLE FIELDS.
+- Do not use red and green decoratively for unrelated purposes in a graphic that shows a rise or a fall.`;
+
+const MAP_ACCURACY_IMAGE_RULES =
+`==================================================
+MAP ACCURACY RULES (CRITICAL)
+==================================================
+- Geographic accuracy overrides visual balance. Do not relocate, compress, distort, rotate or rearrange any coastline, island, border, city or marker to improve the composition.
+- North is up, east is right, west is left, south is at the bottom. Include a north arrow and a scale bar.
+- Coordinates, degree values and bearings given in STRUCTURE are positioning instructions: put the markers at those positions. You are not asked to print them as labels; place-name text and supplied callout wording are the labels that matter.
+- Distances stated in STRUCTURE must be drawn proportionally to the map scale and along the stated bearing.
+- Simplify coastline styling only. Never simplify or alter geographic positions, distances, bearings or relative scale.
+- Do not invent islands, coastlines, landmasses or maritime boundaries. If an accurate coastline cannot be maintained, draw a clean ocean coordinate grid with accurate point markers rather than fabricated geography.
+- Claimed or disputed zones must read as schematic and carry only the label supplied in VARIABLE FIELDS, never as a settled international border.`;
 
 /* ---- 文字規則 / 安全區 常數 ---- */
 const REPORTER_TEXT_RULES =

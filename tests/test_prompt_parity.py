@@ -84,6 +84,20 @@ class ConstantParityTests(unittest.TestCase):
         self.assertIsNotNone(match, "app.js 裡找不到 SYSTEM_DISCLAIMER")
         self.assertEqual(match.group(1), news_prompt.SYSTEM_DISCLAIMER)
 
+    def test_real_world_rendering_rules(self):
+        self.assert_same("REAL_WORLD_RENDERING_RULES", news_prompt.REAL_WORLD_RENDERING_RULES)
+
+    def test_directional_colour_rules(self):
+        self.assert_same("TW_DIRECTIONAL_COLOR_RULES", news_prompt.TW_DIRECTIONAL_COLOR_RULES)
+
+    def test_map_accuracy_image_rules(self):
+        self.assert_same("MAP_ACCURACY_IMAGE_RULES", news_prompt.MAP_ACCURACY_IMAGE_RULES)
+
+    def test_map_type_label_matches(self):
+        js_value = js_quoted_const("MAP_TYPE_LABEL", self.source)
+        self.assertIsNotNone(js_value, "app.js 裡找不到 MAP_TYPE_LABEL")
+        self.assertEqual(js_value, news_prompt.MAP_TYPE_LABEL)
+
 
 class BuiltPromptShapeTests(unittest.TestCase):
     """組裝結果的關鍵骨架——區塊順序或標頭被改動時要能發現。"""
@@ -107,10 +121,30 @@ class BuiltPromptShapeTests(unittest.TestCase):
             "STRUCTURE (LAYOUT RULES)",
             "VARIABLE FIELDS (USER INPUT)",
             "EMPTY MARGIN RULES (CRITICAL — MUST PRESERVE)",
+            "REAL-WORLD ACCURACY (CRITICAL)",
+            "DIRECTIONAL COLOUR CONVENTION (TAIWAN)",
             "FINAL OUTPUT RULE",
         ]
         positions = [prompt.index(m) for m in markers]
         self.assertEqual(positions, sorted(positions), "區塊順序與 app.js 不同")
+
+    def test_map_block_lands_between_colour_and_final_rule(self):
+        prompt = news_prompt.build_prompt(
+            role="記者",
+            engine="gemini",
+            type_label=news_prompt.MAP_TYPE_LABEL,
+            style="S",
+            structure="T",
+            variable="V",
+        )
+        self.assertLess(
+            prompt.index("DIRECTIONAL COLOUR CONVENTION (TAIWAN)"),
+            prompt.index("MAP ACCURACY RULES (CRITICAL)"),
+        )
+        self.assertLess(
+            prompt.index("MAP ACCURACY RULES (CRITICAL)"),
+            prompt.index("FINAL OUTPUT RULE"),
+        )
 
     def test_user_content_is_embedded(self):
         prompt = self.build()
