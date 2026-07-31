@@ -1,4 +1,5 @@
 import base64
+import contextvars
 import hmac
 import json
 import os
@@ -23,6 +24,7 @@ from openai import (
 )
 from pydantic import BaseModel, Field
 
+import request_log
 import safe_frame
 from input_filter import check_input, note_accepted
 from news_prompt import MAP_TYPE_LABEL, PROMPT_VERSION, build_prompt, compose_variable
@@ -372,6 +374,12 @@ def build_digest_instructions(
     return instructions
 
 
+# generate_news_image() 會自己記一筆含最終 prompt 的完整紀錄，它內部呼叫的
+# generate() 就不該再記一次半套的。用 contextvar 而不是函式參數，免得這個純內部
+# 的旗標變成 /api/generate 對外可見的欄位。
+_inside_pipeline = contextvars.ContextVar("inside_pipeline", default=False)
+
+
 def digest_completion(
     *,
     model: str,
@@ -573,12 +581,28 @@ def generate(req: GenerateRequest):
             # AI 未回報或回報不在清單內；指定類型時退回原值，自動判斷時留空由前端處理
             chart_type = "" if req.type_label == AUTO_TYPE_LABEL else req.type_label
 
-        return GenerateResponse(
+        result = GenerateResponse(
             style=data.get("style", ""),
             structure=data.get("structure", ""),
             variable=data.get("variable", ""),
             chart_type=chart_type,
         )
+        # 網頁版走這個端點後自己在前端組生圖 prompt，後端看不到最終 prompt，
+        # 因此這裡只記到消化為止——有輸入與消化結果，事後仍可重跑重現。
+        if not _inside_pipeline.get():
+            request_log.log_generation(
+                request_id=request_log.new_request_id(),
+                source="digest",
+                news_text=req.news_text,
+                style=result.style,
+                structure=result.structure,
+                variable=result.variable,
+                chart_type=result.chart_type,
+                type_label=req.type_label,
+                role=req.role,
+                density=req.density,
+            )
+        return result
 
     raise HTTPException(status_code=502, detail=last_detail)
 
@@ -1000,6 +1024,8 @@ class NewsImageGenerateRequest(BaseModel):
     image_size: str = "1K"
     # True＝滿版生成＋後端置框（安全框由數學保證，不靠模型自律）
     safe_frame: bool = False
+    # 落檔時標示來源（line／workcord／…），純粹方便回查時篩選；空值用預設值
+    source: str = ""
 
 
 class NewsImageGenerateResponse(BaseModel):
@@ -1008,6 +1034,8 @@ class NewsImageGenerateResponse(BaseModel):
     model: str
     title: str = ""
     prompt_version: str = PROMPT_VERSION
+    # 回查用：對應 logs/generations-*.jsonl 裡的那一筆
+    request_id: str = ""
 
 
 def _extract_title(variable: str) -> str:
@@ -1040,16 +1068,21 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
         raise HTTPException(status_code=400, detail=verdict.user_message)
     if req.client_id:
         note_accepted(req.news_text, client_id=req.client_id)
+    request_id = request_log.new_request_id()
     aspect_ratio = resolve_aspect_ratio(req.aspect_ratio, req.safe_frame)
-    digest = generate(
-        GenerateRequest(
-            news_text=req.news_text,
-            type_label=req.type_label,
-            role=req.role,
-            density=req.density,
-            safe_frame=req.safe_frame,
+    token = _inside_pipeline.set(True)
+    try:
+        digest = generate(
+            GenerateRequest(
+                news_text=req.news_text,
+                type_label=req.type_label,
+                role=req.role,
+                density=req.density,
+                safe_frame=req.safe_frame,
+            )
         )
-    )
+    finally:
+        _inside_pipeline.reset(token)
     prompt = build_prompt(
         role=req.role,
         engine=req.provider,
@@ -1069,11 +1102,29 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             safe_frame=req.safe_frame,
         )
     )
+    request_log.log_generation(
+        request_id=request_id,
+        source=req.source or "news-image",
+        client_id=req.client_id,
+        news_text=req.news_text,
+        style=digest.style,
+        structure=digest.structure,
+        variable=digest.variable,
+        prompt=prompt,
+        chart_type=digest.chart_type,
+        type_label=req.type_label,
+        role=req.role,
+        density=req.density,
+        provider=req.provider,
+        image_model=image.model,
+        prompt_version=PROMPT_VERSION,
+    )
     return NewsImageGenerateResponse(
         image_data_base64=image.image_data_base64,
         mime_type=image.mime_type,
         model=image.model,
         title=_extract_title(digest.variable),
+        request_id=request_id,
     )
 
 

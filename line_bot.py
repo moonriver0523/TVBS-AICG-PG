@@ -25,6 +25,7 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
 from PIL import Image
 
+import request_log
 from input_filter import check_input, note_accepted
 
 LINE_MESSAGE_API = "https://api.line.me/v2/bot/message"
@@ -185,10 +186,16 @@ def generate_and_push(reply_token: str, to: str, news_text: str) -> None:
                 density=density,
                 provider=provider,
                 safe_frame=safe_frame_enabled,
+                source="line",
             )
         )
         raw = base64.b64decode(result.image_data_base64)
         original_name, preview_name = save_image(raw, result.mime_type)
+        # 把成圖檔名接回 request_id：使用者回報時傳來的是 LINE 下載的圖，檔名
+        # 已被 LINE 換掉，只能靠這筆對照從原始檔名回推到那次請求的輸入與 prompt。
+        request_log.log_image_file(
+            request_id=result.request_id, image_name=original_name, client_id=to
+        )
 
         base_url = _env("PUBLIC_BASE_URL").rstrip("/")
         push_image(
