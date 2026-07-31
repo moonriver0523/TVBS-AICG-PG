@@ -82,21 +82,21 @@ class GenerateRetryTests(unittest.TestCase):
         self.assertEqual(create.call_count, 2)
         self.assertEqual(result.style, "cinematic broadcast style")
 
-    def test_gives_up_after_three_attempts(self):
+    def test_gives_up_after_the_configured_number_of_attempts(self):
         result, exc, create = self.call_with(
-            [connection_error(), connection_error(), connection_error()]
+            [connection_error()] * main.DIGEST_ATTEMPTS
         )
         self.assertIsNone(result)
-        self.assertEqual(create.call_count, 3)
+        self.assertEqual(create.call_count, main.DIGEST_ATTEMPTS)
         self.assertEqual(exc.status_code, 502)
         self.assertIn("無法連線", exc.detail)
 
     def test_parse_failure_reports_parse_detail(self):
         result, exc, create = self.call_with(
-            [bad_json_response(), bad_json_response(), bad_json_response()]
+            [bad_json_response()] * main.DIGEST_ATTEMPTS
         )
         self.assertIsNone(result)
-        self.assertEqual(create.call_count, 3)
+        self.assertEqual(create.call_count, main.DIGEST_ATTEMPTS)
         self.assertEqual(exc.status_code, 502)
         self.assertEqual(exc.detail, "AI 回傳格式無法解析")
 

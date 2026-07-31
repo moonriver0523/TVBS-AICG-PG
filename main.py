@@ -83,6 +83,12 @@ GEMINI_DIGEST_MIN_TOKENS = 6000
 DIGEST_MAX_TOKENS = 1500
 MAP_DIGEST_MAX_TOKENS = 6000
 
+# 消化重試次數。上游（OpenRouter 輪替的 provider）會間歇性脫軌——2026-08-01 實測
+# 休達那則新聞，模型會在 variable 裡吐出韓文／西里爾／馬拉雅拉姆等隨機文字碎片，
+# 單次成功率約 2/3，3 次重試仍整組摃摃、使用者收到 502 拿不到圖。消化是純文字
+# 呼叫、單價低，多兩次重試換一次成功的成本遠低於讓使用者空手而回。
+DIGEST_ATTEMPTS = 5
+
 app = FastAPI()
 
 app.add_middleware(
@@ -520,7 +526,7 @@ def generate(req: GenerateRequest):
         else DIGEST_MAX_TOKENS
     )
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
-    for attempt in range(3):
+    for attempt in range(DIGEST_ATTEMPTS):
         try:
             response = digest_completion(
                 model=model,
@@ -546,7 +552,7 @@ def generate(req: GenerateRequest):
                 if isinstance(exc, APIConnectionError)
                 else "AI 服務處理失敗，請確認模型權限或稍後重試"
             )
-            print(f"[generate] attempt {attempt + 1}/3 API error: {exc}", flush=True)
+            print(f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} API error: {exc}", flush=True)
             time.sleep(1.5)
             continue
 
@@ -557,7 +563,7 @@ def generate(req: GenerateRequest):
         except (json.JSONDecodeError, IndexError, TypeError) as exc:
             last_detail = "AI 回傳格式無法解析"
             print(
-                f"[generate] attempt {attempt + 1}/3 parse failed "
+                f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} parse failed "
                 f"(finish_reason={finish_reason}): {exc}\n"
                 f"[generate] raw content: {raw_content[:800]}",
                 flush=True,
@@ -570,7 +576,7 @@ def generate(req: GenerateRequest):
         if problem:
             last_detail = "AI 回傳內容異常，請稍後重試"
             print(
-                f"[generate] attempt {attempt + 1}/3 quality check failed: {problem}",
+                f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} quality check failed: {problem}",
                 flush=True,
             )
             time.sleep(1.5)
