@@ -1,4 +1,5 @@
 import base64
+import contextvars
 import hmac
 import json
 import os
@@ -23,6 +24,7 @@ from openai import (
 )
 from pydantic import BaseModel, Field
 
+import request_log
 import safe_frame
 from input_filter import check_input, note_accepted
 from news_prompt import MAP_TYPE_LABEL, PROMPT_VERSION, build_prompt, compose_variable
@@ -70,6 +72,22 @@ else:
 # 真實消化內容（含完整格式化的 style/structure/variable 文字）遠比玩具範例長，
 # 這裡抓一個寬裕的下限，只在走 Gemini 這條路徑時生效，不影響其他 backend。
 GEMINI_DIGEST_MIN_TOKENS = 6000
+
+# 消化輸出上限。地圖類要寫的東西本來就比別類多——MAP_ACCURACY_RULES 要求雙層地圖
+# （定位總覽 + 細部圖）、每張圖各自的涵蓋範圍、指北針與比例尺、多個地名的經緯度，
+# 光 structure 一欄的英文就能吃掉一般預算。2026-07-31 休達案例實測：地圖類用 1500
+# 幾乎每次第一輪都 finish_reason=length 被截斷，重試又在長度壓力下吐出摻雜垃圾字元
+# 的 variable（語法上仍是合法 JSON，因此舊版直接收下送去生圖）。分開給預算是治本。
+# 上限是天花板不是用量，只有真的寫出來的 token 才計費，因此寧可寬裕。
+# 3000 實測仍會截斷（同案例），拉到 6000 比照 GEMINI_DIGEST_MIN_TOKENS 的量級。
+DIGEST_MAX_TOKENS = 1500
+MAP_DIGEST_MAX_TOKENS = 6000
+
+# 消化重試次數。上游（OpenRouter 輪替的 provider）會間歇性脫軌——2026-08-01 實測
+# 休達那則新聞，模型會在 variable 裡吐出韓文／西里爾／馬拉雅拉姆等隨機文字碎片，
+# 單次成功率約 2/3，3 次重試仍整組摃摃、使用者收到 502 拿不到圖。消化是純文字
+# 呼叫、單價低，多兩次重試換一次成功的成本遠低於讓使用者空手而回。
+DIGEST_ATTEMPTS = 5
 
 app = FastAPI()
 
@@ -307,6 +325,7 @@ MAP ACCURACY RULES (apply ONLY when the graphic you are specifying is a 地圖�
 8. When the story spans a wide area, ask for two map levels: a small north-up locator overview showing the true relative positions of the places involved, and a larger detail map centred on the incident. One map rarely serves both, and forcing it is what makes models drag distant places closer together.
 9. Disputed or claimed zones (EEZ, 主張海域, 爭議邊界) must be drawn as a thin schematic boundary, never as a settled international border, and must carry the label 主張範圍 示意. Because the renderer may only draw text that was supplied to it, write that label text into "variable" as well.
 10. "Simplified" applies to line styling and visual detail ONLY. Never simplify geographic positions, distances, bearings or relative scale. Use the phrase "geographically accurate simplified cartography" in "style".
+11. ONE SUBJECT PLACE IN THE HEADLINE. Decide which place the incident actually happened in, and let only that place be the subject of the 標題 line in "variable". Other countries that merely reacted, commented, protested or announced a response are secondary: put them in a 內文小標 or a callout, never in the headline as the acting subject. A headline that names a reacting country beside the incident location reads as if the incident happened there, and the renderer will place that country's callout on the incident itself. Name the reacting country inside its own callout wording so the two can never be confused.
 """
 
 
@@ -361,6 +380,12 @@ def build_digest_instructions(
     return instructions
 
 
+# generate_news_image() 會自己記一筆含最終 prompt 的完整紀錄，它內部呼叫的
+# generate() 就不該再記一次半套的。用 contextvar 而不是函式參數，免得這個純內部
+# 的旗標變成 /api/generate 對外可見的欄位。
+_inside_pipeline = contextvars.ContextVar("inside_pipeline", default=False)
+
+
 def digest_completion(
     *,
     model: str,
@@ -405,6 +430,76 @@ def digest_completion(
         )
 
 
+# 消化輸出健檢用：新聞稿消化結果應該只由中文、日文假名、拉丁字母（含歐洲人名的
+# 附加符號）、數字、標點與空白組成。實測 2026-07-31 休達案例，模型在輸出長度壓力下
+# 會在 variable 尾端接上亞美尼亞文、西里爾文與博弈垃圾字串——語法上仍是合法 JSON，
+# 所以只檢查 json.loads 的舊版會直接收下並送去生圖。這裡把「不可能出現的文字系統」
+# 當成污染訊號。
+DIGEST_ALLOWED_CHARS = re.compile(
+    r"[一-鿿㐀-䶿"      # 中日韓統一表意文字（含擴充 A）
+    r"　-〿぀-ヿ"       # 中日韓標點、日文假名
+    r"＀-￯"                    # 全形字母數字與標點
+    r"‐-⁞"                    # 一般標點（破折號、引號、刪節號）
+    r" -ÿ"                    # 拉丁字母補充（é ñ ü 等歐洲人名、°）
+    r"\x20-\x7e\r\n\t]"                 # ASCII 可見字元與空白
+)
+# 單一雜字不足以判定污染（模型偶爾夾一個罕用符號），連續出現才是。
+DIGEST_MAX_STRAY_CHARS = 3
+# variable 是繁中新聞文字，正常情況拉丁字母只佔少數（地名、機型代號）。比例過高
+# 代表模型開始用英文自言自語（實測撞到 "Need correct. We accidentally weird."）。
+DIGEST_MAX_LATIN_RATIO = 0.35
+# 放寬 token 上限後出現的另一種失控：模型不再截斷，改成把原文每個詞都拆成一條
+# [內文小標] 灌到幾十行（實測撞到 90 行、同一詞重複出現）。長度本身不能當判準——
+# 逐字模式本來就會產生長 variable——但大量重複的行是失控獨有的訊號。
+# 行數上限刻意抓得寬鬆：逐字模式重現的完稿 CG 腳本本來就可能有十幾行，不能誤傷。
+# 實測的失控案例是 90 行，跟正常輸出差一個量級，40 行足以區隔。
+DIGEST_MAX_VARIABLE_LINES = 40
+DIGEST_REPETITION_MIN_LINES = 10
+DIGEST_MIN_UNIQUE_LINE_RATIO = 0.8
+
+
+def digest_quality_problem(data: dict, finish_reason: str) -> str:
+    """檢查消化結果是否可用，通過回傳空字串，否則回傳給 log 用的問題描述。
+
+    語法合法不等於內容可用。截斷（finish_reason=length）與字元污染都會產生
+    「能解析但不能用」的結果，必須跟解析失敗一樣走重試，不能直接送去生圖。
+    """
+    if finish_reason == "length":
+        return "輸出被截斷（finish_reason=length）"
+
+    for field in ("style", "structure", "variable"):
+        value = data.get(field) or ""
+        if not value.strip():
+            return f"{field} 為空"
+        stray = DIGEST_ALLOWED_CHARS.sub("", value)
+        if len(stray) >= DIGEST_MAX_STRAY_CHARS:
+            # 用 ascii() 轉義：這些字元照原樣印會在 Windows cp950 主控台丟
+            # UnicodeEncodeError，把診斷訊息本身變成當掉整條請求的新故障
+            return f"{field} 含 {len(stray)} 個異常字元：{ascii(stray[:40])}"
+
+    variable = data.get("variable") or ""
+    latin = sum(1 for ch in variable if "a" <= ch.lower() <= "z")
+    if variable and latin / len(variable) > DIGEST_MAX_LATIN_RATIO:
+        return f"variable 拉丁字母比例 {latin / len(variable):.0%} 過高，疑似模型自言自語"
+
+    # 比對去掉標記後的文字，才抓得到同一句話掛在不同標記下重複出現。只剝
+    # [標題]／【內文小標】這種「前綴」標記——<...> 是整句強調、不是前綴，
+    # 連同內容一起剝掉會把數個強調行都變成空字串、誤判成重複。
+    lines = [
+        stripped
+        for line in variable.splitlines()
+        if (stripped := re.sub(r"^\s*[\[【][^\]】]*[\]】]", "", line).strip())
+    ]
+    if len(lines) > DIGEST_MAX_VARIABLE_LINES:
+        return f"variable 共 {len(lines)} 行，疑似逐詞灌行失控"
+    if len(lines) >= DIGEST_REPETITION_MIN_LINES:
+        ratio = len(set(lines)) / len(lines)
+        if ratio < DIGEST_MIN_UNIQUE_LINE_RATIO:
+            return f"variable {len(lines)} 行中僅 {ratio:.0%} 不重複，疑似逐詞灌行失控"
+
+    return ""
+
+
 @app.post("/api/generate", response_model=GenerateResponse)
 def generate(req: GenerateRequest):
     system_prompt = build_digest_instructions(
@@ -423,14 +518,21 @@ def generate(req: GenerateRequest):
     # 上游（OpenRouter 多 provider 輪替）偶發 502、輸出截斷或不合 schema 的回傳是常態，
     # 重試圈必須涵蓋「呼叫＋解析」全程——只重試呼叫，解析失敗一樣會把錯誤丟給使用者。
     # 作法比照 hybrid_digest：金鑰／用量問題不重試（重試也沒用），其餘 3 次 × 1.5 秒。
+    # 地圖類（含自動判斷，因為 AI 可能選地圖）要寫雙層地圖與多組座標，字數本來就多，
+    # 用一般預算幾乎必定截斷，見 MAP_DIGEST_MAX_TOKENS 的說明。
+    max_output_tokens = (
+        MAP_DIGEST_MAX_TOKENS
+        if req.type_label in (MAP_TYPE_LABEL, AUTO_TYPE_LABEL)
+        else DIGEST_MAX_TOKENS
+    )
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
-    for attempt in range(3):
+    for attempt in range(DIGEST_ATTEMPTS):
         try:
             response = digest_completion(
                 model=model,
                 system_prompt=system_prompt,
                 news_text=req.news_text,
-                max_output_tokens=1500,
+                max_output_tokens=max_output_tokens,
                 schema_name="news_cg_digest",
                 schema=DIGEST_OUTPUT_SCHEMA,
             )
@@ -450,7 +552,7 @@ def generate(req: GenerateRequest):
                 if isinstance(exc, APIConnectionError)
                 else "AI 服務處理失敗，請確認模型權限或稍後重試"
             )
-            print(f"[generate] attempt {attempt + 1}/3 API error: {exc}", flush=True)
+            print(f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} API error: {exc}", flush=True)
             time.sleep(1.5)
             continue
 
@@ -461,9 +563,20 @@ def generate(req: GenerateRequest):
         except (json.JSONDecodeError, IndexError, TypeError) as exc:
             last_detail = "AI 回傳格式無法解析"
             print(
-                f"[generate] attempt {attempt + 1}/3 parse failed "
+                f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} parse failed "
                 f"(finish_reason={finish_reason}): {exc}\n"
                 f"[generate] raw content: {raw_content[:800]}",
+                flush=True,
+            )
+            time.sleep(1.5)
+            continue
+
+        # 能解析不代表能用：截斷與字元污染都要跟解析失敗一樣重試，不能送去生圖
+        problem = digest_quality_problem(data, finish_reason)
+        if problem:
+            last_detail = "AI 回傳內容異常，請稍後重試"
+            print(
+                f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} quality check failed: {problem}",
                 flush=True,
             )
             time.sleep(1.5)
@@ -474,12 +587,28 @@ def generate(req: GenerateRequest):
             # AI 未回報或回報不在清單內；指定類型時退回原值，自動判斷時留空由前端處理
             chart_type = "" if req.type_label == AUTO_TYPE_LABEL else req.type_label
 
-        return GenerateResponse(
+        result = GenerateResponse(
             style=data.get("style", ""),
             structure=data.get("structure", ""),
             variable=data.get("variable", ""),
             chart_type=chart_type,
         )
+        # 網頁版走這個端點後自己在前端組生圖 prompt，後端看不到最終 prompt，
+        # 因此這裡只記到消化為止——有輸入與消化結果，事後仍可重跑重現。
+        if not _inside_pipeline.get():
+            request_log.log_generation(
+                request_id=request_log.new_request_id(),
+                source="digest",
+                news_text=req.news_text,
+                style=result.style,
+                structure=result.structure,
+                variable=result.variable,
+                chart_type=result.chart_type,
+                type_label=req.type_label,
+                role=req.role,
+                density=req.density,
+            )
+        return result
 
     raise HTTPException(status_code=502, detail=last_detail)
 
@@ -901,6 +1030,8 @@ class NewsImageGenerateRequest(BaseModel):
     image_size: str = "1K"
     # True＝滿版生成＋後端置框（安全框由數學保證，不靠模型自律）
     safe_frame: bool = False
+    # 落檔時標示來源（line／workcord／…），純粹方便回查時篩選；空值用預設值
+    source: str = ""
 
 
 class NewsImageGenerateResponse(BaseModel):
@@ -909,6 +1040,8 @@ class NewsImageGenerateResponse(BaseModel):
     model: str
     title: str = ""
     prompt_version: str = PROMPT_VERSION
+    # 回查用：對應 logs/generations-*.jsonl 裡的那一筆
+    request_id: str = ""
 
 
 def _extract_title(variable: str) -> str:
@@ -941,16 +1074,21 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
         raise HTTPException(status_code=400, detail=verdict.user_message)
     if req.client_id:
         note_accepted(req.news_text, client_id=req.client_id)
+    request_id = request_log.new_request_id()
     aspect_ratio = resolve_aspect_ratio(req.aspect_ratio, req.safe_frame)
-    digest = generate(
-        GenerateRequest(
-            news_text=req.news_text,
-            type_label=req.type_label,
-            role=req.role,
-            density=req.density,
-            safe_frame=req.safe_frame,
+    token = _inside_pipeline.set(True)
+    try:
+        digest = generate(
+            GenerateRequest(
+                news_text=req.news_text,
+                type_label=req.type_label,
+                role=req.role,
+                density=req.density,
+                safe_frame=req.safe_frame,
+            )
         )
-    )
+    finally:
+        _inside_pipeline.reset(token)
     prompt = build_prompt(
         role=req.role,
         engine=req.provider,
@@ -970,11 +1108,29 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             safe_frame=req.safe_frame,
         )
     )
+    request_log.log_generation(
+        request_id=request_id,
+        source=req.source or "news-image",
+        client_id=req.client_id,
+        news_text=req.news_text,
+        style=digest.style,
+        structure=digest.structure,
+        variable=digest.variable,
+        prompt=prompt,
+        chart_type=digest.chart_type,
+        type_label=req.type_label,
+        role=req.role,
+        density=req.density,
+        provider=req.provider,
+        image_model=image.model,
+        prompt_version=PROMPT_VERSION,
+    )
     return NewsImageGenerateResponse(
         image_data_base64=image.image_data_base64,
         mime_type=image.mime_type,
         model=image.model,
         title=_extract_title(digest.variable),
+        request_id=request_id,
     )
 
 
