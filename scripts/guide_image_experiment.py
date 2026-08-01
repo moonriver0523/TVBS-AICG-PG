@@ -47,6 +47,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import news_prompt  # noqa: E402  （需先加入專案根目錄到 sys.path）
 
+
+def model_defaults():
+    """模型預設值只認 main.py 一個來源。
+
+    腳本自己寫死第二份，會在 main 改了之後靜靜跑成另一個模型，而本腳本的前提正是
+    「模型與 production 相同，差異不會混入模型變因」——2026-08-01 就這樣歪過一次
+    （main 的 GPT 預設換成 gpt-image-2，這裡還停在 gpt-5.4-image-2）。
+    延後匯入是因為 main 在 import 期就會建 OpenAI client，乾跑不該被金鑰擋住。
+    """
+    import main  # noqa: PLC0415
+
+    return main
+
 load_dotenv()
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -279,7 +292,7 @@ def call_gemini_native(
     if not api_key:
         raise RuntimeError("缺 GEMINI_API_KEY")
 
-    model = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3-pro-image")
+    model = os.getenv("GEMINI_IMAGE_MODEL", model_defaults().NATIVE_GEMINI_IMAGE_MODEL)
     content: list[dict[str, object]] = [{"type": "text", "text": prompt}]
     if guide is not None:
         content.append(
@@ -332,7 +345,10 @@ def call_openai_edit(prompt: str, input_fidelity: str | None = None) -> tuple[st
     """
     from openai import OpenAI
 
-    model = os.getenv("OPENAI_EDIT_MODEL", os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2"))
+    model = os.getenv(
+        "OPENAI_EDIT_MODEL",
+        os.getenv("OPENAI_IMAGE_MODEL", model_defaults().NATIVE_GPT_IMAGE_MODEL),
+    )
     base = guide_path("edit-base")
     mask = guide_path("edit-mask")
     client = OpenAI()
@@ -379,10 +395,11 @@ def run_arm(
     else:
         used_transport = "openrouter"
         env_key = "OPENROUTER_GPT_MODEL" if config["provider"] == "gpt" else "OPENROUTER_GEMINI_MODEL"
+        defaults = model_defaults()
         default = (
-            "openai/gpt-5.4-image-2"
+            defaults.OPENROUTER_GPT_IMAGE_MODEL
             if config["provider"] == "gpt"
-            else "google/gemini-3-pro-image"
+            else defaults.OPENROUTER_GEMINI_IMAGE_MODEL
         )
         model = os.getenv(env_key, default)
         b64, media_type = call_openrouter(model, prompt, guide, image_size)

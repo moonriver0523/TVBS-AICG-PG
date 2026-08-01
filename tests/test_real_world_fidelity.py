@@ -30,8 +30,9 @@ class DigestStageTests(unittest.TestCase):
                         self.assertIn("REAL-WORLD ACCURACY", prompt)
 
     def test_key_clauses_present(self):
-        # 2026-07-31 使用者裁決後的方向：場景盡量照真實畫、非真實必標「示意圖」、
-        # 人物允許正臉肖像（力求神似、不醜化、不得置入原文沒有的情境）
+        # 2026-07-31 使用者裁決後的方向：場景盡量照真實畫、非真實必標「示意圖」。
+        # 2026-08-01 修訂人物條款：消化端只負責判定「是不是具名真人肖像題」並回報
+        # portrait_subject，畫法改由後端依有無參考照片決定（見 test_portrait_rules）。
         prompt = build_digest_instructions("記者", "standard", "情境示意圖")
         for phrase in (
             "NO UNSOURCED BRANDS",
@@ -39,8 +40,8 @@ class DigestStageTests(unittest.TestCase):
             "as faithfully to its real appearance as your knowledge allows",
             "LABEL WHAT IS NOT REAL",
             "示意圖",
-            "portraits are allowed, including a front-facing likeness",
-            "never caricature",
+            "you do NOT decide how the face is drawn",
+            "portrait_subject",
             "An invented picture presented as real is as serious a defect as an invented number",
         ):
             with self.subTest(phrase=phrase):
@@ -63,7 +64,7 @@ class ImageStageTests(unittest.TestCase):
         prompt = image_prompt()
         for phrase in (
             "not even a small, faint, distant or background one",
-            "a faithful portrait is allowed, including a front-facing likeness",
+            "do NOT draw a recognisable face for a named real person",
             "示意圖",
             "never drop or hide it",
             "SELF-CHECK before finalizing",

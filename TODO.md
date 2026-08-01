@@ -829,3 +829,20 @@ LINE／行動版都是缺口，且是更高階的需求（局部編輯技術上�
       規則 5／`REAL_WORLD_RENDERING_RULES`（app.js 同步）管人物畫面
 - [ ] 進階：「使用者附真實照片」路線與「以圖生圖」待辦合併規劃
       （對不知名人物——地方新聞當事人等——模型記憶沒有樣貌，仍需照片參考）
+
+**進度（2026-08-01，尚未 commit）**：自動查參考照的路線已實作於後端——
+`photo_lookup.py`（Wikimedia／Wikipedia 查圖，免金鑰）＋ `news_prompt` 的
+`PORTRAIT_WITH_REFERENCE_RULES`／`PORTRAIT_NO_REFERENCE_RULES`／`PORTRAIT_MODES`，
+消化端只填 `portrait_subject`、畫法由後端依有無照片決定，未知 mode 一律退回不畫臉。
+
+**只動了後端，沒有動網頁版**——網頁版走 `app.js` 自己組 prompt 直打
+`/api/images/generate` 的另一條路徑，沒有 `portrait_subject` 也沒有查圖通道，
+把這三個常數同步過去只會得到一個永遠注入不了的區塊。網頁版因此停在
+`REAL_WORLD_RENDERING_RULES` 的預設（具名真人不畫臉），在路線裁決前那正是安全值。
+此處是本專案「app.js／news_prompt.py 逐字同步」規則的**明列例外**，前例同
+2026-07-31 的 `resolve_aspect_ratio`（見上文「沒有動網頁版」那段）。
+
+**尚未裁決**：臉要怎麼來仍有 A（GPT 憑知識畫）／C（Gemini＋參考照）／D（一律不畫臉）
+三條路；B（GPT＋參考照）已於 2026-08-01 用 4 張實測蓋棺——附參考圖會讓 OpenAI 切進
+編輯通道、比例掉成 3:2，換模型救不回來。詳見
+`docs/error-cases/2026-08-01-真人肖像與生圖模型清查-分析.md`。

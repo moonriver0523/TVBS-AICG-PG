@@ -128,12 +128,12 @@ class ImageBackendRoutingTests(unittest.TestCase):
     def _run(self, provider):
         return generate_image(ImageGenerateRequest(prompt="p", provider=provider))
 
-    def test_openrouter_backend_maps_gpt_to_5_4_image_2(self):
+    def test_openrouter_backend_maps_gpt_to_gpt_image_2(self):
         os.environ["IMAGE_BACKEND"] = "openrouter"
         os.environ["OPENROUTER_API_KEY"] = "test-or-key"
         os.environ.pop("OPENROUTER_GPT_MODEL", None)
         self._run("gpt")
-        self.assertEqual(self.calls.get("openrouter"), "openai/gpt-5.4-image-2")
+        self.assertEqual(self.calls.get("openrouter"), "openai/gpt-image-2")
 
     def test_openrouter_backend_maps_gemini_to_pro(self):
         os.environ["IMAGE_BACKEND"] = "openrouter"

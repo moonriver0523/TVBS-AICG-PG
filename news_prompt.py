@@ -10,7 +10,7 @@ LINE Bot 是純後端流程、沒有瀏覽器，因此在這裡有一份對應�
 
 # 供外部整合（如 /api/news-image/generate 的呼叫端）追蹤這批規則的版本；
 # 這裡或對應的 app.js 常數只要有實質修改，就手動遞增這個字串。
-PROMPT_VERSION = "v3-2026-07-31"
+PROMPT_VERSION = "v4-2026-08-01"
 
 # 地圖類型的標籤字面值。定義在本模組（而非 main.py）是因為匯入方向是
 # main → news_prompt：build_prompt() 要用它決定是否注入地圖規則，
@@ -156,7 +156,7 @@ REAL-WORLD ACCURACY (CRITICAL)
 - Real, verifiable places and objects (skylines, specific buildings, highways and interchanges, airports, facilities, and specific models of aircraft, ship, vehicle or equipment) must look like the real thing: correct shape, layout, proportions and distinguishing features as far as they are known. Faithful, realistic rendering is welcome — do not distort reality for style.
 - Do not fabricate identifying detail you do not know and present it as real. If the rendering is a generic stand-in or a reconstruction rather than the real thing, the 示意圖 label supplied in VARIABLE FIELDS must be clearly visible — never drop or hide it.
 - NO UNSOURCED BRANDS: every sign, storefront, banner, package, product body, vehicle livery, screen, badge and building facade must be blank or carry a generic non-readable mark. Do NOT draw any real company logo, wordmark, trademark, ticker symbol, exchange name or brand text — not even a small, faint, distant or background one. A brand name may appear only if that exact text is supplied in VARIABLE FIELDS, and then only as plain typeset text, never as a reproduced logotype.
-- NAMED REAL PEOPLE: a faithful portrait is allowed, including a front-facing likeness. Make the face resemble the real person as closely as you can; never caricature or distort, and never show the person in a scene, action or context that STRUCTURE does not describe.
+- NAMED REAL PEOPLE: how to depict a named real person is governed by the NAMED REAL PERSON block below whenever one is present — follow that block, not your own judgement. If no such block is present, do NOT draw a recognisable face for a named real person: use a back view or a plain silhouette and keep the 示意圖 label visible. Never show the person in a scene, action or context that STRUCTURE does not describe.
 - SELF-CHECK before finalizing: look at every surface in the image for text or marks you added yourself. If any sign, screen, package or vehicle carries readable branding, blank it."""
 
 TW_DIRECTIONAL_COLOR_RULES = """==================================================
@@ -166,6 +166,44 @@ DIRECTIONAL COLOUR CONVENTION (TAIWAN)
 - Apply the same pairing to every arrow, triangle, bar, line, highlight block and emphasised figure in the graphic, including when one graphic shows a riser and a faller side by side.
 - An up arrow means up and a down arrow means down: match every arrow to the direction stated in VARIABLE FIELDS.
 - Do not use red and green decoratively for unrelated purposes in a graphic that shows a rise or a fall."""
+
+# 真人肖像的處理方式不交給模型判斷：後端查得到參考照片就走插畫化肖像，
+# 查不到就退回不生成臉孔。兩種情況各有一個區塊，由 build_prompt 依
+# portrait_mode 注入；兩者都沒注入時，REAL_WORLD_RENDERING_RULES 的預設
+# 條款仍然擋著（不畫臉），所以漏傳參數不會變成「放行寫實肖像」。
+#
+# 措辭沿用 2026-08-01 實驗的 v1：加強版（v2，明列筆觸／禁照片特徵）實測筆觸
+# 過度刻意、顯得造作，v1 已足以讓觀眾辨識為插畫，使用者拍板採 v1。
+#
+# ⚠️ 這三個常數**刻意不同步到 app.js**，是本檔頂端「兩份來源」規則的明列例外。
+# 網頁版自己組 prompt 直打 /api/images/generate，沒有消化端填的 portrait_subject、
+# 也沒有後端的參考照查圖，同步過去只會得到一個永遠注入不了的區塊。網頁版因此
+# 停在 REAL_WORLD_RENDERING_RULES 的預設（不畫臉），那也是尚未裁決前的安全值。
+# 記載於 TODO.md「真實人物圖須參考真實樣貌」一節，前例同 2026-07-31 的
+# resolve_aspect_ratio（同樣只動後端、沒動網頁版）。
+PORTRAIT_WITH_REFERENCE_RULES = """==================================================
+NAMED REAL PERSON — PORTRAIT TREATMENT (CRITICAL)
+==================================================
+- A reference photograph of the named real person is attached to this request. Base the portrait on that photograph.
+- Render the portrait as a hand-painted editorial portrait illustration rather than a photograph, while preserving the recognisable likeness of the reference photograph: the same facial structure, hairstyle, glasses and build, so that viewers identify the same individual.
+- The illustration must be readable as an illustration. Do not aim for a photographic reproduction of the reference image.
+- Take only the person's likeness from the reference photograph. Pose, attire, framing and surroundings follow STRUCTURE, not the photograph's own background or occasion.
+- The 示意圖 label supplied in VARIABLE FIELDS sits beside the portrait and must stay clearly visible: this is an illustrated depiction, not a photograph of the person.
+- Never place the person in a scene, action or context that STRUCTURE does not describe."""
+
+PORTRAIT_NO_REFERENCE_RULES = """==================================================
+NAMED REAL PERSON — NO REFERENCE AVAILABLE (CRITICAL)
+==================================================
+- No reference photograph is available for the named real person, so you MUST NOT draw their face.
+- Depict the figure as a back view or a plain silhouette wearing the attire STRUCTURE describes. Never invent, guess or approximate the person's facial features, and never substitute a generic face in their place.
+- The 示意圖 label supplied in VARIABLE FIELDS sits beside the figure and must stay clearly visible.
+- Never place the person in a scene, action or context that STRUCTURE does not describe."""
+
+PORTRAIT_MODES = {
+    "reference": PORTRAIT_WITH_REFERENCE_RULES,
+    "no_reference": PORTRAIT_NO_REFERENCE_RULES,
+    "none": "",
+}
 
 MAP_ACCURACY_IMAGE_RULES = """==================================================
 MAP ACCURACY RULES (CRITICAL)
@@ -189,6 +227,7 @@ def build_prompt(
     variable: str,
     safe_frame: bool = False,
     aspect_ratio: str = "16:9",
+    portrait_mode: str = "none",
 ) -> str:
     """對應 app.js 的 buildPrompt()。role: 記者／編輯，engine: gemini／gpt。
 
@@ -207,6 +246,11 @@ def build_prompt(
     extra_blocks = [REAL_WORLD_RENDERING_RULES, TW_DIRECTIONAL_COLOR_RULES]
     if type_label == MAP_TYPE_LABEL:
         extra_blocks.append(MAP_ACCURACY_IMAGE_RULES)
+    # 真人肖像區塊：未知的 portrait_mode 一律當成沒有區塊，讓預設的
+    # 「不畫臉」條款接手，而不是靜靜放行。
+    portrait_block = PORTRAIT_MODES.get(portrait_mode, "")
+    if portrait_block:
+        extra_blocks.append(portrait_block)
     extras = "\n\n".join(extra_blocks)
 
     body = f"""==================================================
