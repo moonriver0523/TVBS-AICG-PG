@@ -5,6 +5,8 @@ aspect_ratio 時 OpenRouter 靜靜忽略、不報錯——安全框要 21:9 卻�
 這組測試釘住兩件事：兩條路徑是同一個模型、做不到的比例一定當場失敗。
 """
 
+import base64
+import io
 import os
 import sys
 import unittest
@@ -16,7 +18,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import main  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
-from main import ImageGenerateRequest  # noqa: E402
+from main import ImageGenerateRequest, ImageGenerateResponse  # noqa: E402
+from PIL import Image  # noqa: E402
+
+
+def image_response(size: tuple[int, int], model: str = "openai/gpt-image-2") -> ImageGenerateResponse:
+    """做一張指定尺寸的假成圖，用來驗「量成圖比例」這道關卡。"""
+    buffer = io.BytesIO()
+    Image.new("RGB", size, (10, 20, 30)).save(buffer, format="PNG")
+    return ImageGenerateResponse(
+        image_data_base64=base64.b64encode(buffer.getvalue()).decode("ascii"),
+        mime_type="image/png",
+        model=model,
+    )
 
 
 class ModelDefaultsTests(unittest.TestCase):
@@ -126,6 +140,57 @@ class NativeGptSizeTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             main.generate_gpt_image(ImageGenerateRequest(prompt="p", aspect_ratio="5:4"))
         self.assertEqual(ctx.exception.status_code, 400)
+
+
+class OutputAspectRatioTests(unittest.TestCase):
+    """量成圖比例：擋「宣告支援卻回別的尺寸」這種間歇性降級（2026-08-01 實際發生過）。"""
+
+    def test_matching_ratio_passes(self):
+        main.verify_output_aspect_ratio(image_response((1792, 768)), "21:9")
+
+    def test_small_deviation_is_tolerated(self):
+        """模型不保證小數點精確，1808x768=2.354 只差 0.9%，不該擋。"""
+        main.verify_output_aspect_ratio(image_response((1808, 768)), "21:9")
+
+    def test_three_by_two_when_twentyone_by_nine_was_requested_fails(self):
+        """8/1 實際拿回的就是這個尺寸，當時沒有任何機制發現。"""
+        with self.assertRaises(HTTPException) as ctx:
+            main.verify_output_aspect_ratio(image_response((1536, 1024)), "21:9")
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertIn("1536x1024", ctx.exception.detail)
+
+    def test_auto_has_no_target_to_verify(self):
+        main.verify_output_aspect_ratio(image_response((1536, 1024)), "auto")
+
+    def test_parse_aspect_ratio_handles_bad_input(self):
+        self.assertIsNone(main.parse_aspect_ratio("auto"))
+        self.assertIsNone(main.parse_aspect_ratio(""))
+        self.assertIsNone(main.parse_aspect_ratio("21:0"))
+        self.assertAlmostEqual(main.parse_aspect_ratio("21:9"), 21 / 9)
+
+    def test_unreadable_image_fails_instead_of_passing_silently(self):
+        broken = ImageGenerateResponse(
+            image_data_base64="bm90LWFuLWltYWdl", mime_type="image/png", model="m"
+        )
+        with self.assertRaises(HTTPException):
+            main.verify_output_aspect_ratio(broken, "21:9")
+
+    def test_check_runs_before_framing_and_covers_every_provider(self):
+        """置框會把畫布改成 1920x1080，驗證必須在那之前；且不分 provider 都要驗。"""
+        for provider in ("gpt", "gemini"):
+            with self.subTest(provider=provider):
+                with patch.object(main, "generate_image_raw", return_value=image_response((1536, 1024))):
+                    with patch.object(main, "frame_image_response") as framed:
+                        with self.assertRaises(HTTPException):
+                            main.generate_image(
+                                ImageGenerateRequest(
+                                    prompt="p",
+                                    provider=provider,
+                                    aspect_ratio="21:9",
+                                    safe_frame=True,
+                                )
+                            )
+                        framed.assert_not_called()
 
 
 if __name__ == "__main__":

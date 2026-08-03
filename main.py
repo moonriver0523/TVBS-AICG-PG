@@ -1,6 +1,7 @@
 import base64
 import contextvars
 import hmac
+import io
 import json
 import os
 import re
@@ -22,6 +23,7 @@ from openai import (
     OpenAI,
     RateLimitError,
 )
+from PIL import Image
 from pydantic import BaseModel, Field
 
 import photo_lookup
@@ -780,9 +782,72 @@ def generate_image(req: ImageGenerateRequest):
     req.safe_frame=True 時，生成後再由 safe_frame 置入 TVBS 安全框。
     """
     result = generate_image_raw(req)
+    verify_output_aspect_ratio(result, req.aspect_ratio)
     if req.safe_frame:
         result = frame_image_response(result)
     return result
+
+
+# 生成端不保證給到小數點精確的比例（21:9 可能回 1808x768＝2.354），所以要留容差；
+# 但真正要抓的降級差很遠（3:2＝1.50 vs 21:9＝2.33，差 36%），5% 分得非常開。
+ASPECT_RATIO_TOLERANCE = 0.05
+
+
+def parse_aspect_ratio(aspect_ratio: str) -> float | None:
+    """'21:9' → 2.33。不是 W:H 形式（例如 auto）就回 None，代表沒有可驗的目標。"""
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)\s*", aspect_ratio or "")
+    if not match:
+        return None
+    width, height = float(match.group(1)), float(match.group(2))
+    if width <= 0 or height <= 0:
+        return None
+    return width / height
+
+
+def verify_output_aspect_ratio(result: ImageGenerateResponse, aspect_ratio: str) -> None:
+    """成圖比例與要求不符就當場失敗，不讓它默默播出去。
+
+    存在理由：`assert_aspect_ratio_supported` 只擋得住「模型宣告不支援」，擋不住
+    「宣告支援卻回別的尺寸」。2026-08-01 附參考圖的兩張 21:9 回來是 3:2，模型與
+    參數都合法；2026-08-03 同樣條件（同一人、同一張參考照、同一模型、同一份 prompt）
+    又完全正常，三次全對。這種**間歇性**降級只有量成圖才抓得到。
+    整條安全框流程都建立在「要到的比例真的拿得到」上，悄悄降級的圖會直接上鏡。
+
+    刻意不自動重試：生圖是付費的，靜靜多花一次錢不該由這裡決定。失敗訊息會明講
+    可以重試。
+    """
+    expected = parse_aspect_ratio(aspect_ratio)
+    if expected is None:
+        return
+
+    try:
+        with Image.open(io.BytesIO(base64.b64decode(result.image_data_base64))) as image:
+            width, height = image.size
+    except Exception as exc:  # noqa: BLE001 — 讀不出尺寸就無從驗證，必須讓呼叫端知道
+        raise HTTPException(
+            status_code=502, detail=f"成圖無法解析，無法驗證比例：{type(exc).__name__}: {exc}"
+        ) from exc
+
+    if height <= 0:
+        raise HTTPException(status_code=502, detail="成圖高度為 0，無法驗證比例")
+
+    actual = width / height
+    if abs(actual - expected) / expected <= ASPECT_RATIO_TOLERANCE:
+        return
+
+    print(
+        f"[aspect] 比例不符：要求 {aspect_ratio} 實得 {width}x{height} "
+        f"({actual:.2f}:1) model={result.model}",
+        flush=True,
+    )
+    raise HTTPException(
+        status_code=502,
+        detail=(
+            f"生成端回傳的比例不符：要求 {aspect_ratio}（{expected:.2f}:1），"
+            f"實得 {width}x{height}（{actual:.2f}:1），模型 {result.model}。"
+            "這種降級是間歇性的，重試一次通常就正常；若持續發生請換模型或引擎。"
+        ),
+    )
 
 
 def _split_data_url(data_url: str) -> tuple[str, str, str]:

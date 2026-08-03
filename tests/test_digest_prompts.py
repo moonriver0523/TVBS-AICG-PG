@@ -94,21 +94,38 @@ class DigestPromptTests(unittest.TestCase):
 class ImageBackendRoutingTests(unittest.TestCase):
     """驗證 backend 開關與模型對應，不呼叫任何付費 API。"""
 
+    @staticmethod
+    def fake_image(model):
+        """假成圖要是真的能解析的 16:9 圖——generate_image 現在會量成圖比例，
+        隨手塞 'x' 會被那道關卡以 502 擋下，測不到路由本身。"""
+        import base64
+        import io
+
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        Image.new("RGB", (1280, 720), (0, 0, 0)).save(buffer, format="PNG")
+        return ImageGenerateResponse(
+            image_data_base64=base64.b64encode(buffer.getvalue()).decode("ascii"),
+            mime_type="image/png",
+            model=model,
+        )
+
     def setUp(self):
         # 攔截真正的 OpenRouter / 原生呼叫，只記錄被指派的模型
         self.calls = {}
 
         def fake_openrouter(model, req):
             self.calls["openrouter"] = model
-            return ImageGenerateResponse(image_data_base64="x", mime_type="image/png", model=model)
+            return self.fake_image(model)
 
         def fake_gpt(req):
             self.calls["native"] = "gpt"
-            return ImageGenerateResponse(image_data_base64="x", mime_type="image/png", model="native-gpt")
+            return self.fake_image("native-gpt")
 
         def fake_gemini(req):
             self.calls["native"] = "gemini"
-            return ImageGenerateResponse(image_data_base64="x", mime_type="image/png", model="native-gemini")
+            return self.fake_image("native-gemini")
 
         self._orig = (main.generate_via_openrouter, main.generate_gpt_image, main.generate_gemini_image)
         main.generate_via_openrouter = fake_openrouter
