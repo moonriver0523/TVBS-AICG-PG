@@ -1,0 +1,281 @@
+"""產生給主管看的單頁進度報告（自帶樣式與內嵌圖片的 HTML）。
+
+為什麼做成產生器而不是手寫 HTML：圖片要 base64 內嵌才能離線開啟與轉寄，
+手寫等於把幾百 KB 的亂碼貼進原始碼，之後換一張圖就得重貼。這支腳本負責
+壓縮、內嵌與組版，換圖只要換路徑再跑一次。
+
+用法：
+    python scripts/build_status_report.py
+    python scripts/build_status_report.py --line-shots D:/Downloads   # 指定截圖來源
+
+LINE 對話截圖需人工提供（LINE 桌面版是原生程式，無法自動截圖）。
+放在來源資料夾、檔名含 "貼稿" 與 "收圖" 即可被認出；找不到就留佔位框，
+不會拿假畫面充數。
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import html
+import io
+from datetime import date
+from pathlib import Path
+
+from PIL import Image
+
+REPO = Path(__file__).resolve().parent.parent
+OUT = REPO / "docs" / "aicg-進度報告.html"
+GENERATED = REPO / "static" / "generated"
+
+EMBED_WIDTH = 1100
+JPEG_QUALITY = 82
+
+
+def embed(path: Path, max_width: int = EMBED_WIDTH) -> str | None:
+    """縮圖後轉 data URI；檔案不存在回 None（呼叫端要能接受沒有圖）。"""
+    if not path.exists():
+        return None
+    with Image.open(path) as image:
+        image = image.convert("RGB")
+        if image.width > max_width:
+            height = round(image.height * max_width / image.width)
+            image = image.resize((max_width, height), Image.LANCZOS)
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=JPEG_QUALITY, optimize=True)
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def find_line_shot(folder: Path, keyword: str) -> Path | None:
+    if not folder.exists():
+        return None
+    for candidate in sorted(folder.glob("*")):
+        if candidate.suffix.lower() in {".png", ".jpg", ".jpeg"} and keyword in candidate.name:
+            return candidate
+    return None
+
+
+def figure(data_uri: str | None, caption: str, placeholder: str, *, phone: bool = False) -> str:
+    cls = "shot phone" if phone else "shot"
+    if data_uri is None:
+        return (
+            f'<figure class="{cls}"><div class="placeholder">{html.escape(placeholder)}</div>'
+            f"<figcaption>{html.escape(caption)}</figcaption></figure>"
+        )
+    return (
+        f'<figure class="{cls}"><img alt="{html.escape(caption)}" src="{data_uri}">'
+        f"<figcaption>{html.escape(caption)}</figcaption></figure>"
+    )
+
+
+CSS = """
+:root { --ink:#1c2431; --muted:#5b6676; --line:#dde3ea; --accent:#0b5cab; --warn:#b45309; --ok:#1a7f4b; --bg:#fff; }
+* { box-sizing:border-box; }
+body { margin:0; padding:0; background:#eef1f5; color:var(--ink);
+  font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif; line-height:1.75; }
+.page { max-width:1000px; margin:0 auto; background:var(--bg); padding:56px 60px 72px; }
+h1 { font-size:30px; margin:0 0 6px; letter-spacing:.5px; }
+.sub { color:var(--muted); margin:0 0 28px; font-size:15px; }
+h2 { font-size:22px; margin:44px 0 14px; padding-bottom:8px; border-bottom:3px solid var(--accent); }
+h3 { font-size:17px; margin:26px 0 8px; }
+p, li { font-size:15px; }
+.lead { background:#f4f8fd; border-left:4px solid var(--accent); padding:16px 20px; margin:0 0 28px; }
+.lead strong { font-size:16px; }
+table { width:100%; border-collapse:collapse; margin:14px 0 8px; font-size:14.5px; }
+th, td { border:1px solid var(--line); padding:9px 12px; text-align:left; vertical-align:top; }
+th { background:#f5f7fa; font-weight:600; }
+.tag { display:inline-block; padding:1px 9px; border-radius:11px; font-size:12.5px; white-space:nowrap; }
+.t-ok { background:#e4f4ec; color:var(--ok); }
+.t-partial { background:#fdf1de; color:var(--warn); }
+.t-none { background:#eef0f3; color:var(--muted); }
+.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(228px,1fr)); gap:14px; margin:16px 0; }
+.card { border:1px solid var(--line); border-radius:9px; padding:14px 16px; }
+.card b { display:block; margin-bottom:4px; }
+.card span { color:var(--muted); font-size:13.5px; }
+.steps { counter-reset:s; list-style:none; padding:0; margin:16px 0; }
+.steps li { counter-increment:s; position:relative; padding:0 0 0 44px; margin-bottom:14px; }
+.steps li::before { content:counter(s); position:absolute; left:0; top:1px; width:29px; height:29px;
+  border-radius:50%; background:var(--accent); color:#fff; text-align:center; line-height:29px; font-size:14px; }
+figure.shot { margin:18px 0; }
+figure.shot img { width:100%; border:1px solid var(--line); border-radius:7px; display:block; }
+figure.shot.phone { max-width:330px; display:inline-block; margin:18px 22px 18px 0; vertical-align:top; }
+figcaption { color:var(--muted); font-size:13px; margin-top:6px; }
+.placeholder { border:2px dashed #c3ccd8; border-radius:7px; padding:52px 18px; text-align:center;
+  color:var(--muted); font-size:14px; background:#fafbfc; }
+.note { background:#fffaf0; border:1px solid #f0dfc0; border-radius:7px; padding:13px 16px; font-size:14px; margin:16px 0; }
+.foot { margin-top:44px; padding-top:16px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+@media print { body { background:#fff; } .page { padding:0; max-width:none; } }
+@media (max-width:720px) { .page { padding:28px 20px 44px; } figure.shot.phone { max-width:100%; margin-right:0; } }
+"""
+
+
+def build(line_shots_dir: Path) -> str:
+    today = date.today().isoformat()
+
+    trump = embed(GENERATED / "20260803-095240-7acc8b.png")
+    ferry = embed(GENERATED / "20260803-100808-96f38c.png")
+    shot_input = embed(find_line_shot(line_shots_dir, "貼稿") or Path("nonexistent"), 700)
+    shot_output = embed(find_line_shot(line_shots_dir, "收圖") or Path("nonexistent"), 700)
+
+    samples = "".join(
+        [
+            figure(ferry, "情境示意圖：AI 自行判斷圖表類型，標題與三個重點皆由新聞原文而來", "（成品圖缺漏）"),
+            figure(trump, "真人肖像：自動查得參考照片後繪製，並標示「示意圖」", "（成品圖缺漏）"),
+        ]
+    )
+
+    shots = figure(
+        shot_input, "步驟二：貼上新聞文字", "待補：LINE 對話截圖（貼稿）", phone=True
+    ) + figure(shot_output, "步驟四：收到成品圖", "待補：LINE 對話截圖（收圖）", phone=True)
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AICG 新聞圖卡生成器 — 專案進度報告</title>
+<style>{CSS}</style>
+</head>
+<body>
+<div class="page">
+
+<h1>AICG 新聞圖卡生成器 — 專案進度報告</h1>
+<p class="sub">TVBS 國際新聞中心｜報告日期 {today}</p>
+
+<div class="lead">
+<strong>一句話：工具已經可以做出直接上鏡品質的新聞圖卡，並且做出了手機版（LINE）讓編輯在任何地方都能出圖；
+但還停在本機測試階段，尚未部署成多人可用的服務，效益數字也還沒有正式量測。</strong>
+</div>
+
+<h2>一、專案進度</h2>
+
+<h3>目前能做到什麼</h3>
+<p>編輯把一段新聞文字交給系統，系統自動整理成圖卡文案、選定版型並生成完整圖卡，
+四周留白符合電視播出安全框，可直接送進鏡面。目前有兩種操作方式：<strong>網頁版</strong>（功能完整，可逐項微調）
+與 <strong>LINE 版</strong>（貼一段文字就出圖，適合突發與外出時使用）。</p>
+
+<h3>已經解決的原始痛點</h3>
+<div class="cards">
+  <div class="card"><b>播出安全區</b><span>四邊留白改由程式用數學置框，不再靠 AI 自律。實測四邊全部合格，且每次結果一致。</span></div>
+  <div class="card"><b>繁體中文不亂碼</b><span>標題與內文由模型直接寫進圖裡且用字正確，不再出現亂碼或簡體字。</span></div>
+  <div class="card"><b>內容不被亂改</b><span>已加規則禁止 AI 自行增補新聞沒說的內容，版面留白也不得拿捏造的資訊去填滿。</span></div>
+  <div class="card"><b>真人肖像有依據</b><span>遇到具名真人，系統自動找出可用的參考照片再繪製；查不到就一律不畫臉，改用背影並標示示意圖。</span></div>
+</div>
+
+<h3>對照原提案 KPI</h3>
+<table>
+<tr><th style="width:26%">指標</th><th style="width:26%">提案目標</th><th style="width:16%">目前狀態</th><th>說明</th></tr>
+<tr><td>單張製作時間</td><td>20–30 分鐘 → 約 10 分鐘</td><td><span class="tag t-partial">未正式量測</span></td>
+    <td>單次生圖實測約 30–120 秒，但「從拿到新聞到定稿」的完整時間還沒有實際計時過，不宜對外宣稱已達標。</td></tr>
+<tr><td>單日產能</td><td>8 張 → 10 張以上</td><td><span class="tag t-none">未量測</span></td>
+    <td>要等實際上線使用才有數字。</td></tr>
+<tr><td>CG 錯誤投訴</td><td>每季不超過 1 件</td><td><span class="tag t-none">未量測</span></td>
+    <td>尚未正式播出使用。</td></tr>
+<tr><td>一擊即中率</td><td>提高、減少重生</td><td><span class="tag t-partial">部分改善</span></td>
+    <td>安全區與中文亂碼這兩個最常見的重生原因已消除；整體重生次數仍未統計。</td></tr>
+<tr><td>視覺風格一致</td><td>統一版型與規範</td><td><span class="tag t-ok">已達成</span></td>
+    <td>所有人共用同一套版型、配色與安全區規則，不再各自摸索。</td></tr>
+<tr><td>降低人工後製</td><td>減少 Photoshop 加工</td><td><span class="tag t-partial">部分改善</span></td>
+    <td>安全框與文字正確度改善後，多數情況不需再修；尚未統計比例。</td></tr>
+</table>
+<div class="note"><strong>關於數字的說明：</strong>上表刻意把「還沒量過」與「已達成」分開標示。
+要取得可信的效益數字，需要在實際編務流程中試用一段時間並記錄每張圖的耗時與重生次數，
+這也是下一階段建議優先做的事。</div>
+
+<h3>還沒解決的部分</h3>
+<ul>
+<li>地圖、數字、日期與資料來源的<strong>自動查核</strong>仍需人工把關</li>
+<li>滿意的畫面無法<strong>只改局部</strong>，目前仍是整張重新生成</li>
+<li>尚未部署成<strong>多人可用的正式服務</strong>（見第三節）</li>
+<li>真人肖像會連參考照片的<strong>姿勢一起複製</strong>，用在特定語境（如訃聞）需人工確認</li>
+</ul>
+
+<h3>實際成品</h3>
+<p>以下兩張都是系統實際輸出、未經任何人工修圖的成品。</p>
+{samples}
+
+<h2>二、LINE 版操作流程</h2>
+<p>LINE 版的用意是讓編輯不必開電腦：在手機上貼一段新聞文字就能拿到圖卡，
+適合突發新聞或外出時使用。內容規則與網頁版完全相同。</p>
+
+<ol class="steps">
+<li><strong>加入官方帳號</strong>——掃 QR code 加好友，只需做一次。</li>
+<li><strong>貼上新聞文字</strong>——直接把稿子或素材貼進對話框送出，不需要下任何指令。</li>
+<li><strong>系統回覆「收到」</strong>——接著在背景整理文案、選版型並生成圖卡。</li>
+<li><strong>收到成品圖</strong>——約 30–120 秒後回傳，可直接下載使用。</li>
+</ol>
+
+{shots}
+
+<h3>目前的使用限制</h3>
+<table>
+<tr><th style="width:34%">限制</th><th>說明</th></tr>
+<tr><td>一次一則</td><td>沒有排隊機制，多人同時使用會依序處理、等待變長。</td></tr>
+<tr><td>等待 30–120 秒</td><td>生圖本身需要時間，屬於正常範圍。</td></tr>
+<tr><td>角色固定為「記者」</td><td>圖表類型由 AI 自動判斷，尚未開放在 LINE 上切換。</td></tr>
+<tr><td>網址會變動</td><td>目前是本機測試環境，每次重新啟動連線網址就會改變，需要重新設定一次。</td></tr>
+<tr><td>依賴電腦開機</td><td>服務跑在本機，電腦關機或斷網就無法使用——這是目前最大的實用性阻礙。</td></tr>
+<tr><td>圖片保留 24 小時</td><td>逾時自動清除，需要留存請即時下載。</td></tr>
+</table>
+
+<h2>三、未來拓展</h2>
+
+<table>
+<tr><th style="width:22%">項目</th><th style="width:34%">要解決什麼</th><th style="width:18%">額外成本</th><th>初估時程</th></tr>
+<tr><td><strong>正式部署</strong></td>
+    <td>不再依賴個人電腦開機，網址固定，5–15 人可同時內測使用。</td>
+    <td>雲端免費方案可先行，未來視用量而定</td><td>數天</td></tr>
+<tr><td><strong>混合版型</strong></td>
+    <td>AI 只生成背景畫面，所有中文、數字與資料來源改由程式繪製，從根本消除錯字與數字錯誤。技術原型已完成並驗證通過。</td>
+    <td>無額外費用（同樣的生圖次數）</td><td>數週</td></tr>
+<tr><td><strong>局部修訂</strong></td>
+    <td>滿意的畫面只改其中一塊，不必整張重生，可直接減少生成次數與等待時間。</td>
+    <td>無額外費用</td><td>待評估</td></tr>
+<tr><td><strong>跨組別延伸</strong></td>
+    <td>從編輯台擴及記者、網路新聞與社群，各自需要不同尺寸與風格的版型。</td>
+    <td>視版型數量而定</td><td>視推廣節奏</td></tr>
+</table>
+<p style="color:#5b6676;font-size:13.5px;margin-top:2px;">時程為初步估計，尚未做正式工時評估。</p>
+
+<h3>需要主管決定的事項</h3>
+<div class="note">
+<strong>正式部署前必須先確認：公司是否允許把 API 金鑰與 LINE 權杖放到外部雲端平台。</strong>
+本專案含有台內的 prompt 資產（程式碼倉庫已轉為私有）。
+另一個專案已訂下「測試期用雲端、正式期搬回公司內網」的原則，本專案建議沿用，但需要主管確認。
+</div>
+
+<h3>建議的下一步</h3>
+<ol>
+<li>先在小範圍（核心編輯 3–5 人）實際試用兩週，同時記錄每張圖的耗時與重生次數，把 KPI 的空白補上</li>
+<li>取得金鑰放置的授權後完成部署，解除「依賴電腦開機」這個最大阻礙</li>
+<li>再依試用回饋決定混合版型與局部修訂的優先順序</li>
+</ol>
+
+<div class="foot">
+資料來源：專案原始提案摘要、LINE 版設定文件、混合版型提案，以及實際生成紀錄與驗證紀錄。<br>
+本報告由 <code>scripts/build_status_report.py</code> 產生，更新內容或替換圖片後重新執行即可。
+</div>
+
+</div>
+</body>
+</html>
+"""
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--line-shots",
+        default="D:/Downloads",
+        help="LINE 對話截圖所在資料夾（檔名含「貼稿」「收圖」）",
+    )
+    args = parser.parse_args()
+
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(build(Path(args.line_shots)), encoding="utf-8")
+    size_kb = OUT.stat().st_size / 1024
+    print(f"已產生 {OUT}（{size_kb:.0f} KB）")
+
+
+if __name__ == "__main__":
+    main()
