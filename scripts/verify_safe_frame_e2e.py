@@ -55,12 +55,16 @@ def prepare_environment(provider: str, transport: str) -> list[str]:
         os.environ["IMAGE_BACKEND"] = "native"
         os.environ["OPENROUTER_API_KEY"] = ""
         notes.append("傳輸層：原生（生圖與消化都不經 OpenRouter）")
+        # 預設值只認 main.py 一個來源，寫死第二份會在 main 改了之後印出錯的模型名
+        # （2026-08-01 清查發現腳本與 main 已經歪掉一次）。
+        import main  # noqa: PLC0415  （延後匯入：main 在 import 期就會建 OpenAI client）
+
         notes.append(
             "生圖模型："
             + (
-                os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2")
+                os.getenv("OPENAI_IMAGE_MODEL", main.NATIVE_GPT_IMAGE_MODEL)
                 if provider == "gpt"
-                else os.getenv("GEMINI_IMAGE_MODEL", "gemini-3-pro-image")
+                else os.getenv("GEMINI_IMAGE_MODEL", main.NATIVE_GEMINI_IMAGE_MODEL)
             )
         )
     else:

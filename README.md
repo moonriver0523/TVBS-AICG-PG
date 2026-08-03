@@ -52,17 +52,24 @@ AI 自動消化有兩個獨立設定：
 
 ```
 GEMINI_API_KEY=your_api_key
-# 可選：預設為 Nano Banana Pro
+# 可選：只在 IMAGE_BACKEND=native 時生效，預設為 Nano Banana Pro
 GEMINI_IMAGE_MODEL=gemini-3-pro-image
 
 # GPT 圖片沿用上方 OPENAI_API_KEY
-# 可選：預設為 gpt-image-2
+# 可選：只在 IMAGE_BACKEND=native 時生效，預設為 gpt-image-2
 OPENAI_IMAGE_MODEL=gpt-image-2
 # 可選：low / medium / high / auto，預設 medium
 OPENAI_IMAGE_QUALITY=medium
 ```
 
-Gemini 使用原生 `1K` 設定；GPT 使用符合模型限制的 16:9 最小尺寸 1280×720 PNG。金鑰僅由 `main.py` 讀取，絕不放入前端程式碼。
+**預設走 OpenRouter**（`IMAGE_BACKEND=openrouter`，設 `native` 可切回原生直連），模型分別是
+`openai/gpt-image-2` 與 `google/gemini-3-pro-image`，以 `OPENROUTER_GPT_MODEL`／
+`OPENROUTER_GEMINI_MODEL` 覆寫。兩條路徑刻意用同一個模型，切換傳輸層不會連模型一起換掉。
+
+Gemini 使用原生 `1K` 設定；GPT 依要求的比例換算尺寸（16:9→1280×720、21:9→1680×720）輸出 PNG。
+模型做不到要求的比例時會直接回 400 而不是默默給你別的尺寸——`openai/gpt-5.4-image-2` 之類
+沒有 `aspect_ratio` 參數的模型即屬此類，確定不在意尺寸再設 `ALLOW_UNSUPPORTED_ASPECT_RATIO=1`。
+金鑰僅由 `main.py` 讀取，絕不放入前端程式碼。
 
 ## 目前版本
 

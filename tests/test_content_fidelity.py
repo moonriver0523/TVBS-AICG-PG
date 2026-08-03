@@ -138,7 +138,7 @@ class DualSourceParityTests(unittest.TestCase):
 
     # 已退役的版本字串：每次實質改動 prompt 規則時把舊值加進來再 bump，
     # 讓「忘記 bump」在測試就會炸，而不是停在上一版靜默通過。
-    RETIRED_PROMPT_VERSIONS = {"v1-2026-07-29", "v2-2026-07-30"}
+    RETIRED_PROMPT_VERSIONS = {"v1-2026-07-29", "v2-2026-07-30", "v3-2026-07-31"}
 
     def test_prompt_version_was_bumped(self):
         """外部整合方（WorkCord）靠 PROMPT_VERSION 追規則版本，實質改動要遞增。"""

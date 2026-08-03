@@ -161,10 +161,14 @@ AI 消化有兩個獨立維度：
 
 前端確認最終 Prompt 後，可透過 `/api/images/generate` 使用 Gemini 或 GPT 生成圖片。
 
-- Gemini 預設模型：`gemini-3-pro-image`
+- 傳輸層預設 `IMAGE_BACKEND=openrouter`（設 `native` 切回原生直連）
+- Gemini 預設模型：`google/gemini-3-pro-image`（原生那條為 `gemini-3-pro-image`，同一個模型）
 - Gemini 圖片尺寸：原生 `1K`
-- GPT 預設模型：`gpt-image-2`
-- GPT 圖片尺寸：`1280×720` PNG（符合模型限制的 16:9 最小尺寸）
+- GPT 預設模型：`openai/gpt-image-2`（原生那條為 `gpt-image-2`，同一個模型）
+- GPT 圖片尺寸：依 `aspect_ratio` 換算（16:9→`1280×720`、21:9→`1680×720`）PNG
+- **模型做不到要求的 `aspect_ratio` 一律回 400**，不默默改尺寸；例外要用
+  `ALLOW_UNSUPPORTED_ASPECT_RATIO=1` 明示（2026-08-01 清查後加，見
+  `docs/error-cases/2026-08-01-真人肖像與生圖模型清查-分析.md`）
 - OpenAI 與 Gemini 金鑰都只由後端讀取
 - 前端可預覽並下載生成圖片
 

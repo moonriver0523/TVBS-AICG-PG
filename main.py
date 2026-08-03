@@ -1,6 +1,7 @@
 import base64
 import contextvars
 import hmac
+import io
 import json
 import os
 import re
@@ -22,8 +23,10 @@ from openai import (
     OpenAI,
     RateLimitError,
 )
+from PIL import Image
 from pydantic import BaseModel, Field
 
+import photo_lookup
 import request_log
 import safe_frame
 from input_filter import check_input, note_accepted
@@ -117,6 +120,9 @@ class GenerateResponse(BaseModel):
     variable: str
     # 這次實際採用的圖表類型（自動判斷模式下為 AI 所選）
     chart_type: str = ""
+    # 版面以某位具名真實人物的肖像為主體時，填那個人的姓名；否則空字串。
+    # 後端據此決定要不要查參考照片、以及套哪一種肖像處理規則。
+    portrait_subject: str = ""
 
 
 class ImageGenerateRequest(BaseModel):
@@ -126,6 +132,8 @@ class ImageGenerateRequest(BaseModel):
     image_size: str = "1K"
     # True＝生成後用 safe_frame 把整張圖置入 TVBS 安全框並補背景
     safe_frame: bool = False
+    # 真人肖像的參考照片（data URL）。空字串＝這次不附參考圖。
+    reference_image_data_url: str = ""
 
 
 class ImageGenerateResponse(BaseModel):
@@ -148,8 +156,10 @@ DIGEST_OUTPUT_SCHEMA = {
         "variable": {"type": "string"},
         # 回報這次實際採用的圖表類型；自動判斷模式下前端用它顯示 AI 選了什麼
         "chart_type": {"type": "string", "enum": CHART_TYPE_CHOICES},
+        # 具名真實人物肖像題才填姓名，其餘一律空字串（見 REAL_WORLD_FIDELITY_RULES 第 5 條）
+        "portrait_subject": {"type": "string"},
     },
-    "required": ["style", "structure", "variable", "chart_type"],
+    "required": ["style", "structure", "variable", "chart_type", "portrait_subject"],
     "additionalProperties": False,
 }
 
@@ -291,7 +301,7 @@ REAL-WORLD ACCURACY (governs "style" and "structure" — the pictures you commis
 2. REAL PLACES AND OBJECTS: when the story shows a verifiable real place or object — a skyline, a specific building, a highway or interchange, an airport, a facility, or a specific model of aircraft, ship, vehicle or equipment — ask for it to be depicted as faithfully to its real appearance as your knowledge allows: real shape, real layout, real proportions, real distinguishing features. Do not stylise reality away when the real look is known.
 3. LABEL WHAT IS NOT REAL: if you are not confident the depiction will match the real thing, or the scene is a generic stand-in or a reconstruction rather than a documented view, you MUST plan a clearly visible 示意圖 label — write the word 示意圖 into "variable" and tell "structure" where it sits. An unlabelled reconstruction presented as real is a defect. Do not fabricate identifying detail you do not actually know and pass it off as real.
 4. NO UNSOURCED BRANDS. Signage, storefronts, banners, packaging, product bodies, vehicle liveries, screens, jerseys, badges and building facades must be de-identified: blank surfaces or generic abstract marks, no readable brand text, no trademark, no ticker symbol, no exchange name. A brand may appear ONLY if its name is in the source material, and then only as plain typeset text, never as a reproduced logotype. Whenever the scene contains any object that would normally carry a brand, write this requirement into "structure" explicitly — do not assume the renderer will infer it.
-5. NAMED REAL PEOPLE: portraits are allowed, including a front-facing likeness. Aim for a faithful resemblance to the person's real appearance; never caricature or distort. If a faithful likeness is beyond reach, use a back view or silhouette and add the 示意圖 label instead of guessing a face. Never place the person in a scene, action or context the source material does not describe.
+5. NAMED REAL PEOPLE: you do NOT decide how the face is drawn. If the graphic centres on the portrait of ONE specific named real person, put that person's name — exactly as the source material writes it, no title, no company — in the "portrait_subject" field, and in "structure" describe only WHERE the figure sits and what it wears, never the rendering treatment (do not write "photorealistic", "faithful likeness", "back view", "silhouette", "illustration" or similar). The backend looks up a reference photograph and appends the binding portrait rules itself. Leave "portrait_subject" as an empty string for every other graphic, including crowds, unnamed or generic figures, and stories where no single person is the subject. Always plan the 示意圖 label into "variable" when a person is depicted. Never place the person in a scene, action or context the source material does not describe.
 """
 
 
@@ -592,6 +602,7 @@ def generate(req: GenerateRequest):
             structure=data.get("structure", ""),
             variable=data.get("variable", ""),
             chart_type=chart_type,
+            portrait_subject=(data.get("portrait_subject") or "").strip(),
         )
         # 網頁版走這個端點後自己在前端組生圖 prompt，後端看不到最終 prompt，
         # 因此這裡只記到消化為止——有輸入與消化結果，事後仍可重跑重現。
@@ -771,18 +782,189 @@ def generate_image(req: ImageGenerateRequest):
     req.safe_frame=True 時，生成後再由 safe_frame 置入 TVBS 安全框。
     """
     result = generate_image_raw(req)
+    verify_output_aspect_ratio(result, req.aspect_ratio)
     if req.safe_frame:
         result = frame_image_response(result)
     return result
+
+
+# 生成端不保證給到小數點精確的比例（21:9 可能回 1808x768＝2.354），所以要留容差；
+# 但真正要抓的降級差很遠（3:2＝1.50 vs 21:9＝2.33，差 36%），5% 分得非常開。
+ASPECT_RATIO_TOLERANCE = 0.05
+
+
+def parse_aspect_ratio(aspect_ratio: str) -> float | None:
+    """'21:9' → 2.33。不是 W:H 形式（例如 auto）就回 None，代表沒有可驗的目標。"""
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)\s*", aspect_ratio or "")
+    if not match:
+        return None
+    width, height = float(match.group(1)), float(match.group(2))
+    if width <= 0 or height <= 0:
+        return None
+    return width / height
+
+
+def verify_output_aspect_ratio(result: ImageGenerateResponse, aspect_ratio: str) -> None:
+    """成圖比例與要求不符就當場失敗，不讓它默默播出去。
+
+    存在理由：`assert_aspect_ratio_supported` 只擋得住「模型宣告不支援」，擋不住
+    「宣告支援卻回別的尺寸」。2026-08-01 附參考圖的兩張 21:9 回來是 3:2，模型與
+    參數都合法；2026-08-03 同樣條件（同一人、同一張參考照、同一模型、同一份 prompt）
+    又完全正常，三次全對。這種**間歇性**降級只有量成圖才抓得到。
+    整條安全框流程都建立在「要到的比例真的拿得到」上，悄悄降級的圖會直接上鏡。
+
+    刻意不自動重試：生圖是付費的，靜靜多花一次錢不該由這裡決定。失敗訊息會明講
+    可以重試。
+    """
+    expected = parse_aspect_ratio(aspect_ratio)
+    if expected is None:
+        return
+
+    try:
+        with Image.open(io.BytesIO(base64.b64decode(result.image_data_base64))) as image:
+            width, height = image.size
+    except Exception as exc:  # noqa: BLE001 — 讀不出尺寸就無從驗證，必須讓呼叫端知道
+        raise HTTPException(
+            status_code=502, detail=f"成圖無法解析，無法驗證比例：{type(exc).__name__}: {exc}"
+        ) from exc
+
+    if height <= 0:
+        raise HTTPException(status_code=502, detail="成圖高度為 0，無法驗證比例")
+
+    actual = width / height
+    if abs(actual - expected) / expected <= ASPECT_RATIO_TOLERANCE:
+        return
+
+    print(
+        f"[aspect] 比例不符：要求 {aspect_ratio} 實得 {width}x{height} "
+        f"({actual:.2f}:1) model={result.model}",
+        flush=True,
+    )
+    raise HTTPException(
+        status_code=502,
+        detail=(
+            f"生成端回傳的比例不符：要求 {aspect_ratio}（{expected:.2f}:1），"
+            f"實得 {width}x{height}（{actual:.2f}:1），模型 {result.model}。"
+            "這種降級是間歇性的，重試一次通常就正常；若持續發生請換模型或引擎。"
+        ),
+    )
+
+
+def _split_data_url(data_url: str) -> tuple[str, str, str]:
+    """拆 data URL，回傳 (mime_type, 編碼方式, base64 內容)；格式不對回空內容。"""
+    if not data_url.startswith("data:"):
+        return "", "", ""
+    header, _, encoded = data_url.partition(",")
+    if not encoded:
+        return "", "", ""
+    meta = header[len("data:") :]
+    mime_type, _, encoding = meta.partition(";")
+    return mime_type or "image/jpeg", encoding, encoded
+
+
+def supports_reference_image(provider: str) -> bool:
+    """這次的生圖後端能不能真的把參考圖送出去。
+
+    存在理由：附圖能力與 prompt 措辭必須一致。原生 OpenAI 的 images.generate
+    沒有參考圖通道，若照樣叫模型「參考附圖」，模型只能憑印象捏一張臉——比不
+    提附圖更糟。因此送不出去時，呼叫端要改用「不生成臉孔」的規則。
+    """
+    if os.getenv("IMAGE_BACKEND", "openrouter") == "openrouter" and os.getenv(
+        "OPENROUTER_API_KEY"
+    ):
+        return True
+    return provider != "gpt"
+
+
+# 一家一個模型，OpenRouter 與原生兩條路徑共用同一個——否則切 IMAGE_BACKEND 會連模型一起
+# 換掉，而兩個模型的能力並不相同（2026-08-01 清查：OpenRouter 那條原本是 gpt-5.4-image-2、
+# 原生那條是 gpt-image-2，文件卻只寫後者）。
+# GPT 選 gpt-image-2 的理由：OpenAI 家族只有它在 API 層支援安全框要的 21:9，
+# gpt-5.4-image-2 / gpt-5-image 系列連 aspect_ratio 參數都沒有。
+NATIVE_GPT_IMAGE_MODEL = "gpt-image-2"
+NATIVE_GEMINI_IMAGE_MODEL = "gemini-3-pro-image"
+OPENROUTER_GPT_IMAGE_MODEL = f"openai/{NATIVE_GPT_IMAGE_MODEL}"
+OPENROUTER_GEMINI_IMAGE_MODEL = f"google/{NATIVE_GEMINI_IMAGE_MODEL}"
+
+# 各模型在 API 層支援的 aspect_ratio。
+# 來源：GET https://openrouter.ai/api/v1/images/models（2026-08-01 取得，含 enum 值）。
+# 存在理由：帶了不支援的參數，OpenRouter 不會報錯也不會警告，就是靜靜忽略——
+# 2026-08-01 的 21:9 悄悄掉成 3:2 查了整晚，根因就是這個。做不到的比例必須當場擋下來，
+# 因為整條安全框流程都建立在「要到的比例真的拿得到」這個假設上。
+_RATIOS_OPENAI_FULL = frozenset(
+    {"1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16", "21:9", "auto"}
+)
+_RATIOS_OPENAI_LEGACY = frozenset({"1:1", "3:2", "2:3", "auto"})
+_RATIOS_GEMINI = frozenset(
+    {"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"}
+)
+_RATIOS_GEMINI_FLASH_31 = _RATIOS_GEMINI | {"1:4", "1:8", "4:1", "8:1"}
+_RATIOS_WIDE_STANDARD = frozenset(
+    {"1:1", "4:3", "3:4", "3:2", "2:3", "16:9", "9:16", "21:9", "auto"}
+)
+
+MODEL_ASPECT_RATIOS: dict[str, frozenset[str]] = {
+    "openai/gpt-image-2": _RATIOS_OPENAI_FULL,
+    "openai/gpt-image-1": _RATIOS_OPENAI_LEGACY,
+    "openai/gpt-image-1-mini": _RATIOS_OPENAI_LEGACY,
+    # GPT-5 影像系列沒有 aspect_ratio 參數，比例只能靠 prompt 內文碰運氣。
+    "openai/gpt-5-image": frozenset(),
+    "openai/gpt-5-image-mini": frozenset(),
+    "openai/gpt-5.4-image-2": frozenset(),
+    "google/gemini-2.5-flash-image": _RATIOS_GEMINI,
+    "google/gemini-3-pro-image": _RATIOS_GEMINI,
+    "google/gemini-3-pro-image-preview": _RATIOS_GEMINI,
+    "google/gemini-3.1-flash-image": _RATIOS_GEMINI_FLASH_31,
+    "google/gemini-3.1-flash-image-preview": _RATIOS_GEMINI_FLASH_31,
+    "google/gemini-3.1-flash-lite-image": _RATIOS_GEMINI_FLASH_31,
+    "black-forest-labs/flux.2-pro": _RATIOS_WIDE_STANDARD,
+    "black-forest-labs/flux.2-max": _RATIOS_WIDE_STANDARD,
+    "black-forest-labs/flux.2-flex": _RATIOS_WIDE_STANDARD,
+    "black-forest-labs/flux.2-klein-4b": _RATIOS_WIDE_STANDARD,
+    "sourceful/riverflow-v2-pro": _RATIOS_WIDE_STANDARD,
+    "sourceful/riverflow-v2-fast": _RATIOS_WIDE_STANDARD,
+    "sourceful/riverflow-v2.5-pro": _RATIOS_WIDE_STANDARD,
+    "sourceful/riverflow-v2.5-fast": _RATIOS_WIDE_STANDARD,
+}
+
+
+def assert_aspect_ratio_supported(model: str, aspect_ratio: str) -> None:
+    """模型做不到要求的比例就當場擋下，不讓它靜靜降級成別的尺寸。
+
+    表上沒有的模型只警告不擋——不確定不等於不支援，擋下來會誤傷新模型。
+    真的要用做不到的組合，設 ALLOW_UNSUPPORTED_ASPECT_RATIO=1 明示放行。
+    """
+    supported = MODEL_ASPECT_RATIOS.get(model)
+    if supported is None:
+        print(
+            f"[OpenRouter image] 未知模型 {model!r}，無法確認是否支援 "
+            f"aspect_ratio={aspect_ratio!r}，照送不擋",
+            flush=True,
+        )
+        return
+    if aspect_ratio in supported:
+        return
+
+    available = "、".join(sorted(supported)) if supported else "（此模型沒有 aspect_ratio 參數）"
+    message = (
+        f"模型 {model} 不支援 aspect_ratio={aspect_ratio}，"
+        f"送出去只會被靜靜忽略、拿回別的尺寸。可用值：{available}。"
+        f"請改用支援的模型（安全框需要 21:9，OpenAI 家族只有 {OPENROUTER_GPT_IMAGE_MODEL} 支援），"
+        f"或設 ALLOW_UNSUPPORTED_ASPECT_RATIO=1 明示接受任何尺寸。"
+    )
+    if os.getenv("ALLOW_UNSUPPORTED_ASPECT_RATIO", "").strip() == "1":
+        print(f"[OpenRouter image] {message}（已由環境變數放行）", flush=True)
+        return
+    raise HTTPException(status_code=400, detail=message)
 
 
 def generate_image_raw(req: ImageGenerateRequest) -> ImageGenerateResponse:
     backend = os.getenv("IMAGE_BACKEND", "openrouter")
     if backend == "openrouter" and os.getenv("OPENROUTER_API_KEY"):
         if req.provider == "gpt":
-            model = os.getenv("OPENROUTER_GPT_MODEL", "openai/gpt-5.4-image-2")
+            model = os.getenv("OPENROUTER_GPT_MODEL", OPENROUTER_GPT_IMAGE_MODEL)
         else:
-            model = os.getenv("OPENROUTER_GEMINI_MODEL", "google/gemini-3-pro-image")
+            model = os.getenv("OPENROUTER_GEMINI_MODEL", OPENROUTER_GEMINI_IMAGE_MODEL)
         return generate_via_openrouter(model, req)
 
     if req.provider == "gpt":
@@ -835,6 +1017,8 @@ def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGener
             detail="尚未設定 OPENROUTER_API_KEY，無法生成圖片",
         )
 
+    assert_aspect_ratio_supported(model, req.aspect_ratio)
+
     payload = {
         "model": model,
         "prompt": req.prompt,
@@ -844,6 +1028,10 @@ def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGener
     # GPT 系列不吃 resolution，帶了會 400。
     if any(tag in model for tag in ("gemini", "seedream", "riverflow")):
         payload["resolution"] = req.image_size
+    if req.reference_image_data_url:
+        payload["input_references"] = [
+            {"type": "image_url", "image_url": {"url": req.reference_image_data_url}}
+        ]
 
     request = Request(
         "https://openrouter.ai/api/v1/images",
@@ -893,15 +1081,42 @@ def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGener
     )
 
 
+# 原生 OpenAI 沒有 aspect_ratio，只吃 size。gpt-image-2 接受任意 16 的倍數
+# （標準上限 2560×1440），這裡挑貼合比例、又不超過上限的尺寸。
+# 2026-08-01 之前這裡寫死 1280x720，等於無視呼叫端要的比例——安全框開 21:9
+# 也會靜靜拿回 16:9，是與 OpenRouter 那條同一類的靜默降級。
+NATIVE_GPT_IMAGE_SIZES = {
+    "1:1": "1024x1024",
+    "4:3": "1280x960",
+    "3:4": "960x1280",
+    "3:2": "1440x960",
+    "2:3": "960x1440",
+    "16:9": "1280x720",
+    "9:16": "720x1280",
+    "21:9": "1680x720",
+}
+
+
 def generate_gpt_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
-    model = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2")
+    model = os.getenv("OPENAI_IMAGE_MODEL", NATIVE_GPT_IMAGE_MODEL)
     quality = os.getenv("OPENAI_IMAGE_QUALITY", "medium")
+
+    size = NATIVE_GPT_IMAGE_SIZES.get(req.aspect_ratio)
+    if size is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"原生 OpenAI 生圖沒有對應 aspect_ratio={req.aspect_ratio} 的尺寸，"
+                f"可用比例：{'、'.join(NATIVE_GPT_IMAGE_SIZES)}。"
+                "改走 OpenRouter（IMAGE_BACKEND=openrouter）可支援更多比例。"
+            ),
+        )
 
     try:
         result = openai_client.images.generate(
             model=model,
             prompt=req.prompt,
-            size="1280x720",
+            size=size,
             quality=quality,
             output_format="png",
         )
@@ -950,10 +1165,15 @@ def generate_gemini_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
             detail="尚未設定 GEMINI_API_KEY，無法生成圖片",
         )
 
-    model = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3-pro-image")
+    model = os.getenv("GEMINI_IMAGE_MODEL", NATIVE_GEMINI_IMAGE_MODEL)
+    content: list[dict[str, object]] = [{"type": "text", "text": req.prompt}]
+    if req.reference_image_data_url:
+        mime_type, _, encoded = _split_data_url(req.reference_image_data_url)
+        if encoded:
+            content.append({"type": "image", "mime_type": mime_type, "data": encoded})
     payload = {
         "model": model,
-        "input": [{"type": "text", "text": req.prompt}],
+        "input": content,
         "response_format": {
             "type": "image",
             "mime_type": "image/jpeg",
@@ -1065,6 +1285,33 @@ def resolve_aspect_ratio(requested: str | None, safe_frame: bool) -> str:
     return SAFE_FRAME_ASPECT_RATIO if safe_frame else DEFAULT_ASPECT_RATIO
 
 
+def resolve_portrait(
+    portrait_subject: str, provider: str
+) -> tuple[str, photo_lookup.ReferencePhoto | None]:
+    """決定這次的肖像處理方式，回傳 (portrait_mode, 參考照片或 None)。
+
+    三種結果：
+    - 不是真人肖像題 → ("none", None)，沿用一般規則
+    - 查到照片且後端送得出去 → ("reference", 照片)，走插畫化肖像
+    - 查不到照片、或後端送不出參考圖 → ("no_reference", None)，一律不生成臉孔
+
+    查圖失敗（網路、逾時、查無此人）不讓整條請求失敗：新聞生產不能因為維基
+    查不到人就整張圖生不出來，退回不畫臉仍是可播的結果。
+    """
+    if not portrait_subject:
+        return "none", None
+    if not supports_reference_image(provider):
+        return "no_reference", None
+    try:
+        photo = photo_lookup.find_reference_photo(portrait_subject)
+    except Exception as exc:  # noqa: BLE001 — 查圖是加分項，不該拖垮生圖
+        print(f"[portrait] 查參考照片失敗（{portrait_subject}）：{exc}", flush=True)
+        return "no_reference", None
+    if photo is None:
+        return "no_reference", None
+    return "reference", photo
+
+
 def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateResponse:
     # 前置過濾（縱深防禦）：擋垃圾／亂碼／注入輸入，避免燒掉付費呼叫。
     # LINE 路徑在 line_bot 已含頻率限制地查過一次，這裡 client_id 為空時
@@ -1089,6 +1336,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
         )
     finally:
         _inside_pipeline.reset(token)
+    portrait_mode, reference_photo = resolve_portrait(digest.portrait_subject, req.provider)
     prompt = build_prompt(
         role=req.role,
         engine=req.provider,
@@ -1098,6 +1346,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
         variable=compose_variable(digest.variable),
         safe_frame=req.safe_frame,
         aspect_ratio=aspect_ratio,
+        portrait_mode=portrait_mode,
     )
     image = generate_image(
         ImageGenerateRequest(
@@ -1106,6 +1355,9 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             aspect_ratio=aspect_ratio,
             image_size=req.image_size,
             safe_frame=req.safe_frame,
+            reference_image_data_url=(
+                reference_photo.data_url() if reference_photo is not None else ""
+            ),
         )
     )
     request_log.log_generation(
@@ -1124,6 +1376,11 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
         provider=req.provider,
         image_model=image.model,
         prompt_version=PROMPT_VERSION,
+        portrait_subject=digest.portrait_subject,
+        portrait_mode=portrait_mode,
+        portrait_photo_source=(
+            reference_photo.source_page if reference_photo is not None else ""
+        ),
     )
     return NewsImageGenerateResponse(
         image_data_base64=image.image_data_base64,

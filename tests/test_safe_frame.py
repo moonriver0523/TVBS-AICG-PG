@@ -287,9 +287,13 @@ class EndpointWiringTests(unittest.TestCase):
         )
         from fastapi import HTTPException
 
+        # aspect_ratio="auto" 讓「量成圖比例」那道關卡沒有可驗的目標而放行，
+        # 這條測的才會是置框失敗本身；否則會先被比例檢查以 502 擋下。
         with patch.object(main, "generate_image_raw", return_value=broken):
             with self.assertRaises(HTTPException) as caught:
-                generate_image(ImageGenerateRequest(prompt="p", safe_frame=True))
+                generate_image(
+                    ImageGenerateRequest(prompt="p", safe_frame=True, aspect_ratio="auto")
+                )
         self.assertEqual(caught.exception.status_code, 500)
 
 

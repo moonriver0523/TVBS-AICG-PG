@@ -79,6 +79,9 @@ def log_generation(
     image_model: str = "",
     prompt_version: str = "",
     client_id: str = "",
+    portrait_subject: str = "",
+    portrait_mode: str = "",
+    portrait_photo_source: str = "",
 ) -> None:
     """記一筆成功的生成。任何例外都吞掉——記錄失敗不該波及請求本身。"""
     if not ENABLED:
@@ -100,6 +103,11 @@ def log_generation(
                 "style": style,
                 "structure": structure,
                 "variable": variable,
+                # 肖像來源一定要能回查：自動查圖有抓到同名者照片的風險，
+                # 事後複核靠的就是這個網址。
+                "portrait_subject": portrait_subject,
+                "portrait_mode": portrait_mode,
+                "portrait_photo_source": portrait_photo_source,
                 "prompt": prompt[:MAX_PROMPT_CHARS],
             }
         )
