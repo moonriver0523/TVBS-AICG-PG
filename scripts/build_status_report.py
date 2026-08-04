@@ -26,7 +26,11 @@ from PIL import Image
 
 REPO = Path(__file__).resolve().parent.parent
 OUT = REPO / "docs" / "aicg-進度報告.html"
-GENERATED = REPO / "static" / "generated"
+
+# 報告用圖一律放這裡、跟著版控走。
+# 不要改指向 static/generated——那個資料夾超過 24 小時會自動清空，
+# 2026-08-04 就發生過：重跑腳本時範例圖已被清掉，報告靜靜少了兩張圖。
+ASSETS = REPO / "docs" / "assets" / "report"
 
 EMBED_WIDTH = 1100
 JPEG_QUALITY = 82
@@ -47,11 +51,17 @@ def embed(path: Path, max_width: int = EMBED_WIDTH) -> str | None:
 
 
 def find_line_shot(folder: Path, keyword: str) -> Path | None:
-    if not folder.exists():
-        return None
-    for candidate in sorted(folder.glob("*")):
-        if candidate.suffix.lower() in {".png", ".jpg", ".jpeg"} and keyword in candidate.name:
-            return candidate
+    """先找版控裡的 assets，再找使用者指定的來源資料夾（例如下載夾）。
+
+    截圖一旦確定就該複製進 assets，否則下次重跑時人家的下載夾早就清空了，
+    報告會靜靜少一張圖——這正是原本指向 static/generated 踩到的坑。
+    """
+    for base in (ASSETS, folder):
+        if not base.exists():
+            continue
+        for candidate in sorted(base.glob("*")):
+            if candidate.suffix.lower() in {".png", ".jpg", ".jpeg"} and keyword in candidate.name:
+                return candidate
     return None
 
 
@@ -112,14 +122,19 @@ figcaption { color:var(--muted); font-size:13px; margin-top:6px; }
 def build(line_shots_dir: Path) -> str:
     today = date.today().isoformat()
 
-    trump = embed(GENERATED / "20260803-095240-7acc8b.png")
-    ferry = embed(GENERATED / "20260803-100808-96f38c.png")
+    trump = embed(ASSETS / "sample-portrait-trump.jpg")
+    drill = embed(ASSETS / "sample-map-drill.jpg")
     shot_input = embed(find_line_shot(line_shots_dir, "貼稿") or Path("nonexistent"), 700)
     shot_output = embed(find_line_shot(line_shots_dir, "收圖") or Path("nonexistent"), 700)
 
     samples = "".join(
         [
-            figure(ferry, "情境示意圖：AI 自行判斷圖表類型，標題與三個重點皆由新聞原文而來", "（成品圖缺漏）"),
+            figure(
+                drill,
+                "地圖類：由防衛白皮書新聞稿直接生成，含比例尺、指北針、演習名稱與時間，"
+                "推測性的範圍一律標「示意」",
+                "（成品圖缺漏）",
+            ),
             figure(trump, "真人肖像：自動查得參考照片後繪製，並標示「示意圖」", "（成品圖缺漏）"),
         ]
     )
@@ -166,7 +181,7 @@ def build(line_shots_dir: Path) -> str:
 <table>
 <tr><th style="width:26%">指標</th><th style="width:26%">提案目標</th><th style="width:16%">目前狀態</th><th>說明</th></tr>
 <tr><td>單張製作時間</td><td>20–30 分鐘 → 約 10 分鐘</td><td><span class="tag t-partial">未正式量測</span></td>
-    <td>單次生圖實測約 30–120 秒，但「從拿到新聞到定稿」的完整時間還沒有實際計時過，不宜對外宣稱已達標。</td></tr>
+    <td>單次生圖實測約 30 秒–3 分鐘（複雜圖表較久），但「從拿到新聞到定稿」的完整時間還沒有實際計時過，不宜對外宣稱已達標。</td></tr>
 <tr><td>單日產能</td><td>8 張 → 10 張以上</td><td><span class="tag t-none">未量測</span></td>
     <td>要等實際上線使用才有數字。</td></tr>
 <tr><td>CG 錯誤投訴</td><td>每季不超過 1 件</td><td><span class="tag t-none">未量測</span></td>
@@ -201,8 +216,8 @@ def build(line_shots_dir: Path) -> str:
 <ol class="steps">
 <li><strong>加入官方帳號</strong>——掃 QR code 加好友，只需做一次。</li>
 <li><strong>貼上新聞文字</strong>——直接把稿子或素材貼進對話框送出，不需要下任何指令。</li>
-<li><strong>系統回覆「收到」</strong>——接著在背景整理文案、選版型並生成圖卡。</li>
-<li><strong>收到成品圖</strong>——約 30–120 秒後回傳，可直接下載使用。</li>
+<li><strong>系統立刻回覆「收到！AI 消化與生圖中」</strong>——接著在背景整理文案、選版型並生成圖卡。</li>
+<li><strong>收到成品圖</strong>——約 30 秒–3 分鐘後回傳，點開即可下載使用。</li>
 </ol>
 
 {shots}
@@ -211,7 +226,7 @@ def build(line_shots_dir: Path) -> str:
 <table>
 <tr><th style="width:34%">限制</th><th>說明</th></tr>
 <tr><td>一次一則</td><td>沒有排隊機制，多人同時使用會依序處理、等待變長。</td></tr>
-<tr><td>等待 30–120 秒</td><td>生圖本身需要時間，屬於正常範圍。</td></tr>
+<tr><td>等待 30 秒–3 分鐘</td><td>生圖本身需要時間，屬於正常範圍；地圖等複雜圖表偏長。</td></tr>
 <tr><td>角色固定為「記者」</td><td>圖表類型由 AI 自動判斷，尚未開放在 LINE 上切換。</td></tr>
 <tr><td>網址會變動</td><td>目前是本機測試環境，每次重新啟動連線網址就會改變，需要重新設定一次。</td></tr>
 <tr><td>依賴電腦開機</td><td>服務跑在本機，電腦關機或斷網就無法使用——這是目前最大的實用性阻礙。</td></tr>
