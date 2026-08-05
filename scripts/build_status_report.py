@@ -32,6 +32,12 @@ OUT = REPO / "docs" / "aicg-進度報告.html"
 # 2026-08-04 就發生過：重跑腳本時範例圖已被清掉，報告靜靜少了兩張圖。
 ASSETS = REPO / "docs" / "assets" / "report"
 
+# AIHUNTER 成品影片（Google 雲端硬碟）。這是報告裡唯一的外部連結——
+# 它是「點了才去開」的超連結，不是頁面載入時要抓的資源，所以不影響離線開啟。
+DEMO_VIDEO_URL = (
+    "https://drive.google.com/file/d/1gMSQrZGj6ob7aCR8eZQ8KMbDgukpEWc8/view?usp=drive_link"
+)
+
 EMBED_WIDTH = 1100
 JPEG_QUALITY = 82
 
@@ -104,6 +110,13 @@ body { margin:0; padding:0; background:#eef1f5; color:var(--ink);
 .flow .step em { display:block; font-style:normal; font-size:12.5px; color:var(--muted);
   margin-top:6px; padding-top:6px; border-top:1px dashed var(--line); }
 @media (max-width:720px) { .flow { grid-template-columns:1fr; } }
+.cta-wrap { text-align:center; margin:22px 0 4px; }
+a.cta { display:inline-block; background:var(--accent); color:#fff; text-decoration:none;
+  padding:13px 34px; border-radius:26px; font-size:16.5px; font-weight:600; letter-spacing:1px;
+  box-shadow:0 2px 10px rgba(11,92,171,.28); }
+.cta-note { text-align:center; color:var(--muted); font-size:13px; margin:0 0 4px; }
+@media print { a.cta { background:#fff; color:var(--accent); border:2px solid var(--accent);
+  box-shadow:none; } }
 h1 { font-size:30px; margin:0 0 6px; letter-spacing:.5px; }
 .sub { color:var(--muted); margin:0 0 28px; font-size:15px; }
 h2 { font-size:22px; margin:44px 0 14px; padding-bottom:8px; border-bottom:3px solid var(--accent); }
@@ -193,7 +206,7 @@ def build(line_shots_dir: Path) -> str:
 
 {hero_html}
 <h1>AICG 新聞圖卡生成器 — 專案進度報告</h1>
-<p class="sub">TVBS 國際新聞中心｜報告日期 {today}</p>
+<p class="sub">報告人：新聞部國際組　許岱軒｜報告日期 {today}</p>
 
 <div class="lead">
 <strong>一句話：工具已經可以做出直接上鏡品質的新聞圖卡，並且做出了手機版（LINE）讓編輯在任何地方都能出圖；
@@ -348,10 +361,14 @@ def build(line_shots_dir: Path) -> str:
   <div class="step"><b>1 ・ 寫稿</b><span>外電原文 → 台灣新聞稿</span>
     <em>AI 消化外電、改寫成符合台內語法的稿子，並自動掐出可用的 BITE 段落</em></div>
   <div class="step"><b>2 ・ 配音</b><span>成稿 → AI 過音</span>
-    <em>用 AI 語音把稿子唸成旁白，並與畫面自動對時</em></div>
+    <em>旁白由 <strong>AI 生成</strong>，聲音模型是用<strong>許岱軒過往的新聞配音</strong>訓練而成，
+    音色與播報語氣貼近本人；完成後與畫面自動對時</em></div>
   <div class="step"><b>3 ・ 剪輯</b><span>畫面＋聲音 → 自動出帶</span>
     <em>自動套版、上字幕，輸出可直接播出的成帶</em></div>
 </div>
+
+<p class="cta-wrap"><a class="cta" href="{DEMO_VIDEO_URL}">🎬　成果按我觀賞</a></p>
+<p class="cta-note">影片存放於 Google 雲端硬碟，點擊會另開瀏覽器分頁播放。</p>
 
 <div class="note"><strong>說明：</strong>這是與本專案分開進行的另一條產線，仍在開發中，
 本節只做流程概要，實際進度與成效另行報告。之所以放在這裡，是因為兩個專案共用同一套思路——
