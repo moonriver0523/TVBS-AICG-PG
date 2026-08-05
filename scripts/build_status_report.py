@@ -65,8 +65,8 @@ def find_line_shot(folder: Path, keyword: str) -> Path | None:
     return None
 
 
-def figure(data_uri: str | None, caption: str, placeholder: str, *, phone: bool = False) -> str:
-    cls = "shot phone" if phone else "shot"
+def figure(data_uri: str | None, caption: str, placeholder: str) -> str:
+    cls = "shot"
     if data_uri is None:
         return (
             f'<figure class="{cls}"><div class="placeholder">{html.escape(placeholder)}</div>'
@@ -108,14 +108,13 @@ th { background:#f5f7fa; font-weight:600; }
   border-radius:50%; background:var(--accent); color:#fff; text-align:center; line-height:29px; font-size:14px; }
 figure.shot { margin:18px 0; }
 figure.shot img { width:100%; border:1px solid var(--line); border-radius:7px; display:block; }
-figure.shot.phone { max-width:330px; display:inline-block; margin:18px 22px 18px 0; vertical-align:top; }
 figcaption { color:var(--muted); font-size:13px; margin-top:6px; }
 .placeholder { border:2px dashed #c3ccd8; border-radius:7px; padding:52px 18px; text-align:center;
   color:var(--muted); font-size:14px; background:#fafbfc; }
 .note { background:#fffaf0; border:1px solid #f0dfc0; border-radius:7px; padding:13px 16px; font-size:14px; margin:16px 0; }
 .foot { margin-top:44px; padding-top:16px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
 @media print { body { background:#fff; } .page { padding:0; max-width:none; } }
-@media (max-width:720px) { .page { padding:28px 20px 44px; } figure.shot.phone { max-width:100%; margin-right:0; } }
+@media (max-width:720px) { .page { padding:28px 20px 44px; } }
 """
 
 
@@ -124,8 +123,9 @@ def build(line_shots_dir: Path) -> str:
 
     trump = embed(ASSETS / "sample-portrait-trump.jpg")
     drill = embed(ASSETS / "sample-map-drill.jpg")
-    shot_input = embed(find_line_shot(line_shots_dir, "貼稿") or Path("nonexistent"), 700)
-    shot_output = embed(find_line_shot(line_shots_dir, "收圖") or Path("nonexistent"), 700)
+    # 桌面版 LINE 的截圖是橫式視窗，縮到手機直式寬度會小到看不清字，維持原寬滿版。
+    shot_input = embed(find_line_shot(line_shots_dir, "貼稿") or Path("nonexistent"), 880)
+    shot_output = embed(find_line_shot(line_shots_dir, "收圖") or Path("nonexistent"), 880)
 
     samples = "".join(
         [
@@ -140,8 +140,14 @@ def build(line_shots_dir: Path) -> str:
     )
 
     shots = figure(
-        shot_input, "步驟二：貼上新聞文字", "待補：LINE 對話截圖（貼稿）", phone=True
-    ) + figure(shot_output, "步驟四：收到成品圖", "待補：LINE 對話截圖（收圖）", phone=True)
+        shot_input,
+        "步驟二、三：把新聞文字貼進對話框送出，系統立刻回覆「收到」（下午 5:45）",
+        "待補：LINE 對話截圖（貼稿）",
+    ) + figure(
+        shot_output,
+        "步驟四：約三分鐘後回傳成品圖，點開即可下載（下午 5:48）",
+        "待補：LINE 對話截圖（收圖）",
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="zh-Hant">
@@ -294,3 +300,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
