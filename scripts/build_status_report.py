@@ -94,6 +94,16 @@ CSS = """
 body { margin:0; padding:0; background:#eef1f5; color:var(--ink);
   font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif; line-height:1.75; }
 .page { max-width:1000px; margin:0 auto; background:var(--bg); padding:56px 60px 72px; }
+.hero { text-align:center; margin:0 0 22px; }
+.hero img { width:190px; height:190px; border-radius:50%; display:inline-block;
+  box-shadow:0 2px 14px rgba(28,36,49,.16); }
+.flow { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:16px 0 6px; }
+.flow .step { border:1px solid var(--line); border-radius:9px; padding:14px 16px; position:relative; }
+.flow .step b { display:block; color:var(--accent); margin-bottom:5px; }
+.flow .step span { color:var(--muted); font-size:13.5px; }
+.flow .step em { display:block; font-style:normal; font-size:12.5px; color:var(--muted);
+  margin-top:6px; padding-top:6px; border-top:1px dashed var(--line); }
+@media (max-width:720px) { .flow { grid-template-columns:1fr; } }
 h1 { font-size:30px; margin:0 0 6px; letter-spacing:.5px; }
 .sub { color:var(--muted); margin:0 0 28px; font-size:15px; }
 h2 { font-size:22px; margin:44px 0 14px; padding-bottom:8px; border-bottom:3px solid var(--accent); }
@@ -140,6 +150,10 @@ def build(line_shots_dir: Path) -> str:
     drill = embed(ASSETS / "sample-map-drill.jpg")
     garbled = embed(ASSETS / "fail-garbled-title.jpg")
     spec = embed(ASSETS / "safe-frame-spec.png", 1302)
+    hero = embed(ASSETS / "hero-aicg-emblem.png", 520)
+    hero_html = (
+        f'<div class="hero"><img alt="TVBS AICG 徽標" src="{hero}"></div>' if hero else ""
+    )
     # 桌面版 LINE 的截圖是橫式視窗，縮到手機直式寬度會小到看不清字，維持原寬滿版。
     shot_input = embed(find_line_shot(line_shots_dir, "貼稿") or Path("nonexistent"), 880)
     shot_output = embed(find_line_shot(line_shots_dir, "收圖") or Path("nonexistent"), 880)
@@ -177,6 +191,7 @@ def build(line_shots_dir: Path) -> str:
 <body>
 <div class="page">
 
+{hero_html}
 <h1>AICG 新聞圖卡生成器 — 專案進度報告</h1>
 <p class="sub">TVBS 國際新聞中心｜報告日期 {today}</p>
 
@@ -323,8 +338,28 @@ def build(line_shots_dir: Path) -> str:
 <li>再依試用回饋決定混合版型與局部修訂的優先順序</li>
 </ol>
 
+<h2>四、同場加映：另一條產線（AIHUNTER）</h2>
+<p>除了圖卡，另有一個獨立進行中的專案 <strong>AIHUNTER</strong>，處理的是<strong>影音成帶</strong>。
+兩者互補：AICG 產出的是「圖」，AIHUNTER 產出的是「帶」，共同目標都是把重複性高的產製工作自動化。</p>
+
+<div class="lead"><strong>外電進、成帶出——寫稿、配音、剪輯全程自動化。</strong></div>
+
+<div class="flow">
+  <div class="step"><b>1 ・ 寫稿</b><span>外電原文 → 台灣新聞稿</span>
+    <em>AI 消化外電、改寫成符合台內語法的稿子，並自動掐出可用的 BITE 段落</em></div>
+  <div class="step"><b>2 ・ 配音</b><span>成稿 → AI 過音</span>
+    <em>用 AI 語音把稿子唸成旁白，並與畫面自動對時</em></div>
+  <div class="step"><b>3 ・ 剪輯</b><span>畫面＋聲音 → 自動出帶</span>
+    <em>自動套版、上字幕，輸出可直接播出的成帶</em></div>
+</div>
+
+<div class="note"><strong>說明：</strong>這是與本專案分開進行的另一條產線，仍在開發中，
+本節只做流程概要，實際進度與成效另行報告。之所以放在這裡，是因為兩個專案共用同一套思路——
+<strong>讓 AI 做重複性的產製工作，人力留給判斷與把關</strong>。</div>
+
 <div class="foot">
-資料來源：專案原始提案摘要、LINE 版設定文件、混合版型提案，以及實際生成紀錄與驗證紀錄。<br>
+資料來源：專案原始提案摘要、LINE 版設定文件、混合版型提案、AI Champion Weekly 成果簡報，
+以及實際生成紀錄與驗證紀錄。<br>
 本報告由 <code>scripts/build_status_report.py</code> 產生，更新內容或替換圖片後重新執行即可。
 </div>
 
