@@ -37,9 +37,19 @@ JPEG_QUALITY = 82
 
 
 def embed(path: Path, max_width: int = EMBED_WIDTH) -> str | None:
-    """縮圖後轉 data URI；檔案不存在回 None（呼叫端要能接受沒有圖）。"""
+    """縮圖後轉 data URI；檔案不存在回 None（呼叫端要能接受沒有圖）。
+
+    線條圖（規格示意圖那種）轉 JPEG 會在文字邊緣糊掉，所以夠小又不需縮的 PNG
+    直接原樣內嵌；照片類一律走 JPEG，否則整份檔案會大好幾倍。
+    """
     if not path.exists():
         return None
+    if path.suffix.lower() == ".png" and path.stat().st_size <= 300 * 1024:
+        with Image.open(path) as probe:
+            if probe.width <= max_width:
+                return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode(
+                    "ascii"
+                )
     with Image.open(path) as image:
         image = image.convert("RGB")
         if image.width > max_width:
@@ -128,6 +138,8 @@ def build(line_shots_dir: Path) -> str:
 
     trump = embed(ASSETS / "sample-portrait-trump.jpg")
     drill = embed(ASSETS / "sample-map-drill.jpg")
+    garbled = embed(ASSETS / "fail-garbled-title.jpg")
+    spec = embed(ASSETS / "safe-frame-spec.png", 1302)
     # 桌面版 LINE 的截圖是橫式視窗，縮到手機直式寬度會小到看不清字，維持原寬滿版。
     shot_input = embed(find_line_shot(line_shots_dir, "貼稿") or Path("nonexistent"), 880)
     shot_output = embed(find_line_shot(line_shots_dir, "收圖") or Path("nonexistent"), 880)
@@ -199,6 +211,13 @@ def build(line_shots_dir: Path) -> str:
   <div class="card"><b>內容不被亂改</b><span>規則禁止 AI 自行增補新聞沒說的內容，版面留白也不得拿捏造的資訊去填滿。</span></div>
   <div class="card"><b>真人肖像有依據</b><span>具名真人會先找出可用的參考照片再繪製；查不到就一律不畫臉，改用背影並標示示意圖。</span></div>
 </div>
+{figure(
+    garbled,
+    "早期失敗案例：標題整排變成無意義的亂碼（「美國会牴刡佈齎発絲动唢」），"
+    "內文自己變成英文，連「台灣」都寫成「台濱」。這種圖完全不能上鏡，"
+    "而且每次結果都不一樣——這正是「一鍵生成」必須連文字正確性一起解決的原因。",
+    "（案例圖缺漏）",
+)}
 </div>
 
 <div class="purpose">
@@ -223,6 +242,12 @@ def build(line_shots_dir: Path) -> str:
   改由程式在固定座標上置框，不再請 AI 配合，用的是與公司既有 Studio Locked-Frame 工具
   同一組官方數值。實測四邊全部合格，而且<strong>每次結果都一樣</strong>，不再是抽卡。</div>
 </div>
+{figure(
+    spec,
+    "採用的安全框規格：1920×1080 基準下，安全區為 X=140、Y=109、寬 1634、高 751。"
+    "四邊刻意不對稱，下方留白最大，是為了預留下標與跑馬燈的位置。",
+    "（規格圖缺漏）",
+)}
 </div>
 
 <div class="note"><strong>要誠實說明的一點：</strong>上面三項都是已經做到的功能，
