@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AICG 新聞圖卡生成器 — 專案進度報告</title>
 <style>
-:root { --ink:#1c2431; --muted:#5b6676; --line:#dde3ea; --accent:#0b5cab; --warn:#b45309; --ok:#1a7f4b; --bg:#fff; }
+:root { --ink:#1c2431; --muted:#5b6676; --line:#dde3ea; --accent:#0b5cab; --bg:#fff; }
 * { box-sizing:border-box; }
 body { margin:0; padding:0; background:#eef1f5; color:var(--ink);
   font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif; line-height:1.75; }
@@ -20,10 +20,15 @@ p, li { font-size:15px; }
 table { width:100%; border-collapse:collapse; margin:14px 0 8px; font-size:14.5px; }
 th, td { border:1px solid var(--line); padding:9px 12px; text-align:left; vertical-align:top; }
 th { background:#f5f7fa; font-weight:600; }
-.tag { display:inline-block; padding:1px 9px; border-radius:11px; font-size:12.5px; white-space:nowrap; }
-.t-ok { background:#e4f4ec; color:var(--ok); }
-.t-partial { background:#fdf1de; color:var(--warn); }
-.t-none { background:#eef0f3; color:var(--muted); }
+.purpose { border:1px solid var(--line); border-left:5px solid var(--accent); border-radius:8px;
+  padding:16px 20px 18px; margin:16px 0; }
+.purpose > b { display:block; font-size:16.5px; margin-bottom:10px; color:var(--accent); }
+.pair { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+.pair > div { font-size:14.5px; }
+.lbl { display:block; font-weight:600; font-size:12.5px; letter-spacing:.5px; margin-bottom:3px;
+  color:var(--muted); }
+.purpose .cards { margin:14px 0 0; }
+@media (max-width:720px) { .pair { grid-template-columns:1fr; gap:10px; } }
 .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(228px,1fr)); gap:14px; margin:16px 0; }
 .card { border:1px solid var(--line); border-radius:9px; padding:14px 16px; }
 .card b { display:block; margin-bottom:4px; }
@@ -61,33 +66,54 @@ figcaption { color:var(--muted); font-size:13px; margin-top:6px; }
 四周留白符合電視播出安全框，可直接送進鏡面。目前有兩種操作方式：<strong>網頁版</strong>（功能完整，可逐項微調）
 與 <strong>LINE 版</strong>（貼一段文字就出圖，適合突發與外出時使用）。</p>
 
-<h3>已經解決的原始痛點</h3>
+<h3>本 APP 誕生的目的：要解決哪些問題</h3>
+<p>一個目標貫穿整個專案：<strong>讓記者與編輯共用同一套流程，一次就做出可以直接上鏡的新聞圖卡。</strong>
+底下三件事，就是這個工具存在的理由。</p>
+
+<div class="purpose">
+<b>目的一 · 一鍵生成，不必再各自摸索</b>
+<div class="pair">
+  <div><span class="lbl">原本的問題</span>
+  每位編輯用自己的 Gemini 反覆試，一張圖來回 20–30 分鐘；同一則新聞不同人做出來風格不一致。
+  AI 還常自作主張刪改內容、寫出錯字、亂碼或簡體字，改完往往還要進 Photoshop 補一次。</div>
+  <div><span class="lbl">現在怎麼解</span>
+  貼上新聞原文、按一次，系統自動整理文案、判斷圖表類型、選版型、生成、輸出成品，
+  全程不需要有人在旁邊盯著改。所有人共用同一套版型、配色與規則。</div>
+</div>
 <div class="cards">
-  <div class="card"><b>播出安全區</b><span>四邊留白改由程式用數學置框，不再靠 AI 自律。實測四邊全部合格，且每次結果一致。</span></div>
-  <div class="card"><b>繁體中文不亂碼</b><span>標題與內文由模型直接寫進圖裡且用字正確，不再出現亂碼或簡體字。</span></div>
-  <div class="card"><b>內容不被亂改</b><span>已加規則禁止 AI 自行增補新聞沒說的內容，版面留白也不得拿捏造的資訊去填滿。</span></div>
-  <div class="card"><b>真人肖像有依據</b><span>遇到具名真人，系統自動找出可用的參考照片再繪製；查不到就一律不畫臉，改用背影並標示示意圖。</span></div>
+  <div class="card"><b>繁體中文不亂碼</b><span>標題與內文用字正確，不再出現亂碼或簡體字。</span></div>
+  <div class="card"><b>內容不被亂改</b><span>規則禁止 AI 自行增補新聞沒說的內容，版面留白也不得拿捏造的資訊去填滿。</span></div>
+  <div class="card"><b>真人肖像有依據</b><span>具名真人會先找出可用的參考照片再繪製；查不到就一律不畫臉，改用背影並標示示意圖。</span></div>
+</div>
 </div>
 
-<h3>對照原提案 KPI</h3>
-<table>
-<tr><th style="width:26%">指標</th><th style="width:26%">提案目標</th><th style="width:16%">目前狀態</th><th>說明</th></tr>
-<tr><td>單張製作時間</td><td>20–30 分鐘 → 約 10 分鐘</td><td><span class="tag t-partial">未正式量測</span></td>
-    <td>單次生圖實測約 30 秒–3 分鐘（複雜圖表較久），但「從拿到新聞到定稿」的完整時間還沒有實際計時過，不宜對外宣稱已達標。</td></tr>
-<tr><td>單日產能</td><td>8 張 → 10 張以上</td><td><span class="tag t-none">未量測</span></td>
-    <td>要等實際上線使用才有數字。</td></tr>
-<tr><td>CG 錯誤投訴</td><td>每季不超過 1 件</td><td><span class="tag t-none">未量測</span></td>
-    <td>尚未正式播出使用。</td></tr>
-<tr><td>一擊即中率</td><td>提高、減少重生</td><td><span class="tag t-partial">部分改善</span></td>
-    <td>安全區與中文亂碼這兩個最常見的重生原因已消除；整體重生次數仍未統計。</td></tr>
-<tr><td>視覺風格一致</td><td>統一版型與規範</td><td><span class="tag t-ok">已達成</span></td>
-    <td>所有人共用同一套版型、配色與安全區規則，不再各自摸索。</td></tr>
-<tr><td>降低人工後製</td><td>減少 Photoshop 加工</td><td><span class="tag t-partial">部分改善</span></td>
-    <td>安全框與文字正確度改善後，多數情況不需再修；尚未統計比例。</td></tr>
-</table>
-<div class="note"><strong>關於數字的說明：</strong>上表刻意把「還沒量過」與「已達成」分開標示。
-要取得可信的效益數字，需要在實際編務流程中試用一段時間並記錄每張圖的耗時與重生次數，
-這也是下一階段建議優先做的事。</div>
+<div class="purpose">
+<b>目的二 · 記者在外面也能馬上做圖</b>
+<div class="pair">
+  <div><span class="lbl">原本的問題</span>
+  一定要回到電腦前、開工具、學會介面才做得出圖。外勤、突發、或人在路上時，等於做不了。</div>
+  <div><span class="lbl">現在怎麼解</span>
+  做了 LINE 版：<strong>聊天室就是介面</strong>。把新聞文字貼進對話框送出，圖就直接回到對話裡，
+  不必開電腦、不必安裝任何東西、也不必學操作。實際流程見第二節。</div>
+</div>
+</div>
+
+<div class="purpose">
+<b>目的三 · 安全框一定符合播出規定</b>
+<div class="pair">
+  <div><span class="lbl">原本的問題</span>
+  電視畫面上下左右必須留白，底部還要留給下標與跑馬燈。這件事交給 AI 自己拿捏完全不可靠——
+  試過直接告訴它留多少像素，它把數字當成美術字畫進畫面；改用百分比，又出現標題貼齊上緣、
+  資訊條壓進下標區。前後三輪十九張圖，沒有一次穩定達標。</div>
+  <div><span class="lbl">現在怎麼解</span>
+  改由程式在固定座標上置框，不再請 AI 配合，用的是與公司既有 Studio Locked-Frame 工具
+  同一組官方數值。實測四邊全部合格，而且<strong>每次結果都一樣</strong>，不再是抽卡。</div>
+</div>
+</div>
+
+<div class="note"><strong>要誠實說明的一點：</strong>上面三項都是已經做到的功能，
+但「省下多少時間、少了幾次重生」這類效益數字，還沒有在真實編務流程中量測過。
+要拿到可信的數字，需要實際試用一段時間並記錄每張圖的耗時與重生次數——這也是下一階段建議優先做的事。</div>
 
 <h3>還沒解決的部分</h3>
 <ul>
@@ -153,7 +179,7 @@ figcaption { color:var(--muted); font-size:13px; margin-top:6px; }
 
 <h3>建議的下一步</h3>
 <ol>
-<li>先在小範圍（核心編輯 3–5 人）實際試用兩週，同時記錄每張圖的耗時與重生次數，把 KPI 的空白補上</li>
+<li>先在小範圍（核心編輯 3–5 人）實際試用兩週，同時記錄每張圖的耗時與重生次數，把效益數字補上</li>
 <li>取得金鑰放置的授權後完成部署，解除「依賴電腦開機」這個最大阻礙</li>
 <li>再依試用回饋決定混合版型與局部修訂的優先順序</li>
 </ol>
