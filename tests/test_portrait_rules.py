@@ -56,19 +56,27 @@ class PortraitPromptBlockTests(unittest.TestCase):
 
     def test_no_reference_mode_forbids_drawing_the_face(self):
         prompt = _prompt("no_reference")
-        self.assertIn("NAMED REAL PERSON — NO REFERENCE AVAILABLE", prompt)
-        self.assertIn("MUST NOT draw their face", prompt)
+        self.assertIn("NAMED REAL PEOPLE — NO REFERENCE AVAILABLE", prompt)
+        self.assertIn("MUST NOT draw the face of ANY named real person", prompt)
         # 沒有照片時絕不能出現「參考附圖」的指示，否則模型只能憑印象捏臉
         self.assertNotIn("is attached to this request", prompt)
+
+    def test_no_reference_block_covers_multi_person_layouts(self):
+        """2026-08-05 事故：兩格肖像只附一張照片，沒照片那格被編出來還掛真名。"""
+        prompt = _prompt("no_reference")
+        self.assertIn("two or more portraits side by side", prompt)
+        self.assertIn("never beside an invented face", prompt)
 
     def test_none_mode_injects_no_portrait_block(self):
         prompt = _prompt("none")
         self.assertNotIn("NAMED REAL PERSON —", prompt)
+        self.assertNotIn("NAMED REAL PEOPLE —", prompt)
 
     def test_unknown_mode_falls_back_to_no_block(self):
         """打錯字或未來新增的模式不能靜靜放行成寫實肖像。"""
         prompt = _prompt("definitely-not-a-mode")
         self.assertNotIn("NAMED REAL PERSON —", prompt)
+        self.assertNotIn("NAMED REAL PEOPLE —", prompt)
 
     def test_default_rule_still_forbids_faces_without_a_block(self):
         prompt = _prompt("none")
@@ -81,49 +89,103 @@ class PortraitPromptBlockTests(unittest.TestCase):
 
 
 class PortraitDigestContractTests(unittest.TestCase):
-    def test_schema_requires_portrait_subject(self):
-        self.assertIn("portrait_subject", DIGEST_OUTPUT_SCHEMA["properties"])
-        self.assertIn("portrait_subject", DIGEST_OUTPUT_SCHEMA["required"])
+    def test_schema_requires_portrait_subjects(self):
+        self.assertIn("portrait_subjects", DIGEST_OUTPUT_SCHEMA["properties"])
+        self.assertIn("portrait_subjects", DIGEST_OUTPUT_SCHEMA["required"])
+
+    def test_schema_field_is_a_list_so_two_people_both_fit(self):
+        """單一字串裝不下第二個人，那正是 2026-08-05 事故的起點。"""
+        field = DIGEST_OUTPUT_SCHEMA["properties"]["portrait_subjects"]
+        self.assertEqual(field["type"], "array")
+        self.assertEqual(field["items"]["type"], "string")
 
     def test_response_defaults_to_no_portrait(self):
-        self.assertEqual(GenerateResponse(style="s", structure="t", variable="v").portrait_subject, "")
+        self.assertEqual(
+            GenerateResponse(style="s", structure="t", variable="v").portrait_subjects, []
+        )
 
     def test_digest_rule_hands_the_treatment_to_the_backend(self):
         rules = main.REAL_WORLD_FIDELITY_RULES
-        self.assertIn("portrait_subject", rules)
+        self.assertIn("portrait_subjects", rules)
         self.assertIn("you do NOT decide how the face is drawn", rules)
+
+    def test_digest_rule_demands_every_person_be_listed(self):
+        self.assertIn("EVERY specific named real person", main.REAL_WORLD_FIDELITY_RULES)
+        self.assertIn("listing only the first is a defect", main.REAL_WORLD_FIDELITY_RULES)
 
 
 class ResolvePortraitTests(unittest.TestCase):
     def test_no_subject_means_no_portrait_handling(self):
-        self.assertEqual(resolve_portrait("", "gpt"), ("none", None))
+        self.assertEqual(resolve_portrait([], "gpt"), ("none", None))
 
     def test_found_photo_selects_reference_mode(self):
         with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO):
             with patch.object(main, "supports_reference_image", return_value=True):
-                mode, photo = resolve_portrait("某人", "gpt")
+                mode, photo = resolve_portrait(["某人"], "gpt")
         self.assertEqual(mode, "reference")
         self.assertIs(photo, PHOTO)
 
     def test_missing_photo_falls_back_to_no_reference(self):
         with patch.object(photo_lookup, "find_reference_photo", return_value=None):
             with patch.object(main, "supports_reference_image", return_value=True):
-                mode, photo = resolve_portrait("查無此人", "gpt")
+                mode, photo = resolve_portrait(["查無此人"], "gpt")
         self.assertEqual((mode, photo), ("no_reference", None))
 
     def test_lookup_failure_does_not_break_generation(self):
         with patch.object(photo_lookup, "find_reference_photo", side_effect=OSError("boom")):
             with patch.object(main, "supports_reference_image", return_value=True):
-                mode, photo = resolve_portrait("某人", "gpt")
+                mode, photo = resolve_portrait(["某人"], "gpt")
         self.assertEqual((mode, photo), ("no_reference", None))
 
     def test_backend_without_reference_channel_never_claims_an_attachment(self):
         """原生 OpenAI 沒有參考圖通道，這時必須退回不畫臉，且不該白查一次圖。"""
         with patch.object(main, "supports_reference_image", return_value=False):
             with patch.object(photo_lookup, "find_reference_photo") as lookup:
-                mode, photo = resolve_portrait("某人", "gpt")
+                mode, photo = resolve_portrait(["某人"], "gpt")
         self.assertEqual((mode, photo), ("no_reference", None))
         lookup.assert_not_called()
+
+    def test_two_people_never_draw_faces(self):
+        """2026-08-05 事故：一張照片配兩個肖像框，模型把沒照片的那格編出來還掛真名。
+
+        參考圖通道一次只對應得了一個人，所以兩人以上一律退回不畫臉，
+        而且不該白查照片——查到了也不能用。
+        """
+        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO) as lookup:
+            with patch.object(main, "supports_reference_image", return_value=True):
+                mode, photo = resolve_portrait(["鄭明典", "吳軒彤"], "gpt")
+        self.assertEqual((mode, photo), ("no_reference", None))
+        lookup.assert_not_called()
+
+    def test_three_people_also_blocked(self):
+        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                mode, _ = resolve_portrait(["甲", "乙", "丙"], "gpt")
+        self.assertEqual(mode, "no_reference")
+
+    def test_duplicate_name_is_still_one_person(self):
+        """同一個人被列兩次不該被誤判成多人——清洗過的名單才進判斷。"""
+        subjects = main.clean_portrait_subjects(["某人", "某人 ", "某人"])
+        self.assertEqual(subjects, ["某人"])
+        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                mode, _ = resolve_portrait(subjects, "gpt")
+        self.assertEqual(mode, "reference")
+
+
+class CleanPortraitSubjectsTests(unittest.TestCase):
+    """消化端偶爾回 null／回字串／混進空值，這些都不該讓後面的判斷歪掉。"""
+
+    def test_none_and_bad_types_become_empty(self):
+        self.assertEqual(main.clean_portrait_subjects(None), [])
+        self.assertEqual(main.clean_portrait_subjects(123), [])
+        self.assertEqual(main.clean_portrait_subjects([None, 5, ""]), [])
+
+    def test_bare_string_is_treated_as_one_name(self):
+        self.assertEqual(main.clean_portrait_subjects("某人"), ["某人"])
+
+    def test_whitespace_is_trimmed_and_order_kept(self):
+        self.assertEqual(main.clean_portrait_subjects([" 甲 ", "乙"]), ["甲", "乙"])
 
 
 class SupportsReferenceImageTests(unittest.TestCase):

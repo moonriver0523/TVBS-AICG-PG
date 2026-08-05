@@ -10,7 +10,7 @@ LINE Bot 是純後端流程、沒有瀏覽器，因此在這裡有一份對應�
 
 # 供外部整合（如 /api/news-image/generate 的呼叫端）追蹤這批規則的版本；
 # 這裡或對應的 app.js 常數只要有實質修改，就手動遞增這個字串。
-PROMPT_VERSION = "v4-2026-08-01"
+PROMPT_VERSION = "v5-2026-08-05"
 
 # 地圖類型的標籤字面值。定義在本模組（而非 main.py）是因為匯入方向是
 # main → news_prompt：build_prompt() 要用它決定是否注入地圖規則，
@@ -176,7 +176,7 @@ DIRECTIONAL COLOUR CONVENTION (TAIWAN)
 # 過度刻意、顯得造作，v1 已足以讓觀眾辨識為插畫，使用者拍板採 v1。
 #
 # ⚠️ 這三個常數**刻意不同步到 app.js**，是本檔頂端「兩份來源」規則的明列例外。
-# 網頁版自己組 prompt 直打 /api/images/generate，沒有消化端填的 portrait_subject、
+# 網頁版自己組 prompt 直打 /api/images/generate，沒有消化端填的 portrait_subjects、
 # 也沒有後端的參考照查圖，同步過去只會得到一個永遠注入不了的區塊。網頁版因此
 # 停在 REAL_WORLD_RENDERING_RULES 的預設（不畫臉），那也是尚未裁決前的安全值。
 # 記載於 TODO.md「真實人物圖須參考真實樣貌」一節，前例同 2026-07-31 的
@@ -192,12 +192,13 @@ NAMED REAL PERSON — PORTRAIT TREATMENT (CRITICAL)
 - Never place the person in a scene, action or context that STRUCTURE does not describe."""
 
 PORTRAIT_NO_REFERENCE_RULES = """==================================================
-NAMED REAL PERSON — NO REFERENCE AVAILABLE (CRITICAL)
+NAMED REAL PEOPLE — NO REFERENCE AVAILABLE (CRITICAL)
 ==================================================
-- No reference photograph is available for the named real person, so you MUST NOT draw their face.
-- Depict the figure as a back view or a plain silhouette wearing the attire STRUCTURE describes. Never invent, guess or approximate the person's facial features, and never substitute a generic face in their place.
-- The 示意圖 label supplied in VARIABLE FIELDS sits beside the figure and must stay clearly visible.
-- Never place the person in a scene, action or context that STRUCTURE does not describe."""
+- No reference photograph is available, so you MUST NOT draw the face of ANY named real person in this graphic. This applies to every such figure, including when the layout calls for two or more portraits side by side.
+- Depict each figure as a back view or a plain silhouette wearing the attire STRUCTURE describes. Never invent, guess or approximate anyone's facial features, and never substitute a generic face in their place — a fabricated face sitting under a real person's name label is the single most serious failure this rule exists to prevent.
+- Name labels may stay, but each must sit beside a faceless figure, never beside an invented face.
+- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible.
+- Never place a person in a scene, action or context that STRUCTURE does not describe."""
 
 PORTRAIT_MODES = {
     "reference": PORTRAIT_WITH_REFERENCE_RULES,

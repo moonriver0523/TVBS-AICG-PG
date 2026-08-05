@@ -32,7 +32,8 @@ class DigestStageTests(unittest.TestCase):
     def test_key_clauses_present(self):
         # 2026-07-31 使用者裁決後的方向：場景盡量照真實畫、非真實必標「示意圖」。
         # 2026-08-01 修訂人物條款：消化端只負責判定「是不是具名真人肖像題」並回報
-        # portrait_subject，畫法改由後端依有無參考照片決定（見 test_portrait_rules）。
+        # portrait_subjects，畫法改由後端依有無參考照片決定（見 test_portrait_rules）。
+        # 2026-08-05 改成陣列：要列出畫面上每一位具名真人，漏列第二個人正是那天的事故成因。
         prompt = build_digest_instructions("記者", "standard", "情境示意圖")
         for phrase in (
             "NO UNSOURCED BRANDS",

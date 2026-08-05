@@ -120,9 +120,11 @@ class GenerateResponse(BaseModel):
     variable: str
     # 這次實際採用的圖表類型（自動判斷模式下為 AI 所選）
     chart_type: str = ""
-    # 版面以某位具名真實人物的肖像為主體時，填那個人的姓名；否則空字串。
+    # 版面會畫出臉孔的每一位具名真實人物，全部列進來（沒有就空陣列）。
     # 後端據此決定要不要查參考照片、以及套哪一種肖像處理規則。
-    portrait_subject: str = ""
+    # 為什麼是陣列不是單一字串：2026-08-05 出過事——使用者要「鄭明典／吳軒彤兩顆人頭」，
+    # 單一欄位只裝得下第一個人，第二格因此完全沒進肖像流程，被模型自由發揮還掛上真名。
+    portrait_subjects: list[str] = Field(default_factory=list)
 
 
 class ImageGenerateRequest(BaseModel):
@@ -156,10 +158,11 @@ DIGEST_OUTPUT_SCHEMA = {
         "variable": {"type": "string"},
         # 回報這次實際採用的圖表類型；自動判斷模式下前端用它顯示 AI 選了什麼
         "chart_type": {"type": "string", "enum": CHART_TYPE_CHOICES},
-        # 具名真實人物肖像題才填姓名，其餘一律空字串（見 REAL_WORLD_FIDELITY_RULES 第 5 條）
-        "portrait_subject": {"type": "string"},
+        # 版面會畫出臉孔的具名真實人物，全部列出；其餘一律空陣列
+        # （見 REAL_WORLD_FIDELITY_RULES 第 5 條）
+        "portrait_subjects": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["style", "structure", "variable", "chart_type", "portrait_subject"],
+    "required": ["style", "structure", "variable", "chart_type", "portrait_subjects"],
     "additionalProperties": False,
 }
 
@@ -301,7 +304,7 @@ REAL-WORLD ACCURACY (governs "style" and "structure" — the pictures you commis
 2. REAL PLACES AND OBJECTS: when the story shows a verifiable real place or object — a skyline, a specific building, a highway or interchange, an airport, a facility, or a specific model of aircraft, ship, vehicle or equipment — ask for it to be depicted as faithfully to its real appearance as your knowledge allows: real shape, real layout, real proportions, real distinguishing features. Do not stylise reality away when the real look is known.
 3. LABEL WHAT IS NOT REAL: if you are not confident the depiction will match the real thing, or the scene is a generic stand-in or a reconstruction rather than a documented view, you MUST plan a clearly visible 示意圖 label — write the word 示意圖 into "variable" and tell "structure" where it sits. An unlabelled reconstruction presented as real is a defect. Do not fabricate identifying detail you do not actually know and pass it off as real.
 4. NO UNSOURCED BRANDS. Signage, storefronts, banners, packaging, product bodies, vehicle liveries, screens, jerseys, badges and building facades must be de-identified: blank surfaces or generic abstract marks, no readable brand text, no trademark, no ticker symbol, no exchange name. A brand may appear ONLY if its name is in the source material, and then only as plain typeset text, never as a reproduced logotype. Whenever the scene contains any object that would normally carry a brand, write this requirement into "structure" explicitly — do not assume the renderer will infer it.
-5. NAMED REAL PEOPLE: you do NOT decide how the face is drawn. If the graphic centres on the portrait of ONE specific named real person, put that person's name — exactly as the source material writes it, no title, no company — in the "portrait_subject" field, and in "structure" describe only WHERE the figure sits and what it wears, never the rendering treatment (do not write "photorealistic", "faithful likeness", "back view", "silhouette", "illustration" or similar). The backend looks up a reference photograph and appends the binding portrait rules itself. Leave "portrait_subject" as an empty string for every other graphic, including crowds, unnamed or generic figures, and stories where no single person is the subject. Always plan the 示意圖 label into "variable" when a person is depicted. Never place the person in a scene, action or context the source material does not describe.
+5. NAMED REAL PEOPLE: you do NOT decide how the face is drawn. List in "portrait_subjects" EVERY specific named real person whose face the graphic would show — one entry per person, names exactly as the source material writes them, no title, no company. If the layout shows two people, list both; listing only the first is a defect. In "structure" describe only WHERE each figure sits and what it wears, never the rendering treatment (do not write "photorealistic", "faithful likeness", "back view", "silhouette", "illustration" or similar). The backend looks up reference photographs and appends the binding portrait rules itself. Leave "portrait_subjects" as an empty array for every other graphic, including crowds and unnamed or generic figures. Always plan the 示意圖 label into "variable" when a person is depicted. Never place a person in a scene, action or context the source material does not describe.
 """
 
 
@@ -602,7 +605,7 @@ def generate(req: GenerateRequest):
             structure=data.get("structure", ""),
             variable=data.get("variable", ""),
             chart_type=chart_type,
-            portrait_subject=(data.get("portrait_subject") or "").strip(),
+            portrait_subjects=clean_portrait_subjects(data.get("portrait_subjects")),
         )
         # 網頁版走這個端點後自己在前端組生圖 prompt，後端看不到最終 prompt，
         # 因此這裡只記到消化為止——有輸入與消化結果，事後仍可重跑重現。
@@ -1285,27 +1288,61 @@ def resolve_aspect_ratio(requested: str | None, safe_frame: bool) -> str:
     return SAFE_FRAME_ASPECT_RATIO if safe_frame else DEFAULT_ASPECT_RATIO
 
 
+def clean_portrait_subjects(raw: object) -> list[str]:
+    """把消化端回傳的名單洗乾淨：去空白、丟掉非字串與空值、去重但保留順序。
+
+    模型偶爾會回 null、回字串而不是陣列、或同一個人重複列兩次，這些都不該讓
+    後面的判斷跟著歪掉。
+    """
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    cleaned: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        name = item.strip()
+        if name and name not in cleaned:
+            cleaned.append(name)
+    return cleaned
+
+
 def resolve_portrait(
-    portrait_subject: str, provider: str
+    portrait_subjects: list[str], provider: str
 ) -> tuple[str, photo_lookup.ReferencePhoto | None]:
     """決定這次的肖像處理方式，回傳 (portrait_mode, 參考照片或 None)。
 
     三種結果：
     - 不是真人肖像題 → ("none", None)，沿用一般規則
     - 查到照片且後端送得出去 → ("reference", 照片)，走插畫化肖像
-    - 查不到照片、或後端送不出參考圖 → ("no_reference", None)，一律不生成臉孔
+    - 查不到照片、後端送不出參考圖、或畫面上有兩位以上具名真人
+      → ("no_reference", None)，一律不生成臉孔
+
+    **兩人以上一律不畫臉**（2026-08-05 事故後加）：參考圖通道一次只能對應一個人，
+    附一張照片卻要模型畫兩張臉時，它會把沒有照片的那格自己編出來，而且照樣掛上
+    真名姓名條——掛著真名的假臉比畫得醜嚴重得多。真正的多人支援要能逐格對應
+    參考圖，還沒做到之前，寧可整張退回不畫臉。
 
     查圖失敗（網路、逾時、查無此人）不讓整條請求失敗：新聞生產不能因為維基
     查不到人就整張圖生不出來，退回不畫臉仍是可播的結果。
     """
-    if not portrait_subject:
+    if not portrait_subjects:
         return "none", None
+    if len(portrait_subjects) > 1:
+        print(
+            f"[portrait] 畫面有 {len(portrait_subjects)} 位具名真人"
+            f"（{'、'.join(portrait_subjects)}），一律不生成臉孔",
+            flush=True,
+        )
+        return "no_reference", None
     if not supports_reference_image(provider):
         return "no_reference", None
+    subject = portrait_subjects[0]
     try:
-        photo = photo_lookup.find_reference_photo(portrait_subject)
+        photo = photo_lookup.find_reference_photo(subject)
     except Exception as exc:  # noqa: BLE001 — 查圖是加分項，不該拖垮生圖
-        print(f"[portrait] 查參考照片失敗（{portrait_subject}）：{exc}", flush=True)
+        print(f"[portrait] 查參考照片失敗（{subject}）：{exc}", flush=True)
         return "no_reference", None
     if photo is None:
         return "no_reference", None
@@ -1336,7 +1373,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
         )
     finally:
         _inside_pipeline.reset(token)
-    portrait_mode, reference_photo = resolve_portrait(digest.portrait_subject, req.provider)
+    portrait_mode, reference_photo = resolve_portrait(digest.portrait_subjects, req.provider)
     prompt = build_prompt(
         role=req.role,
         engine=req.provider,
@@ -1376,7 +1413,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
         provider=req.provider,
         image_model=image.model,
         prompt_version=PROMPT_VERSION,
-        portrait_subject=digest.portrait_subject,
+        portrait_subject="、".join(digest.portrait_subjects),
         portrait_mode=portrait_mode,
         portrait_photo_source=(
             reference_photo.source_page if reference_photo is not None else ""
