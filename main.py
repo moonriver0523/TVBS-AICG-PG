@@ -1385,18 +1385,39 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
         aspect_ratio=aspect_ratio,
         portrait_mode=portrait_mode,
     )
-    image = generate_image(
-        ImageGenerateRequest(
-            prompt=prompt,
-            provider=req.provider,
-            aspect_ratio=aspect_ratio,
-            image_size=req.image_size,
-            safe_frame=req.safe_frame,
-            reference_image_data_url=(
-                reference_photo.data_url() if reference_photo is not None else ""
-            ),
+    try:
+        image = generate_image(
+            ImageGenerateRequest(
+                prompt=prompt,
+                provider=req.provider,
+                aspect_ratio=aspect_ratio,
+                image_size=req.image_size,
+                safe_frame=req.safe_frame,
+                reference_image_data_url=(
+                    reference_photo.data_url() if reference_photo is not None else ""
+                ),
+            )
         )
-    )
+    except Exception as exc:
+        # 生圖這一步失敗（例如上游安全過濾擋下）在此之前完全沒有留痕——
+        # 消化與 prompt 都已經算出來了，一併記下才能事後回查是哪段文字觸發。
+        request_log.log_failure(
+            request_id=request_id,
+            source=req.source or "news-image",
+            client_id=req.client_id,
+            news_text=req.news_text,
+            error=str(exc),
+            style=digest.style,
+            structure=digest.structure,
+            variable=digest.variable,
+            prompt=prompt,
+            chart_type=digest.chart_type,
+            type_label=req.type_label,
+            role=req.role,
+            density=req.density,
+            provider=req.provider,
+        )
+        raise
     request_log.log_generation(
         request_id=request_id,
         source=req.source or "news-image",

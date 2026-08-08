@@ -33,10 +33,15 @@ the request ID req_a7f2bd8330074ab7b3dc0f35146dc35c.","code":400,"metadata":{"pr
 
 ## 待辦
 
-- [ ] 補一則稿件內容供覆盤（若使用者記得或截圖還在）
-- [ ] 評估是否要在 `main.py` 生圖失敗時，額外記錄（僅本機、不外流）當次 prompt 摘要，
-      方便未來同類案例排查，同時要顧到暫存內容的保留期限與個資規範（見 TODO.md
-      「暫存的照片是個人資料」同一原則）
+- [x] **2026-08-08 已修復**：`request_log.py` 新增 `log_failure()`，`main.py` 的
+      `generate_news_image()` 在 `generate_image()` 失敗時會連同新聞原文、消化結果、
+      最終 prompt、錯誤訊息一起記到 `logs/generations-*.jsonl`（`ok: false`），
+      同一批文字保留期限（預設 14 天，`REQUEST_LOG_RETENTION_DAYS` 可調）。
+      同時把 `static/generated/` 的圖片保留期從 24 小時延長到 7 天
+      （`line_bot.py` 的 `KEEP_FILES_HOURS`），事故後有更多時間回查。
+      往後同類案例可直接查當天的 JSONL，不必再靠使用者回憶原文。
+- [ ] 補一則稿件內容供覆盤（若使用者記得或截圖還在）——本次事發早於上述修復，
+      log 裡沒有這筆的原文
 - [ ] 若後續能重現，補充是哪類生物新聞（例如疫情/病毒/動物解剖圖等）觸發，
       納入主管報告的「已知限制」一欄
 

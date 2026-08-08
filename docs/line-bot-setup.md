@@ -68,7 +68,7 @@ https://xxxx.trycloudflare.com/line/webhook
 - 文字密度預設「簡化」（手機上好讀），要改回標準版就把 `.env` 的
   `LINE_DIGEST_DENSITY` 設成 `standard` 並重啟後端
 - 背景任務跑在同一個 uvicorn 行程，沒有佇列——多人同時下指令會排隊變慢
-- `static/generated/` 的圖超過 24 小時會在下次請求時自動清掉
+- `static/generated/` 的圖超過 7 天會在下次請求時自動清掉（2026-08-08 由 24 小時延長）
 - 沒有重複訊息去重：LINE 重送時可能重複生成
 
 ## 永久化方案（2026-07-29 決議：demo 後執行）

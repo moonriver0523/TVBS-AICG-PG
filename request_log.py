@@ -115,6 +115,55 @@ def log_generation(
         print(f"[request_log] write failed: {exc}", flush=True)
 
 
+def log_failure(
+    *,
+    request_id: str,
+    source: str,
+    news_text: str,
+    error: str,
+    style: str = "",
+    structure: str = "",
+    variable: str = "",
+    prompt: str = "",
+    chart_type: str = "",
+    type_label: str = "",
+    role: str = "",
+    density: str = "",
+    provider: str = "",
+    client_id: str = "",
+) -> None:
+    """記一筆失敗的生成（例如上游安全過濾擋下）。
+
+    2026-08-08 缺口：失敗只會 print，連原始新聞文字都沒留，事後排查不出是哪段
+    文字/哪個 prompt 觸發拒絕。跟 log_generation 分開一支函式，避免混淆
+    「這筆到底有沒有成功出圖」——查 log 時 ok=False 一眼就能篩出失敗案例。
+    """
+    if not ENABLED:
+        return
+    try:
+        _write(
+            {
+                "request_id": request_id,
+                "ok": False,
+                "source": source,
+                "client_id": client_id,
+                "provider": provider,
+                "role": role,
+                "density": density,
+                "type_label": type_label,
+                "chart_type": chart_type,
+                "news_text": news_text,
+                "style": style,
+                "structure": structure,
+                "variable": variable,
+                "prompt": prompt[:MAX_PROMPT_CHARS],
+                "error": error[:MAX_PROMPT_CHARS],
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - 記 log 失敗只印出來，不影響回應
+        print(f"[request_log] write failed: {exc}", flush=True)
+
+
 def log_image_file(*, request_id: str, image_name: str, client_id: str = "") -> None:
     """把成圖檔名接回 request_id。
 

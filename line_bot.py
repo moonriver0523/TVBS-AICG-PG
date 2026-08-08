@@ -40,7 +40,8 @@ GENERATED_DIR = STATIC_ROOT / "generated"
 PREVIEW_MAX_WIDTH = 1280
 PREVIEW_QUALITY = 88
 # 原型階段沒有儲存體管理，超過這個時數的舊圖在每次請求時順手清掉
-KEEP_FILES_HOURS = 24
+# 2026-08-08：24 小時太短，出事後常常等不到人回報就被清掉，改成 7 天
+KEEP_FILES_HOURS = 24 * 7
 
 router = APIRouter(prefix="/line", tags=["line"])
 

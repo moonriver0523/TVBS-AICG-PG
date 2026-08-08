@@ -74,6 +74,22 @@ class LogWritingTests(unittest.TestCase):
             request_log.log_generation(request_id="x", source="test", news_text="n")
         self.assertEqual(self.records(), [])
 
+    def test_failure_record_carries_error_and_is_marked_not_ok(self):
+        request_log.log_failure(
+            request_id="abc123", source="line", news_text="生物疫情圖表",
+            error="[OpenRouter image HTTPError] 400: rejected by the safety system",
+            style="S", structure="T", variable="V", prompt="P",
+            chart_type="資料圖表", provider="gpt",
+        )
+        [record] = self.records()
+        self.assertEqual(record["ok"], False)
+        self.assertEqual(record["news_text"], "生物疫情圖表")
+        self.assertIn("safety system", record["error"])
+
+    def test_failure_write_failure_never_raises(self):
+        with patch.object(request_log, "_write", side_effect=OSError("disk full")):
+            request_log.log_failure(request_id="x", source="test", news_text="n", error="e")
+
     def test_retention_sweep_removes_stale_files(self):
         stale = self.log_dir / "generations-20200101.jsonl"
         stale.write_text("{}\n", encoding="utf-8")
@@ -85,6 +101,29 @@ class LogWritingTests(unittest.TestCase):
 
 class DigestEndpointLoggingTests(unittest.TestCase):
     """/api/generate 走網頁版，後端看不到最終 prompt，但仍要留下輸入與消化結果。"""
+
+    def test_failed_generation_logs_failure_and_still_raises(self):
+        fake_digest = main.GenerateResponse(
+            style="S", structure="T", variable="[標題]生物疫情圖表",
+            chart_type="資料圖表", portrait_subjects=[],
+        )
+        with patch.object(main, "check_input") as check_input, \
+                patch.object(main, "generate", return_value=fake_digest), \
+                patch.object(main, "resolve_portrait", return_value=("none", None)), \
+                patch.object(main, "build_prompt", return_value="最終 PROMPT"), \
+                patch.object(main, "generate_image", side_effect=RuntimeError("safety system 400")), \
+                patch.object(request_log, "log_failure") as failed, \
+                patch.object(request_log, "log_generation") as logged:
+            check_input.return_value = type("V", (), {"accepted": True, "user_message": ""})()
+            with self.assertRaises(RuntimeError):
+                main.generate_news_image(
+                    main.NewsImageGenerateRequest(news_text="生物疫情圖表", source="line")
+                )
+        failed.assert_called_once()
+        self.assertEqual(failed.call_args.kwargs["news_text"], "生物疫情圖表")
+        self.assertEqual(failed.call_args.kwargs["prompt"], "最終 PROMPT")
+        self.assertIn("safety system", failed.call_args.kwargs["error"])
+        logged.assert_not_called()
 
     def test_digest_is_logged_once_when_called_directly(self):
         with patch.object(request_log, "log_generation") as logged, \
