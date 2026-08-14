@@ -20,6 +20,7 @@ from main import (  # noqa: E402
     DIGEST_OUTPUT_SCHEMA,
     GenerateResponse,
     ImageGenerateRequest,
+    apply_portrait_to_image_request,
     resolve_portrait,
     supports_reference_image,
 )
@@ -278,6 +279,42 @@ class PhotoLookupTests(unittest.TestCase):
     def test_network_failure_returns_none(self):
         with patch.object(photo_lookup, "_get", return_value=None):
             self.assertIsNone(photo_lookup.find_reference_photo("某人"))
+
+
+class ApplyPortraitToImageRequestTests(unittest.TestCase):
+    """網頁版 /api/images/generate 在生圖前補上肖像規則與參考照。"""
+
+    def test_no_subjects_leaves_request_unchanged(self):
+        req = ImageGenerateRequest(prompt="hello prompt")
+        self.assertIs(apply_portrait_to_image_request(req), req)
+
+    def test_one_person_with_photo_injects_rules_and_attachment(self):
+        req = ImageGenerateRequest(prompt="base prompt", portrait_subjects=["某人"], provider="gpt")
+        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                out = apply_portrait_to_image_request(req)
+        self.assertIn("NAMED REAL PERSON — PORTRAIT TREATMENT", out.prompt)
+        self.assertTrue(out.reference_image_data_url.startswith("data:image/jpeg;base64,"))
+
+    def test_two_people_forbid_faces_and_attach_nothing(self):
+        req = ImageGenerateRequest(
+            prompt="base prompt", portrait_subjects=["鄭明典", "吳軒彤"], provider="gpt"
+        )
+        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                out = apply_portrait_to_image_request(req)
+        self.assertIn("NO REFERENCE AVAILABLE", out.prompt)
+        self.assertEqual(out.reference_image_data_url, "")
+
+    def test_existing_block_is_not_duplicated(self):
+        already = "base\n\n" + news_prompt.PORTRAIT_WITH_REFERENCE_RULES
+        req = ImageGenerateRequest(
+            prompt=already, portrait_subjects=["某人"], provider="gpt"
+        )
+        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                out = apply_portrait_to_image_request(req)
+        self.assertEqual(out.prompt.count("NAMED REAL PERSON — PORTRAIT TREATMENT"), 1)
 
 
 if __name__ == "__main__":

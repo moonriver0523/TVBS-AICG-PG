@@ -30,7 +30,13 @@ import photo_lookup
 import request_log
 import safe_frame
 from input_filter import check_input, note_accepted
-from news_prompt import MAP_TYPE_LABEL, PROMPT_VERSION, build_prompt, compose_variable
+from news_prompt import (
+    MAP_TYPE_LABEL,
+    PORTRAIT_MODES,
+    PROMPT_VERSION,
+    build_prompt,
+    compose_variable,
+)
 
 load_dotenv()
 
@@ -136,6 +142,9 @@ class ImageGenerateRequest(BaseModel):
     safe_frame: bool = False
     # 真人肖像的參考照片（data URL）。空字串＝這次不附參考圖。
     reference_image_data_url: str = ""
+    # 網頁版消化後回傳的具名真人名單。後端據此查參考照並注入肖像規則。
+    # LINE／generate_news_image 已在組 prompt 時處理過，不要再傳，以免規則灌兩次。
+    portrait_subjects: list[str] = Field(default_factory=list)
 
 
 class ImageGenerateResponse(BaseModel):
@@ -783,11 +792,36 @@ def generate_image(req: ImageGenerateRequest):
     設 IMAGE_BACKEND=native 可切回原生 OpenAI / Gemini 直連。
 
     req.safe_frame=True 時，生成後再由 safe_frame 置入 TVBS 安全框。
+    網頁版可帶 portrait_subjects，在這裡查參考照並注入肖像規則。
+    generate_news_image 已組好 prompt，走這支時不要重複落檔。
     """
-    result = generate_image_raw(req)
-    verify_output_aspect_ratio(result, req.aspect_ratio)
-    if req.safe_frame:
-        result = frame_image_response(result)
+    req = apply_portrait_to_image_request(req)
+    request_id = request_log.new_request_id()
+    try:
+        result = generate_image_raw(req)
+        verify_output_aspect_ratio(result, req.aspect_ratio)
+        if req.safe_frame:
+            result = frame_image_response(result)
+    except Exception as exc:
+        if not _inside_pipeline.get():
+            request_log.log_failure(
+                request_id=request_id,
+                source="web-image",
+                news_text="",
+                error=str(exc),
+                prompt=req.prompt,
+                provider=req.provider,
+            )
+        raise
+    if not _inside_pipeline.get():
+        request_log.log_generation(
+            request_id=request_id,
+            source="web-image",
+            news_text="",
+            prompt=req.prompt,
+            provider=req.provider,
+            image_model=result.model,
+        )
     return result
 
 
@@ -1349,6 +1383,28 @@ def resolve_portrait(
     return "reference", photo
 
 
+def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateRequest:
+    """網頁版生圖路徑：依 portrait_subjects 注入規則並附上參考照。
+
+    LINE／generate_news_image 已在 build_prompt 處理過，不會傳 portrait_subjects。
+    規則字串若已在 prompt 裡，不再灌第二次。
+    """
+    subjects = clean_portrait_subjects(req.portrait_subjects)
+    if not subjects:
+        return req
+    mode, photo = resolve_portrait(subjects, req.provider)
+    block = PORTRAIT_MODES.get(mode, "")
+    prompt = req.prompt
+    if block and block not in prompt:
+        prompt = f"{prompt.rstrip()}\n\n{block}"
+    reference = req.reference_image_data_url
+    if photo is not None and not reference:
+        reference = photo.data_url()
+    if prompt == req.prompt and reference == req.reference_image_data_url:
+        return req
+    return req.model_copy(update={"prompt": prompt, "reference_image_data_url": reference})
+
+
 def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateResponse:
     # 前置過濾（縱深防禦）：擋垃圾／亂碼／注入輸入，避免燒掉付費呼叫。
     # LINE 路徑在 line_bot 已含頻率限制地查過一次，這裡 client_id 為空時
@@ -1371,42 +1427,56 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 safe_frame=req.safe_frame,
             )
         )
-    finally:
-        _inside_pipeline.reset(token)
-    portrait_mode, reference_photo = resolve_portrait(digest.portrait_subjects, req.provider)
-    prompt = build_prompt(
-        role=req.role,
-        engine=req.provider,
-        type_label=digest.chart_type or req.type_label,
-        style=digest.style,
-        structure=digest.structure,
-        variable=compose_variable(digest.variable),
-        safe_frame=req.safe_frame,
-        aspect_ratio=aspect_ratio,
-        portrait_mode=portrait_mode,
-    )
-    try:
-        image = generate_image(
-            ImageGenerateRequest(
-                prompt=prompt,
-                provider=req.provider,
-                aspect_ratio=aspect_ratio,
-                image_size=req.image_size,
-                safe_frame=req.safe_frame,
-                reference_image_data_url=(
-                    reference_photo.data_url() if reference_photo is not None else ""
-                ),
-            )
+        portrait_mode, reference_photo = resolve_portrait(
+            digest.portrait_subjects, req.provider
         )
-    except Exception as exc:
-        # 生圖這一步失敗（例如上游安全過濾擋下）在此之前完全沒有留痕——
-        # 消化與 prompt 都已經算出來了，一併記下才能事後回查是哪段文字觸發。
-        request_log.log_failure(
+        prompt = build_prompt(
+            role=req.role,
+            engine=req.provider,
+            type_label=digest.chart_type or req.type_label,
+            style=digest.style,
+            structure=digest.structure,
+            variable=compose_variable(digest.variable),
+            safe_frame=req.safe_frame,
+            aspect_ratio=aspect_ratio,
+            portrait_mode=portrait_mode,
+        )
+        try:
+            image = generate_image(
+                ImageGenerateRequest(
+                    prompt=prompt,
+                    provider=req.provider,
+                    aspect_ratio=aspect_ratio,
+                    image_size=req.image_size,
+                    safe_frame=req.safe_frame,
+                    reference_image_data_url=(
+                        reference_photo.data_url() if reference_photo is not None else ""
+                    ),
+                )
+            )
+        except Exception as exc:
+            request_log.log_failure(
+                request_id=request_id,
+                source=req.source or "news-image",
+                client_id=req.client_id,
+                news_text=req.news_text,
+                error=str(exc),
+                style=digest.style,
+                structure=digest.structure,
+                variable=digest.variable,
+                prompt=prompt,
+                chart_type=digest.chart_type,
+                type_label=req.type_label,
+                role=req.role,
+                density=req.density,
+                provider=req.provider,
+            )
+            raise
+        request_log.log_generation(
             request_id=request_id,
             source=req.source or "news-image",
             client_id=req.client_id,
             news_text=req.news_text,
-            error=str(exc),
             style=digest.style,
             structure=digest.structure,
             variable=digest.variable,
@@ -1416,37 +1486,23 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             role=req.role,
             density=req.density,
             provider=req.provider,
+            image_model=image.model,
+            prompt_version=PROMPT_VERSION,
+            portrait_subject="、".join(digest.portrait_subjects),
+            portrait_mode=portrait_mode,
+            portrait_photo_source=(
+                reference_photo.source_page if reference_photo is not None else ""
+            ),
         )
-        raise
-    request_log.log_generation(
-        request_id=request_id,
-        source=req.source or "news-image",
-        client_id=req.client_id,
-        news_text=req.news_text,
-        style=digest.style,
-        structure=digest.structure,
-        variable=digest.variable,
-        prompt=prompt,
-        chart_type=digest.chart_type,
-        type_label=req.type_label,
-        role=req.role,
-        density=req.density,
-        provider=req.provider,
-        image_model=image.model,
-        prompt_version=PROMPT_VERSION,
-        portrait_subject="、".join(digest.portrait_subjects),
-        portrait_mode=portrait_mode,
-        portrait_photo_source=(
-            reference_photo.source_page if reference_photo is not None else ""
-        ),
-    )
-    return NewsImageGenerateResponse(
-        image_data_base64=image.image_data_base64,
-        mime_type=image.mime_type,
-        model=image.model,
-        title=_extract_title(digest.variable),
-        request_id=request_id,
-    )
+        return NewsImageGenerateResponse(
+            image_data_base64=image.image_data_base64,
+            mime_type=image.mime_type,
+            model=image.model,
+            title=_extract_title(digest.variable),
+            request_id=request_id,
+        )
+    finally:
+        _inside_pipeline.reset(token)
 
 
 def verify_news_image_api_key(x_api_key: str = Header(default="")) -> None:

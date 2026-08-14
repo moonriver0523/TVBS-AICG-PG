@@ -18,6 +18,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import time
 import uuid
 
@@ -44,6 +45,69 @@ PREVIEW_QUALITY = 88
 KEEP_FILES_HOURS = 24 * 7
 
 router = APIRouter(prefix="/line", tags=["line"])
+
+ROLE_REPORTER = "記者"
+ROLE_EDITOR = "編輯"
+# 每人／每聊天室上次選的角色。重啟就忘，跟頻率限制同一個限制。
+_role_by_client: dict[str, str] = {}
+
+_STANDALONE_ROLES = {
+    "記者": ROLE_REPORTER,
+    "記者模式": ROLE_REPORTER,
+    "記者版": ROLE_REPORTER,
+    "編輯": ROLE_EDITOR,
+    "編輯模式": ROLE_EDITOR,
+    "編輯版": ROLE_EDITOR,
+}
+# 只認開頭或獨立指令行，避免「編輯部」這種複合詞被誤判成切換角色。
+_LEADING_ROLE = re.compile(r"^(記者|編輯)(?:模式|版)?\s*[:：]\s*")
+_LEADING_ROLE_NEWLINE = re.compile(r"^(記者|編輯)(?:模式|版)?\s*\n+")
+_LEADING_ROLE_SPACE = re.compile(r"^(記者|編輯)(?:模式|版)?[ \t]+(?=\S)")
+_INSTRUCTION_ROLE = re.compile(
+    r"^(?:指示|指令)\s*[:：]\s*(記者|編輯)(?:模式|版)?\s*$",
+    re.MULTILINE,
+)
+
+
+def reset_role_state() -> None:
+    _role_by_client.clear()
+
+
+def parse_line_role(text: str, previous: str | None = None) -> tuple[str, str, bool]:
+    """從一則 LINE 訊息拆出 (role, 新聞正文, 是否只是切換角色)。
+
+    預設記者。只有明確指令才走編輯。standalone=True 時不要生圖。
+    """
+    raw = (text or "").strip()
+    fallback = previous or ROLE_REPORTER
+    if not raw:
+        return fallback, "", False
+
+    standalone = _STANDALONE_ROLES.get(raw)
+    if standalone:
+        return standalone, "", True
+
+    role = fallback
+    news = raw
+
+    if _INSTRUCTION_ROLE.search(news):
+        last = None
+        for match in _INSTRUCTION_ROLE.finditer(news):
+            last = match
+        if last is not None:
+            role = last.group(1)
+        news = _INSTRUCTION_ROLE.sub("", news).strip()
+
+    for pattern in (_LEADING_ROLE, _LEADING_ROLE_NEWLINE, _LEADING_ROLE_SPACE):
+        match = pattern.match(news)
+        if match:
+            role = match.group(1)
+            news = news[match.end() :].strip()
+            break
+
+    if not news:
+        return role, "", True
+    return role, news, False
 
 
 def _env(name: str) -> str:
@@ -152,9 +216,22 @@ def generate_and_push(reply_token: str, to: str, news_text: str) -> None:
     """
     from main import NewsImageGenerateRequest, generate_news_image
 
+    role, news_text, standalone = parse_line_role(news_text, _role_by_client.get(to))
+    if standalone:
+        _role_by_client[to] = role
+        try:
+            reply_text(
+                reply_token,
+                f"已切換成{role}模式。請把新聞稿再送一次，我會用{role}規則生圖。",
+            )
+        except Exception as exc:  # noqa: BLE001 - 回絕訊息失敗只記 log
+            print(f"[line] role reply failed: {exc}", flush=True)
+        return
+
     # 前置過濾：在任何付費呼叫（digest／生圖）之前把關。被擋的訊息用同一個
     # 免費 replyToken 回覆原因後直接結束——不進 ack+push 流程、不消耗 push 額度。
     # client_id 用聊天對象（群組回到群、1:1 回個人），頻率限制以聊天室為單位。
+    # 角色指令已剝掉，這裡只檢查真正的新聞正文。
     verdict = check_input(news_text, client_id=to)
     if not verdict.accepted:
         try:
@@ -163,27 +240,35 @@ def generate_and_push(reply_token: str, to: str, news_text: str) -> None:
             print(f"[line] reject reply failed: {exc}", flush=True)
         return
     note_accepted(news_text, client_id=to)
+    _role_by_client[to] = role
 
     try:
-        reply_text(reply_token, "收到！AI 消化與生圖中，約 30-120 秒，完成後回傳圖片。")
+        reply_text(
+            reply_token,
+            f"收到！以{role}模式消化生圖中，約 30-120 秒，完成後回傳圖片。",
+        )
     except Exception as exc:  # noqa: BLE001 - 秒回失敗不該中斷後續生成
         print(f"[line] ack reply failed: {exc}", flush=True)
 
     try:
-        # 原型階段固定記者角色、圖表類型仍由 AI 自動判斷；
-        # 密度預設簡化版（手機上更好讀），可用 LINE_DIGEST_DENSITY 切回 standard
-        density = os.getenv("LINE_DIGEST_DENSITY", "simplified").strip()
-        if density not in ("standard", "simplified"):
-            density = "simplified"
+        # 圖表類型仍由 AI 自動判斷。記者密度預設簡化（手機好讀），
+        # 可用 LINE_DIGEST_DENSITY 切回 standard；編輯固定 standard，
+        # 才不會被簡化規則蓋掉兩行標題與 <蓋章>。
+        if role == ROLE_EDITOR:
+            density = "standard"
+        else:
+            density = os.getenv("LINE_DIGEST_DENSITY", "simplified").strip()
+            if density not in ("standard", "simplified"):
+                density = "simplified"
         provider = os.getenv("LINE_IMAGE_PROVIDER", "gemini")
         # 安全框置框：預設開啟。實測 GPT／Gemini 都無法自己留出合格留白
         # （docs/error-cases/ 四輪實驗，底部安全區 0 次合格），改由後端數學置框。
-        # 要看未置框的原始生成圖可設 LINE_SAFE_FRAME=0。
+        # 要看未置框的原始生成圖可設 LINE_SAFE_FRAME=0。編輯／記者同一套官方框。
         safe_frame_enabled = os.getenv("LINE_SAFE_FRAME", "1").strip() not in ("0", "false", "False")
         result = generate_news_image(
             NewsImageGenerateRequest(
                 news_text=news_text,
-                role="記者",
+                role=role,
                 density=density,
                 provider=provider,
                 safe_frame=safe_frame_enabled,

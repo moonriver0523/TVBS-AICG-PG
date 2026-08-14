@@ -307,6 +307,8 @@ let state = {
     digestChartType: 'auto',
     // 自動判斷模式下，AI 實際選了哪一類（由後端 chart_type 回報）
     digestResolvedType: null,
+    // 最近一次消化回傳的具名真人，生圖時交給後端查參考照
+    portraitSubjects: [],
     // 最終 Prompt 的類型標籤聽誰的：'digest'（第一頁自動生成）或 'library'（第二頁調版型）
     // 由「最後一次動作」決定
     promptTypeSource: 'library',
@@ -1022,6 +1024,9 @@ async function handleAIDigestion() {
         document.getElementById('field-style').value = data.style || '';
         document.getElementById('field-structure').value = data.structure || '';
         document.getElementById('field-variable').value = (data.variable || '').replace(SYSTEM_DISCLAIMER, '').trim();
+        state.portraitSubjects = Array.isArray(data.portrait_subjects)
+            ? data.portrait_subjects.filter(name => typeof name === 'string' && name.trim())
+            : [];
 
         // 自動判斷模式：記下 AI 實際選了哪一類，供徽章與按鈕顯示
         if (state.digestChartType === AUTO_TYPE_KEY) {
@@ -1034,9 +1039,12 @@ async function handleAIDigestion() {
         renderTags(); updateCounter();
         // 剛做完自動生成＝以第一頁的類型為準（claimPromptType 內含 syncOutput）
         claimPromptType('digest');
+        const portraitHint = state.portraitSubjects.length
+            ? `；具名真人：${state.portraitSubjects.join('、')}（生圖時查參考照）`
+            : '';
         showToast(state.digestResolvedType
-            ? `AI 判斷為「${CHART_TYPES[state.digestResolvedType].label}」並完成佈局規劃`
-            : "AI 已完成佈局規劃與視覺輔助設計");
+            ? `AI 判斷為「${CHART_TYPES[state.digestResolvedType].label}」並完成佈局規劃${portraitHint}`
+            : `AI 已完成佈局規劃與視覺輔助設計${portraitHint}`);
     } catch (err) {
         console.error(err);
         showToast("AI 服務連線失敗，請稍後再試");
@@ -1112,7 +1120,8 @@ async function handleImageGeneration() {
                 provider,
                 aspect_ratio: currentAspectRatio(),
                 image_size: state.imageSize,
-                safe_frame: state.safeFrame
+                safe_frame: state.safeFrame,
+                portrait_subjects: state.portraitSubjects
             })
         });
         const data = await response.json();

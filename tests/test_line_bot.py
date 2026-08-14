@@ -166,6 +166,130 @@ class InputFilterWiringTests(unittest.TestCase):
         self.assertIn("重骰", reply.call_args.args[1])
 
 
+class ParseLineRoleTests(unittest.TestCase):
+    """預設記者；只有明確指令才走編輯。新聞內文的「編輯部」不能誤判。"""
+
+    def test_plain_news_defaults_to_reporter(self):
+        role, news, standalone = line_bot.parse_line_role(
+            "台積電法說會宣布擴廠 資本支出上調至新高"
+        )
+        self.assertEqual(role, "記者")
+        self.assertIn("台積電", news)
+        self.assertFalse(standalone)
+
+    def test_editor_prefix_with_colon(self):
+        role, news, standalone = line_bot.parse_line_role(
+            "編輯：台積電法說會宣布擴廠 資本支出上調至新高"
+        )
+        self.assertEqual((role, standalone), ("編輯", False))
+        self.assertTrue(news.startswith("台積電"))
+
+    def test_editor_prefix_with_newline(self):
+        role, news, standalone = line_bot.parse_line_role(
+            "編輯\n台積電法說會宣布擴廠 資本支出上調至新高"
+        )
+        self.assertEqual(role, "編輯")
+        self.assertTrue(news.startswith("台積電"))
+
+    def test_instruction_line_switches_role(self):
+        role, news, standalone = line_bot.parse_line_role(
+            "指示: 編輯\n台積電法說會宣布擴廠 資本支出上調至新高"
+        )
+        self.assertEqual((role, standalone), ("編輯", False))
+        self.assertNotIn("指示", news)
+        self.assertIn("台積電", news)
+
+    def test_newsroom_compound_is_not_an_instruction(self):
+        text = "編輯部今天公布人事異動案 社長改由副社長接任"
+        role, news, standalone = line_bot.parse_line_role(text)
+        self.assertEqual((role, news, standalone), ("記者", text, False))
+
+    def test_standalone_editor_does_not_leave_news_text(self):
+        role, news, standalone = line_bot.parse_line_role("編輯")
+        self.assertEqual((role, news, standalone), ("編輯", "", True))
+
+    def test_previous_role_is_kept_when_no_new_instruction(self):
+        role, news, standalone = line_bot.parse_line_role(
+            "台積電法說會宣布擴廠 資本支出上調至新高", previous="編輯"
+        )
+        self.assertEqual((role, standalone), ("編輯", False))
+        self.assertIn("台積電", news)
+
+
+class LineRoleWiringTests(unittest.TestCase):
+    def setUp(self):
+        import input_filter
+
+        input_filter.reset_state()
+        line_bot.reset_role_state()
+        self.addCleanup(input_filter.reset_state)
+        self.addCleanup(line_bot.reset_role_state)
+
+    def _fake_image(self):
+        from main import NewsImageGenerateResponse
+
+        return NewsImageGenerateResponse(
+            image_data_base64=base64.b64encode(b"img").decode(),
+            mime_type="image/png",
+            model="m",
+        )
+
+    def test_plain_news_sends_reporter_role(self):
+        with (
+            patch.object(line_bot, "reply_text"),
+            patch.object(line_bot, "push_image"),
+            patch.object(line_bot, "save_image", return_value=("a.png", "b.jpg")),
+            patch("main.generate_news_image", return_value=self._fake_image()) as generate,
+        ):
+            line_bot.generate_and_push(
+                "rt", "U123", "台積電法說會宣布擴廠 資本支出上調至新高"
+            )
+        req = generate.call_args.args[0]
+        self.assertEqual(req.role, "記者")
+
+    def test_editor_prefix_sends_editor_role_and_standard_density(self):
+        with (
+            patch.object(line_bot, "reply_text") as reply,
+            patch.object(line_bot, "push_image"),
+            patch.object(line_bot, "save_image", return_value=("a.png", "b.jpg")),
+            patch("main.generate_news_image", return_value=self._fake_image()) as generate,
+        ):
+            line_bot.generate_and_push(
+                "rt", "U123", "編輯\n台積電法說會宣布擴廠 資本支出上調至新高"
+            )
+        req = generate.call_args.args[0]
+        self.assertEqual(req.role, "編輯")
+        self.assertEqual(req.density, "standard")
+        self.assertEqual(req.news_text, "台積電法說會宣布擴廠 資本支出上調至新高")
+        self.assertIn("編輯", reply.call_args.args[1])
+
+    def test_standalone_editor_replies_and_skips_generation(self):
+        with (
+            patch.object(line_bot, "reply_text") as reply,
+            patch.object(line_bot, "push_image") as push_img,
+            patch("main.generate_news_image") as generate,
+        ):
+            line_bot.generate_and_push("rt", "U123", "編輯")
+        generate.assert_not_called()
+        push_img.assert_not_called()
+        reply.assert_called_once()
+        self.assertIn("編輯", reply.call_args.args[1])
+
+    def test_remembered_editor_applies_to_next_plain_news(self):
+        with (
+            patch.object(line_bot, "reply_text"),
+            patch.object(line_bot, "push_image"),
+            patch.object(line_bot, "save_image", return_value=("a.png", "b.jpg")),
+            patch("main.generate_news_image", return_value=self._fake_image()) as generate,
+        ):
+            line_bot.generate_and_push("rt1", "U123", "編輯")
+            line_bot.generate_and_push(
+                "rt2", "U123", "台積電法說會宣布擴廠 資本支出上調至新高"
+            )
+        self.assertEqual(generate.call_count, 1)
+        self.assertEqual(generate.call_args.args[0].role, "編輯")
+
+
 class TargetTests(unittest.TestCase):
     def test_room_id_used_when_no_user_or_group(self):
         self.assertEqual(line_bot.target_of({"source": {"roomId": "R1"}}), "R1")
