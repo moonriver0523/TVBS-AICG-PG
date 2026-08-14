@@ -37,6 +37,16 @@ COVER = 1.0
 # 變動，兩張樣本的驗證不足以保證安全，此路線改為結構性修法（改生成長寬比，見
 # TODO），mode 的裁切用法仍保留給刻意想裁的呼叫端，但**不能是預設**。
 DEFAULT_CROP_RATIO = FIT
+# 編輯對位框（1748×924 ≈ 1.89）比 16:9（1.78）略寬。FIT 會左右各多約 52px，
+# 看起來比對位框範例鬆一圈。編輯改 COVER：左右貼滿紅框，上下各裁約 3%
+# （等比放大後超出的那一點點）。記者框仍用 FIT＋21:9，不走這條。
+EDITOR_CROP_RATIO = COVER
+
+
+def default_crop_ratio(profile: str) -> float:
+    if profile == safe_area_spec.EDITOR_PROFILE:
+        return EDITOR_CROP_RATIO
+    return DEFAULT_CROP_RATIO
 
 # ---- 四周背景的做法 ----
 # 2026-07-30 用實際生成圖做過四種做法的並排對照後由使用者選定 backdrop 為預設。
@@ -207,7 +217,7 @@ def apply_safe_frame(
     image_bytes: bytes,
     *,
     canvas: tuple[int, int] = DEFAULT_CANVAS,
-    mode: float = DEFAULT_CROP_RATIO,
+    mode: float | None = None,
     background: str = DEFAULT_BACKGROUND,
     profile: str = safe_area_spec.REPORTER_PROFILE,
 ) -> bytes:
@@ -216,9 +226,11 @@ def apply_safe_frame(
     來源尺寸不設限：Gemini 實測會回 1376×768 而非要求的 1280×720，
     所以一切都按比例計算，不假設任何輸入解析度。
 
-    mode 見 plan_placement 的說明，預設 0.5（FIT 與 COVER 的餘裕減半）。
+    mode 見 plan_placement。省略時記者 FIT、編輯 COVER。
     background 三種做法見上方 BACKGROUNDS 的說明，預設 backdrop。
     """
+    if mode is None:
+        mode = default_crop_ratio(profile)
     if not isinstance(mode, (int, float)) or not 0.0 <= mode <= 1.0:
         raise ValueError(f"未知 mode：{mode}")
     if background not in BACKGROUNDS:

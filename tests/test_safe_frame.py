@@ -94,6 +94,19 @@ class PlacementGeometryTests(unittest.TestCase):
         half_waste_r = (x1 - half_right)
         self.assertAlmostEqual(half_waste_r, fit_waste_r / 2, delta=1)
 
+    def test_editor_default_is_cover_so_16x9_fills_the_alignment_box(self):
+        """對位框 1.89、16:9 是 1.78。FIT 左右各多 52px；COVER 貼滿紅框。"""
+        self.assertEqual(safe_frame.default_crop_ratio("編輯"), safe_frame.COVER)
+        self.assertEqual(safe_frame.default_crop_ratio("記者"), safe_frame.FIT)
+        x0, y0, x1, y1 = safe_area_spec.safe_rect(1920, 1080, "編輯")
+        left, top, right, bottom = safe_frame.plan_placement(
+            (1280, 720), profile="編輯", mode=safe_frame.COVER
+        )
+        self.assertLessEqual(left, x0)
+        self.assertLessEqual(top, y0)
+        self.assertGreaterEqual(right, x1)
+        self.assertGreaterEqual(bottom, y1)
+
     def test_mode_above_zero_never_shrinks_the_binding_axis_margin(self):
         """這裡曾經有真的 bug：mode>0 時置放框會超出『安全區』邊界（不是畫布邊界），
         若只裁到畫布邊界，官方留白會被吃掉（2026-07-30 實測：底部 <蓋章> 橫幅被裁到）。
@@ -136,6 +149,17 @@ class FramedOutputTests(unittest.TestCase):
                         (box[2] - box[0], box[3] - box[1]), Image.LANCZOS
                     )
                 self.assertEqual(output.crop(box).tobytes(), expected.tobytes())
+
+    def test_editor_cover_output_fills_the_alignment_rect(self):
+        """COVER 裁完後，內容必須剛好貼齊編輯對位框四邊。"""
+        output = self.framed((1280, 720), profile="編輯")
+        x0, y0, x1, y1 = safe_area_spec.safe_rect(1920, 1080, "編輯")
+        # 框外應是襯底，不是來源那圈白邊（滿版測試圖最外圈是白框）
+        outside = output.getpixel((x0 - 8, (y0 + y1) // 2))
+        inside = output.getpixel((x0 + 8, (y0 + y1) // 2))
+        self.assertNotEqual(outside, (255, 255, 255))
+        self.assertNotEqual(inside, outside)
+        self.assertEqual(output.size, (1920, 1080))
 
     def test_content_box_is_inside_the_safe_area_for_every_source(self):
         safe = safe_area_spec.safe_rect(*safe_frame.DEFAULT_CANVAS)
