@@ -4,6 +4,7 @@ import hmac
 import io
 import json
 import os
+import pathlib
 import re
 import ssl
 import time
@@ -15,6 +16,7 @@ import certifi
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from openai import (
     APIConnectionError,
     APIError,
@@ -1553,6 +1555,31 @@ def verify_news_image_api_key(x_api_key: str = Header(default="")) -> None:
 )
 def news_image_generate(req: NewsImageGenerateRequest) -> NewsImageGenerateResponse:
     return generate_news_image(req)
+
+
+# 遠端／隧道測試：前端與 API 同一 origin，瀏覽器才打得到後端。
+# 本機 :3000 預覽仍走 127.0.0.1:8787（見 app.js API_BASE）。
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent
+
+
+@app.get("/")
+def serve_index():
+    return FileResponse(_REPO_ROOT / "index.html")
+
+
+@app.get("/app.js")
+def serve_app_js():
+    return FileResponse(_REPO_ROOT / "app.js", media_type="text/javascript")
+
+
+@app.get("/hybrid.html")
+def serve_hybrid():
+    return FileResponse(_REPO_ROOT / "hybrid.html")
+
+
+@app.get("/hybrid.js")
+def serve_hybrid_js():
+    return FileResponse(_REPO_ROOT / "hybrid.js", media_type="text/javascript")
 
 
 # LINE Bot：webhook 與生成圖的靜態出口。

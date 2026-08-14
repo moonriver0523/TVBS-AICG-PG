@@ -6,7 +6,11 @@
    對外只露出 window.initHybrid()（重複呼叫安全，元素不存在時直接跳過）。 */
 (function () {
 
-const IMAGE_BACKEND_URL = 'http://127.0.0.1:8787/api/images/generate';
+const HYBRID_API_BASE = (location.hostname === '127.0.0.1' || location.hostname === 'localhost') && location.port === '3000'
+    ? 'http://127.0.0.1:8787'
+    : '';
+const IMAGE_BACKEND_URL = `${HYBRID_API_BASE}/api/images/generate`;
+const DIGEST_BACKEND_URL = `${HYBRID_API_BASE}/api/hybrid/digest`;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /* 版型定義：內容(放什麼) / 版型(放哪裡) / AI圖(背景長怎樣) 三者分離。
@@ -359,7 +363,6 @@ async function exportPNG() {
 /* ---- AI 一鍵成圖：新聞原文 → 消化 → 填格 → 背景 → 自動下載 ----
    使用情境：記者外勤只有手機，貼文字下令，不做細部調整。 */
 
-const DIGEST_BACKEND_URL = 'http://127.0.0.1:8787/api/hybrid/digest';
 
 function fillContent(d) {
   document.getElementById('f-title').value = d.title || '';

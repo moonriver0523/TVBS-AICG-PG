@@ -992,8 +992,11 @@ EMPTY MARGIN RULES (CRITICAL — MUST PRESERVE)
 /* ============================================================
    AI 消化：透過本地後端代理呼叫 Claude（見 main.py）
    ============================================================ */
-const AI_BACKEND_URL = "http://127.0.0.1:8787/api/generate";
-const IMAGE_BACKEND_URL = "http://127.0.0.1:8787/api/images/generate";
+const API_BASE = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "3000"
+    ? "http://127.0.0.1:8787"
+    : "";
+const AI_BACKEND_URL = `${API_BASE}/api/generate`;
+const IMAGE_BACKEND_URL = `${API_BASE}/api/images/generate`;
 
 async function handleAIDigestion() {
     const input = document.getElementById('aiInput').value.trim();
