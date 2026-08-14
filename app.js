@@ -538,6 +538,7 @@ function switchRole(role) {
     renderTabs();
     renderAll();
     updateAIBtnRoleHint();
+    updateAspectBadge();
     showToast(`已切換至 ${role} 模式`);
 }
 
@@ -628,6 +629,8 @@ const SAFE_FRAME_ASPECT_RATIO = '21:9';
 const DEFAULT_ASPECT_RATIO = '16:9';
 
 function currentAspectRatio() {
+    // 編輯對位框接近 16:9；記者官方框才用 21:9 塞底部跑馬燈留白
+    if (state.safeFrame && state.currentRole === '編輯') return DEFAULT_ASPECT_RATIO;
     return state.safeFrame ? SAFE_FRAME_ASPECT_RATIO : DEFAULT_ASPECT_RATIO;
 }
 
@@ -636,8 +639,9 @@ function updateAspectBadge() {
     const badge = document.getElementById('aspectBadge');
     if (!badge) return;
     if (state.safeFrame) {
-        // 置框模式：不論引擎與解析度，最終一律置入官方基準畫布 1920×1080
-        badge.innerText = `${SAFE_FRAME_ASPECT_RATIO} → 置框 1920×1080`;
+        const ratio = currentAspectRatio();
+        const frame = state.currentRole === '編輯' ? '編輯對位框' : '記者安全框';
+        badge.innerText = `${ratio} → ${frame} 1920×1080`;
         return;
     }
     badge.innerText = state.engine === 'gpt'
@@ -1102,7 +1106,7 @@ async function handleImageGeneration() {
         return;
     }
 
-    const provider = state.engine === 'gpt' ? 'gpt' : 'gemini';
+    const provider = state.currentRole === '編輯' || state.engine === 'gpt' ? 'gpt' : 'gemini';
     const providerName = provider === 'gpt' ? 'GPT' : 'Gemini';
     const button = document.getElementById('generateImageBtn');
     const buttonText = document.getElementById('generateImageBtnText');
@@ -1121,6 +1125,7 @@ async function handleImageGeneration() {
                 aspect_ratio: currentAspectRatio(),
                 image_size: state.imageSize,
                 safe_frame: state.safeFrame,
+                safe_frame_profile: state.currentRole,
                 portrait_subjects: state.portraitSubjects
             })
         });

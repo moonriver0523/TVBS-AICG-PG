@@ -106,6 +106,18 @@ class GenerateNewsImageTests(unittest.TestCase):
         sent_req = self.mock_image.call_args[0][0]
         self.assertEqual(sent_req.aspect_ratio, "4:3")
 
+    def test_editor_safe_frame_uses_16x9_gpt_and_editor_profile(self):
+        generate_news_image(
+            NewsImageGenerateRequest(
+                news_text=NEWS, role="編輯", safe_frame=True, provider="gemini"
+            )
+        )
+        sent_req = self.mock_image.call_args[0][0]
+        self.assertEqual(sent_req.aspect_ratio, "16:9")
+        self.assertEqual(sent_req.provider, "gpt")
+        self.assertEqual(sent_req.safe_frame_profile, "編輯")
+        self.assertIn("Aspect ratio: 16:9", sent_req.prompt)
+
 
 class InputFilterGuardTests(unittest.TestCase):
     """垃圾輸入必須在任何付費呼叫（digest／生圖）之前就被 400 擋下。"""

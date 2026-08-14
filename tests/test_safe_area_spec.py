@@ -36,6 +36,14 @@ class SpecGeometryTests(unittest.TestCase):
         self.assertEqual((x0, y0), (140, 109))
         self.assertEqual((x1 - x0, y1 - y0), (1634, 751))
 
+    def test_editor_frame_matches_alignment_guide(self):
+        """2026-08-14 量自 TVBS對位框.png 紅框內緣 X=90 Y=70 W=1748 H=924。"""
+        x0, y0, x1, y1 = safe_area_spec.safe_rect(1920, 1080, "編輯")
+        self.assertEqual((x0, y0), (90, 70))
+        self.assertEqual((x1 - x0, y1 - y0), (1748, 924))
+        margins = safe_area_spec.required_margins_px(1920, 1080, "編輯")
+        self.assertEqual(margins, {"top": 70, "left": 90, "right": 82, "bottom": 86})
+
     def test_vertical_fractions_use_height_not_width(self):
         """上下留白必須按高度換算。
 
