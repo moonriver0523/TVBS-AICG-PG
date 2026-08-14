@@ -38,6 +38,11 @@ COVER = 1.0
 # TODO），mode 的裁切用法仍保留給刻意想裁的呼叫端，但**不能是預設**。
 DEFAULT_CROP_RATIO = FIT
 
+
+def default_crop_ratio(profile: str) -> float:
+    # 記者／編輯框都已對齊各自的生成比例（21:9／16:9），一律 FIT 零裁切。
+    return DEFAULT_CROP_RATIO
+
 # ---- 四周背景的做法 ----
 # 2026-07-30 用實際生成圖做過四種做法的並排對照後由使用者選定 backdrop 為預設。
 # blur 的問題是它「試圖假裝無縫」卻失敗：重度模糊把文字糊成鬼影、又與中央清晰內容
@@ -68,6 +73,7 @@ def plan_placement(
     source_size: tuple[int, int],
     canvas: tuple[int, int] = DEFAULT_CANVAS,
     mode: float = FIT,
+    profile: str = safe_area_spec.REPORTER_PROFILE,
 ) -> tuple[int, int, int, int]:
     """算出內容要貼在畫布的哪個矩形 (x0, y0, x1, y1)。純函式，方便直接斷言。
 
@@ -90,7 +96,7 @@ def plan_placement(
     if src_w <= 0 or src_h <= 0:
         raise ValueError("來源尺寸不合法")
 
-    x0, y0, x1, y1 = safe_area_spec.safe_rect(*canvas)
+    x0, y0, x1, y1 = safe_area_spec.safe_rect(*canvas, profile)
     zone_w = x1 - x0
     zone_h = y1 - y0
 
@@ -206,17 +212,20 @@ def apply_safe_frame(
     image_bytes: bytes,
     *,
     canvas: tuple[int, int] = DEFAULT_CANVAS,
-    mode: float = DEFAULT_CROP_RATIO,
+    mode: float | None = None,
     background: str = DEFAULT_BACKGROUND,
+    profile: str = safe_area_spec.REPORTER_PROFILE,
 ) -> bytes:
     """把生成圖置入安全框並補背景，回傳 PNG bytes。
 
     來源尺寸不設限：Gemini 實測會回 1376×768 而非要求的 1280×720，
     所以一切都按比例計算，不假設任何輸入解析度。
 
-    mode 見 plan_placement 的說明，預設 0.5（FIT 與 COVER 的餘裕減半）。
+    mode 見 plan_placement。省略時一律 FIT（零裁切）。
     background 三種做法見上方 BACKGROUNDS 的說明，預設 backdrop。
     """
+    if mode is None:
+        mode = default_crop_ratio(profile)
     if not isinstance(mode, (int, float)) or not 0.0 <= mode <= 1.0:
         raise ValueError(f"未知 mode：{mode}")
     if background not in BACKGROUNDS:
@@ -225,14 +234,14 @@ def apply_safe_frame(
     with Image.open(io.BytesIO(image_bytes)) as opened:
         source = opened.convert("RGB")
 
-        left, top, right, bottom = plan_placement(source.size, canvas, mode)
+        left, top, right, bottom = plan_placement(source.size, canvas, mode, profile)
         full_content = source.resize((right - left, bottom - top), Image.LANCZOS)
 
         # mode>0 時置放框會超出「安全區」邊界（不是畫布邊界）——這裡裁掉超出安全區
         # 的部分，讓內容永遠落在官方安全區內。裁到畫布邊界是錯的：安全區比畫布小，
         # 若只裁到畫布邊界，超出安全區、還沒超出畫布的那圈會侵蝕官方留白（曾實測到
         # 這個錯法會讓上/下留白從精準的 10.09%/20.37% 被吃到只剩 2%/13%）。
-        x0, y0, x1, y1 = safe_area_spec.safe_rect(*canvas)
+        x0, y0, x1, y1 = safe_area_spec.safe_rect(*canvas, profile)
         crop_left = max(0, x0 - left)
         crop_top = max(0, y0 - top)
         crop_right = full_content.width - max(0, (left + full_content.width) - x1)

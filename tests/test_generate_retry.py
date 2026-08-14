@@ -112,6 +112,22 @@ class GenerateRetryTests(unittest.TestCase):
         self.assertEqual(create.call_count, 1)
         self.sleep.assert_not_called()
 
+    def test_markdown_fenced_json_is_accepted_without_retry(self):
+        fenced = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="```json\n" + json.dumps(VALID_PAYLOAD) + "\n```"
+                    ),
+                    finish_reason="stop",
+                )
+            ]
+        )
+        result, exc, create = self.call_with([fenced])
+        self.assertIsNone(exc)
+        self.assertEqual(create.call_count, 1)
+        self.assertEqual(result.chart_type, "資料圖表")
+
 
 if __name__ == "__main__":
     unittest.main()

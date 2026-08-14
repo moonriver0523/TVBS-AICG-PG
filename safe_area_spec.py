@@ -9,20 +9,42 @@
 （見 `docs/error-cases/2026-07-23-像素安全框-分析.md`）。
 """
 
-# 官方基準畫布與安全框座標（像素）
+# 官方基準畫布
 BASE_CANVAS = (1920, 1080)
-BASE_SAFE_RECT = (140, 109, 1634, 751)  # x, y, w, h
 
-_base_w, _base_h = BASE_CANVAS
-_x, _y, _w, _h = BASE_SAFE_RECT
+REPORTER_PROFILE = "記者"
+EDITOR_PROFILE = "編輯"
 
-# 四邊留白佔畫布的比例（與解析度無關，可換算到任意輸出尺寸）
-MARGIN_FRACTIONS = {
-    "top": _y / _base_h,  # 0.1009
-    "left": _x / _base_w,  # 0.0729
-    "right": (_base_w - _x - _w) / _base_w,  # 0.0760
-    "bottom": (_base_h - _y - _h) / _base_h,  # 0.2037
+# 記者：Studio Locked-Frame（預留跑馬燈，底部較深）
+# 編輯：對位框紅線內緣本是 90/70/1748/924（約 1.89）。16:9 生圖若 COVER 貼滿會裁上下，
+# 2026-08-14 改為紅框內最大 16:9（高不變、寬內縮置中）→ X=142 Y=70 W=1643 H=924，
+# FIT 零裁切。與紅框左右各差約 52px，使用者判定「沒差多少、避免被切」可接受。
+PROFILES = {
+    REPORTER_PROFILE: (140, 109, 1634, 751),
+    EDITOR_PROFILE: (142, 70, 1643, 924),
 }
+
+BASE_SAFE_RECT = PROFILES[REPORTER_PROFILE]  # 預設記者，舊呼叫端不用改
+
+
+def _fractions_for(rect: tuple[int, int, int, int]) -> dict[str, float]:
+    x, y, w, h = rect
+    base_w, base_h = BASE_CANVAS
+    return {
+        "top": y / base_h,
+        "left": x / base_w,
+        "right": (base_w - x - w) / base_w,
+        "bottom": (base_h - y - h) / base_h,
+    }
+
+
+def margin_fractions(profile: str = REPORTER_PROFILE) -> dict[str, float]:
+    rect = PROFILES.get(profile, PROFILES[REPORTER_PROFILE])
+    return _fractions_for(rect)
+
+
+# 四邊留白佔畫布的比例（記者；舊程式讀這個常數）
+MARGIN_FRACTIONS = margin_fractions(REPORTER_PROFILE)
 
 EDGES = ("top", "left", "right", "bottom")
 
@@ -34,18 +56,23 @@ WASTEFUL_RATIO = 2.0
 TOLERANCE = 0.005
 
 
-def safe_rect(width: int, height: int) -> tuple[int, int, int, int]:
+def safe_rect(
+    width: int, height: int, profile: str = REPORTER_PROFILE
+) -> tuple[int, int, int, int]:
     """回傳指定畫布尺寸下的安全區矩形 (x0, y0, x1, y1)，x1/y1 為右下界（不含）。"""
-    x0 = round(MARGIN_FRACTIONS["left"] * width)
-    y0 = round(MARGIN_FRACTIONS["top"] * height)
-    x1 = round((1 - MARGIN_FRACTIONS["right"]) * width)
-    y1 = round((1 - MARGIN_FRACTIONS["bottom"]) * height)
+    fractions = margin_fractions(profile)
+    x0 = round(fractions["left"] * width)
+    y0 = round(fractions["top"] * height)
+    x1 = round((1 - fractions["right"]) * width)
+    y1 = round((1 - fractions["bottom"]) * height)
     return x0, y0, x1, y1
 
 
-def required_margins_px(width: int, height: int) -> dict[str, int]:
+def required_margins_px(
+    width: int, height: int, profile: str = REPORTER_PROFILE
+) -> dict[str, int]:
     """回傳指定畫布尺寸下四邊所需的留白像素數。"""
-    x0, y0, x1, y1 = safe_rect(width, height)
+    x0, y0, x1, y1 = safe_rect(width, height, profile)
     return {"top": y0, "left": x0, "right": width - x1, "bottom": height - y1}
 
 

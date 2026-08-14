@@ -94,6 +94,13 @@ class PlacementGeometryTests(unittest.TestCase):
         half_waste_r = (x1 - half_right)
         self.assertAlmostEqual(half_waste_r, fit_waste_r / 2, delta=1)
 
+    def test_editor_default_is_fit_no_crop(self):
+        self.assertEqual(safe_frame.default_crop_ratio("編輯"), safe_frame.FIT)
+        self.assertEqual(safe_frame.default_crop_ratio("記者"), safe_frame.FIT)
+        x0, y0, x1, y1 = safe_area_spec.safe_rect(1920, 1080, "編輯")
+        box = safe_frame.plan_placement((1280, 720), profile="編輯")
+        self.assertEqual(box, (x0, y0, x1, y1))
+
     def test_mode_above_zero_never_shrinks_the_binding_axis_margin(self):
         """這裡曾經有真的 bug：mode>0 時置放框會超出『安全區』邊界（不是畫布邊界），
         若只裁到畫布邊界，官方留白會被吃掉（2026-07-30 實測：底部 <蓋章> 橫幅被裁到）。

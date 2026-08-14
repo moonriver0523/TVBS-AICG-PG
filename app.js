@@ -307,6 +307,8 @@ let state = {
     digestChartType: 'auto',
     // 自動判斷模式下，AI 實際選了哪一類（由後端 chart_type 回報）
     digestResolvedType: null,
+    // 最近一次消化回傳的具名真人，生圖時交給後端查參考照
+    portraitSubjects: [],
     // 最終 Prompt 的類型標籤聽誰的：'digest'（第一頁自動生成）或 'library'（第二頁調版型）
     // 由「最後一次動作」決定
     promptTypeSource: 'library',
@@ -536,6 +538,8 @@ function switchRole(role) {
     renderTabs();
     renderAll();
     updateAIBtnRoleHint();
+    updateAspectBadge();
+    updateImageGenerationControls();
     showToast(`已切換至 ${role} 模式`);
 }
 
@@ -626,6 +630,8 @@ const SAFE_FRAME_ASPECT_RATIO = '21:9';
 const DEFAULT_ASPECT_RATIO = '16:9';
 
 function currentAspectRatio() {
+    // 編輯對位框接近 16:9；記者官方框才用 21:9 塞底部跑馬燈留白
+    if (state.safeFrame && state.currentRole === '編輯') return DEFAULT_ASPECT_RATIO;
     return state.safeFrame ? SAFE_FRAME_ASPECT_RATIO : DEFAULT_ASPECT_RATIO;
 }
 
@@ -634,8 +640,9 @@ function updateAspectBadge() {
     const badge = document.getElementById('aspectBadge');
     if (!badge) return;
     if (state.safeFrame) {
-        // 置框模式：不論引擎與解析度，最終一律置入官方基準畫布 1920×1080
-        badge.innerText = `${SAFE_FRAME_ASPECT_RATIO} → 置框 1920×1080`;
+        const ratio = currentAspectRatio();
+        const frame = state.currentRole === '編輯' ? '編輯對位框' : '記者安全框';
+        badge.innerText = `${ratio} → ${frame} 1920×1080`;
         return;
     }
     badge.innerText = state.engine === 'gpt'
@@ -985,8 +992,11 @@ EMPTY MARGIN RULES (CRITICAL — MUST PRESERVE)
 /* ============================================================
    AI 消化：透過本地後端代理呼叫 Claude（見 main.py）
    ============================================================ */
-const AI_BACKEND_URL = "http://127.0.0.1:8787/api/generate";
-const IMAGE_BACKEND_URL = "http://127.0.0.1:8787/api/images/generate";
+const API_BASE = (location.hostname === "127.0.0.1" || location.hostname === "localhost") && location.port === "3000"
+    ? "http://127.0.0.1:8787"
+    : "";
+const AI_BACKEND_URL = `${API_BASE}/api/generate`;
+const IMAGE_BACKEND_URL = `${API_BASE}/api/images/generate`;
 
 async function handleAIDigestion() {
     const input = document.getElementById('aiInput').value.trim();
@@ -1022,6 +1032,9 @@ async function handleAIDigestion() {
         document.getElementById('field-style').value = data.style || '';
         document.getElementById('field-structure').value = data.structure || '';
         document.getElementById('field-variable').value = (data.variable || '').replace(SYSTEM_DISCLAIMER, '').trim();
+        state.portraitSubjects = Array.isArray(data.portrait_subjects)
+            ? data.portrait_subjects.filter(name => typeof name === 'string' && name.trim())
+            : [];
 
         // 自動判斷模式：記下 AI 實際選了哪一類，供徽章與按鈕顯示
         if (state.digestChartType === AUTO_TYPE_KEY) {
@@ -1034,9 +1047,12 @@ async function handleAIDigestion() {
         renderTags(); updateCounter();
         // 剛做完自動生成＝以第一頁的類型為準（claimPromptType 內含 syncOutput）
         claimPromptType('digest');
+        const portraitHint = state.portraitSubjects.length
+            ? `；具名真人：${state.portraitSubjects.join('、')}（生圖時查參考照）`
+            : '';
         showToast(state.digestResolvedType
-            ? `AI 判斷為「${CHART_TYPES[state.digestResolvedType].label}」並完成佈局規劃`
-            : "AI 已完成佈局規劃與視覺輔助設計");
+            ? `AI 判斷為「${CHART_TYPES[state.digestResolvedType].label}」並完成佈局規劃${portraitHint}`
+            : `AI 已完成佈局規劃與視覺輔助設計${portraitHint}`);
     } catch (err) {
         console.error(err);
         showToast("AI 服務連線失敗，請稍後再試");
@@ -1052,6 +1068,10 @@ function getFinalPrompt() {
     return document.getElementById('displayPrompt').innerText.trim();
 }
 
+function effectiveImageProvider() {
+    return state.currentRole === '編輯' || state.engine === 'gpt' ? 'gpt' : 'gemini';
+}
+
 function updateImageGenerationControls() {
     const confirmed = document.getElementById('promptConfirmed');
     const button = document.getElementById('generateImageBtn');
@@ -1060,14 +1080,14 @@ function updateImageGenerationControls() {
     if (!confirmed || !button || !buttonText || !hint) return;
 
     const hasPrompt = !getFinalPrompt().includes('Waiting for data');
-    const providerName = state.engine === 'gpt' ? 'GPT' : 'Gemini';
+    const providerName = effectiveImageProvider() === 'gpt' ? 'GPT' : 'Gemini';
     button.disabled = !confirmed.checked || !hasPrompt;
     buttonText.innerText = `使用 ${providerName} 生成圖片`;
 
     if (!hasPrompt) {
         hint.innerText = '請先填寫內容，產生最終 Prompt';
     } else if (!confirmed.checked) {
-        hint.innerText = `確認後可使用 ${providerName} 一鍵生成 16:9 圖片`;
+        hint.innerText = `確認後可使用 ${providerName} 一鍵生成 ${currentAspectRatio()} 圖片`;
     } else {
         hint.innerText = `將以目前顯示的 Prompt 送至 ${providerName} 生成圖片`;
     }
@@ -1094,7 +1114,7 @@ async function handleImageGeneration() {
         return;
     }
 
-    const provider = state.engine === 'gpt' ? 'gpt' : 'gemini';
+    const provider = effectiveImageProvider();
     const providerName = provider === 'gpt' ? 'GPT' : 'Gemini';
     const button = document.getElementById('generateImageBtn');
     const buttonText = document.getElementById('generateImageBtnText');
@@ -1112,7 +1132,9 @@ async function handleImageGeneration() {
                 provider,
                 aspect_ratio: currentAspectRatio(),
                 image_size: state.imageSize,
-                safe_frame: state.safeFrame
+                safe_frame: state.safeFrame,
+                safe_frame_profile: state.currentRole,
+                portrait_subjects: state.portraitSubjects
             })
         });
         const data = await response.json();
