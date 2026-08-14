@@ -480,6 +480,19 @@ DIGEST_REPETITION_MIN_LINES = 10
 DIGEST_MIN_UNIQUE_LINE_RATIO = 0.8
 
 
+def parse_digest_json(raw_content: str) -> dict:
+    """解析消化輸出。模型有時會包 ```json 圍欄，必須先拆掉再 json.loads。"""
+    text = (raw_content or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].lstrip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return json.loads(text)
+
+
 def digest_quality_problem(data: dict, finish_reason: str) -> str:
     """檢查消化結果是否可用，通過回傳空字串，否則回傳給 log 用的問題描述。
 
@@ -581,7 +594,7 @@ def generate(req: GenerateRequest):
         raw_content = response.choices[0].message.content or ""
         finish_reason = response.choices[0].finish_reason if response.choices else "?"
         try:
-            data = json.loads(raw_content)
+            data = parse_digest_json(raw_content)
         except (json.JSONDecodeError, IndexError, TypeError) as exc:
             last_detail = "AI 回傳格式無法解析"
             print(
@@ -756,7 +769,7 @@ def hybrid_digest(req: HybridDigestRequest):
         raw_content = response.choices[0].message.content or ""
         finish_reason = response.choices[0].finish_reason if response.choices else "?"
         try:
-            data = json.loads(raw_content)
+            data = parse_digest_json(raw_content)
             items = data.get("items") or []
             if len(items) > 3:
                 items = items[:3]
