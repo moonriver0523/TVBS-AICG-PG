@@ -539,6 +539,7 @@ function switchRole(role) {
     renderAll();
     updateAIBtnRoleHint();
     updateAspectBadge();
+    updateImageGenerationControls();
     showToast(`已切換至 ${role} 模式`);
 }
 
@@ -1064,6 +1065,10 @@ function getFinalPrompt() {
     return document.getElementById('displayPrompt').innerText.trim();
 }
 
+function effectiveImageProvider() {
+    return state.currentRole === '編輯' || state.engine === 'gpt' ? 'gpt' : 'gemini';
+}
+
 function updateImageGenerationControls() {
     const confirmed = document.getElementById('promptConfirmed');
     const button = document.getElementById('generateImageBtn');
@@ -1072,14 +1077,14 @@ function updateImageGenerationControls() {
     if (!confirmed || !button || !buttonText || !hint) return;
 
     const hasPrompt = !getFinalPrompt().includes('Waiting for data');
-    const providerName = state.engine === 'gpt' ? 'GPT' : 'Gemini';
+    const providerName = effectiveImageProvider() === 'gpt' ? 'GPT' : 'Gemini';
     button.disabled = !confirmed.checked || !hasPrompt;
     buttonText.innerText = `使用 ${providerName} 生成圖片`;
 
     if (!hasPrompt) {
         hint.innerText = '請先填寫內容，產生最終 Prompt';
     } else if (!confirmed.checked) {
-        hint.innerText = `確認後可使用 ${providerName} 一鍵生成 16:9 圖片`;
+        hint.innerText = `確認後可使用 ${providerName} 一鍵生成 ${currentAspectRatio()} 圖片`;
     } else {
         hint.innerText = `將以目前顯示的 Prompt 送至 ${providerName} 生成圖片`;
     }
@@ -1106,7 +1111,7 @@ async function handleImageGeneration() {
         return;
     }
 
-    const provider = state.currentRole === '編輯' || state.engine === 'gpt' ? 'gpt' : 'gemini';
+    const provider = effectiveImageProvider();
     const providerName = provider === 'gpt' ? 'GPT' : 'Gemini';
     const button = document.getElementById('generateImageBtn');
     const buttonText = document.getElementById('generateImageBtnText');
