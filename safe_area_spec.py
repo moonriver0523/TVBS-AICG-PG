@@ -16,11 +16,12 @@ REPORTER_PROFILE = "記者"
 EDITOR_PROFILE = "編輯"
 
 # 記者：Studio Locked-Frame（預留跑馬燈，底部較深）
-# 編輯：2026-08-14 量自 D:\Downloads\TVBS對位框.png 紅框內緣（四邊接近均匀）
-#   紅線 4px，內緣 X=90 Y=70 W=1748 H=924；外緣 86/66/1756/932
+# 編輯：對位框紅線內緣本是 90/70/1748/924（約 1.89）。16:9 生圖若 COVER 貼滿會裁上下，
+# 2026-08-14 改為紅框內最大 16:9（高不變、寬內縮置中）→ X=142 Y=70 W=1643 H=924，
+# FIT 零裁切。與紅框左右各差約 52px，使用者判定「沒差多少、避免被切」可接受。
 PROFILES = {
     REPORTER_PROFILE: (140, 109, 1634, 751),
-    EDITOR_PROFILE: (90, 70, 1748, 924),
+    EDITOR_PROFILE: (142, 70, 1643, 924),
 }
 
 BASE_SAFE_RECT = PROFILES[REPORTER_PROFILE]  # 預設記者，舊呼叫端不用改
