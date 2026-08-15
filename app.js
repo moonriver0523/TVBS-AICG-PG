@@ -299,7 +299,7 @@ let state = {
     engine: 'gemini',
     imageSize: '1K',
     // 安全框置框：滿版生成後由後端 safe_frame.py 數學置入 TVBS 安全框
-    safeFrame: false,
+    safeFrame: true,
     activeParent: null,
     currentPage: 1,
     // 第一頁「自動生成」專用的圖表類型，與第二頁模板庫的 chartType 完全獨立
@@ -381,6 +381,14 @@ window.onload = () => {
     renderDigestTypes();
     resetToType('data');
     updateAIBtnRoleHint();
+    syncEngineSizeButtons();
+    updateAspectBadge();
+    ["btnSafeFrame", "p1-btnSafeFrame"].forEach(id => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.className = "px-3 py-1 rounded text-[9px] font-black transition-all " + (state.safeFrame ? "bg-emerald-600 text-white" : "text-slate-500 hover:text-white");
+        btn.innerText = state.safeFrame ? "安全框 ON" : "安全框 OFF";
+    });
     switchPage(1);
 };
 
@@ -401,8 +409,15 @@ function switchPage(page) {
     });
 
     const panel = document.getElementById('outputPanel');
-    const mount = document.getElementById(`outputMount-${page}`);
-    if (panel && mount && panel.parentElement !== mount) mount.appendChild(panel);
+    if (panel) {
+        if (page === 2) {
+            const mount = document.getElementById('outputMount-2');
+            if (mount && panel.parentElement !== mount) mount.appendChild(panel);
+            panel.classList.remove('hidden');
+        } else {
+            panel.classList.add('hidden');
+        }
+    }
 
     // 混合版型延後初始化：hidden 狀態下先 render 沒有意義，重複呼叫由 initHybrid 自行擋掉
     if (page === 3 && typeof window.initHybrid === 'function') window.initHybrid();
@@ -581,7 +596,7 @@ function updateAIBtnRoleHint() {
     const buttonText = document.getElementById('aiBtnText');
     const densityLabel = state.digestDensity === 'simplified' ? '簡化' : '標準';
     if (buttonText) {
-        buttonText.innerText = `開始 AI 自動消化整理（${state.currentRole}・${densityLabel}）`;
+        buttonText.innerText = `一鍵生成（${state.currentRole}・${densityLabel}）`;
     }
 }
 
@@ -595,28 +610,42 @@ function switchTab(tab, el) {
     renderAll();
 }
 
-function switchEngine(engine, el) {
+function _setToggle(id, on) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (on ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-white');
+}
+
+function syncEngineSizeButtons() {
+    ['', 'p1-'].forEach(prefix => {
+        _setToggle(prefix + 'engine-gemini', state.engine === 'gemini');
+        _setToggle(prefix + 'engine-gpt', state.engine === 'gpt');
+        _setToggle(prefix + 'size-1K', state.imageSize === '1K');
+        _setToggle(prefix + 'size-2K', state.imageSize === '2K');
+    });
+}
+
+function switchEngine(engine) {
     state.engine = engine;
-    document.getElementById('engine-gemini').className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (engine === 'gemini' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-white');
-    document.getElementById('engine-gpt').className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (engine === 'gpt' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-white');
+    syncEngineSizeButtons();
     updateAspectBadge();
     syncOutput();
 }
 
-function switchImageSize(size, el) {
+function switchImageSize(size) {
     state.imageSize = size;
-    document.getElementById('size-1K').className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (size === '1K' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-white');
-    document.getElementById('size-2K').className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (size === '2K' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-white');
+    syncEngineSizeButtons();
     updateAspectBadge();
 }
 
 function toggleSafeFrame() {
     state.safeFrame = !state.safeFrame;
-    const btn = document.getElementById('btnSafeFrame');
-    if (btn) {
+    ['btnSafeFrame', 'p1-btnSafeFrame'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
         btn.className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (state.safeFrame ? 'bg-emerald-600 text-white' : 'text-slate-500 hover:text-white');
         btn.innerText = state.safeFrame ? '安全框 ON' : '安全框 OFF';
-    }
+    });
     updateAspectBadge();
     syncOutput();
 }
@@ -637,17 +666,15 @@ function currentAspectRatio() {
 
 // GPT 固定 1280×720（忽略解析度切換）；Gemini 才依 1K／2K 變動
 function updateAspectBadge() {
-    const badge = document.getElementById('aspectBadge');
-    if (!badge) return;
-    if (state.safeFrame) {
-        const ratio = currentAspectRatio();
-        const frame = state.currentRole === '編輯' ? '編輯對位框' : '記者安全框';
-        badge.innerText = `${ratio} → ${frame} 1920×1080`;
-        return;
-    }
-    badge.innerText = state.engine === 'gpt'
-        ? `${DEFAULT_ASPECT_RATIO} / 720p`
-        : `${DEFAULT_ASPECT_RATIO} / ${state.imageSize}`;
+    const text = state.safeFrame
+        ? `${currentAspectRatio()} → ${state.currentRole === '編輯' ? '編輯對位框' : '記者安全框'} 1920×1080`
+        : (state.engine === 'gpt'
+            ? `${DEFAULT_ASPECT_RATIO} / 720p`
+            : `${DEFAULT_ASPECT_RATIO} / ${state.imageSize}`);
+    ['aspectBadge', 'p1-aspectBadge'].forEach(id => {
+        const badge = document.getElementById(id);
+        if (badge) badge.innerText = text;
+    });
 }
 
 /* ============================================================
@@ -997,6 +1024,115 @@ const API_BASE = (location.hostname === "127.0.0.1" || location.hostname === "lo
     : "";
 const AI_BACKEND_URL = `${API_BASE}/api/generate`;
 const IMAGE_BACKEND_URL = `${API_BASE}/api/images/generate`;
+
+function _apiError(data, status) {
+    const detail = data && data.detail;
+    if (typeof detail === "string") return detail;
+    return "HTTP " + status;
+}
+
+async function digestNewsText(input) {
+    const response = await fetch(AI_BACKEND_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            news_text: input,
+            type_label: digestTypeLabelForApi(),
+            role: state.currentRole,
+            density: state.digestDensity,
+            safe_frame: state.safeFrame,
+        }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(_apiError(data, response.status));
+    return data;
+}
+
+function applyDigestToForm(data) {
+    const s = curSelected();
+    s.style = {};
+    s.structure = {};
+    document.getElementById("field-style").value = data.style || "";
+    document.getElementById("field-structure").value = data.structure || "";
+    document.getElementById("field-variable").value = (data.variable || "").replace(SYSTEM_DISCLAIMER, "").trim();
+    state.portraitSubjects = Array.isArray(data.portrait_subjects)
+        ? data.portrait_subjects.filter(name => typeof name === "string" && name.trim())
+        : [];
+    if (state.digestChartType === AUTO_TYPE_KEY) {
+        const resolvedKey = Object.keys(CHART_TYPES).find(k => CHART_TYPES[k].label === data.chart_type);
+        state.digestResolvedType = resolvedKey || null;
+        renderDigestTypes();
+    }
+    renderTags();
+    updateCounter();
+    claimPromptType("digest");
+}
+
+async function handleOneClickGenerate() {
+    const input = document.getElementById("aiInput").value.trim();
+    if (!input) return showToast("請輸入欲生成的新聞內容");
+
+    const btnText = document.getElementById("aiBtnText");
+    const loading = document.getElementById("aiLoading");
+    const btn = document.getElementById("aiBtn");
+    btn.disabled = true;
+    btnText.classList.add("hidden");
+    loading.classList.remove("hidden");
+
+    try {
+        showToast("消化中…");
+        const digest = await digestNewsText(input);
+        applyDigestToForm(digest);
+        const variable = (digest.variable || "").replace(SYSTEM_DISCLAIMER, "").trim();
+        const prompt = buildPrompt({
+            role: state.currentRole,
+            engine: effectiveImageProvider(),
+            typeLabel: digest.chart_type || digestTypeLabelForApi(),
+            style: digest.style || "[No Style Defined]",
+            structure: digest.structure || "[No Structure Defined]",
+            variable: variable ? `${SYSTEM_DISCLAIMER}\n${variable}` : "[No Variables Defined]",
+            safeFrame: state.safeFrame,
+            aspectRatio: currentAspectRatio(),
+        });
+        showToast("生圖中，約 30–120 秒…");
+        const imgRes = await fetch(IMAGE_BACKEND_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                prompt,
+                provider: effectiveImageProvider(),
+                aspect_ratio: currentAspectRatio(),
+                image_size: state.imageSize,
+                safe_frame: state.safeFrame,
+                safe_frame_profile: state.currentRole,
+                portrait_subjects: state.portraitSubjects,
+            }),
+        });
+        const data = await imgRes.json().catch(() => ({}));
+        if (!imgRes.ok) throw new Error(_apiError(data, imgRes.status));
+
+        const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
+        const isPng = data.mime_type === "image/png";
+        document.getElementById("oneClickImage").src = imageUrl;
+        const download = document.getElementById("oneClickDownload");
+        download.href = imageUrl;
+        download.download = `tvbs-news-cg.${isPng ? "png" : "jpg"}`;
+        download.innerText = `下載 ${isPng ? "PNG" : "JPEG"}`;
+        document.getElementById("oneClickLabel").innerText = data.model || "AI Generated";
+        const titleMatch = variable.match(/\[標題\]\s*([^\n]+)/);
+        document.getElementById("oneClickMeta").innerText = titleMatch ? titleMatch[1].trim() : "";
+        document.getElementById("oneClickEmpty").classList.add("hidden");
+        document.getElementById("oneClickResult").classList.remove("hidden");
+        showToast(titleMatch ? `已生成：${titleMatch[1].trim()}` : "已完成圖片生成");
+    } catch (err) {
+        console.error(err);
+        showToast(err.message || "生成失敗，請稍後再試");
+    } finally {
+        btn.disabled = false;
+        btnText.classList.remove("hidden");
+        loading.classList.add("hidden");
+    }
+}
 
 async function handleAIDigestion() {
     const input = document.getElementById('aiInput').value.trim();

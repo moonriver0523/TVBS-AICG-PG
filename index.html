@@ -5,94 +5,155 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TVBS 新聞AICG產生器</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=Noto+Sans+TC:wght@400;700;900&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
         :root {
+            --ink: #f4ece4;
+            --muted: #c4b4a6;
+            --dim: #8a7b70;
+            --bg: #0a0908;
+            --surface: #161311;
+            --line: rgba(244, 236, 228, 0.10);
+            --accent: #e10600;
             --accent-blue: #3b82f6;
-            --accent-red: #ef4444;
-            --bg-dark: #020617;
-            --panel-bg: rgba(15, 23, 42, 0.8);
+            --accent-red: #e10600;
+            --bg-dark: #0a0908;
+            --panel-bg: #161311;
+            --ease: cubic-bezier(0.16, 1, 0.3, 1);
+            --z-toast: 40;
         }
         body {
-            background-color: var(--bg-dark);
-            color: #f1f5f9;
-            font-family: 'Inter', 'Noto Sans TC', sans-serif;
+            background-color: var(--bg);
+            background-image:
+                linear-gradient(180deg, rgba(10,9,8,0.78) 0%, rgba(10,9,8,0.92) 55%, #0a0908 100%),
+                url("/static/ui/bg-control-room.jpg");
+            background-size: cover;
+            background-position: center 28%;
+            background-attachment: fixed;
+            color: var(--ink);
+            font-family: "Noto Sans TC", sans-serif;
             min-height: 100vh;
         }
+        .tally {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: -1rem -1rem 1.25rem;
+            padding: 0.55rem 1.25rem;
+            background: #120a09;
+            border-bottom: 1px solid var(--line);
+            font-family: "IBM Plex Mono", monospace;
+            font-size: 11px;
+            letter-spacing: 0.16em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+        .tally-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--accent);
+            box-shadow: 0 0 0 0 rgba(225, 6, 0, 0.55);
+            animation: tally 1.6s var(--ease) infinite;
+        }
+        @keyframes tally {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(225, 6, 0, 0.45); }
+            50% { box-shadow: 0 0 0 7px rgba(225, 6, 0, 0); }
+        }
         .glass-card {
-            background: var(--panel-bg);
-            backdrop-filter: blur(16px);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: 10px;
         }
         .input-focus-ring:focus {
             outline: none;
-            border-color: var(--accent-blue);
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(225, 6, 0, 0.22);
         }
         .tag-btn {
-            background: rgba(30, 41, 59, 0.5);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            background: #1d1916;
+            border: 1px solid var(--line);
+            transition: border-color 180ms var(--ease), background 180ms var(--ease);
         }
-        .tag-btn:hover {
-            background: rgba(59, 130, 246, 0.15);
-            border-color: var(--accent-blue);
-            transform: translateY(-1px);
-        }
+        .tag-btn:hover { border-color: rgba(244, 236, 228, 0.28); }
         .tag-active {
-            background: var(--accent-blue) !important;
-            border-color: white !important;
+            background: var(--accent) !important;
+            border-color: var(--accent) !important;
             color: white !important;
-            box-shadow: 0 0 15px rgba(59, 130, 246, 0.4);
         }
         .tab-active {
-            color: var(--accent-blue);
-            border-bottom: 2px solid var(--accent-blue);
+            color: var(--ink);
+            border-bottom: 2px solid var(--accent);
         }
         .role-active {
-            background: white !important;
-            color: var(--bg-dark) !important;
-            box-shadow: 0 4px 12px rgba(255,255,255,0.1);
+            background: var(--ink) !important;
+            color: var(--bg) !important;
         }
         .density-active {
-            background: #2563eb !important;
+            background: var(--accent) !important;
             color: white !important;
-            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
         }
         .parent-active {
-            background: rgba(59, 130, 246, 0.2) !important;
-            border-color: var(--accent-blue) !important;
+            background: #2a211c !important;
+            border-color: var(--accent) !important;
             color: white !important;
         }
         .type-active {
-            background: var(--accent-red) !important;
-            border-color: white !important;
+            background: var(--accent) !important;
+            border-color: var(--accent) !important;
             color: white !important;
-            box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);
         }
-        /* 最上方第一頁／第二頁切換 */
         .page-tab {
             background: transparent;
-            border: 1px solid rgba(255, 255, 255, 0.06);
-            color: #64748b;
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            border: 1px solid var(--line);
+            color: var(--dim);
+            padding: 0.4rem 0.75rem;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            transition: color 180ms var(--ease), border-color 180ms var(--ease), background 180ms var(--ease);
         }
-        .page-tab:hover { color: #e2e8f0; background: rgba(30, 41, 59, 0.6); }
+        .page-tab:hover { color: var(--ink); border-color: rgba(244, 236, 228, 0.22); }
         .page-tab-active {
-            background: var(--accent-blue) !important;
-            border-color: rgba(255, 255, 255, 0.35) !important;
-            color: white !important;
-            box-shadow: 0 6px 20px rgba(59, 130, 246, 0.35);
+            background: #211814 !important;
+            border-color: var(--accent) !important;
+            color: var(--ink) !important;
         }
-        .code-font { font-family: 'Fira Code', monospace; }
+        .masthead { margin-bottom: 0.75rem; }
+        #page-1 .glass-card { padding: 1rem 1.1rem; }
+        #digestTypeHint { display: none; }
+        #oneClickEmpty { min-height: 280px !important; }
+        .code-font { font-family: "IBM Plex Mono", monospace; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         @keyframes slide-up {
-            from { transform: translate(-50%, 100%); opacity: 0; }
+            from { transform: translate(-50%, 12px); opacity: 0; }
             to { transform: translate(-50%, 0); opacity: 1; }
         }
-        .toast-animate { animation: slide-up 0.3s ease-out forwards; }
+        .toast-animate { animation: slide-up 0.22s var(--ease) forwards; }
+        .mark {
+            width: 34px; height: 34px;
+            background: var(--accent);
+            color: #fff;
+            font-weight: 900;
+            letter-spacing: 0.02em;
+            display: grid; place-items: center;
+            border-radius: 7px;
+            font-size: 12px;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+        #aiBtn {
+            letter-spacing: 0.08em;
+        }
+        #oneClickEmpty {
+            background:
+                linear-gradient(180deg, rgba(10,9,8,0.55), rgba(10,9,8,0.82)),
+                url("/static/ui/empty-monitor.jpg") center/cover no-repeat;
+            color: var(--ink);
+            min-height: 360px;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .tally-dot { animation: none; }
+            .toast-animate { animation: none; }
+        }
 
         /* 第三頁（混合版型）：三欄數據列由 hybrid.js 動態產生、沒有 class，
            因此以區塊範圍的元素選擇器承接樣式，避免污染第一／二頁 */
@@ -135,56 +196,25 @@
         textarea::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
     </style>
 </head>
-<body class="p-4 md:p-6">
-
+<body class="px-3 py-2 md:px-4 md:py-3">
     <div class="max-w-7xl mx-auto">
 
-        <!-- ============================================================
-             最上方：頁面切換 + 標題列
-             ============================================================ -->
-        <header class="mb-6">
-            <!-- 第一頁 / 第二頁 切換（置頂） -->
-            <div class="glass-card p-2 mb-4 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                <div class="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <button id="pageTab-1" onclick="switchPage(1)"
-                            class="page-tab page-tab-active px-4 py-3 rounded-lg text-left transition-all">
-                        <span class="block text-[11px] font-black uppercase tracking-widest">第一頁 · 快速生成</span>
-                        <span class="block text-[9px] opacity-70 mt-0.5 tracking-wide">貼新聞 / 角色 / 密度 → 總 Prompt → 生成圖片</span>
-                    </button>
-                    <button id="pageTab-2" onclick="switchPage(2)"
-                            class="page-tab px-4 py-3 rounded-lg text-left transition-all">
-                        <span class="block text-[11px] font-black uppercase tracking-widest">第二頁 · 進階微調</span>
-                        <span class="block text-[9px] opacity-70 mt-0.5 tracking-wide">圖表類型 / 版型 / 矩陣 → 總 Prompt → 生成圖片</span>
-                    </button>
-                    <button id="pageTab-3" onclick="switchPage(3)"
-                            class="page-tab px-4 py-3 rounded-lg text-left transition-all">
-                        <span class="block text-[11px] font-black uppercase tracking-widest">第三頁 · 混合版型</span>
-                        <span class="block text-[9px] opacity-70 mt-0.5 tracking-wide">AI 只生背景 / 文字數字由 APP 繪製 → 直接匯出 PNG</span>
-                    </button>
-                </div>
-                <button onclick="confirmReset()"
-                        class="px-4 py-3 sm:py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] font-bold rounded-lg uppercase tracking-widest transition-colors whitespace-nowrap">
-                    Reset System
-                </button>
+        <header class="masthead glass-card px-3 py-2 flex flex-wrap items-center gap-2">
+            <div class="mark" aria-hidden="true">T</div>
+            <div class="flex items-center gap-2 min-w-0 mr-1">
+                <span class="tally-dot" aria-hidden="true"></span>
+                <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS 新聞 CG</h1>
+                <span class="hidden sm:inline text-[10px] text-[color:var(--dim)]">V8.2</span>
             </div>
-
-            <!-- 標題 -->
-            <div class="flex items-center gap-4">
-                <div class="w-12 h-12 bg-red-600 rounded-lg flex items-center justify-center shadow-lg shadow-red-900/20 shrink-0">
-                    <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10l4 4v10a2 2 0 01-2 2z" />
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 2v4a2 2 0 002 2h4" />
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 9H8m4 4H8m4 4H8" />
-                    </svg>
-                </div>
-                <div>
-                    <h1 class="text-xl font-black tracking-tighter text-white flex items-center gap-2 flex-wrap uppercase">
-                        TVBS 新聞AICG產生器
-                        <span class="px-2 py-0.5 bg-red-600/10 border border-red-600/20 text-red-500 text-[10px] rounded uppercase font-bold tracking-widest">Broadcast Standard V8.2</span>
-                    </h1>
-                    <p class="text-slate-500 text-[11px] font-medium">專業國際電視新聞資訊圖表提示詞生成系統 · 四大圖表類型 · Gemini / GPT 雙語法</p>
-                </div>
-            </div>
+            <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
+                <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
+                <button id="pageTab-2" onclick="switchPage(2)" class="page-tab rounded-md">進階微調</button>
+                <button id="pageTab-3" onclick="switchPage(3)" class="page-tab rounded-md">混合版型</button>
+            </nav>
+            <button onclick="confirmReset()"
+                    class="px-3 py-1.5 bg-[#1d1916] hover:bg-[#2a211c] text-[color:var(--dim)] text-[10px] font-bold rounded-md tracking-widest transition-colors whitespace-nowrap">
+                重設
+            </button>
         </header>
 
         <!-- ============================================================
@@ -194,69 +224,71 @@
             <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
 
                 <!-- 貼新聞 -->
-                <div class="lg:col-span-5 glass-card p-6 border-l-4 border-l-red-600">
-                    <h2 class="text-[10px] font-black text-red-500 uppercase tracking-[0.2em] mb-1">Step 1 · 貼上新聞原文</h2>
-                    <p class="text-[10px] text-slate-500 mb-4 leading-relaxed">
-                        AI 將依下方圖表類型、角色與文字密度，自動決定最直覺的佈局構圖並生成 Prompt。此區設定與第二頁的版型調整互不影響。
-                    </p>
-
-                    <!-- 高度刻意壓低讓下方選項免捲動；文字超出時 textarea 自己捲，也可拖曳右下角放大 -->
+                <div class="lg:col-span-5 glass-card">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <h2 class="text-[13px] font-black text-[color:var(--ink)]">新聞原文</h2>
+                        <span id="newsCounter" class="text-[9px] font-mono text-slate-500">0 字</span>
+                    </div>
                     <textarea id="aiInput" oninput="updateNewsCounter()"
-                           class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-4 py-3 text-sm text-slate-100 input-focus-ring h-[140px] min-h-[96px] resize-y"
-                           placeholder="輸入原始新聞文字…"></textarea>
-                    <div class="flex items-center justify-between gap-2 mt-1.5 mb-4">
-                        <span class="text-[9px] text-slate-600">可拖曳右下角放大，或直接在框內捲動</span>
-                        <span id="newsCounter" class="text-[9px] font-mono text-slate-600">0 字</span>
+                           class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 input-focus-ring h-[88px] min-h-[72px] resize-y"
+                           placeholder="貼上新聞文字…"></textarea>
+
+                    <div class="mt-3 mb-2">
+                        <div id="digestTypeSelector" class="flex gap-1.5 flex-wrap"></div>
+                        <p id="digestTypeHint" class="text-[10px] text-slate-500 italic mt-1"></p>
                     </div>
 
-                    <!-- 自動生成專用的圖表類型（與第二頁調版型完全獨立） -->
-                    <div class="mb-4">
-                        <span class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">圖表類型 / Chart Type（自動生成用．預設交給 AI）</span>
-                        <div id="digestTypeSelector" class="flex gap-2 flex-wrap">
-                            <!-- Rendered by JS -->
+                    <div class="grid grid-cols-2 gap-2 mb-2">
+                        <div class="flex bg-black/40 p-1 rounded-lg">
+                            <button data-role="記者" onclick="switchRole('記者')"
+                                    class="role-active flex-1 px-2 py-1.5 rounded-md text-[10px] font-black transition-all">記者</button>
+                            <button data-role="編輯" onclick="switchRole('編輯')"
+                                    class="flex-1 px-2 py-1.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">編輯</button>
                         </div>
-                        <p id="digestTypeHint" class="text-[10px] text-slate-500 italic mt-2"></p>
-                    </div>
-
-                    <!-- 自動消化相關設定：工作角色模式 + 文字密度 -->
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-                        <div>
-                            <span class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">工作角色模式 / Role Mode</span>
-                            <div class="flex bg-black/40 p-1 rounded-lg">
-                                <button data-role="記者" onclick="switchRole('記者')"
-                                        class="role-active flex-1 px-3 py-2.5 rounded-md text-[10px] font-black transition-all">記者</button>
-                                <button data-role="編輯" onclick="switchRole('編輯')"
-                                        class="flex-1 px-3 py-2.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">編輯</button>
-                            </div>
-                        </div>
-                        <div>
-                            <span class="block text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">文字密度 / Text Density</span>
-                            <div class="flex bg-black/40 p-1 rounded-lg">
-                                <button data-density="standard" onclick="switchDigestDensity('standard')"
-                                        class="density-active flex-1 px-3 py-2.5 rounded-md text-[10px] font-black transition-all">標準</button>
-                                <button data-density="simplified" onclick="switchDigestDensity('simplified')"
-                                        class="flex-1 px-3 py-2.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">簡化</button>
-                            </div>
+                        <div class="flex bg-black/40 p-1 rounded-lg">
+                            <button data-density="standard" onclick="switchDigestDensity('standard')"
+                                    class="density-active flex-1 px-2 py-1.5 rounded-md text-[10px] font-black transition-all">標準</button>
+                            <button data-density="simplified" onclick="switchDigestDensity('simplified')"
+                                    class="flex-1 px-2 py-1.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">簡化</button>
                         </div>
                     </div>
 
-                    <button id="aiBtn" onclick="handleAIDigestion()"
-                            class="bg-red-600 hover:bg-red-500 w-full py-4 rounded-lg text-xs font-black flex items-center justify-center gap-2 transition-all shadow-lg shadow-red-600/20 active:scale-95 disabled:opacity-50 uppercase tracking-tighter">
-                        <span id="aiBtnText">開始 AI 自動消化整理（記者・標準）</span>
+                    <div class="flex flex-wrap items-center gap-1.5 mb-3">
+                        <div class="flex bg-black/40 p-1 rounded-lg">
+                            <button id="p1-engine-gemini" onclick="switchEngine('gemini')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all bg-blue-600 text-white">Gemini</button>
+                            <button id="p1-engine-gpt" onclick="switchEngine('gpt')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all text-slate-500 hover:text-white">GPT</button>
+                        </div>
+                        <div class="flex bg-black/40 p-1 rounded-lg">
+                            <button id="p1-size-1K" onclick="switchImageSize('1K')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all bg-blue-600 text-white">1K</button>
+                            <button id="p1-size-2K" onclick="switchImageSize('2K')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all text-slate-500 hover:text-white">2K</button>
+                        </div>
+                        <button id="p1-btnSafeFrame" onclick="toggleSafeFrame()" title="開啟後滿版生成，後端再置入安全框" class="px-2.5 py-1 rounded text-[9px] font-black transition-all bg-emerald-600 text-white">安全框 ON</button>
+                        <span id="p1-aspectBadge" class="text-[9px] font-mono text-slate-500 bg-slate-800 px-2 py-0.5 rounded">16:9 → 記者安全框 1920×1080</span>
+                    </div>
+
+                    <button id="aiBtn" onclick="handleOneClickGenerate()"
+                            class="bg-red-600 hover:bg-red-500 w-full py-3 rounded-lg text-xs font-black flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50">
+                        <span id="aiBtnText">一鍵生成（記者・標準）</span>
                         <div id="aiLoading" class="hidden w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
                     </button>
-
-                    <div class="mt-4 flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2">
-                        <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest">想手動挑版型？</span>
-                        <button onclick="switchPage(2)"
-                                class="text-[10px] font-black text-slate-400 hover:text-blue-400 transition-colors">
-                            前往第二頁調整版型 →
-                        </button>
-                    </div>
                 </div>
 
-                <!-- 總 Prompt + 生成圖片（共用面板掛載點） -->
-                <div id="outputMount-1" class="lg:col-span-7"></div>
+                <div class="lg:col-span-7 glass-card p-5">
+                    <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
+                        <h3 class="text-[10px] font-black text-red-500 uppercase tracking-[0.2em]">生成結果</h3>
+                        <span id="oneClickMeta" class="text-[9px] font-mono text-slate-500"></span>
+                    </div>
+                    <div id="oneClickEmpty" class="min-h-[280px] flex items-center justify-center rounded-lg border border-dashed border-slate-800 bg-slate-950/40 px-6 text-center text-[12px] text-slate-500 leading-relaxed">
+                        螢幕待命。貼稿後按一鍵生成，成圖會上這面牆。
+                    </div>
+                    <div id="oneClickResult" class="hidden">
+                        <div class="flex items-center justify-between gap-3 mb-3">
+                            <span id="oneClickLabel" class="text-[10px] font-black uppercase tracking-widest text-violet-400">AI Generated</span>
+                            <a id="oneClickDownload" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg.jpg">下載圖片</a>
+                        </div>
+                        <img id="oneClickImage" alt="一鍵生成的新聞 CG" class="w-full rounded-lg border border-slate-800" />
+                    </div>
+                </div>
             </div>
         </section>
 
@@ -447,7 +479,7 @@
              共用面板：Final Prompt Output + 生成圖片
              由 switchPage() 搬移到當前頁的 outputMount
              ============================================================ -->
-        <div id="outputPanel" class="glass-card p-5 border-t-4 border-t-red-600">
+        <div id="outputPanel" class="glass-card p-5 hidden">
             <div class="flex justify-between items-center mb-4 gap-3 flex-wrap">
                 <div class="flex items-center gap-2 flex-wrap">
                     <h3 class="text-[10px] font-black text-red-500 uppercase tracking-[0.2em]">Final Prompt Output</h3>
@@ -514,12 +546,12 @@
     </div>
 
     <!-- Toast Notification -->
-    <div id="toast" class="fixed bottom-10 left-1/2 -translate-x-1/2 px-6 py-3 rounded bg-blue-600 text-white text-[10px] font-bold shadow-2xl opacity-0 pointer-events-none transition-opacity duration-300 z-50 uppercase tracking-widest">
+    <div id="toast" class="fixed bottom-10 left-1/2 -translate-x-1/2 px-6 py-3 rounded bg-[#e10600] text-white text-[11px] font-bold opacity-0 pointer-events-none transition-opacity duration-300 z-50 tracking-widest">
         Prompt Copied
     </div>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=20260815b"></script>
     <!-- 第三頁（混合版型）；內部包 IIFE，只對外露出 initHybrid()，由 switchPage(3) 首次切頁時呼叫 -->
-    <script src="hybrid.js"></script>
+    <script src="hybrid.js?v=20260815a"></script>
 </body>
 </html>

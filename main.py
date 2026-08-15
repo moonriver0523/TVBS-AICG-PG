@@ -1562,24 +1562,32 @@ def news_image_generate(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent
 
 
+def _frontend_file(name: str, media_type: str) -> FileResponse:
+    return FileResponse(
+        _REPO_ROOT / name,
+        media_type=media_type,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.get("/")
 def serve_index():
-    return FileResponse(_REPO_ROOT / "index.html")
+    return _frontend_file("index.html", "text/html; charset=utf-8")
 
 
 @app.get("/app.js")
 def serve_app_js():
-    return FileResponse(_REPO_ROOT / "app.js", media_type="text/javascript")
+    return _frontend_file("app.js", "text/javascript; charset=utf-8")
 
 
 @app.get("/hybrid.html")
 def serve_hybrid():
-    return FileResponse(_REPO_ROOT / "hybrid.html")
+    return _frontend_file("hybrid.html", "text/html; charset=utf-8")
 
 
 @app.get("/hybrid.js")
 def serve_hybrid_js():
-    return FileResponse(_REPO_ROOT / "hybrid.js", media_type="text/javascript")
+    return _frontend_file("hybrid.js", "text/javascript; charset=utf-8")
 
 
 # LINE Bot：webhook 與生成圖的靜態出口。
