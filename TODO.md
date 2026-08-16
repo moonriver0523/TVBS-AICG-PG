@@ -1020,3 +1020,31 @@ AICG**——一次報告三個專案的進度，AICG 這個 repo 的「給主管
 reference_image_data_url` 指向一張板塊分布圖（非人物），透過 OpenRouter 的
 `input_references` 成功讓生圖模型參考該圖畫出地理準確的板塊構造圖。證實 B 段規劃
 的技術路線是通的，LINE 端要做的只剩訊息配對與暫存那幾件事（見 C 段）。
+
+## 網頁版歷史紀錄（prompt+圖檔）備份進 Google Drive（2026-08-16 部分完成）
+
+**背景**：網頁版的圖過去完全沒有伺服器端留存（`static/generated/` 只有 LINE 版在寫），
+Cloud Run 本機磁碟也不持久，重部署就清空。
+
+**已完成（route 1）**：`gcs_archive.py` 在 `/api/images/generate` 與 `/api/news-image`
+（排除 `source=line`）成功生成後，把圖＋prompt/消化結果 metadata 一起丟進
+`gs://tvbs-aicg-history`（90 天自動清理，asia-east1）。**刻意不做自動排程同步進
+Drive**——使用者要的是隨要隨拉，之後用時再請 agent 手動跑 `gcloud storage` 把新檔案
+搬進 `G:\我的雲端硬碟\Claude共用\AICG\TVBS AICG 網頁版 歷史紀錄\`（本機 Drive 桌面
+同步資料夾），不必事先寫排程或 Task Scheduler。
+
+- [ ] **route 2（Cloud Run 即時直連 Drive API，暫緩）**：使用者原本選這條，做到一半
+      （已 `gcloud services enable drive.googleapis.com`；已決定用 `drive.file` scope
+      非 full drive）又改選 route 1。若之後要撿回來：
+  - 需使用者在 Console 建 Desktop OAuth Client（`https://console.cloud.google.com/auth/clients?project=tvbs-aicg-linebot`）
+    ＋把 consent screen 從 Testing 發佈成 Production（`drive.file` 非敏感 scope，
+    理論上不用排 Google 人工審查）——**這步只有使用者能做**，見
+    [Manage App Audience](https://support.google.com/cloud/answer/15549945?hl=en)。
+  - **地雷**：Testing 狀態發出的 refresh token 7 天就失效，會讓歸檔部署一週後
+    悄悄死掉，發佈成 Production 才是無限期。
+  - `drive.file` scope 看不到既有的「Claude共用」資料夾，app 只能自己在 My Drive
+    根目錄建新資料夾，使用者要手動拖進 `Claude共用/AICG/` 一次；之後程式存資料夾
+    ID 直寫，不受路徑影響。
+  - 已知涵蓋範圍：`/api/images/generate`（line ~859）與 `/api/news-image`
+    （line ~1532，排除 `source=line`）兩處都要掛；`/api/generate` 純消化沒有圖，
+    不在範圍內。
