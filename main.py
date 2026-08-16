@@ -28,6 +28,7 @@ from openai import (
 from PIL import Image
 from pydantic import BaseModel, Field
 
+import gcs_archive
 import photo_lookup
 import request_log
 import safe_area_spec
@@ -864,6 +865,15 @@ def generate_image(req: ImageGenerateRequest):
             provider=req.provider,
             image_model=result.model,
         )
+        gcs_archive.archive_generation(
+            request_id=request_id,
+            image_base64=result.image_data_base64,
+            mime_type=result.mime_type,
+            source="web-image",
+            prompt=req.prompt,
+            provider=req.provider,
+            image_model=result.model,
+        )
     return result
 
 
@@ -1551,6 +1561,27 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 reference_photo.source_page if reference_photo is not None else ""
             ),
         )
+        # LINE 版圖檔已由 line_bot.py 存進 static/generated/，這裡只補網頁版的缺口
+        if req.source != "line":
+            gcs_archive.archive_generation(
+                request_id=request_id,
+                image_base64=image.image_data_base64,
+                mime_type=image.mime_type,
+                source=req.source or "news-image",
+                client_id=req.client_id,
+                news_text=req.news_text,
+                style=digest.style,
+                structure=digest.structure,
+                variable=digest.variable,
+                prompt=prompt,
+                chart_type=digest.chart_type,
+                type_label=req.type_label,
+                role=req.role,
+                density=req.density,
+                provider=provider,
+                image_model=image.model,
+                portrait_subject="、".join(digest.portrait_subjects),
+            )
         return NewsImageGenerateResponse(
             image_data_base64=image.image_data_base64,
             mime_type=image.mime_type,
