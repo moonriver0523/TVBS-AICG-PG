@@ -11,6 +11,14 @@ const HYBRID_API_BASE = (location.hostname === '127.0.0.1' || location.hostname 
     : '';
 const IMAGE_BACKEND_URL = `${HYBRID_API_BASE}/api/images/generate`;
 const DIGEST_BACKEND_URL = `${HYBRID_API_BASE}/api/hybrid/digest`;
+
+// 後端要求 X-API-Key（見 main.py verify_internal_api_key）。hybrid.html
+// 也能獨立打開（不一定跟 app.js 一起載入），所以這裡自己存一份，不依賴外部。
+// 占位符，容器啟動時由 entrypoint.sh 換成真實值，真實 Key 不進 git（公開 repo）。
+const _INTERNAL_API_KEY = '__NEWS_IMAGE_API_KEY__';
+function _apiHeaders() {
+    return { 'Content-Type': 'application/json', 'X-API-Key': _INTERNAL_API_KEY };
+}
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /* 版型定義：內容(放什麼) / 版型(放哪裡) / AI圖(背景長怎樣) 三者分離。
@@ -307,7 +315,7 @@ async function generateBackground() {
   try {
     const res = await fetch(IMAGE_BACKEND_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: _apiHeaders(),
       body: JSON.stringify({
         prompt: buildBgPrompt(c),
         provider: document.getElementById('f-provider').value,
@@ -391,7 +399,7 @@ async function autoPilot() {
     status.textContent = '1/3 AI 消化新聞中…';
     const res = await fetch(DIGEST_BACKEND_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: _apiHeaders(),
       body: JSON.stringify({ news_text: news })
     });
     if (!res.ok) throw new Error('消化失敗 HTTP ' + res.status);

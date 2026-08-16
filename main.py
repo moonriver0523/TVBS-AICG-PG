@@ -540,7 +540,23 @@ def digest_quality_problem(data: dict, finish_reason: str) -> str:
     return ""
 
 
-@app.post("/api/generate", response_model=GenerateResponse)
+def verify_internal_api_key(x_api_key: str = Header(default="")) -> None:
+    # 未設定金鑰時 fail-closed（與 LINE webhook 的驗簽同一原則），
+    # 避免忘記設定就把端點裸奔給外部呼叫。這把金鑰同時保護所有內部
+    # 生成端點（news-image / generate / hybrid-digest / images-generate），
+    # LINE webhook 不受影響，因為它走自己的簽章驗證，不掛這個 Depends。
+    expected = os.getenv("NEWS_IMAGE_API_KEY", "").strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="尚未設定 NEWS_IMAGE_API_KEY")
+    if not hmac.compare_digest(x_api_key, expected):
+        raise HTTPException(status_code=401, detail="API Key 無效")
+
+
+@app.post(
+    "/api/generate",
+    response_model=GenerateResponse,
+    dependencies=[Depends(verify_internal_api_key)],
+)
 def generate(req: GenerateRequest):
     system_prompt = build_digest_instructions(
         role=req.role,
@@ -731,7 +747,11 @@ Rules:
 - visual_subject: one Traditional Chinese sentence describing a TEXT-FREE background scene for the card (place, mood, lighting; dark navy broadcast tone preferred). Describe imagery only — never mention any text, numbers or logos."""
 
 
-@app.post("/api/hybrid/digest", response_model=HybridDigestResponse)
+@app.post(
+    "/api/hybrid/digest",
+    response_model=HybridDigestResponse,
+    dependencies=[Depends(verify_internal_api_key)],
+)
 def hybrid_digest(req: HybridDigestRequest):
     model = (
         os.getenv("DIGEST_MODEL")
@@ -801,7 +821,11 @@ def hybrid_digest(req: HybridDigestRequest):
     raise HTTPException(status_code=502, detail=last_detail)
 
 
-@app.post("/api/images/generate", response_model=ImageGenerateResponse)
+@app.post(
+    "/api/images/generate",
+    response_model=ImageGenerateResponse,
+    dependencies=[Depends(verify_internal_api_key)],
+)
 def generate_image(req: ImageGenerateRequest):
     """Generate one news CG image without exposing provider API keys.
 
@@ -1538,20 +1562,10 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
         _inside_pipeline.reset(token)
 
 
-def verify_news_image_api_key(x_api_key: str = Header(default="")) -> None:
-    # 未設定金鑰時 fail-closed（與 LINE webhook 的驗簽同一原則），
-    # 避免忘記設定就把端點裸奔給外部呼叫。
-    expected = os.getenv("NEWS_IMAGE_API_KEY", "").strip()
-    if not expected:
-        raise HTTPException(status_code=503, detail="尚未設定 NEWS_IMAGE_API_KEY")
-    if not hmac.compare_digest(x_api_key, expected):
-        raise HTTPException(status_code=401, detail="API Key 無效")
-
-
 @app.post(
     "/api/news-image/generate",
     response_model=NewsImageGenerateResponse,
-    dependencies=[Depends(verify_news_image_api_key)],
+    dependencies=[Depends(verify_internal_api_key)],
 )
 def news_image_generate(req: NewsImageGenerateRequest) -> NewsImageGenerateResponse:
     return generate_news_image(req)

@@ -1031,10 +1031,20 @@ function _apiError(data, status) {
     return "HTTP " + status;
 }
 
+// 後端 /api/generate、/api/images/generate 現在要求 X-API-Key（見 main.py
+// verify_internal_api_key）。這個值直接烙在這裡，等於這個頁面公開就等於
+// Key 公開——是使用者確認過取捨後選的方案，換來不用手動輸入。
+// 這裡放的是占位符，容器啟動時由 entrypoint.sh 換成 Secret Manager 的真實值，
+// 真實 Key 不進 git（公開 repo）。
+const _INTERNAL_API_KEY = "__NEWS_IMAGE_API_KEY__";
+function _apiHeaders() {
+    return { "Content-Type": "application/json", "X-API-Key": _INTERNAL_API_KEY };
+}
+
 async function digestNewsText(input) {
     const response = await fetch(AI_BACKEND_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: _apiHeaders(),
         body: JSON.stringify({
             news_text: input,
             type_label: digestTypeLabelForApi(),
@@ -1044,7 +1054,9 @@ async function digestNewsText(input) {
         }),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(_apiError(data, response.status));
+    if (!response.ok) {
+        throw new Error(_apiError(data, response.status));
+    }
     return data;
 }
 
@@ -1097,7 +1109,7 @@ async function handleOneClickGenerate() {
         showToast("生圖中，約 30–120 秒…");
         const imgRes = await fetch(IMAGE_BACKEND_URL, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: _apiHeaders(),
             body: JSON.stringify({
                 prompt,
                 provider: effectiveImageProvider(),
@@ -1109,7 +1121,9 @@ async function handleOneClickGenerate() {
             }),
         });
         const data = await imgRes.json().catch(() => ({}));
-        if (!imgRes.ok) throw new Error(_apiError(data, imgRes.status));
+        if (!imgRes.ok) {
+            throw new Error(_apiError(data, imgRes.status));
+        }
 
         const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
         const isPng = data.mime_type === "image/png";
@@ -1149,7 +1163,7 @@ async function handleAIDigestion() {
     try {
         const response = await fetch(AI_BACKEND_URL, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: _apiHeaders(),
             body: JSON.stringify({
                 news_text: input,
                 type_label: typeLabel,
@@ -1160,7 +1174,9 @@ async function handleAIDigestion() {
                 safe_frame: state.safeFrame
             })
         });
-        if (!response.ok) throw new Error("HTTP " + response.status);
+        if (!response.ok) {
+            throw new Error("HTTP " + response.status);
+        }
         const data = await response.json();
 
         const s = curSelected();
@@ -1262,7 +1278,7 @@ async function handleImageGeneration() {
     try {
         const response = await fetch(IMAGE_BACKEND_URL, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: _apiHeaders(),
             body: JSON.stringify({
                 prompt,
                 provider,
