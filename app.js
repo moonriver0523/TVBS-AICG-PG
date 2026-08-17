@@ -318,8 +318,10 @@ let state = {
     // ② 使用者上傳的參考圖：[{dataUrl, purpose:'map'|'scene', name}]
     userRefImages: [],
     // ③ 追加修改用：**置框前**原圖（不是顯示中的成品——成品餵回去會二次拉伸）
-    // refineSource = {base64, mimeType}；refineStack 供「退回上一版」
+    // refineSource = {base64, mimeType}；refineDisplay = 顯示中成品的原始回傳；
+    // refineStack 供「退回上一版」
     refineSource: null,
+    refineDisplay: null,
     refineStack: []
 };
 
@@ -1237,10 +1239,7 @@ async function handleOneClickGenerate() {
         download.download = `tvbs-news-cg.${isPng ? "png" : "jpg"}`;
         download.innerText = `下載 ${isPng ? "PNG" : "JPEG"}`;
         // ③ 記住「置框前」原圖供追加修改；未置框時成品本身就是原圖
-        resetRefineState({
-            base64: data.source_image_base64 || data.image_data_base64,
-            mimeType: data.source_image_base64 ? "image/png" : data.mime_type,
-        });
+        resetRefineState(refineSourceFromResponse(data), data);
         document.getElementById("oneClickLabel").innerText = data.model || "AI Generated";
         const titleMatch = variable.match(/\[標題\]\s*([^\n]+)/);
         document.getElementById("oneClickMeta").innerText = titleMatch ? titleMatch[1].trim() : "";
@@ -1507,8 +1506,18 @@ function userRefImagesPayload() {
    一律送置框前原圖（refineSource），成品只拿來顯示與下載——
    把成品餵回去會二次拉伸（6.4% → 13.2% → 20.5% 疊上去）。
    ============================================================ */
-function resetRefineState(source) {
+function refineSourceFromResponse(data) {
+    // 後端置框時回傳置框前原圖與其實際 MIME；未置框時成品本身就是原圖
+    if (data.source_image_base64) {
+        return { base64: data.source_image_base64, mimeType: data.source_mime_type || 'image/png' };
+    }
+    return { base64: data.image_data_base64, mimeType: data.mime_type };
+}
+
+function resetRefineState(source, display) {
     state.refineSource = source || null;
+    // 顯示中的成品也記在 state（退回上一版用），不從 DOM 反解
+    state.refineDisplay = display || null;
     state.refineStack = [];
     const input = document.getElementById('refineInput');
     if (input) input.value = '';
@@ -1563,20 +1572,14 @@ async function handleRefine() {
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(_apiError(data, response.status));
 
-        // 退回上一版用：存目前顯示中的成品與它的置框前原圖
+        // 退回上一版用：存目前這一版的置框前原圖與顯示中成品（都在 state，不碰 DOM）
         state.refineStack.push({
             source: state.refineSource,
-            display: {
-                mime_type: document.getElementById('oneClickImage').src.startsWith('data:image/png') ? 'image/png' : 'image/jpeg',
-                image_data_base64: document.getElementById('oneClickImage').src.split(',')[1] || '',
-                model: document.getElementById('oneClickLabel').innerText,
-            },
+            display: state.refineDisplay,
         });
         // 下一輪修改要用**新的**置框前原圖，不是成品
-        state.refineSource = {
-            base64: data.source_image_base64 || data.image_data_base64,
-            mimeType: data.source_image_base64 ? 'image/png' : data.mime_type,
-        };
+        state.refineSource = refineSourceFromResponse(data);
+        state.refineDisplay = data;
         showRefinedImage(data);
         input.value = '';
         showToast('修改完成');
@@ -1594,6 +1597,7 @@ function undoRefine() {
     const previous = state.refineStack.pop();
     if (!previous) return;
     state.refineSource = previous.source;
+    state.refineDisplay = previous.display;
     showRefinedImage(previous.display);
     updateRefineControls();
     showToast('已退回上一版');

@@ -143,6 +143,12 @@ class GenerateResponse(BaseModel):
     portrait_subjects: list[str] = Field(default_factory=list)
 
 
+# input_references 的上限。模型端 gpt-image-2 收 0–16、Gemini 0–14（PLAN.md 查證），
+# 這裡抓遠低於兩者的值：一張肖像參考照＋幾張使用者參考圖已綽綽有餘，
+# 塞更多只會稀釋每張的權重、還把 base64 請求撐爆。
+MAX_INPUT_REFERENCES = 6
+
+
 # 使用者上傳參考圖的單筆描述。purpose 決定注入哪一段用途 prompt（見
 # news_prompt.USER_REFERENCE_MODES）：map＝地圖底稿（地理關係以附圖為準）、
 # scene＝實景參考（場景／建物／器材外觀依附圖）。
@@ -166,7 +172,10 @@ class ImageGenerateRequest(BaseModel):
     reference_image_data_url: str = ""
     # 使用者上傳的參考圖（地圖底稿／實景參考）。與肖像參考照分開兩個欄位：
     # 肖像那格語意寫死是「人臉參考照」且由後端自動填，混用會打架。
-    reference_images: list[UserReferenceImage] = Field(default_factory=list)
+    # 上限在 request 層就擋（不是只在 OpenRouter 傳輸層），任何後端路徑都收不進超量。
+    reference_images: list[UserReferenceImage] = Field(
+        default_factory=list, max_length=MAX_INPUT_REFERENCES
+    )
     # 網頁版消化後回傳的具名真人名單。後端據此查參考照並注入肖像規則。
     # LINE／generate_news_image 已在組 prompt 時處理過，不要再傳，以免規則灌兩次。
     portrait_subjects: list[str] = Field(default_factory=list)
@@ -178,10 +187,13 @@ class ImageGenerateResponse(BaseModel):
     # 兩者不可混用——把成品餵回去改圖會二次拉伸，失真 6.4%→13.2%→20.5% 疊上去，
     # 而且每輪只多一點、很難察覺（PLAN.md ③ 的失真疊加坑）。
     # 未置框（safe_frame=False）時 source_image_base64 為空字串，成品本身就是原圖。
+    # source_mime_type＝原圖實際的 MIME（模型可能回 png 也可能回 jpeg），
+    # 前端組 refine 請求時要用它，不能假設一律是 png。
     image_data_base64: str
     mime_type: str
     model: str
     source_image_base64: str = ""
+    source_mime_type: str = ""
 
 
 # 第一頁「懶人機制」：type_label 傳這個值代表由 AI 自行判斷最適合的圖表類型
@@ -894,14 +906,12 @@ def generate_image(req: ImageGenerateRequest):
     req = apply_user_references_to_image_request(req)
     request_id = request_log.new_request_id()
     try:
-        result = generate_image_raw(req)
-        verify_output_aspect_ratio(result, req.aspect_ratio)
-        if req.safe_frame:
-            # 置框前的原圖要留給追加修改（refine）用：把置框後成品餵回去改圖
-            # 會二次拉伸（見 ImageGenerateResponse 的欄位說明）。
-            result = frame_image_response(result, req.safe_frame_profile).model_copy(
-                update={"source_image_base64": result.image_data_base64}
-            )
+        result = finalize_image_result(
+            generate_image_raw(req),
+            aspect_ratio=req.aspect_ratio,
+            safe_frame=req.safe_frame,
+            profile=req.safe_frame_profile,
+        )
     except Exception as exc:
         if not _inside_pipeline.get():
             request_log.log_failure(
@@ -1022,16 +1032,24 @@ def supports_reference_image(provider: str) -> bool:
     return provider != "gpt"
 
 
+def supports_multiple_reference_images() -> bool:
+    """多張參考圖（reference_images 陣列）只有 OpenRouter 路徑送得出去。
+
+    存在理由：supports_reference_image() 對 native-gemini 回 True，但那條
+    只送單張 reference_image_data_url——若拿它當放行條件，使用者上傳的
+    reference_images 會被靜默丟掉、prompt 卻已寫著「依附圖」，正是
+    「叫模型參考不存在的附圖」這個最糟情境。判斷必須用這支。
+    """
+    return os.getenv("IMAGE_BACKEND", "openrouter") == "openrouter" and bool(
+        os.getenv("OPENROUTER_API_KEY")
+    )
+
+
 # 一家一個模型，OpenRouter 與原生兩條路徑共用同一個——否則切 IMAGE_BACKEND 會連模型一起
 # 換掉，而兩個模型的能力並不相同（2026-08-01 清查：OpenRouter 那條原本是 gpt-5.4-image-2、
 # 原生那條是 gpt-image-2，文件卻只寫後者）。
 # GPT 選 gpt-image-2 的理由：OpenAI 家族只有它在 API 層支援安全框要的 21:9，
 # gpt-5.4-image-2 / gpt-5-image 系列連 aspect_ratio 參數都沒有。
-# input_references 的上限。模型端 gpt-image-2 收 0–16、Gemini 0–14（PLAN.md 查證），
-# 這裡抓遠低於兩者的值：一張肖像參考照＋幾張使用者參考圖已綽綽有餘，
-# 塞更多只會稀釋每張的權重、還把 base64 請求撐爆。
-MAX_INPUT_REFERENCES = 6
-
 NATIVE_GPT_IMAGE_MODEL = "gpt-image-2"
 NATIVE_GEMINI_IMAGE_MODEL = "gemini-3-pro-image"
 OPENROUTER_GPT_IMAGE_MODEL = f"openai/{NATIVE_GPT_IMAGE_MODEL}"
@@ -1160,6 +1178,30 @@ def frame_image_response(
         image_data_base64=base64.b64encode(framed).decode("ascii"),
         mime_type="image/png",
         model=result.model,
+    )
+
+
+def finalize_image_result(
+    result: ImageGenerateResponse,
+    *,
+    aspect_ratio: str,
+    safe_frame: bool,
+    profile: str,
+) -> ImageGenerateResponse:
+    """生成後的共同收尾：驗比例，需要時置框並保留置框前原圖。
+
+    generate_image 與 refine_image 共用。置框前的原圖（含實際 MIME）要留給
+    追加修改（refine）用：把置框後成品餵回去改圖會二次拉伸
+    （見 ImageGenerateResponse 的欄位說明）。
+    """
+    verify_output_aspect_ratio(result, aspect_ratio)
+    if not safe_frame:
+        return result
+    return frame_image_response(result, profile).model_copy(
+        update={
+            "source_image_base64": result.image_data_base64,
+            "source_mime_type": result.mime_type,
+        }
     )
 
 
@@ -1436,9 +1478,10 @@ class NewsImageGenerateResponse(BaseModel):
     prompt_version: str = PROMPT_VERSION
     # 回查用：對應 logs/generations-*.jsonl 裡的那一筆
     request_id: str = ""
-    # 置框前原圖，僅供 /api/images/refine 再編輯用；語意同
+    # 置框前原圖與其實際 MIME，僅供 /api/images/refine 再編輯用；語意同
     # ImageGenerateResponse.source_image_base64（成品拿去顯示，這格拿去改圖）
     source_image_base64: str = ""
+    source_mime_type: str = ""
 
 
 def _extract_title(variable: str) -> str:
@@ -1562,11 +1605,11 @@ def apply_user_references_to_image_request(
     """
     if not req.reference_images:
         return req
-    if not supports_reference_image(req.provider):
+    if not supports_multiple_reference_images():
         raise HTTPException(
             status_code=400,
-            detail="目前的生圖後端無法附上參考圖（原生 OpenAI 路徑沒有參考圖通道），"
-            "請移除上傳的參考圖，或改用支援參考圖的引擎設定",
+            detail="目前的生圖後端無法附上上傳的參考圖（僅 OpenRouter 路徑支援多張參考圖），"
+            "請移除上傳的參考圖，或改回 OpenRouter 生圖設定",
         )
     prompt = req.prompt
     for purpose in dict.fromkeys(ref.purpose for ref in req.reference_images):
@@ -1623,13 +1666,12 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
     )
     request_id = request_log.new_request_id()
     try:
-        result = generate_image_raw(image_req)
-        verify_output_aspect_ratio(result, req.aspect_ratio)
-        if req.safe_frame:
-            # 與 generate_image 相同：置框前原圖留給下一輪 refine 用
-            result = frame_image_response(result, req.safe_frame_profile).model_copy(
-                update={"source_image_base64": result.image_data_base64}
-            )
+        result = finalize_image_result(
+            generate_image_raw(image_req),
+            aspect_ratio=req.aspect_ratio,
+            safe_frame=req.safe_frame,
+            profile=req.safe_frame_profile,
+        )
     except Exception as exc:
         request_log.log_failure(
             request_id=request_id,
@@ -1784,6 +1826,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             title=_extract_title(digest.variable),
             request_id=request_id,
             source_image_base64=image.source_image_base64,
+            source_mime_type=image.source_mime_type,
         )
     finally:
         _inside_pipeline.reset(token)

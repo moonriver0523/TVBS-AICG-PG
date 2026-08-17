@@ -133,6 +133,34 @@ class RefineEndpointTests(unittest.TestCase):
             )
             source = result.source_image_base64
 
+    def test_source_mime_type_reports_raw_mime(self):
+        """置框前原圖的實際 MIME 要回給前端；模型回 jpeg 時不能被硬當成 png。"""
+        raw = main.ImageGenerateResponse(
+            image_data_base64=EDITOR_RAW, mime_type="image/jpeg", model="fake-model"
+        )
+        with patch.object(main, "generate_image_raw", return_value=raw):
+            result = main.refine_image(self.refine_request())
+        self.assertEqual(result.source_mime_type, "image/jpeg")
+
+    def test_reporter_profile_refine_fits_into_official_canvas(self):
+        """記者 profile：21:9 原圖 FIT 進 1920×1080 畫布（與編輯的拉伸是兩條路）。"""
+        reporter_raw = png_base64(1792, 768)
+        with patch.object(
+            main, "generate_image_raw", return_value=fake_raw_response(reporter_raw)
+        ):
+            result = main.refine_image(
+                self.refine_request(
+                    source_image_base64=reporter_raw,
+                    aspect_ratio="21:9",
+                    safe_frame_profile="記者",
+                )
+            )
+        self.assertEqual(result.source_image_base64, reporter_raw)
+        with Image.open(
+            io.BytesIO(base64.b64decode(result.image_data_base64))
+        ) as image:
+            self.assertEqual(image.size, (1920, 1080))
+
     def test_no_safe_frame_returns_empty_source(self):
         with patch.object(
             main, "generate_image_raw", return_value=fake_raw_response(EDITOR_RAW)
@@ -284,11 +312,13 @@ class UserReferenceImageTests(unittest.TestCase):
         payload = self.sent_payload(self.openrouter_request())
         self.assertNotIn("input_references", payload)
 
-    def test_too_many_references_rejected(self):
+    def test_too_many_references_rejected_at_request_layer(self):
+        """上限在 request 層就擋（pydantic max_length），任何後端路徑都收不進超量。"""
+        from pydantic import ValidationError
+
         refs = [self.SCENE_REF] * (main.MAX_INPUT_REFERENCES + 1)
-        with self.assertRaises(main.HTTPException) as ctx:
-            self.sent_payload(self.openrouter_request(reference_images=refs))
-        self.assertEqual(ctx.exception.status_code, 400)
+        with self.assertRaises(ValidationError):
+            self.openrouter_request(reference_images=refs)
 
     def test_purpose_blocks_injected_once_per_purpose(self):
         req = self.openrouter_request(
@@ -305,6 +335,15 @@ class UserReferenceImageTests(unittest.TestCase):
 
     def test_backend_without_reference_channel_rejects_uploads(self):
         req = self.openrouter_request(reference_images=[self.MAP_REF])
+        with patch.dict(os.environ, {"IMAGE_BACKEND": "native"}):
+            with self.assertRaises(main.HTTPException) as ctx:
+                main.apply_user_references_to_image_request(req)
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_native_gemini_also_rejects_uploads(self):
+        """native-gemini 送得出單張肖像照，但送不出 reference_images 陣列。
+        不擋下來的話上傳圖被靜默丟掉、prompt 卻寫著「依附圖」——比不附更糟。"""
+        req = self.openrouter_request(provider="gemini", reference_images=[self.MAP_REF])
         with patch.dict(os.environ, {"IMAGE_BACKEND": "native"}):
             with self.assertRaises(main.HTTPException) as ctx:
                 main.apply_user_references_to_image_request(req)
