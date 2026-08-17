@@ -71,6 +71,30 @@ class ConstantParityTests(unittest.TestCase):
     def test_full_bleed_rules(self):
         self.assert_same("FULL_BLEED_RULES", news_prompt.FULL_BLEED_RULES)
 
+    def test_editor_full_bleed_rules(self):
+        self.assert_same(
+            "EDITOR_FULL_BLEED_RULES", news_prompt.EDITOR_FULL_BLEED_RULES
+        )
+
+    def test_editor_replaces_the_full_bleed_block_rather_than_appending(self):
+        """編輯要換掉整段滿版規則，不能兩段並存。
+
+        兩段並存實測只留 0-8px 背景帶：FULL_BLEED_RULES 開頭就寫「不准留白」
+        並聲明 OVERRIDE 衝突指令，模型會聽它而不是後面的留邊要求。
+        """
+        editor = news_prompt.build_prompt(
+            role="編輯", engine="gpt", type_label="資料圖表",
+            style="S", structure="T", variable="V", safe_frame=True,
+        )
+        reporter = news_prompt.build_prompt(
+            role="記者", engine="gpt", type_label="資料圖表",
+            style="S", structure="T", variable="V", safe_frame=True,
+        )
+        self.assertIn(news_prompt.EDITOR_FULL_BLEED_RULES, editor)
+        self.assertNotIn(news_prompt.FULL_BLEED_RULES, editor)
+        self.assertIn(news_prompt.FULL_BLEED_RULES, reporter)
+        self.assertNotIn(news_prompt.EDITOR_FULL_BLEED_RULES, reporter)
+
     def test_canvas_lines(self):
         for name, value in (
             ("CANVAS_MARGIN_LINE", news_prompt.CANVAS_MARGIN_LINE),
