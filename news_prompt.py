@@ -10,7 +10,7 @@ LINE Bot 是純後端流程、沒有瀏覽器，因此在這裡有一份對應�
 
 # 供外部整合（如 /api/news-image/generate 的呼叫端）追蹤這批規則的版本；
 # 這裡或對應的 app.js 常數只要有實質修改，就手動遞增這個字串。
-PROMPT_VERSION = "v5-2026-08-05"
+PROMPT_VERSION = "v6-2026-08-17"
 
 # 地圖類型的標籤字面值。定義在本模組（而非 main.py）是因為匯入方向是
 # main → news_prompt：build_prompt() 要用它決定是否注入地圖規則，
@@ -228,6 +228,105 @@ PORTRAIT_MODES = {
     "no_reference": PORTRAIT_NO_REFERENCE_RULES,
     "none": "",
 }
+
+# ============================================================
+# 使用者上傳參考圖的用途區塊（2026-08-17，PLAN.md ②）。
+#
+# ⚠️ 這些常數**刻意不同步到 app.js**，理由與 PORTRAIT_* 相同（本檔頂端
+# 「兩份來源」規則的明列例外）：上傳的圖一定經過後端 /api/images/generate
+# 才送得進 input_references，由後端在同一處依 purpose 注入區塊，規則就只有
+# 一份來源；同步到前端只會多一份要對齊的拷貝。
+#
+# 措辭要點：附圖不是要重現的成品，是「依據」。地圖類與 MAP_ACCURACY_IMAGE_RULES
+# 同向（地理正確壓過構圖），不衝突——附圖只是把「正確」的來源從模型記憶換成附圖。
+# ============================================================
+
+USER_REFERENCE_MAP_RULES = """==================================================
+ATTACHED MAP REFERENCE (CRITICAL)
+==================================================
+- One of the attached images is a map supplied by the user. Treat it as the geographic ground truth for this graphic.
+- The relative positions, coastlines, routes and boundaries shown in that attached map override your own geographic memory. Do not move, rotate, mirror, compress or "improve" any of them.
+- Re-draw the geography in the graphic's own visual style; do not paste or photographically reproduce the attached map itself.
+- Labels and callout text still come ONLY from VARIABLE FIELDS, never from text visible inside the attached map."""
+
+USER_REFERENCE_SCENE_RULES = """==================================================
+ATTACHED SCENE REFERENCE (CRITICAL)
+==================================================
+- One of the attached images is a real-scene photograph supplied by the user. The appearance of the scene, buildings, vehicles or equipment in the graphic must follow that attached image: same shape, layout, proportions and distinguishing features.
+- Re-draw it in the graphic's own visual style; do not paste or photographically reproduce the attached image itself.
+- Do not copy any readable text, logo or brand mark visible inside the attached image; the NO UNSOURCED BRANDS rule above still applies in full.
+- Do not copy any recognisable human face from the attached image; how to depict named real people is governed solely by the NAMED REAL PERSON rules."""
+
+# 使用者上傳肖像照（2026-08-17 使用者裁決開放）。
+# 標題刻意含「NAMED REAL PERSON」：REAL_WORLD_RENDERING_RULES 的預設條款寫著
+# 「有 NAMED REAL PERSON 區塊時聽它的」，這段就是那個區塊的使用者上傳版。
+# 「兩位以上具名真人不畫臉」鐵律在**使用者親自上傳照片**時解除——鐵律的成因是
+# 參考圖通道一次只能對應一人（2026-08-05 事故），多圖支援＋使用者明示提供照片
+# 後成因不存在；但**沒有附照片的那位仍然不畫臉**，鐵律只對有照片的人解除。
+USER_REFERENCE_PORTRAIT_RULES = """==================================================
+NAMED REAL PERSON — USER-SUPPLIED PORTRAIT REFERENCE (CRITICAL)
+==================================================
+- The user has attached portrait photograph(s) of the named real person(s) in this graphic. Base each portrait on its attached photograph.
+- Render each portrait as a hand-painted editorial portrait illustration rather than a photograph, while preserving the recognisable likeness of its reference photograph: the same facial structure, hairstyle, glasses and build, so that viewers identify the same individual.
+- When the layout shows more than one named person, match each face to the correct person: use the resemblance between the attached photographs and the name labels, and never swap likenesses between people.
+- Draw a recognisable face ONLY for a person whose photograph is attached. Any named real person WITHOUT an attached photograph must still be shown as a back view or a plain silhouette — never invent or approximate a face for them.
+- Take only each person's likeness from the photographs. Pose, attire, framing and surroundings follow STRUCTURE, not the photographs' own backgrounds or occasions.
+- Never place a person in a scene, action or context that STRUCTURE does not describe."""
+
+USER_REFERENCE_MODES = {
+    "map": USER_REFERENCE_MAP_RULES,
+    "scene": USER_REFERENCE_SCENE_RULES,
+    "portrait": USER_REFERENCE_PORTRAIT_RULES,
+}
+
+# 使用者有上傳參考圖時一律注入（2026-08-17 使用者裁決）：既然是照著使用者
+# 提供的實景實物生成，就不再標「示意圖」。REAL_WORLD_RENDERING_RULES 寫著
+# 標籤 never drop or hide，所以這裡必須位置在後＋明文 OVERRIDE（repo 慣例
+# 「位置＋明文 OVERRIDE 雙重表達」）才壓得過去；其餘條款（禁品牌、肖像對應、
+# 地理正確）全部原樣生效。
+USER_REFERENCE_NO_DISCLAIMER_RULES = """==================================================
+USER REFERENCE SUPPLIED — NO 示意圖 LABEL (OVERRIDE)
+==================================================
+- The user has supplied reference image(s) for this graphic, so the depiction is based on real supplied material rather than a generic stand-in.
+- Do NOT render any 示意圖 label anywhere in the image. If the text 示意圖 appears in VARIABLE FIELDS, omit that text and render everything else exactly as supplied.
+- This rule OVERRIDES every earlier instruction that asks for a 示意圖 label to be present or kept visible, including the REAL-WORLD ACCURACY and NAMED REAL PERSON blocks.
+- Every other rule in those blocks still binds in full: the brand bans, likeness and face rules, and geographic accuracy are unchanged."""
+
+
+# ============================================================
+# 追加指令改圖（2026-08-17，PLAN.md ③）。
+#
+# ⚠️ 同上，**刻意不同步到 app.js**：refine 一律走後端 /api/images/refine，
+# prompt 只在這裡組，前端沒有任何一條路徑需要自己組 refine prompt。
+#
+# 附圖是「上次的成品（置框前原圖）」，措辭核心是：只改指令指定的部分，
+# 其餘逐像素保持。FINAL OUTPUT RULE 的括號禁令與繁中要求仍要帶著，
+# 免得修改輪把原本守住的規則丟掉。
+# ============================================================
+
+IMAGE_REFINE_RULES = """==================================================
+IMAGE REFINE RULES (CRITICAL)
+==================================================
+- The attached image is YOUR OWN previous output for this news graphic. It is the base image.
+- Apply ONLY the change requested in USER CHANGE REQUEST below. Everything else — layout, composition, colours, typography, spelling, every other element — must remain exactly as in the attached image.
+- Do not redesign, re-balance, restyle or "improve" anything that the request did not mention.
+- Keep the exact same aspect ratio and framing as the attached image. Do not crop, letterbox, zoom or shift the composition.
+- Use only Traditional Chinese (Taiwan standard) for any text you add or change, with correct stroke forms.
+- The final image must NOT contain any "[" "]" or "<" ">" characters.
+- Never add new facts, figures, sources, logos or captions that the request did not supply."""
+
+
+def build_refine_prompt(instruction: str) -> str:
+    """組追加修改（refine）的生圖 prompt。附圖＝上次置框前原圖，經 input_references 送出。"""
+    return (
+        "Modify the attached news infographic image according to the change "
+        "request below. This is an edit of an existing image, not a new design.\n\n"
+        f"{IMAGE_REFINE_RULES}\n\n"
+        "==================================================\n"
+        "USER CHANGE REQUEST\n"
+        "==================================================\n"
+        f"{instruction}"
+    )
 
 MAP_ACCURACY_IMAGE_RULES = """==================================================
 MAP ACCURACY RULES (CRITICAL)
