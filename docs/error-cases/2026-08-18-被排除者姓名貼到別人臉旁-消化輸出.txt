@@ -1,0 +1,12 @@
+portrait_subject: 賴清德
+portrait_mode: reference
+
+STRUCTURE:
+The infographic uses the entire frame edge to edge, with only a slim even breathing space just inside the frame border so that no element is clipped; the background is one single continuous image covering the whole canvas. Across the upper area, the headline text sits large and clear, announcing the president's inspection of the central disaster response center as the typhoon approaches, with a small 示意圖 label placed directly beside the main scene to mark it as a reconstruction. Centred within the main body of the frame, a wide command-center interior is depicted: rows of unbranded monitor screens showing generic typhoon satellite-loop graphics line the back wall, their surfaces left free of any real broadcaster or agency logo. In the mid-ground, one identifiable figure representing 賴清德 stands facing the monitors in a plain dark formal suit with no visible insignia, positioned with clear separation from surrounding staff figures who are rendered as generic, non-identifiable silhouetted personnel in unbranded uniforms. Along the right side of the frame, a vertical information panel holds the 內文小標 text describing the maximum-level response order and the reminder for the public to avoid mountains and coastlines, kept with clear separation from the central scene. Along the lower portion of the frame, a separate weather-briefing panel is shown as a stylised map-and-graphic display with generic, unbranded screen framing; beside this panel a text caption box (not a depicted person, no face, no figure) carries the quoted point attributed to 吳軒彤 about the storm's unusually large wind-radius and the risk of continuous heavy rainfall in the south-central region, with her name appearing only as attribution text and never placed beside any drawn figure. The lowest row of the design, sitting just inside the frame border, carries a slim closing line reiterating the joint call for the public to stay away from mountainous and coastal areas.
+
+VARIABLE:
+[標題]強颱來襲 賴清德視察中央災害應變中心 示意圖
+[內文小標]要求各部會 以最高規格應變
+[內文小標]氣象中心說明 暴風半徑偏大
+中南部須留意 連續性強降雨
+[內文小標]籲請民眾 避免前往山區與海邊
