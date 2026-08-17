@@ -573,6 +573,11 @@ def digest_quality_problem(data: dict, finish_reason: str) -> str:
 
     for field in ("style", "structure", "variable"):
         value = data.get(field) or ""
+        # 模型偶爾無視 strict schema 把欄位回成巢狀物件／陣列（2026-08-17 實測：
+        # 使用者帶指令＋參考圖時 variable 回成 dict，.strip() 直接 AttributeError
+        # 炸 500）。型別不對與截斷同級：能解析不代表能用，走重試。
+        if not isinstance(value, str):
+            return f"{field} 不是字串（{type(value).__name__}）"
         if not value.strip():
             return f"{field} 為空"
         stray = DIGEST_ALLOWED_CHARS.sub("", value)

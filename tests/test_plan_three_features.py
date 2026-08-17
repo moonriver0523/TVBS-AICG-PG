@@ -230,6 +230,20 @@ class UserInstructionFieldTests(unittest.TestCase):
         self.assertIn("VERBATIM MODE", block, "欄位寫逐字保留要能觸發逐字模式")
         self.assertIn("NEVER news content", block)
 
+    def test_non_string_digest_field_is_quality_problem_not_crash(self):
+        """2026-08-17 實測：帶指令＋參考圖時模型把 variable 回成 dict，
+        舊版 .strip() 直接 AttributeError 炸 500。必須改判品質問題走重試。"""
+        data = {
+            "style": "S",
+            "structure": "T",
+            "variable": {"標題": "巢狀物件"},
+            "chart_type": "資料圖表",
+            "portrait_subjects": [],
+        }
+        problem = main.digest_quality_problem(data, "stop")
+        self.assertIn("variable", problem)
+        self.assertIn("不是字串", problem)
+
     def test_news_image_request_forwards_user_instruction(self):
         digest = main.GenerateResponse(
             style="S", structure="T", variable="[標題] X", chart_type="資料圖表"
