@@ -144,6 +144,14 @@ FULL-FRAME RULES (CRITICAL — MUST PRESERVE)
 - SELF-CHECK before finalizing: if any element is clipped by the frame edge, nudge it inward; if a wide empty band has appeared along any edge, enlarge the design to fill it."""
 
 
+# 只給編輯：對位框比 16:9 寬，差額由後端水平拉伸補（safe_frame.STRETCH_PROFILES）。
+# 拉伸幅度會扣掉模型自己留的純背景，所以這裡多要一點上下呼吸空間就能少失真——
+# 2026-08-17 實測，有這段時模型留 21–23px，殘餘失真從 6.4% 降到約 1%。
+# 刻意只要「一點點」：要多了會變成舊的縮小置中，畫面利用率反而變差。
+EDITOR_EDGE_BREATHING_RULES = """- Along the very top edge and the very bottom edge, let a thin ribbon of plain background show through — just a few pixels of pure backdrop with no headline, card, banner, icon or border touching it. Keep it thin: this is a hairline of breathing room, not a margin, and the design must still read as filling the frame.
+- Do the same along the left and right edges."""
+
+
 # ============================================================
 # 視覺忠實度區塊（2026-07-31）。與 app.js 逐字同步（tests/test_prompt_parity.py）。
 # 插在 margin_rules 與 FINAL OUTPUT RULE 之間——放在該標頭之後會汙染
@@ -236,7 +244,11 @@ def build_prompt(
     """
     text_rules = EDITOR_TEXT_RULES if role == "編輯" else REPORTER_TEXT_RULES
     if safe_frame:
+        # 編輯多要一條髮絲般的背景邊：後端會把它裁掉換取更小的水平拉伸失真。
+        # 記者是 21:9 FIT，不走拉伸，加了只會白白縮小畫面。
         margin_rules = FULL_BLEED_RULES
+        if role == "編輯":
+            margin_rules = f"{FULL_BLEED_RULES}\n{EDITOR_EDGE_BREATHING_RULES}"
         canvas_line = CANVAS_FULL_BLEED_LINE
     else:
         margin_rules = EDITOR_SAFE_AREA if role == "編輯" else REPORTER_SAFE_AREA

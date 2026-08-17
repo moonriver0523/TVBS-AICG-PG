@@ -856,8 +856,10 @@ function buildPrompt({ role, engine, typeLabel, style, structure, variable, safe
     // 共用的正文區塊（style / structure / variable）
     const textRules = role === '編輯' ? EDITOR_TEXT_RULES : REPORTER_TEXT_RULES;
     // safeFrame=true：留白改由後端 safe_frame.py 數學置框，這裡改下滿版指示
+    // 編輯多要一條髮絲般的背景邊：後端會裁掉它換取更小的水平拉伸失真。
+    // 記者是 21:9 FIT，不走拉伸，加了只會白白縮小畫面。
     const marginRules = safeFrame
-        ? FULL_BLEED_RULES
+        ? (role === '編輯' ? `${FULL_BLEED_RULES}\n${EDITOR_EDGE_BREATHING_RULES}` : FULL_BLEED_RULES)
         : (role === '編輯' ? EDITOR_SAFE_AREA : REPORTER_SAFE_AREA);
     const canvasLine = safeFrame ? CANVAS_FULL_BLEED_LINE : CANVAS_MARGIN_LINE;
 
@@ -946,6 +948,13 @@ FULL-FRAME RULES (CRITICAL — MUST PRESERVE)
 - The background is ONE single continuous image covering the whole canvas. Do NOT render any frame, rectangle, outline, border line, guide line, crop mark, corner bracket, or dimmed / tinted / shaded band anywhere.
 - Every element must be fully inside the canvas: nothing may run off the edge or be sliced by it.
 - SELF-CHECK before finalizing: if any element is clipped by the frame edge, nudge it inward; if a wide empty band has appeared along any edge, enlarge the design to fill it.`;
+
+/* 只給編輯：對位框比 16:9 寬，差額由後端水平拉伸補。拉伸幅度會扣掉模型自己留的
+   純背景，所以多要一點呼吸空間就能少失真（2026-08-17 實測 6.4% → 約 1%）。
+   ⚠️ 與 news_prompt.py 必須逐字一致（tests/test_prompt_parity.py 會驗）。 */
+const EDITOR_EDGE_BREATHING_RULES =
+`- Along the very top edge and the very bottom edge, let a thin ribbon of plain background show through — just a few pixels of pure backdrop with no headline, card, banner, icon or border touching it. Keep it thin: this is a hairline of breathing room, not a margin, and the design must still read as filling the frame.
+- Do the same along the left and right edges.`;
 
 /* ---- 視覺忠實度常數（2026-07-31）----
    ⚠️ 與 news_prompt.py 必須逐字一致（tests/test_prompt_parity.py 會驗）。

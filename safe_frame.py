@@ -61,6 +61,98 @@ STRETCH_PROFILES = frozenset({safe_area_spec.EDITOR_PROFILE})
 def uses_stretch(profile: str) -> bool:
     return profile in STRETCH_PROFILES
 
+
+# ---- 先吃掉模型自己留的純背景，剩下的差額才用拉伸 ----
+# 拉伸幅度取決於「來源比例離安全區多遠」，所以每從上下裁掉 1px 背景，
+# 失真就少約 0.25%。2026-08-17 實測（6 張真實生成圖）：prompt 要求四周留純背景帶時
+# 模型會留 21–23px，裁掉後殘餘失真只剩 0.75–1.24%；沒要求時留 8–14px，殘餘 3–4.4%。
+#
+# 關鍵是這裡**不寫死裁多少**：從邊界往內走，一遇到任何元素跡象就停，只裁已確認
+# 是純背景的列。最壞情況（模型一點邊都沒留）退回全額拉伸，絕不會切到內容——
+# 與寫死裁 3% 的 COVER 有本質差別（那個實測會削到蓋章橫幅的下緣金框）。
+#
+# 判準刻意保守：背景基準取該列最左／最右各 8px 的中位數（邊緣必為背景，否則
+# 這張圖本來就不該裁），該列只要有 EDGE_SCAN_MIN_HITS 以上的像素明顯偏離就停。
+EDGE_SAMPLE = 8          # 取樣寬度（每側）
+EDGE_DEVIATION = 90      # RGB 三通道絕對差之和，超過視為「不是背景」
+EDGE_SCAN_MIN_HITS = 3   # 該列偏離像素數達此值就判定有元素；比例式門檻會漏掉小圖示
+# 相鄰兩列的基準色跳變上限。單看「這一列夠均勻」擋不住橫貫全寬的純色帶
+# （例如貼邊的實心色條會整列同色，看起來就像背景）；但從邊界一路掃進來時，
+# 背景漸層在幾十列內變化很小，色帶則是一次大跳，用這個把它攔下來。
+EDGE_BASE_JUMP = 40
+
+
+def _row_pixels(source: Image.Image, y: int) -> list[tuple[int, int, int]]:
+    """第 y 列的像素。走 tobytes 而不是 getdata——後者在 Pillow 14 會移除。"""
+    raw = source.crop((0, y, source.width, y + 1)).tobytes()
+    return [tuple(raw[i : i + 3]) for i in range(0, len(raw), 3)]
+
+
+def _row_base_colour(pixels: list[tuple[int, int, int]]) -> tuple[int, ...]:
+    """該列的背景基準色：最左／最右各取樣後的中位數。邊緣必為背景，否則不該裁。"""
+    sample = pixels[:EDGE_SAMPLE] + pixels[-EDGE_SAMPLE:]
+    return tuple(sorted(channel)[len(channel) // 2] for channel in zip(*sample))
+
+
+def _row_is_plain_background(
+    pixels: list[tuple[int, int, int]], base: tuple[int, ...]
+) -> bool:
+    hits = 0
+    for pixel in pixels:
+        if sum(abs(p - b) for p, b in zip(pixel, base)) > EDGE_DEVIATION:
+            hits += 1
+            if hits >= EDGE_SCAN_MIN_HITS:
+                return False
+    return True
+
+
+def plain_background_margin(source: Image.Image, limit: int) -> int:
+    """上下各有多少列可安全裁掉。回傳兩側都成立的較小值，最多 limit。
+
+    對稱裁切是刻意的：只裁一側會讓設計在框內上下偏移。
+
+    掃描中途遇到基準色大跳變時，先前掃過的那幾列會整批作廢（回傳 0）。
+    那代表邊緣壓著一塊與背景不同色的東西——例如貼邊的實心色條，它整列同色，
+    只看「這列夠均勻」會誤判成背景。寧可退回全額拉伸，也不能裁到那種色條。
+    """
+    if limit <= 0:
+        return 0
+    height = source.size[1]
+    counts = []
+    for from_top in (True, False):
+        found = 0
+        previous: tuple[int, ...] | None = None
+        for step in range(min(limit, height // 2)):
+            y = step if from_top else height - 1 - step
+            pixels = _row_pixels(source, y)
+            base = _row_base_colour(pixels)
+            if previous is not None and sum(
+                abs(b - p) for b, p in zip(base, previous)
+            ) > EDGE_BASE_JUMP:
+                found = 0
+                break
+            if not _row_is_plain_background(pixels, base):
+                break
+            previous = base
+            found += 1
+        counts.append(found)
+    return min(counts)
+
+
+def _shave_plain_edges(source: Image.Image, zone: tuple[int, int]) -> Image.Image:
+    """裁掉上下的純背景，讓來源比例更接近安全區，降低待會兒的拉伸幅度。"""
+    zone_w, zone_h = zone
+    width, height = source.size
+    if width <= 0 or height <= 0 or zone_w <= 0 or zone_h <= 0:
+        return source
+    # 裁到「來源比例＝安全區比例」就零失真，再多裁只是白白丟畫面
+    ideal_h = width * zone_h / zone_w
+    limit = int((height - ideal_h) // 2)
+    margin = plain_background_margin(source, limit)
+    if margin <= 0:
+        return source
+    return source.crop((0, margin, width, height - margin))
+
 # ---- 四周背景的做法 ----
 # 2026-07-30 用實際生成圖做過四種做法的並排對照後由使用者選定 backdrop 為預設。
 # blur 的問題是它「試圖假裝無縫」卻失敗：重度模糊把文字糊成鬼影、又與中央清晰內容
@@ -259,6 +351,10 @@ def apply_safe_frame(
 
     with Image.open(io.BytesIO(image_bytes)) as opened:
         source = opened.convert("RGB")
+
+        if uses_stretch(profile):
+            x0, y0, x1, y1 = safe_area_spec.safe_rect(*canvas, profile)
+            source = _shave_plain_edges(source, (x1 - x0, y1 - y0))
 
         left, top, right, bottom = plan_placement(source.size, canvas, mode, profile)
         full_content = source.resize((right - left, bottom - top), Image.LANCZOS)
