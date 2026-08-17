@@ -36,15 +36,19 @@ class SpecGeometryTests(unittest.TestCase):
         self.assertEqual((x0, y0), (140, 109))
         self.assertEqual((x1 - x0, y1 - y0), (1634, 751))
 
-    def test_editor_frame_is_16x9_inscribed_in_the_alignment_guide(self):
-        """紅框內最大 16:9：高 924 不變，寬 924×16/9＝1643，左右置中。"""
+    def test_editor_frame_is_the_whole_alignment_guide(self):
+        """編輯框＝對位框紅線內緣本身，不再內縮成 16:9。
+
+        2026-08-14 曾內縮到 142/70/1643/924 以求 FIT 零裁切，代價是左右各 52px
+        由 backdrop 漸層補——編輯 2026-08-17 回報那兩條色帶裁完還在、後製難處理。
+        改回整個紅框後由 safe_frame 水平拉伸填滿。
+        """
         x0, y0, x1, y1 = safe_area_spec.safe_rect(1920, 1080, "編輯")
-        self.assertEqual((x0, y0), (142, 70))
-        self.assertEqual((x1 - x0, y1 - y0), (1643, 924))
-        self.assertAlmostEqual((x1 - x0) / (y1 - y0), 16 / 9, places=3)
+        self.assertEqual((x0, y0), (90, 70))
+        self.assertEqual((x1 - x0, y1 - y0), (1748, 924))
         margins = safe_area_spec.required_margins_px(1920, 1080, "編輯")
-        self.assertEqual(margins, {"top": 70, "left": 142, "right": 135, "bottom": 86})
-        # 16:9 FIT 必須剛好貼齊此框，左右不再多一截、上下不裁
+        self.assertEqual(margins, {"top": 70, "left": 90, "right": 82, "bottom": 86})
+        # 內容必須整塊貼齊此框：不留任何要補底色的縫
         box = __import__("safe_frame").plan_placement((1280, 720), profile="編輯")
         self.assertEqual(box, (x0, y0, x1, y1))
 

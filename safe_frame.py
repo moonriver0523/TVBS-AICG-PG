@@ -40,8 +40,26 @@ DEFAULT_CROP_RATIO = FIT
 
 
 def default_crop_ratio(profile: str) -> float:
-    # 記者／編輯框都已對齊各自的生成比例（21:9／16:9），一律 FIT 零裁切。
+    # 記者框已對齊 21:9 生成比例，FIT 零裁切。編輯走拉伸（見 STRETCH_PROFILES），
+    # 不經過 mode 這條路。
     return DEFAULT_CROP_RATIO
+
+
+# ---- 不等比水平拉伸填滿安全區 ----
+# 編輯的對位框是 1.892，能拿到的最寬生成比例是 16:9（1.778）——OpenRouter 上
+# OpenAI 全家在 16:9 與 21:9 之間沒有任何比例，也沒有模型吃自由尺寸（2026-08-17 查證）。
+# 比例對不上就只能三選一，2026-08-17 全部用真實生成圖驗證過：
+#   FIT   → 左右各留 53px，得補東西。漸層襯底就是編輯反映很難後製的那兩條色帶。
+#   COVER → 上下各裁 3%。實測兩輪（共 6 張）模型的邊界習慣穩定落在 3% 上下，
+#           拿掉 prompt 的滿版字眼也只推到 24–26px，正好卡在裁切線上，
+#           會削到蓋章橫幅的下緣金框——賭運氣，不能上。
+#   拉伸  → 水平 +6.4%，零裁切零補邊。使用者比對特寫後判定「失真輕微可接受」。
+# 之所以是水平而非垂直：對位框比 16:9 寬，拉寬即可；垂直方向本來就吻合。
+STRETCH_PROFILES = frozenset({safe_area_spec.EDITOR_PROFILE})
+
+
+def uses_stretch(profile: str) -> bool:
+    return profile in STRETCH_PROFILES
 
 # ---- 四周背景的做法 ----
 # 2026-07-30 用實際生成圖做過四種做法的並排對照後由使用者選定 backdrop 為預設。
@@ -87,7 +105,15 @@ def plan_placement(
 
     ⚠️ 這裡回傳的矩形不再保證落在安全區或畫布內（mode>0 時會超出）。
     mode=0.0（FIT）仍保證落在安全區內，行為與過去相同。
+
+    拉伸 profile（見 STRETCH_PROFILES）直接回傳整個安全區——內容會被不等比
+    縮放填滿它，沒有等比縮放這回事，mode 對它沒有意義。
     """
+    if uses_stretch(profile):
+        src_w, src_h = source_size
+        if src_w <= 0 or src_h <= 0:
+            raise ValueError("來源尺寸不合法")
+        return safe_area_spec.safe_rect(*canvas, profile)
     if not isinstance(mode, (int, float)) or not 0.0 <= mode <= 1.0:
         raise ValueError(
             f"mode 必須是 0.0（FIT）到 1.0（COVER）之間的數字，收到：{mode!r}"

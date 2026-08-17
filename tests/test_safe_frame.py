@@ -39,6 +39,43 @@ def full_bleed_image(size: tuple[int, int]) -> bytes:
     return buffer.getvalue()
 
 
+class EditorNoFillerInsideFrameTests(unittest.TestCase):
+    """編輯 2026-08-17 的回報：裁到對位框後，左右仍留著機制補上的底色。
+
+    這條是那個回報的回歸測試——整個對位框內必須 100% 是生成圖的像素，
+    一個補出來的像素都不准有。
+    """
+
+    MARKER = (7, 199, 133)  # 生成圖用這個色填滿，補出來的底色不可能撞到
+
+    def _output(self, source_size):
+        img = Image.new("RGB", source_size, self.MARKER)
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        data = safe_frame.apply_safe_frame(buffer.getvalue(), profile="編輯")
+        return Image.open(io.BytesIO(data)).convert("RGB")
+
+    def test_alignment_guide_contains_only_generated_pixels(self):
+        x0, y0, x1, y1 = safe_area_spec.safe_rect(*safe_frame.DEFAULT_CANVAS, "編輯")
+        for source_size in ((1280, 720), (1536, 864), (1376, 768)):
+            with self.subTest(source=source_size):
+                out = self._output(source_size)
+                self.assertEqual(out.size, safe_frame.DEFAULT_CANVAS)
+                inside = out.crop((x0, y0, x1, y1))
+                self.assertEqual(
+                    inside.getcolors(maxcolors=8),
+                    [(inside.width * inside.height, self.MARKER)],
+                    "對位框內出現了非生成圖的像素——補底色又跑回來了",
+                )
+
+    def test_corners_of_the_guide_are_generated_pixels_too(self):
+        # 四角是最容易被補底色吃掉的地方，單獨釘住
+        x0, y0, x1, y1 = safe_area_spec.safe_rect(*safe_frame.DEFAULT_CANVAS, "編輯")
+        out = self._output((1536, 864))
+        for point in ((x0, y0), (x1 - 1, y0), (x0, y1 - 1), (x1 - 1, y1 - 1)):
+            self.assertEqual(out.getpixel(point), self.MARKER, f"{point} 是補出來的")
+
+
 class PlacementGeometryTests(unittest.TestCase):
     def test_fit_placement_never_leaves_the_safe_area(self):
         safe = safe_area_spec.safe_rect(*safe_frame.DEFAULT_CANVAS)
@@ -94,12 +131,38 @@ class PlacementGeometryTests(unittest.TestCase):
         half_waste_r = (x1 - half_right)
         self.assertAlmostEqual(half_waste_r, fit_waste_r / 2, delta=1)
 
-    def test_editor_default_is_fit_no_crop(self):
-        self.assertEqual(safe_frame.default_crop_ratio("編輯"), safe_frame.FIT)
+    def test_reporter_default_is_fit_no_crop(self):
         self.assertEqual(safe_frame.default_crop_ratio("記者"), safe_frame.FIT)
+
+    def test_editor_fills_the_whole_zone_by_stretching(self):
+        """編輯：內容不等比拉伸貼滿整個對位框，不裁切也不留縫。"""
+        self.assertTrue(safe_frame.uses_stretch("編輯"))
+        self.assertFalse(safe_frame.uses_stretch("記者"))
         x0, y0, x1, y1 = safe_area_spec.safe_rect(1920, 1080, "編輯")
-        box = safe_frame.plan_placement((1280, 720), profile="編輯")
-        self.assertEqual(box, (x0, y0, x1, y1))
+        for source in ((1280, 720), (1536, 864), (1376, 768)):
+            with self.subTest(source=source):
+                # 來源比例不同也一律貼滿同一個框——這正是「拉伸」與 FIT 的差別
+                self.assertEqual(
+                    safe_frame.plan_placement(source, profile="編輯"), (x0, y0, x1, y1)
+                )
+
+    def test_editor_stretch_ignores_mode(self):
+        """mode 對拉伸沒有意義，帶什麼都不該改變結果，也不該炸掉。"""
+        x0, y0, x1, y1 = safe_area_spec.safe_rect(1920, 1080, "編輯")
+        for mode in (0.0, 0.5, 1.0):
+            with self.subTest(mode=mode):
+                self.assertEqual(
+                    safe_frame.plan_placement((1280, 720), mode=mode, profile="編輯"),
+                    (x0, y0, x1, y1),
+                )
+
+    def test_editor_horizontal_distortion_is_the_agreed_6_4_percent(self):
+        """16:9 拉進 1.892 的失真幅度。使用者是看著這個數字點頭的，變了要重新確認。"""
+        x0, y0, x1, y1 = safe_area_spec.safe_rect(1920, 1080, "編輯")
+        zone_w, zone_h = x1 - x0, y1 - y0
+        # 等高縮放後的寬度 vs 實際被拉到的寬度
+        natural_w = zone_h * 16 / 9
+        self.assertAlmostEqual(zone_w / natural_w - 1, 0.064, places=3)
 
     def test_mode_above_zero_never_shrinks_the_binding_axis_margin(self):
         """這裡曾經有真的 bug：mode>0 時置放框會超出『安全區』邊界（不是畫布邊界），
