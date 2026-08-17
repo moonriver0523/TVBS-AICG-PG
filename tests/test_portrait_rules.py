@@ -7,6 +7,7 @@
 3. 任何非預期狀態一律退回「不生成臉孔」，不是放行
 """
 
+import json
 import os
 import unittest
 from unittest.mock import patch
@@ -243,32 +244,85 @@ class ReferenceImagePayloadTests(unittest.TestCase):
 
 
 class PhotoLookupTests(unittest.TestCase):
-    API_RESPONSE = (
-        b'{"query": {"pages": [{"title": "\\u67d0\\u4eba", '
-        b'"thumbnail": {"source": "https://upload.wikimedia.org/x.jpg"}}]}}'
-    )
+    """查圖：條目首圖優先、Wikidata 只當身分閘門與備援（2026-08-18 改）。
+
+    `_get` 的呼叫順序就是這條流程的規格：
+    1. wikipedia query（一次要齊 thumbnail 與 wikibase_item）
+    2. wbgetclaims P31（驗是不是人）
+    3.（首圖缺才有）wbgetclaims P18
+    4. 下載圖片
+    """
+
+    @staticmethod
+    def _page(*, qid="Q1", thumbnail=True, missing=False) -> bytes:
+        page: dict = {"title": "某人"}
+        if missing:
+            page["missing"] = True
+        if qid:
+            page["pageprops"] = {"wikibase_item": qid}
+        if thumbnail:
+            page["thumbnail"] = {"source": "https://upload.wikimedia.org/x.jpg"}
+        return json.dumps({"query": {"pages": [page]}}).encode("utf-8")
+
+    @staticmethod
+    def _claim(prop: str, value) -> bytes:
+        return json.dumps(
+            {"claims": {prop: [{"mainsnak": {"datavalue": {"value": value}}}]}}
+        ).encode("utf-8")
 
     def test_returns_photo_with_traceable_source(self):
-        with patch.object(photo_lookup, "_get", side_effect=[self.API_RESPONSE, b"binary"]):
+        calls = [self._page(), self._claim("P31", {"id": "Q5"}), b"binary"]
+        with patch.object(photo_lookup, "_get", side_effect=calls):
             photo = photo_lookup.find_reference_photo("某人")
         self.assertIsNotNone(photo)
         self.assertEqual(photo.mime_type, "image/jpeg")
         self.assertTrue(photo.source_page.startswith("https://zh.wikipedia.org/wiki/"))
         self.assertTrue(photo.data_url().startswith("data:image/jpeg;base64,"))
 
-    def test_missing_page_returns_none(self):
-        missing = b'{"query": {"pages": [{"title": "x", "missing": true}]}}'
-        with patch.object(photo_lookup, "_get", return_value=missing):
-            self.assertIsNone(photo_lookup.find_reference_photo("查無此人"))
+    def test_non_human_entity_is_rejected(self):
+        """「馬斯克」在 Wikidata 的同名實體之一是「姓氏」，那不是人，不能當肖像。"""
+        calls = [self._page(), self._claim("P31", {"id": "Q101352"})]
+        with patch.object(photo_lookup, "_get", side_effect=calls):
+            self.assertIsNone(photo_lookup.find_reference_photo("某姓氏", langs=("zh",)))
 
-    def test_page_without_image_returns_none(self):
-        no_image = b'{"query": {"pages": [{"title": "x"}]}}'
-        with patch.object(photo_lookup, "_get", return_value=no_image):
-            self.assertIsNone(photo_lookup.find_reference_photo("沒照片的人"))
+    def test_page_without_wikidata_entity_is_rejected(self):
+        """沒有對應實體＝身分無從驗證，寧可不畫臉。"""
+        with patch.object(photo_lookup, "_get", side_effect=[self._page(qid=None)]):
+            self.assertIsNone(photo_lookup.find_reference_photo("無實體", langs=("zh",)))
+
+    def test_falls_back_to_p18_when_article_has_no_lead_image(self):
+        calls = [
+            self._page(thumbnail=False),
+            self._claim("P31", {"id": "Q5"}),
+            self._claim("P18", "Some Person.jpg"),
+            b"binary",
+        ]
+        with patch.object(photo_lookup, "_get", side_effect=calls) as get:
+            photo = photo_lookup.find_reference_photo("沒首圖的人", langs=("zh",))
+        self.assertIsNotNone(photo)
+        # 出處改標實體頁——圖是從那裡來的，回查才對得上
+        self.assertEqual(photo.source_page, "https://www.wikidata.org/wiki/Q1")
+        self.assertIn("Special:FilePath/Some%20Person.jpg", get.call_args_list[-1][0][0])
+
+    def test_human_without_any_image_returns_none(self):
+        calls = [
+            self._page(thumbnail=False),
+            self._claim("P31", {"id": "Q5"}),
+            json.dumps({"claims": {}}).encode("utf-8"),
+        ]
+        with patch.object(photo_lookup, "_get", side_effect=calls):
+            self.assertIsNone(
+                photo_lookup.find_reference_photo("沒照片的人", langs=("zh",))
+            )
+
+    def test_missing_page_returns_none(self):
+        with patch.object(photo_lookup, "_get", side_effect=[self._page(missing=True)]):
+            self.assertIsNone(photo_lookup.find_reference_photo("查無此人", langs=("zh",)))
 
     def test_oversized_photo_is_rejected(self):
         huge = b"x" * (photo_lookup.MAX_PHOTO_BYTES + 1)
-        with patch.object(photo_lookup, "_get", side_effect=[self.API_RESPONSE, huge]):
+        calls = [self._page(), self._claim("P31", {"id": "Q5"}), huge]
+        with patch.object(photo_lookup, "_get", side_effect=calls):
             self.assertIsNone(photo_lookup.find_reference_photo("某人", langs=("zh",)))
 
     def test_blank_name_never_calls_the_api(self):
