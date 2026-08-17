@@ -16,7 +16,7 @@ import certifi
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from openai import (
     APIConnectionError,
     APIError,
@@ -1816,9 +1816,25 @@ def serve_index():
     return _frontend_file("index.html", "text/html; charset=utf-8")
 
 
+# app.js／hybrid.js 進 git 時 _INTERNAL_API_KEY 只是占位符，容器啟動時由
+# entrypoint.sh sed 換成真實值。本機直跑 uvicorn 沒有那一步，瀏覽器會拿著
+# 占位符打 API 吃 401——所以 serve 時做同一件事：占位符還在且環境有金鑰就換掉。
+# 容器內檔案已被 sed 過，這裡的 replace 是 no-op，兩條路徑行為一致。
+def _serve_js_with_key(name: str) -> PlainTextResponse:
+    text = (_REPO_ROOT / name).read_text(encoding="utf-8")
+    key = os.getenv("NEWS_IMAGE_API_KEY", "").strip()
+    if key:
+        text = text.replace("__NEWS_IMAGE_API_KEY__", key)
+    return PlainTextResponse(
+        text,
+        media_type="text/javascript; charset=utf-8",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.get("/app.js")
 def serve_app_js():
-    return _frontend_file("app.js", "text/javascript; charset=utf-8")
+    return _serve_js_with_key("app.js")
 
 
 @app.get("/hybrid.html")
@@ -1828,7 +1844,7 @@ def serve_hybrid():
 
 @app.get("/hybrid.js")
 def serve_hybrid_js():
-    return _frontend_file("hybrid.js", "text/javascript; charset=utf-8")
+    return _serve_js_with_key("hybrid.js")
 
 
 # LINE Bot：webhook 與生成圖的靜態出口。

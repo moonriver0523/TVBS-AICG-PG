@@ -276,6 +276,23 @@
                            class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 input-focus-ring h-[88px] min-h-[72px] resize-y"
                            placeholder="貼上新聞文字…"></textarea>
 
+                    <!-- ① 指令拆欄：專用高信賴度通道；在文章內夾指令的舊習慣仍然有效 -->
+                    <input id="aiInstruction" type="text" maxlength="2000"
+                           class="w-full mt-2 bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
+                           placeholder="給 AI 的指令（選填），如：用手繪風／標題放左邊／逐字保留" />
+
+                    <!-- ② 上傳參考圖：地圖底稿／實景參考（肖像照仍由後端自動查） -->
+                    <div class="mt-2">
+                        <div class="flex items-center gap-2">
+                            <button type="button" onclick="document.getElementById('refFileInput').click()"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">＋ 附參考圖（選填）</button>
+                            <span class="text-[9px] text-slate-600">地圖底稿／實景參考，單張 ≤1.5MB，最多 3 張</span>
+                        </div>
+                        <input id="refFileInput" type="file" accept="image/*" multiple class="hidden"
+                               onchange="handleRefFilesSelected(this)" />
+                        <div id="refUploadList" class="mt-1.5 flex flex-col gap-1.5"></div>
+                    </div>
+
                     <div class="mt-3 mb-2">
                         <div id="digestTypeSelector" class="flex gap-1.5 flex-wrap"></div>
                         <p id="digestTypeHint" class="text-[10px] text-slate-500 italic mt-1"></p>
@@ -328,6 +345,24 @@
                             <a id="oneClickDownload" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg.jpg">下載圖片</a>
                         </div>
                         <img id="oneClickImage" alt="一鍵生成的新聞 CG" class="w-full rounded-lg border border-slate-800" />
+
+                        <!-- ③ 追加指令修改：以置框前原圖為基礎就地改圖，不重跑消化 -->
+                        <div id="refineBox" class="mt-3 border-t border-slate-800 pt-3">
+                            <div class="flex items-center gap-2">
+                                <input id="refineInput" type="text" maxlength="2000"
+                                       onkeydown="if(event.key==='Enter')handleRefine()"
+                                       class="flex-1 bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
+                                       placeholder="追加修改，如：把標題改成紅色／左邊那張圖換成長條圖" />
+                                <button id="refineBtn" onclick="handleRefine()"
+                                        class="px-3 py-2 rounded-lg text-[10px] font-black bg-violet-600 hover:bg-violet-500 text-white transition-all active:scale-95 disabled:opacity-50 flex items-center gap-1.5">
+                                    <span id="refineBtnText">修改</span>
+                                    <div id="refineLoading" class="hidden w-3.5 h-3.5 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                                </button>
+                                <button id="refineUndoBtn" onclick="undoRefine()" disabled
+                                        class="px-3 py-2 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all disabled:opacity-40">退回上一版</button>
+                            </div>
+                            <p class="text-[9px] text-slate-600 mt-1">只改指定的部分，其餘保持不變；每次修改為一次付費生圖。</p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -591,7 +626,7 @@
         Prompt Copied
     </div>
 
-    <script src="app.js?v=20260817i"></script>
+    <script src="app.js?v=20260817j"></script>
     <!-- 第三頁（混合版型）；內部包 IIFE，只對外露出 initHybrid()，由 switchPage(3) 首次切頁時呼叫 -->
     <script src="hybrid.js?v=20260815a"></script>
 </body>

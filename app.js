@@ -314,7 +314,13 @@ let state = {
     // 由「最後一次動作」決定
     promptTypeSource: 'library',
     // selected 依 chartType 分開存，避免切類型互相污染
-    selectedByType: {}
+    selectedByType: {},
+    // ② 使用者上傳的參考圖：[{dataUrl, purpose:'map'|'scene', name}]
+    userRefImages: [],
+    // ③ 追加修改用：**置框前**原圖（不是顯示中的成品——成品餵回去會二次拉伸）
+    // refineSource = {base64, mimeType}；refineStack 供「退回上一版」
+    refineSource: null,
+    refineStack: []
 };
 
 function curType() { return CHART_TYPES[state.chartType]; }
@@ -1112,6 +1118,7 @@ const API_BASE = (location.hostname === "127.0.0.1" || location.hostname === "lo
     : "";
 const AI_BACKEND_URL = `${API_BASE}/api/generate`;
 const IMAGE_BACKEND_URL = `${API_BASE}/api/images/generate`;
+const REFINE_BACKEND_URL = `${API_BASE}/api/images/refine`;
 
 function _apiError(data, status) {
     const detail = data && data.detail;
@@ -1139,6 +1146,7 @@ async function digestNewsText(input) {
             role: state.currentRole,
             density: state.digestDensity,
             safe_frame: state.safeFrame,
+            user_instruction: currentUserInstruction(),
         }),
     });
     const data = await response.json().catch(() => ({}));
@@ -1213,6 +1221,7 @@ async function handleOneClickGenerate() {
                 safe_frame: state.safeFrame,
                 safe_frame_profile: state.currentRole,
                 portrait_subjects: state.portraitSubjects,
+                reference_images: userRefImagesPayload(),
             }),
         });
         const data = await imgRes.json().catch(() => ({}));
@@ -1227,6 +1236,11 @@ async function handleOneClickGenerate() {
         download.href = imageUrl;
         download.download = `tvbs-news-cg.${isPng ? "png" : "jpg"}`;
         download.innerText = `下載 ${isPng ? "PNG" : "JPEG"}`;
+        // ③ 記住「置框前」原圖供追加修改；未置框時成品本身就是原圖
+        resetRefineState({
+            base64: data.source_image_base64 || data.image_data_base64,
+            mimeType: data.source_image_base64 ? "image/png" : data.mime_type,
+        });
         document.getElementById("oneClickLabel").innerText = data.model || "AI Generated";
         const titleMatch = variable.match(/\[標題\]\s*([^\n]+)/);
         document.getElementById("oneClickMeta").innerText = titleMatch ? titleMatch[1].trim() : "";
@@ -1268,7 +1282,8 @@ async function handleAIDigestion() {
                 density: state.digestDensity,
                 // 安全框 ON 時消化要出滿版版面，否則 STRUCTURE 的「縮小置中」
                 // 開頭句會跟最終 prompt 的 FULL-FRAME RULES 互相打架
-                safe_frame: state.safeFrame
+                safe_frame: state.safeFrame,
+                user_instruction: currentUserInstruction()
             })
         });
         if (!response.ok) {
@@ -1411,6 +1426,177 @@ async function handleImageGeneration() {
         loading.classList.add('hidden');
         updateImageGenerationControls();
     }
+}
+
+/* ============================================================
+   ① 專用指令欄位
+   ============================================================ */
+function currentUserInstruction() {
+    const el = document.getElementById('aiInstruction');
+    return el ? el.value.trim() : '';
+}
+
+/* ============================================================
+   ② 使用者上傳參考圖（地圖底稿／實景參考）
+   肖像照仍由後端 resolve_portrait 自動查，這裡刻意不開人臉上傳。
+   ============================================================ */
+const REF_MAX_FILES = 3;
+// 後端 data_url 上限約 2MB base64；1.5MB 原檔編碼後約 2MB，貼著上限
+const REF_MAX_BYTES = 1.5 * 1024 * 1024;
+const REF_PURPOSES = { map: '地圖底稿', scene: '實景參考' };
+
+function handleRefFilesSelected(input) {
+    const files = Array.from(input.files || []);
+    input.value = '';
+    for (const file of files) {
+        if (state.userRefImages.length >= REF_MAX_FILES) {
+            showToast(`參考圖最多 ${REF_MAX_FILES} 張`);
+            break;
+        }
+        if (file.size > REF_MAX_BYTES) {
+            showToast(`「${file.name}」超過 1.5MB，請縮小後再上傳`);
+            continue;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+            state.userRefImages.push({ dataUrl: reader.result, purpose: 'scene', name: file.name });
+            renderRefUploads();
+        };
+        reader.readAsDataURL(file);
+    }
+}
+
+function renderRefUploads() {
+    const list = document.getElementById('refUploadList');
+    if (!list) return;
+    list.innerHTML = '';
+    state.userRefImages.forEach((ref, index) => {
+        const row = document.createElement('div');
+        row.className = 'flex items-center gap-2 bg-slate-950/60 border border-slate-800 rounded-lg px-2 py-1.5';
+        const img = document.createElement('img');
+        img.src = ref.dataUrl;
+        img.className = 'w-10 h-10 object-cover rounded';
+        const name = document.createElement('span');
+        name.className = 'flex-1 text-[10px] text-slate-400 truncate';
+        name.textContent = ref.name;
+        const select = document.createElement('select');
+        select.className = 'bg-slate-900 border border-slate-700 rounded text-[10px] text-slate-200 px-1.5 py-1';
+        for (const [value, label] of Object.entries(REF_PURPOSES)) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            option.selected = ref.purpose === value;
+            select.appendChild(option);
+        }
+        select.onchange = () => { ref.purpose = select.value; };
+        const remove = document.createElement('button');
+        remove.className = 'text-[10px] font-black text-slate-500 hover:text-red-400 px-1';
+        remove.textContent = '✕';
+        remove.onclick = () => { state.userRefImages.splice(index, 1); renderRefUploads(); };
+        row.append(img, name, select, remove);
+        list.appendChild(row);
+    });
+}
+
+function userRefImagesPayload() {
+    return state.userRefImages.map(ref => ({ data_url: ref.dataUrl, purpose: ref.purpose }));
+}
+
+/* ============================================================
+   ③ 追加指令修改既有圖（/api/images/refine）
+   一律送置框前原圖（refineSource），成品只拿來顯示與下載——
+   把成品餵回去會二次拉伸（6.4% → 13.2% → 20.5% 疊上去）。
+   ============================================================ */
+function resetRefineState(source) {
+    state.refineSource = source || null;
+    state.refineStack = [];
+    const input = document.getElementById('refineInput');
+    if (input) input.value = '';
+    updateRefineControls();
+}
+
+function updateRefineControls() {
+    const undoBtn = document.getElementById('refineUndoBtn');
+    if (undoBtn) undoBtn.disabled = state.refineStack.length === 0;
+    const btn = document.getElementById('refineBtn');
+    if (btn) btn.disabled = !state.refineSource;
+}
+
+function showRefinedImage(data) {
+    const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
+    const isPng = data.mime_type === 'image/png';
+    document.getElementById('oneClickImage').src = imageUrl;
+    const download = document.getElementById('oneClickDownload');
+    download.href = imageUrl;
+    download.download = `tvbs-news-cg.${isPng ? 'png' : 'jpg'}`;
+    document.getElementById('oneClickLabel').innerText = data.model || 'AI Generated';
+}
+
+async function handleRefine() {
+    const input = document.getElementById('refineInput');
+    const instruction = input.value.trim();
+    if (!instruction) return showToast('請輸入要修改的內容');
+    if (!state.refineSource) return showToast('沒有可修改的圖，請先生成一張');
+
+    const btn = document.getElementById('refineBtn');
+    const btnText = document.getElementById('refineBtnText');
+    const loading = document.getElementById('refineLoading');
+    btn.disabled = true;
+    btnText.innerText = '修改中…';
+    loading.classList.remove('hidden');
+
+    try {
+        const response = await fetch(REFINE_BACKEND_URL, {
+            method: 'POST',
+            headers: _apiHeaders(),
+            body: JSON.stringify({
+                source_image_base64: state.refineSource.base64,
+                source_mime_type: state.refineSource.mimeType,
+                instruction,
+                provider: effectiveImageProvider(),
+                aspect_ratio: currentAspectRatio(),
+                image_size: state.imageSize,
+                safe_frame: state.safeFrame,
+                safe_frame_profile: state.currentRole,
+            }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(_apiError(data, response.status));
+
+        // 退回上一版用：存目前顯示中的成品與它的置框前原圖
+        state.refineStack.push({
+            source: state.refineSource,
+            display: {
+                mime_type: document.getElementById('oneClickImage').src.startsWith('data:image/png') ? 'image/png' : 'image/jpeg',
+                image_data_base64: document.getElementById('oneClickImage').src.split(',')[1] || '',
+                model: document.getElementById('oneClickLabel').innerText,
+            },
+        });
+        // 下一輪修改要用**新的**置框前原圖，不是成品
+        state.refineSource = {
+            base64: data.source_image_base64 || data.image_data_base64,
+            mimeType: data.source_image_base64 ? 'image/png' : data.mime_type,
+        };
+        showRefinedImage(data);
+        input.value = '';
+        showToast('修改完成');
+    } catch (err) {
+        console.error(err);
+        showToast(err.message || '修改失敗，請稍後再試');
+    } finally {
+        btnText.innerText = '修改';
+        loading.classList.add('hidden');
+        updateRefineControls();
+    }
+}
+
+function undoRefine() {
+    const previous = state.refineStack.pop();
+    if (!previous) return;
+    state.refineSource = previous.source;
+    showRefinedImage(previous.display);
+    updateRefineControls();
+    showToast('已退回上一版');
 }
 
 /* ============================================================
