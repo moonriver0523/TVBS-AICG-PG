@@ -71,6 +71,25 @@ Gemini 使用原生 `1K` 設定；GPT 依要求的比例換算尺寸（16:9→12
 沒有 `aspect_ratio` 參數的模型即屬此類，確定不在意尺寸再設 `ALLOW_UNSUPPORTED_ASPECT_RATIO=1`。
 金鑰僅由 `main.py` 讀取，絕不放入前端程式碼。
 
+## 部署與回滾
+
+線上跑在 Cloud Run（`tvbs-aicg-linebot`，asia-east1），沒有 CI/CD，部署是手動的：
+
+```bash
+gcloud run deploy tvbs-aicg-linebot --source . --region asia-east1
+```
+
+出事要回滾時**不需要重新建置**——Cloud Run 留著每一個舊 revision，把流量切回去即可，
+幾秒鐘生效：
+
+```powershell
+.\rollback.ps1            # 切回上一個 revision
+.\rollback.ps1 -List      # 先看有哪些可選（不動流量）
+.\rollback.ps1 -Revision tvbs-aicg-linebot-00022-95m   # 切回指定版本
+```
+
+環境變數（金鑰、`GCS_HISTORY_BUCKET` 等）設在服務上、跨 revision 共用，回滾不會動到它們。
+
 ## 目前版本
 
 V8.2 — 詳見 `docs/HANDOFF.md` 第七節「已收錄的模板現況」
