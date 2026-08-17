@@ -132,10 +132,6 @@ CANVAS_MARGIN_LINE = "- Scale the whole design down so it fills only the central
 
 CANVAS_FULL_BLEED_LINE = "- Use the whole frame: the design fills the canvas completely, with only a slim even breathing space inside the frame edge so that no element is clipped"
 
-# 編輯專用。上面那句（記者在用）叫模型「塞滿畫布」，與 EDITOR_FULL_BLEED_RULES
-# 的「上下留背景帶」直接打架，2026-08-17 稽核抓到。這句只保留背景滿版的部分。
-EDITOR_CANVAS_LINE = "- The background covers the whole canvas edge to edge, while the design itself keeps clear of the top and bottom edges, leaving a strip of plain background across each"
-
 FULL_BLEED_RULES = """==================================================
 FULL-FRAME RULES (CRITICAL — MUST PRESERVE)
 ==================================================
@@ -146,29 +142,6 @@ FULL-FRAME RULES (CRITICAL — MUST PRESERVE)
 - The background is ONE single continuous image covering the whole canvas. Do NOT render any frame, rectangle, outline, border line, guide line, crop mark, corner bracket, or dimmed / tinted / shaded band anywhere.
 - Every element must be fully inside the canvas: nothing may run off the edge or be sliced by it.
 - SELF-CHECK before finalizing: if any element is clipped by the frame edge, nudge it inward; if a wide empty band has appeared along any edge, enlarge the design to fill it."""
-
-
-# 只給編輯：對位框比 16:9 寬，差額由後端水平拉伸補（safe_frame.STRETCH_PROFILES）。
-# 拉伸幅度會扣掉模型自己留的純背景，所以請模型上下各留一條背景帶就能少失真。
-#
-# ⚠️ 這是**取代** FULL_BLEED_RULES，不是附加。2026-08-17 兩種都實測過：
-# 附加版（FULL_BLEED_RULES + 呼吸邊）只留 0–8px，因為 FULL_BLEED_RULES 開頭就寫
-# 「there is no reserved margin, no empty band」還聲明自己 OVERRIDE 衝突指令，
-# 模型聽前面那條。取代版留 21–23px，殘餘失真降到 0.75–1.24%。
-#
-# 「約一個標題字高」是刻意用具體視覺參照而非百分比——四輪實驗證實模型量不出
-# 比例（見 safe_area_spec 的說明），但看得懂「跟標題的字一樣高」。
-EDITOR_FULL_BLEED_RULES = """==================================================
-EDGE-SAFE FULL-FRAME RULES (CRITICAL — MUST PRESERVE)
-==================================================
-- The background artwork is ONE single continuous image running right to all four edges of the canvas. Do NOT render any frame, rectangle, outline, border line, guide line, crop mark, corner bracket, dimmed / tinted / shaded band, or letterbox anywhere.
-- Across the very TOP of the canvas and across the very BOTTOM of the canvas, leave a clear horizontal strip where ONLY the background artwork appears. Each strip is about as tall as one character of the main headline. No headline, card, chart, icon, banner, arrow, source line or border may enter either strip.
-- The closing banner must sit fully above the bottom strip, with an obvious run of plain background visible beneath it all the way to the bottom edge.
-- Left and right: keep a similar clear gap of background between the outermost element and the side edge.
-- Do NOT shrink the design into a small central box and do NOT draw a visible border. These strips are plain continuous background, not a frame.
-- These rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction asks you to run the design edge to edge, ignore that instruction and keep the strips clear.
-- Nothing may touch, run off, or be sliced by any edge.
-- SELF-CHECK before finalizing: look at the topmost and bottommost pixels of the design. If any element reaches into the top or bottom strip, move the whole design inward until both strips are clear."""
 
 
 # ============================================================
@@ -263,10 +236,8 @@ def build_prompt(
     """
     text_rules = EDITOR_TEXT_RULES if role == "編輯" else REPORTER_TEXT_RULES
     if safe_frame:
-        # 編輯換一套：上下留背景帶，後端裁掉它換取更小的水平拉伸失真。
-        # 記者是 21:9 FIT，不走拉伸，留帶只會白白縮小畫面。
-        margin_rules = EDITOR_FULL_BLEED_RULES if role == "編輯" else FULL_BLEED_RULES
-        canvas_line = EDITOR_CANVAS_LINE if role == "編輯" else CANVAS_FULL_BLEED_LINE
+        margin_rules = FULL_BLEED_RULES
+        canvas_line = CANVAS_FULL_BLEED_LINE
     else:
         margin_rules = EDITOR_SAFE_AREA if role == "編輯" else REPORTER_SAFE_AREA
         canvas_line = CANVAS_MARGIN_LINE

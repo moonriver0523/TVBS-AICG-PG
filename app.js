@@ -856,14 +856,10 @@ function buildPrompt({ role, engine, typeLabel, style, structure, variable, safe
     // 共用的正文區塊（style / structure / variable）
     const textRules = role === '編輯' ? EDITOR_TEXT_RULES : REPORTER_TEXT_RULES;
     // safeFrame=true：留白改由後端 safe_frame.py 數學置框，這裡改下滿版指示
-    // 編輯換一套：上下留背景帶，後端裁掉它換取更小的水平拉伸失真。
-    // 記者是 21:9 FIT，不走拉伸，留帶只會白白縮小畫面。
     const marginRules = safeFrame
-        ? (role === '編輯' ? EDITOR_FULL_BLEED_RULES : FULL_BLEED_RULES)
+        ? FULL_BLEED_RULES
         : (role === '編輯' ? EDITOR_SAFE_AREA : REPORTER_SAFE_AREA);
-    const canvasLine = safeFrame
-        ? (role === '編輯' ? EDITOR_CANVAS_LINE : CANVAS_FULL_BLEED_LINE)
-        : CANVAS_MARGIN_LINE;
+    const canvasLine = safeFrame ? CANVAS_FULL_BLEED_LINE : CANVAS_MARGIN_LINE;
 
     // 視覺忠實度區塊：地圖規則只在已解析的類型是地圖時注入
     // （typeLabel 來自 activeType()，自動判斷模式下已是 AI 解析後的具體類型）
@@ -939,11 +935,6 @@ const CANVAS_MARGIN_LINE = `- Scale the whole design down so it fills only the c
 
 const CANVAS_FULL_BLEED_LINE = `- Use the whole frame: the design fills the canvas completely, with only a slim even breathing space inside the frame edge so that no element is clipped`;
 
-/* 編輯專用：上面那句（記者在用）叫模型塞滿畫布，與 EDITOR_FULL_BLEED_RULES 的
-   「上下留背景帶」直接打架。這句只保留背景滿版的部分。
-   ⚠️ 與 news_prompt.py 必須逐字一致（tests/test_prompt_parity.py 會驗）。 */
-const EDITOR_CANVAS_LINE = `- The background covers the whole canvas edge to edge, while the design itself keeps clear of the top and bottom edges, leaving a strip of plain background across each`;
-
 const FULL_BLEED_RULES =
 `==================================================
 FULL-FRAME RULES (CRITICAL — MUST PRESERVE)
@@ -955,23 +946,6 @@ FULL-FRAME RULES (CRITICAL — MUST PRESERVE)
 - The background is ONE single continuous image covering the whole canvas. Do NOT render any frame, rectangle, outline, border line, guide line, crop mark, corner bracket, or dimmed / tinted / shaded band anywhere.
 - Every element must be fully inside the canvas: nothing may run off the edge or be sliced by it.
 - SELF-CHECK before finalizing: if any element is clipped by the frame edge, nudge it inward; if a wide empty band has appeared along any edge, enlarge the design to fill it.`;
-
-/* 只給編輯，**取代** FULL_BLEED_RULES（不是附加——附加版實測只留 0-8px，
-   因為 FULL_BLEED_RULES 自己就寫著不准留白且聲明 OVERRIDE 衝突指令）。
-   上下留的背景帶會被後端裁掉，換取更小的水平拉伸失真（6.4% → 約 1%）。
-   ⚠️ 與 news_prompt.py 必須逐字一致（tests/test_prompt_parity.py 會驗）。 */
-const EDITOR_FULL_BLEED_RULES =
-`==================================================
-EDGE-SAFE FULL-FRAME RULES (CRITICAL — MUST PRESERVE)
-==================================================
-- The background artwork is ONE single continuous image running right to all four edges of the canvas. Do NOT render any frame, rectangle, outline, border line, guide line, crop mark, corner bracket, dimmed / tinted / shaded band, or letterbox anywhere.
-- Across the very TOP of the canvas and across the very BOTTOM of the canvas, leave a clear horizontal strip where ONLY the background artwork appears. Each strip is about as tall as one character of the main headline. No headline, card, chart, icon, banner, arrow, source line or border may enter either strip.
-- The closing banner must sit fully above the bottom strip, with an obvious run of plain background visible beneath it all the way to the bottom edge.
-- Left and right: keep a similar clear gap of background between the outermost element and the side edge.
-- Do NOT shrink the design into a small central box and do NOT draw a visible border. These strips are plain continuous background, not a frame.
-- These rules OVERRIDE any conflicting instruction in STYLE, STRUCTURE, or VARIABLE FIELDS. If a layout instruction asks you to run the design edge to edge, ignore that instruction and keep the strips clear.
-- Nothing may touch, run off, or be sliced by any edge.
-- SELF-CHECK before finalizing: look at the topmost and bottommost pixels of the design. If any element reaches into the top or bottom strip, move the whole design inward until both strips are clear.`;
 
 /* ---- 視覺忠實度常數（2026-07-31）----
    ⚠️ 與 news_prompt.py 必須逐字一致（tests/test_prompt_parity.py 會驗）。
