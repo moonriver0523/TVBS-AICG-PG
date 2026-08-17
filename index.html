@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TVBS 新聞AICG產生器</title>
+    <title>TVBS AICG</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
@@ -152,16 +152,11 @@
             to { transform: translate(-50%, 0); opacity: 1; }
         }
         .toast-animate { animation: slide-up 0.22s var(--ease) forwards; }
+        /* 原本是紅底方塊寫個 T 的暫用標記，2026-08-17 換成真的 AICG logo。
+           圖檔已是圓形去背（見 static/ui/logo-aicg.png），這裡不再補圓角。 */
         .mark {
             width: 34px; height: 34px;
-            background: var(--accent);
-            color: #fff;
-            font-weight: 900;
-            letter-spacing: 0.02em;
-            display: grid; place-items: center;
-            border-radius: 7px;
-            font-size: 12px;
-            line-height: 1;
+            display: block;
             flex-shrink: 0;
         }
         /* 一鍵生成進度條：整顆按鈕就是進度條，左段亮＝已完成比例。
@@ -246,10 +241,11 @@
     <div class="max-w-7xl mx-auto">
 
         <header class="masthead glass-card px-3 py-2 flex flex-wrap items-center gap-2">
-            <div class="mark" aria-hidden="true">T</div>
+            <img class="mark" src="/static/ui/logo-aicg.png" alt="" aria-hidden="true"
+                 width="34" height="34" decoding="async">
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
-                <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS 新聞 CG</h1>
+                <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
                 <span class="hidden sm:inline text-[10px] text-[color:var(--dim)]">V8.2</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
@@ -594,7 +590,7 @@
         Prompt Copied
     </div>
 
-    <script src="app.js?v=20260817c"></script>
+    <script src="app.js?v=20260817d"></script>
     <!-- 第三頁（混合版型）；內部包 IIFE，只對外露出 initHybrid()，由 switchPage(3) 首次切頁時呼叫 -->
     <script src="hybrid.js?v=20260815a"></script>
 </body>
