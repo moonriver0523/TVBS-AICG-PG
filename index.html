@@ -155,7 +155,8 @@
         /* 原本是紅底方塊寫個 T 的暫用標記，2026-08-17 換成真的 AICG logo。
            圖檔已是圓形去背（見 static/ui/logo-aicg.png），這裡不再補圓角。 */
         .mark {
-            width: 34px; height: 34px;
+            /* 34px 時 logo 裡的 TVBS 小字與 AICG 都糊成一團，放到 46px 才讀得出來 */
+            width: 46px; height: 46px;
             display: block;
             flex-shrink: 0;
         }
@@ -242,7 +243,7 @@
 
         <header class="masthead glass-card px-3 py-2 flex flex-wrap items-center gap-2">
             <img class="mark" src="/static/ui/logo-aicg.png" alt="" aria-hidden="true"
-                 width="34" height="34" decoding="async">
+                 width="46" height="46" decoding="async">
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
@@ -590,7 +591,7 @@
         Prompt Copied
     </div>
 
-    <script src="app.js?v=20260817d"></script>
+    <script src="app.js?v=20260817e"></script>
     <!-- 第三頁（混合版型）；內部包 IIFE，只對外露出 initHybrid()，由 switchPage(3) 首次切頁時呼叫 -->
     <script src="hybrid.js?v=20260815a"></script>
 </body>
