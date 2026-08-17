@@ -229,6 +229,75 @@ PORTRAIT_MODES = {
     "none": "",
 }
 
+# ============================================================
+# 使用者上傳參考圖的用途區塊（2026-08-17，PLAN.md ②）。
+#
+# ⚠️ 這些常數**刻意不同步到 app.js**，理由與 PORTRAIT_* 相同（本檔頂端
+# 「兩份來源」規則的明列例外）：上傳的圖一定經過後端 /api/images/generate
+# 才送得進 input_references，由後端在同一處依 purpose 注入區塊，規則就只有
+# 一份來源；同步到前端只會多一份要對齊的拷貝。
+#
+# 措辭要點：附圖不是要重現的成品，是「依據」。地圖類與 MAP_ACCURACY_IMAGE_RULES
+# 同向（地理正確壓過構圖），不衝突——附圖只是把「正確」的來源從模型記憶換成附圖。
+# ============================================================
+
+USER_REFERENCE_MAP_RULES = """==================================================
+ATTACHED MAP REFERENCE (CRITICAL)
+==================================================
+- One of the attached images is a map supplied by the user. Treat it as the geographic ground truth for this graphic.
+- The relative positions, coastlines, routes and boundaries shown in that attached map override your own geographic memory. Do not move, rotate, mirror, compress or "improve" any of them.
+- Re-draw the geography in the graphic's own visual style; do not paste or photographically reproduce the attached map itself.
+- Labels and callout text still come ONLY from VARIABLE FIELDS, never from text visible inside the attached map."""
+
+USER_REFERENCE_SCENE_RULES = """==================================================
+ATTACHED SCENE REFERENCE (CRITICAL)
+==================================================
+- One of the attached images is a real-scene photograph supplied by the user. The appearance of the scene, buildings, vehicles or equipment in the graphic must follow that attached image: same shape, layout, proportions and distinguishing features.
+- Re-draw it in the graphic's own visual style; do not paste or photographically reproduce the attached image itself.
+- Do not copy any readable text, logo or brand mark visible inside the attached image; the NO UNSOURCED BRANDS rule above still applies in full.
+- Do not copy any recognisable human face from the attached image; how to depict named real people is governed solely by the NAMED REAL PERSON rules."""
+
+USER_REFERENCE_MODES = {
+    "map": USER_REFERENCE_MAP_RULES,
+    "scene": USER_REFERENCE_SCENE_RULES,
+}
+
+
+# ============================================================
+# 追加指令改圖（2026-08-17，PLAN.md ③）。
+#
+# ⚠️ 同上，**刻意不同步到 app.js**：refine 一律走後端 /api/images/refine，
+# prompt 只在這裡組，前端沒有任何一條路徑需要自己組 refine prompt。
+#
+# 附圖是「上次的成品（置框前原圖）」，措辭核心是：只改指令指定的部分，
+# 其餘逐像素保持。FINAL OUTPUT RULE 的括號禁令與繁中要求仍要帶著，
+# 免得修改輪把原本守住的規則丟掉。
+# ============================================================
+
+IMAGE_REFINE_RULES = """==================================================
+IMAGE REFINE RULES (CRITICAL)
+==================================================
+- The attached image is YOUR OWN previous output for this news graphic. It is the base image.
+- Apply ONLY the change requested in USER CHANGE REQUEST below. Everything else — layout, composition, colours, typography, spelling, every other element — must remain exactly as in the attached image.
+- Do not redesign, re-balance, restyle or "improve" anything that the request did not mention.
+- Keep the exact same aspect ratio and framing as the attached image. Do not crop, letterbox, zoom or shift the composition.
+- Use only Traditional Chinese (Taiwan standard) for any text you add or change, with correct stroke forms.
+- The final image must NOT contain any "[" "]" or "<" ">" characters.
+- Never add new facts, figures, sources, logos or captions that the request did not supply."""
+
+
+def build_refine_prompt(instruction: str) -> str:
+    """組追加修改（refine）的生圖 prompt。附圖＝上次置框前原圖，經 input_references 送出。"""
+    return (
+        "Modify the attached news infographic image according to the change "
+        "request below. This is an edit of an existing image, not a new design.\n\n"
+        f"{IMAGE_REFINE_RULES}\n\n"
+        "==================================================\n"
+        "USER CHANGE REQUEST\n"
+        "==================================================\n"
+        f"{instruction}"
+    )
+
 MAP_ACCURACY_IMAGE_RULES = """==================================================
 MAP ACCURACY RULES (CRITICAL)
 ==================================================

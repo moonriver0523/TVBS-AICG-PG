@@ -38,7 +38,9 @@ from news_prompt import (
     MAP_TYPE_LABEL,
     PORTRAIT_MODES,
     PROMPT_VERSION,
+    USER_REFERENCE_MODES,
     build_prompt,
+    build_refine_prompt,
     compose_variable,
 )
 
@@ -122,6 +124,10 @@ class GenerateRequest(BaseModel):
     density: DigestDensity = "standard"
     # True＝留白改由後端 safe_frame 置框，消化階段要出滿版版面而非縮小置中
     safe_frame: bool = False
+    # 網頁版「給 AI 的指令」專用欄位（PLAN.md ①）。這是文內解析之外**多出來**的
+    # 高信賴度通道，不是取代：LINE 是聊天框拆不了欄位，且有人習慣把「逐字保留」
+    # 寫在完稿裡，文內解析（USER_INSTRUCTION_RULES）必須原樣保留。
+    user_instruction: str = Field(default="", max_length=2_000)
 
 
 class GenerateResponse(BaseModel):
@@ -137,6 +143,16 @@ class GenerateResponse(BaseModel):
     portrait_subjects: list[str] = Field(default_factory=list)
 
 
+# 使用者上傳參考圖的單筆描述。purpose 決定注入哪一段用途 prompt（見
+# news_prompt.USER_REFERENCE_MODES）：map＝地圖底稿（地理關係以附圖為準）、
+# scene＝實景參考（場景／建物／器材外觀依附圖）。
+# 肖像刻意不開放上傳：具名真人照片由 resolve_portrait() 自動查，
+# 使用者上傳人臉會繞過「兩位以上具名真人不生成臉孔」的鐵律，先不開這個口。
+class UserReferenceImage(BaseModel):
+    data_url: str = Field(min_length=1, max_length=2_800_000)  # 約 2MB base64
+    purpose: Literal["map", "scene"] = "scene"
+
+
 class ImageGenerateRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=20_000)
     provider: Literal["gemini", "gpt"] = "gemini"
@@ -148,15 +164,24 @@ class ImageGenerateRequest(BaseModel):
     safe_frame_profile: str = "記者"
     # 真人肖像的參考照片（data URL）。空字串＝這次不附參考圖。
     reference_image_data_url: str = ""
+    # 使用者上傳的參考圖（地圖底稿／實景參考）。與肖像參考照分開兩個欄位：
+    # 肖像那格語意寫死是「人臉參考照」且由後端自動填，混用會打架。
+    reference_images: list[UserReferenceImage] = Field(default_factory=list)
     # 網頁版消化後回傳的具名真人名單。後端據此查參考照並注入肖像規則。
     # LINE／generate_news_image 已在組 prompt 時處理過，不要再傳，以免規則灌兩次。
     portrait_subjects: list[str] = Field(default_factory=list)
 
 
 class ImageGenerateResponse(BaseModel):
+    # image_data_base64：給人看的成品（已置框／拉伸），拿去顯示與下載。
+    # source_image_base64：置框「前」的原始生成圖，**只**供追加修改（refine）再編輯用。
+    # 兩者不可混用——把成品餵回去改圖會二次拉伸，失真 6.4%→13.2%→20.5% 疊上去，
+    # 而且每輪只多一點、很難察覺（PLAN.md ③ 的失真疊加坑）。
+    # 未置框（safe_frame=False）時 source_image_base64 為空字串，成品本身就是原圖。
     image_data_base64: str
     mime_type: str
     model: str
+    source_image_base64: str = ""
 
 
 # 第一頁「懶人機制」：type_label 傳這個值代表由 AI 自行判斷最適合的圖表類型
@@ -374,11 +399,31 @@ USER INSTRUCTIONS INSIDE THE MATERIAL (DO THIS FIRST, BEFORE APPLYING ANY RULE A
 """
 
 
+# 專用指令欄位（PLAN.md ①）。把「這幾行是指令」從分類任務變成結構事實：
+# 欄位裡的字**保證**是指令、絕不是新聞內容，規則第 4 條因此從「靠 prompt 自律」
+# 變成「結構上不可能」。文內解析（上方 USER_INSTRUCTION_RULES）仍原樣生效——
+# 兩邊都有時兩者都要遵守（專用欄位優先，但互不取消），欄位寫「逐字保留」
+# 一樣要觸發 VERBATIM MODE（規則第 5 條）。
+# 模板：{instruction} 由 build_digest_instructions 填入；只在欄位有值時注入，
+# 沒填時消化行為與過去逐字元相同（記者 frozen 測試靠這點維持綠燈）。
+DEDICATED_INSTRUCTION_RULES_TEMPLATE = """
+
+DEDICATED USER INSTRUCTION (GUARANTEED CHANNEL — READ TOGETHER WITH THE BLOCK ABOVE):
+The user has also supplied an instruction through a dedicated field, quoted between the markers below. Everything between the markers is CERTAIN to be an instruction to you and is NEVER news content — do not classify it, do not let it appear in "variable", and never draw or describe it in the graphic.
+Obey it under exactly the same rules as the block above: carry style or layout requests into "style" and "structure"; if it asks for the wording to be kept (e.g. 「逐字保留」「完全依照文字」「這是完稿」), VERBATIM MODE applies to the news material in full.
+If the news material ALSO contains instructions, obey both. When the two conflict on the same point, this dedicated instruction wins; on every other point each instruction still binds — neither cancels the other.
+<<USER INSTRUCTION START>>
+{instruction}
+<<USER INSTRUCTION END>>
+"""
+
+
 def build_digest_instructions(
     role: str,
     density: DigestDensity,
     type_label: str,
     full_bleed: bool = False,
+    user_instruction: str = "",
 ) -> str:
     is_editor = role == "編輯"
     template = EDITOR_SYSTEM_PROMPT_TEMPLATE if is_editor else SYSTEM_PROMPT_TEMPLATE
@@ -405,6 +450,12 @@ def build_digest_instructions(
         instructions += SIMPLIFIED_DENSITY_RULES
     # 固定放最後：逐字模式必須壓過 SIMPLIFIED_DENSITY_RULES（位置＋明文 OVERRIDE 同向）
     instructions += USER_INSTRUCTION_RULES
+    # 專用欄位緊接在文內解析規則之後（要引用「the block above」），沒填時不注入，
+    # 確保既有輸出逐字元不變。
+    if user_instruction.strip():
+        instructions += DEDICATED_INSTRUCTION_RULES_TEMPLATE.format(
+            instruction=user_instruction.strip()
+        )
     return instructions
 
 
@@ -564,6 +615,7 @@ def generate(req: GenerateRequest):
         density=req.density,
         type_label=req.type_label,
         full_bleed=req.safe_frame,
+        user_instruction=req.user_instruction,
     )
 
     # DIGEST_MODEL 可覆寫；沿用舊環境變數 OPENAI_DIGEST_MODEL 作為次要相容
@@ -839,12 +891,17 @@ def generate_image(req: ImageGenerateRequest):
     generate_news_image 已組好 prompt，走這支時不要重複落檔。
     """
     req = apply_portrait_to_image_request(req)
+    req = apply_user_references_to_image_request(req)
     request_id = request_log.new_request_id()
     try:
         result = generate_image_raw(req)
         verify_output_aspect_ratio(result, req.aspect_ratio)
         if req.safe_frame:
-            result = frame_image_response(result, req.safe_frame_profile)
+            # 置框前的原圖要留給追加修改（refine）用：把置框後成品餵回去改圖
+            # 會二次拉伸（見 ImageGenerateResponse 的欄位說明）。
+            result = frame_image_response(result, req.safe_frame_profile).model_copy(
+                update={"source_image_base64": result.image_data_base64}
+            )
     except Exception as exc:
         if not _inside_pipeline.get():
             request_log.log_failure(
@@ -970,6 +1027,11 @@ def supports_reference_image(provider: str) -> bool:
 # 原生那條是 gpt-image-2，文件卻只寫後者）。
 # GPT 選 gpt-image-2 的理由：OpenAI 家族只有它在 API 層支援安全框要的 21:9，
 # gpt-5.4-image-2 / gpt-5-image 系列連 aspect_ratio 參數都沒有。
+# input_references 的上限。模型端 gpt-image-2 收 0–16、Gemini 0–14（PLAN.md 查證），
+# 這裡抓遠低於兩者的值：一張肖像參考照＋幾張使用者參考圖已綽綽有餘，
+# 塞更多只會稀釋每張的權重、還把 base64 請求撐爆。
+MAX_INPUT_REFERENCES = 6
+
 NATIVE_GPT_IMAGE_MODEL = "gpt-image-2"
 NATIVE_GEMINI_IMAGE_MODEL = "gemini-3-pro-image"
 OPENROUTER_GPT_IMAGE_MODEL = f"openai/{NATIVE_GPT_IMAGE_MODEL}"
@@ -1121,9 +1183,25 @@ def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGener
     # GPT 系列不吃 resolution，帶了會 400。
     if any(tag in model for tag in ("gemini", "seedream", "riverflow")):
         payload["resolution"] = req.image_size
-    if req.reference_image_data_url:
+    # 參考圖兩個來源合併送出：肖像參考照（自動查圖）在前、使用者上傳在後。
+    # gpt-image-2 支援 0–16 張、Gemini 0–14 張（PLAN.md 已向 models 端點查證），
+    # 但實務上不需要塞滿，超過 MAX_INPUT_REFERENCES 的直接擋下。
+    reference_urls = [
+        url
+        for url in (
+            [req.reference_image_data_url] if req.reference_image_data_url else []
+        )
+        + [ref.data_url for ref in req.reference_images]
+        if url
+    ]
+    if len(reference_urls) > MAX_INPUT_REFERENCES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"參考圖最多 {MAX_INPUT_REFERENCES} 張（本次共 {len(reference_urls)} 張）",
+        )
+    if reference_urls:
         payload["input_references"] = [
-            {"type": "image_url", "image_url": {"url": req.reference_image_data_url}}
+            {"type": "image_url", "image_url": {"url": url}} for url in reference_urls
         ]
 
     request = Request(
@@ -1345,6 +1423,9 @@ class NewsImageGenerateRequest(BaseModel):
     safe_frame: bool = False
     # 落檔時標示來源（line／workcord／…），純粹方便回查時篩選；空值用預設值
     source: str = ""
+    # 專用指令欄位（PLAN.md ①），語意同 GenerateRequest.user_instruction。
+    # LINE 端不傳（聊天框拆不了欄位，維持文內解析）。
+    user_instruction: str = Field(default="", max_length=2_000)
 
 
 class NewsImageGenerateResponse(BaseModel):
@@ -1355,6 +1436,9 @@ class NewsImageGenerateResponse(BaseModel):
     prompt_version: str = PROMPT_VERSION
     # 回查用：對應 logs/generations-*.jsonl 裡的那一筆
     request_id: str = ""
+    # 置框前原圖，僅供 /api/images/refine 再編輯用；語意同
+    # ImageGenerateResponse.source_image_base64（成品拿去顯示，這格拿去改圖）
+    source_image_base64: str = ""
 
 
 def _extract_title(variable: str) -> str:
@@ -1466,6 +1550,116 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
     return req.model_copy(update={"prompt": prompt, "reference_image_data_url": reference})
 
 
+def apply_user_references_to_image_request(
+    req: ImageGenerateRequest,
+) -> ImageGenerateRequest:
+    """使用者上傳參考圖（PLAN.md ②）：依 purpose 注入用途區塊。
+
+    附圖能力與 prompt 措辭必須一致（同 supports_reference_image 的理由）：
+    後端送不出參考圖（原生 OpenAI 路徑）卻叫模型「依附圖」，它只能憑印象亂捏，
+    比不附更糟——所以送不出去時直接 400，不靜靜忽略使用者的上傳。
+    每種 purpose 的區塊只注入一次（同用途多張圖共用同一段措辭）。
+    """
+    if not req.reference_images:
+        return req
+    if not supports_reference_image(req.provider):
+        raise HTTPException(
+            status_code=400,
+            detail="目前的生圖後端無法附上參考圖（原生 OpenAI 路徑沒有參考圖通道），"
+            "請移除上傳的參考圖，或改用支援參考圖的引擎設定",
+        )
+    prompt = req.prompt
+    for purpose in dict.fromkeys(ref.purpose for ref in req.reference_images):
+        block = USER_REFERENCE_MODES.get(purpose, "")
+        if block and block not in prompt:
+            prompt = f"{prompt.rstrip()}\n\n{block}"
+    if prompt == req.prompt:
+        return req
+    return req.model_copy(update={"prompt": prompt})
+
+
+class ImageRefineRequest(BaseModel):
+    # 置框「前」的原始生成圖（base64，不是 data URL）。一律送
+    # ImageGenerateResponse.source_image_base64；把已置框成品送進來會二次拉伸
+    # （見 ImageGenerateResponse 欄位說明）。未置框流程則送 image_data_base64。
+    source_image_base64: str = Field(min_length=1, max_length=28_000_000)
+    source_mime_type: str = "image/png"
+    # 使用者的修改指令，例如「把標題改成紅色」「左邊那張圖換成長條圖」
+    instruction: str = Field(min_length=1, max_length=2_000)
+    provider: Literal["gemini", "gpt"] = "gemini"
+    aspect_ratio: str = "16:9"
+    image_size: str = "1K"
+    safe_frame: bool = False
+    safe_frame_profile: str = "記者"
+
+
+@app.post(
+    "/api/images/refine",
+    response_model=ImageGenerateResponse,
+    dependencies=[Depends(verify_internal_api_key)],
+)
+def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
+    """追加指令修改既有圖（PLAN.md ③）。
+
+    刻意不重用 /api/images/generate：那條的語意是「從 prompt 生成」，refine 的
+    語意是「以附圖為基礎改圖」，混在同一個函式裡兩種行為會打架。
+    這條**不呼叫消化端**（省錢也省時間）——指令直接組進 refine prompt。
+    """
+    if not supports_reference_image(req.provider):
+        raise HTTPException(
+            status_code=400,
+            detail="目前的生圖後端無法附上參考圖，無法以圖改圖；請整張重新生成",
+        )
+    image_req = ImageGenerateRequest(
+        prompt=build_refine_prompt(req.instruction),
+        provider=req.provider,
+        aspect_ratio=req.aspect_ratio,
+        image_size=req.image_size,
+        safe_frame=req.safe_frame,
+        safe_frame_profile=req.safe_frame_profile,
+        reference_image_data_url=(
+            f"data:{req.source_mime_type};base64,{req.source_image_base64}"
+        ),
+    )
+    request_id = request_log.new_request_id()
+    try:
+        result = generate_image_raw(image_req)
+        verify_output_aspect_ratio(result, req.aspect_ratio)
+        if req.safe_frame:
+            # 與 generate_image 相同：置框前原圖留給下一輪 refine 用
+            result = frame_image_response(result, req.safe_frame_profile).model_copy(
+                update={"source_image_base64": result.image_data_base64}
+            )
+    except Exception as exc:
+        request_log.log_failure(
+            request_id=request_id,
+            source="web-refine",
+            news_text="",
+            error=str(exc),
+            prompt=image_req.prompt,
+            provider=req.provider,
+        )
+        raise
+    request_log.log_generation(
+        request_id=request_id,
+        source="web-refine",
+        news_text="",
+        prompt=image_req.prompt,
+        provider=req.provider,
+        image_model=result.model,
+    )
+    gcs_archive.archive_generation(
+        request_id=request_id,
+        image_base64=result.image_data_base64,
+        mime_type=result.mime_type,
+        source="web-refine",
+        prompt=image_req.prompt,
+        provider=req.provider,
+        image_model=result.model,
+    )
+    return result
+
+
 def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateResponse:
     # 前置過濾（縱深防禦）：擋垃圾／亂碼／注入輸入，避免燒掉付費呼叫。
     # LINE 路徑在 line_bot 已含頻率限制地查過一次，這裡 client_id 為空時
@@ -1491,6 +1685,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 role=req.role,
                 density=req.density,
                 safe_frame=req.safe_frame,
+                user_instruction=req.user_instruction,
             )
         )
         portrait_mode, reference_photo = resolve_portrait(
@@ -1588,6 +1783,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             model=image.model,
             title=_extract_title(digest.variable),
             request_id=request_id,
+            source_image_base64=image.source_image_base64,
         )
     finally:
         _inside_pipeline.reset(token)
