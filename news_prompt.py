@@ -223,8 +223,32 @@ NAMED REAL PEOPLE — NO REFERENCE AVAILABLE (CRITICAL)
 - The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible.
 - Never place a person in a scene, action or context that STRUCTURE does not describe."""
 
+# 2-3 位具名真人、且**每一位都查到參考照**時用這段（2026-08-18 使用者裁定放寬）。
+#
+# 與 USER_REFERENCE_PORTRAIT_RULES 措辭相近但刻意分成兩段常數，差別是這段
+# **保留「示意圖」標籤**：那條「不標示意圖」的 override 語意是「照著使用者親自提供
+# 的素材生成」，套到後端自動查來的維基照片上並不成立——寫實照片感＋真名＋沒有
+# 示意圖標籤是最糟的組合。
+#
+# 「全有或全無」由後端保證（見 main.resolve_portraits）：只要有一人沒照片，整張
+# 退回 PORTRAIT_NO_REFERENCE_RULES。這裡刻意**不寫**「沒附照片的人畫剪影」那種
+# 逐人區分的條款——2026-08-18 實測 2/2 證明生圖模型辦不到，寫了只會給人一種
+# 有防護的錯覺（證據見 docs/error-cases/2026-08-18-多人肖像放寬到3人-實驗-分析.md）。
+PORTRAIT_MULTI_WITH_REFERENCE_RULES = """==================================================
+NAMED REAL PEOPLE — MULTIPLE PORTRAITS (CRITICAL)
+==================================================
+- A reference photograph is attached for EVERY named real person whose face this graphic shows. Base each portrait on its own attached photograph.
+- Match each face to the correct person: use the resemblance between the attached photographs and the name labels, and NEVER swap likenesses between people. A face sitting under the wrong person's name is the single most serious failure this rule exists to prevent.
+- Render each portrait as a hand-painted editorial portrait illustration rather than a photograph, while preserving the recognisable likeness of its reference photograph: the same facial structure, hairstyle, glasses and build, so that viewers identify the same individual.
+- Take only each person's likeness from the photographs. Pose, attire, framing and surroundings follow STRUCTURE, not the photographs' own backgrounds or occasions.
+- An attached photograph may happen to show more than one person. Use only the person the name label refers to; never carry a bystander from a photograph into the graphic.
+- Other real people may be named in the text of this graphic without a photograph. That is intended: render their names as text only, never as a face, and never place such a name beside a depicted figure.
+- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible: these are illustrated depictions, not photographs of the people.
+- Never place a person in a scene, action or context that STRUCTURE does not describe."""
+
 PORTRAIT_MODES = {
     "reference": PORTRAIT_WITH_REFERENCE_RULES,
+    "reference_multi": PORTRAIT_MULTI_WITH_REFERENCE_RULES,
     "no_reference": PORTRAIT_NO_REFERENCE_RULES,
     "none": "",
 }

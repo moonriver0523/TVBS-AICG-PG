@@ -12,6 +12,8 @@ import os
 import unittest
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 import main  # noqa: E402
@@ -147,23 +149,63 @@ class ResolvePortraitTests(unittest.TestCase):
         self.assertEqual((mode, photo), ("no_reference", None))
         lookup.assert_not_called()
 
-    def test_two_people_never_draw_faces(self):
-        """2026-08-05 事故：一張照片配兩個肖像框，模型把沒照片的那格編出來還掛真名。
+    def test_two_or_three_people_all_with_photos_draw_faces(self):
+        """2026-08-18 使用者裁定放寬：1-3 人且每位都查到照片就畫臉。
 
-        參考圖通道一次只對應得了一個人，所以兩人以上一律退回不畫臉，
-        而且不該白查照片——查到了也不能用。
+        依據是同日的實測——全員有照片時 9/9 張臉正確對到姓名條、0 交換 0 捏臉
+        （docs/error-cases/2026-08-18-多人肖像放寬到3人-實驗-分析.md）。
+        """
+        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                with patch.object(main, "supports_multiple_reference_images", return_value=True):
+                    two = main.resolve_portraits(["鄭明典", "吳軒彤"], "gpt")
+                    three = main.resolve_portraits(["甲", "乙", "丙"], "gpt")
+        self.assertEqual(two[0], "reference_multi")
+        self.assertEqual(len(two[1]), 2)
+        self.assertEqual(three[0], "reference_multi")
+        self.assertEqual(len(three[1]), 3)
+
+    def test_one_missing_photo_blocks_every_face(self):
+        """全有或全無：只要有一位查不到，整張退回不畫臉。
+
+        2026-08-18 實測 2/2 證明「有照片的畫、沒照片的畫剪影」生圖模型辦不到——
+        沒照片的那位被憑空捏臉還掛真名。
+        """
+        def lookup(name, **kwargs):
+            return None if name == "吳軒彤" else PHOTO
+
+        with patch.object(photo_lookup, "find_reference_photo", side_effect=lookup):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                with patch.object(main, "supports_multiple_reference_images", return_value=True):
+                    mode, photos = main.resolve_portraits(["鄭明典", "吳軒彤"], "gpt")
+        self.assertEqual((mode, photos), ("no_reference", []))
+
+    def test_more_than_three_people_is_not_truncated(self):
+        """超過 3 人不畫臉，而且**不能**自己砍成 3 人——版面是照 4 個人設計的。
+        壓在 3 人以內是消化階段的事（REAL_WORLD_FIDELITY_RULES 第 6 條）。
         """
         with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO) as lookup:
             with patch.object(main, "supports_reference_image", return_value=True):
-                mode, photo = resolve_portrait(["鄭明典", "吳軒彤"], "gpt")
-        self.assertEqual((mode, photo), ("no_reference", None))
+                mode, photos = main.resolve_portraits(["甲", "乙", "丙", "丁"], "gpt")
+        self.assertEqual((mode, photos), ("no_reference", []))
         lookup.assert_not_called()
 
-    def test_three_people_also_blocked(self):
-        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO):
+    def test_multi_needs_the_multi_reference_channel(self):
+        """送不出多張參考圖的後端，不能宣稱附了多張——措辭與能力必須一致。"""
+        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO) as lookup:
             with patch.object(main, "supports_reference_image", return_value=True):
-                mode, _ = resolve_portrait(["甲", "乙", "丙"], "gpt")
-        self.assertEqual(mode, "no_reference")
+                with patch.object(main, "supports_multiple_reference_images", return_value=False):
+                    mode, photos = main.resolve_portraits(["甲", "乙"], "gpt")
+        self.assertEqual((mode, photos), ("no_reference", []))
+        lookup.assert_not_called()
+
+    def test_multi_block_keeps_the_disclaimer_label(self):
+        """自動查來的照片仍要標「示意圖」：那個不標的 override 只適用於使用者自己
+        提供的素材。寫實照片感＋真名＋沒有標籤是最糟組合。"""
+        self.assertIn("示意圖", news_prompt.PORTRAIT_MULTI_WITH_REFERENCE_RULES)
+        self.assertIn(
+            "NEVER swap likenesses", news_prompt.PORTRAIT_MULTI_WITH_REFERENCE_RULES
+        )
 
     def test_duplicate_name_is_still_one_person(self):
         """同一個人被列兩次不該被誤判成多人——清洗過的名單才進判斷。"""
@@ -173,6 +215,99 @@ class ResolvePortraitTests(unittest.TestCase):
             with patch.object(main, "supports_reference_image", return_value=True):
                 mode, _ = resolve_portrait(subjects, "gpt")
         self.assertEqual(mode, "reference")
+
+
+class ExcludePeopleDigestTests(unittest.TestCase):
+    """查不到照片的人改在消化階段排出版面（2026-08-18 使用者裁決）。
+
+    為什麼不在生圖階段處理：實測 2/2 證明生圖模型做不到逐人區分。消化端是文字
+    模型，而且要拿掉的不只一張臉——姓名條、引言框、版位都要重新安排。
+    """
+
+    def test_empty_exclusion_leaves_the_prompt_byte_identical(self):
+        """沒有人要排除時 prompt 必須逐字不變，記者 frozen 測試靠這點維持綠燈。"""
+        base = main.build_digest_instructions("記者", "standard", "資料圖表")
+        self.assertEqual(
+            main.build_digest_instructions("記者", "standard", "資料圖表", exclude_people=[]),
+            base,
+        )
+        self.assertEqual(
+            main.build_digest_instructions("記者", "standard", "資料圖表", exclude_people=["  "]),
+            base,
+        )
+
+    def test_excluded_people_are_named_and_may_still_appear_as_text(self):
+        out = main.build_digest_instructions(
+            "記者", "standard", "資料圖表", exclude_people=["吳軒彤"]
+        )
+        self.assertIn("吳軒彤", out)
+        self.assertIn("PEOPLE WHO MUST NOT BE DRAWN", out)
+        # 使用者 2026-08-18 補充：名字可以用文字提及，只是不畫臉
+        self.assertIn("may still appear as TEXT", out)
+
+    def test_cap_binds_the_layout_not_just_the_list(self):
+        """上限要綁版面：只綁清單的話，模型可以畫 4 張臉卻只列 3 個，
+        第 4 張就是 2026-08-05 那種掛真名的捏臉。"""
+        out = main.build_digest_instructions("記者", "standard", "資料圖表")
+        self.assertIn("AT MOST THREE FACES", out)
+        self.assertIn("truthful mirror", out)
+
+
+class ResolveDigestPortraitsTests(unittest.TestCase):
+    """兩段式消化：查不到照片就重新消化一次，只重試一次。"""
+
+    def _digest(self, subjects):
+        return main.GenerateResponse(
+            style="s", structure="t", variable="v", chart_type="資料圖表",
+            portrait_subjects=subjects,
+        )
+
+    def _req(self):
+        return main.NewsImageGenerateRequest(news_text="新聞內容" * 10)
+
+    def test_no_retry_when_every_photo_is_found(self):
+        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                with patch.object(main, "generate") as regenerate:
+                    digest, photos = main.resolve_digest_portraits(
+                        self._digest(["甲", "乙"]), self._req(), "gpt"
+                    )
+        regenerate.assert_not_called()
+        self.assertEqual(len(photos), 2)
+        self.assertEqual(digest.portrait_subjects, ["甲", "乙"])
+
+    def test_missing_photo_triggers_exactly_one_redigest(self):
+        def lookup(name, **kwargs):
+            return None if name == "吳軒彤" else PHOTO
+
+        retried = self._digest(["鄭明典"])
+        with patch.object(photo_lookup, "find_reference_photo", side_effect=lookup):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                with patch.object(main, "generate", return_value=retried) as regenerate:
+                    digest, photos = main.resolve_digest_portraits(
+                        self._digest(["鄭明典", "吳軒彤"]), self._req(), "gpt"
+                    )
+        regenerate.assert_called_once()
+        # 重新消化時要把查不到的人明確傳下去
+        self.assertEqual(regenerate.call_args[0][0].exclude_people, ["吳軒彤"])
+        self.assertEqual(digest.portrait_subjects, ["鄭明典"])
+        self.assertEqual(list(photos), ["鄭明典"])
+
+    def test_second_pass_still_missing_gives_up_instead_of_looping(self):
+        """第二次消化又挑出沒照片的人時不再重試——無限重試會一直燒消化費用。"""
+        retried = self._digest(["另一個查不到的人"])
+        with patch.object(photo_lookup, "find_reference_photo", return_value=None):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                with patch.object(main, "generate", return_value=retried) as regenerate:
+                    digest, photos = main.resolve_digest_portraits(
+                        self._digest(["甲"]), self._req(), "gpt"
+                    )
+        regenerate.assert_called_once()
+        self.assertEqual(photos, {})
+        # 交給 resolve_portraits 退回全員不畫臉
+        with patch.object(main, "supports_reference_image", return_value=True):
+            mode, _ = main.resolve_portraits(digest.portrait_subjects, "gpt", photos=photos)
+        self.assertEqual(mode, "no_reference")
 
 
 class CleanPortraitSubjectsTests(unittest.TestCase):
@@ -350,15 +485,71 @@ class ApplyPortraitToImageRequestTests(unittest.TestCase):
         self.assertIn("NAMED REAL PERSON — PORTRAIT TREATMENT", out.prompt)
         self.assertTrue(out.reference_image_data_url.startswith("data:image/jpeg;base64,"))
 
-    def test_two_people_forbid_faces_and_attach_nothing(self):
+    def test_two_people_with_photos_attach_both(self):
+        """2026-08-18 放寬：兩位都查得到照片就兩張都附，走多張通道。"""
         req = ImageGenerateRequest(
             prompt="base prompt", portrait_subjects=["鄭明典", "吳軒彤"], provider="gpt"
         )
         with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO):
             with patch.object(main, "supports_reference_image", return_value=True):
-                out = apply_portrait_to_image_request(req)
+                with patch.object(main, "supports_multiple_reference_images", return_value=True):
+                    out = apply_portrait_to_image_request(req)
+        self.assertIn("MULTIPLE PORTRAITS", out.prompt)
+        self.assertEqual(len(out.portrait_reference_data_urls), 2)
+        # 單張欄位維持空的：多人一律走多張通道，兩邊都塞會重複送同一張
+        self.assertEqual(out.reference_image_data_url, "")
+
+    def test_two_people_with_one_missing_photo_forbid_faces(self):
+        req = ImageGenerateRequest(
+            prompt="base prompt", portrait_subjects=["鄭明典", "吳軒彤"], provider="gpt"
+        )
+
+        def lookup(name, **kwargs):
+            return None if name == "吳軒彤" else PHOTO
+
+        with patch.object(photo_lookup, "find_reference_photo", side_effect=lookup):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                with patch.object(main, "supports_multiple_reference_images", return_value=True):
+                    out = apply_portrait_to_image_request(req)
         self.assertIn("NO REFERENCE AVAILABLE", out.prompt)
         self.assertEqual(out.reference_image_data_url, "")
+        self.assertEqual(out.portrait_reference_data_urls, [])
+
+    def test_upload_shortfall_is_filled_by_lookup(self):
+        """使用者上傳 1 張、畫面 2 人：缺的那位由自動查圖補上（2026-08-18 裁決）。"""
+        req = ImageGenerateRequest(
+            prompt="base prompt",
+            portrait_subjects=["鄭明典", "吳軒彤"],
+            provider="gpt",
+            reference_images=[
+                main.UserReferenceImage(data_url="data:image/jpeg;base64,QQ==", purpose="portrait")
+            ],
+        )
+
+        def lookup(name, **kwargs):
+            return None if name == "吳軒彤" else PHOTO
+
+        with patch.object(photo_lookup, "find_reference_photo", side_effect=lookup):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                out = apply_portrait_to_image_request(req)
+        # 上傳的那張視為對應查不到的吳軒彤，鄭明典由維基補上
+        self.assertEqual(len(out.portrait_reference_data_urls), 1)
+
+    def test_upload_still_short_is_blocked_before_paying_for_an_image(self):
+        """補完仍有人沒照片就擋下不生圖（沿用 2026-08-05 裁決）。"""
+        req = ImageGenerateRequest(
+            prompt="base prompt",
+            portrait_subjects=["甲", "乙", "丙"],
+            provider="gpt",
+            reference_images=[
+                main.UserReferenceImage(data_url="data:image/jpeg;base64,QQ==", purpose="portrait")
+            ],
+        )
+        with patch.object(photo_lookup, "find_reference_photo", return_value=None):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                with self.assertRaises(HTTPException) as caught:
+                    apply_portrait_to_image_request(req)
+        self.assertEqual(caught.exception.status_code, 400)
 
     def test_existing_block_is_not_duplicated(self):
         already = "base\n\n" + news_prompt.PORTRAIT_WITH_REFERENCE_RULES
