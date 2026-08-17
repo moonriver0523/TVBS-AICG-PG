@@ -466,7 +466,7 @@ function renderDigestTypes() {
         const btn = document.createElement('button');
         const isAuto = key === AUTO_TYPE_KEY;
         const isActive = key === state.digestChartType;
-        btn.className = `px-3 py-2 rounded-lg text-[10px] font-black border transition-all tracking-wide ${isActive ? 'type-active' : 'text-slate-400 bg-slate-900/50 border-slate-700 hover:bg-slate-800'}`;
+        btn.className = `digest-type-btn px-3 py-2 rounded-lg text-[10px] font-black border transition-all tracking-wide ${isActive ? 'digest-type-active' : ''}`;
         // 自動判斷完成後，按鈕顯示 AI 選了什麼
         btn.innerText = (isAuto && isActive && state.digestResolvedType)
             ? `AI 自動判斷：${CHART_TYPES[state.digestResolvedType].label}`
@@ -545,8 +545,8 @@ function switchRole(role) {
     state.currentRole = role;
     document.querySelectorAll('[data-role]').forEach(btn => {
         const isActive = btn.dataset.role === role;
+        // 未選態的紅字由 .role-btn 提供，不再套 text-slate-500
         btn.classList.toggle('role-active', isActive);
-        btn.classList.toggle('text-slate-500', !isActive);
     });
     state.currentTab = 'style';
     state.activeParent = Object.keys(curType().styles)[0];
@@ -594,9 +594,77 @@ function updateNewsCounter() {
 // AI 消化按鈕顯示目前角色與文字密度，避免用錯模式
 function updateAIBtnRoleHint() {
     const buttonText = document.getElementById('aiBtnText');
+    // 生成中按鈕正顯示進度，切角色／密度不該把進度文字蓋掉
+    if (_genTicker) return;
     const densityLabel = state.digestDensity === 'simplified' ? '簡化' : '標準';
     if (buttonText) {
         buttonText.innerText = `一鍵生成（${state.currentRole}・${densityLabel}）`;
+    }
+}
+
+/* ============================================================
+   一鍵生成進度顯示
+   後端兩段都是一次性的同步請求，沒有任何進度可回報，所以這裡的百分比
+   是「依經過時間推估」而非真實進度。兩個原則避免它變成假訊號：
+   1. 只有真的拿到圖才會走到 100%；推估值以指數趨近該階段上限，
+      逾時只會愈走愈慢，永遠碰不到上限，不會出現「99% 卡住」以外的謊。
+   2. 文字同時標出目前階段，使用者看得出來卡在消化還是生圖。
+   ============================================================ */
+const GEN_STAGES = {
+    digest: { label: '消化新聞中', from: 0, to: 35, seconds: 20 },
+    image: { label: '生成圖片中', from: 35, to: 95, seconds: 75 },
+};
+
+let _genTicker = null;
+let _genStage = null;
+let _genStageStart = 0;
+let _genStageBudget = 0;
+
+// budgetScale：2K／GPT 這類本來就慢的組合把預估時間拉長，免得早早貼到上限乾等
+function beginGenerationProgress(stageKey, budgetScale = 1) {
+    _genStage = GEN_STAGES[stageKey];
+    _genStageStart = Date.now();
+    _genStageBudget = _genStage.seconds * budgetScale;
+    if (!_genTicker) {
+        const btn = document.getElementById('aiBtn');
+        if (btn) btn.classList.add('generating');
+        _genTicker = setInterval(paintGenerationProgress, 250);
+    }
+    paintGenerationProgress();
+}
+
+function paintGenerationProgress() {
+    if (!_genStage) return;
+    const elapsed = (Date.now() - _genStageStart) / 1000;
+    // 指數趨近：預估時間到時約走完該階段的 89%，之後持續變慢但不會停住
+    const ratio = 1 - Math.exp(-elapsed / (_genStageBudget / 2.2));
+    const pct = _genStage.from + (_genStage.to - _genStage.from) * ratio;
+    renderGenerationProgress(pct, `${_genStage.label} ${Math.round(pct)}%`);
+}
+
+function renderGenerationProgress(pct, text) {
+    const btn = document.getElementById('aiBtn');
+    const btnText = document.getElementById('aiBtnText');
+    if (btn) btn.style.setProperty('--gen-progress', `${pct}%`);
+    if (btnText) btnText.innerText = text;
+}
+
+function endGenerationProgress(completed = false) {
+    if (_genTicker) { clearInterval(_genTicker); _genTicker = null; }
+    _genStage = null;
+    const btn = document.getElementById('aiBtn');
+    if (!btn) return;
+    const restore = () => {
+        btn.classList.remove('generating');
+        btn.style.removeProperty('--gen-progress');
+        updateAIBtnRoleHint();
+    };
+    if (completed) {
+        // 成功才有 100%，短暫停留讓使用者看見「跑完了」再還原按鈕文字
+        renderGenerationProgress(100, '完成 100%');
+        setTimeout(restore, 700);
+    } else {
+        restore();
     }
 }
 
@@ -1088,11 +1156,14 @@ async function handleOneClickGenerate() {
     const loading = document.getElementById("aiLoading");
     const btn = document.getElementById("aiBtn");
     btn.disabled = true;
-    btnText.classList.add("hidden");
+    // 進度文字取代原本的「整段藏起來只留轉圈」，轉圈保留在旁邊當活著的訊號
+    btnText.classList.remove("hidden");
     loading.classList.remove("hidden");
+    let completed = false;
 
     try {
         showToast("消化中…");
+        beginGenerationProgress("digest");
         const digest = await digestNewsText(input);
         applyDigestToForm(digest);
         const variable = (digest.variable || "").replace(SYSTEM_DISCLAIMER, "").trim();
@@ -1107,6 +1178,10 @@ async function handleOneClickGenerate() {
             aspectRatio: currentAspectRatio(),
         });
         showToast("生圖中，約 30–120 秒…");
+        // 2K 與 GPT 都明顯較慢，預估時間拉長免得進度早早貼上限乾等
+        const slowCombo = (state.imageSize === "2K" ? 1.5 : 1)
+            * (effectiveImageProvider() === "gpt" ? 1.3 : 1);
+        beginGenerationProgress("image", slowCombo);
         const imgRes = await fetch(IMAGE_BACKEND_URL, {
             method: "POST",
             headers: _apiHeaders(),
@@ -1137,6 +1212,7 @@ async function handleOneClickGenerate() {
         document.getElementById("oneClickMeta").innerText = titleMatch ? titleMatch[1].trim() : "";
         document.getElementById("oneClickEmpty").classList.add("hidden");
         document.getElementById("oneClickResult").classList.remove("hidden");
+        completed = true;
         showToast(titleMatch ? `已生成：${titleMatch[1].trim()}` : "已完成圖片生成");
     } catch (err) {
         console.error(err);
@@ -1145,6 +1221,7 @@ async function handleOneClickGenerate() {
         btn.disabled = false;
         btnText.classList.remove("hidden");
         loading.classList.add("hidden");
+        endGenerationProgress(completed);
     }
 }
 
