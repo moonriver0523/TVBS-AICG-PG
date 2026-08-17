@@ -74,7 +74,10 @@ class WebhookTests(unittest.TestCase):
     def test_text_message_schedules_generation(self):
         response = post([text_event("熊本強震")])
         self.assertEqual(response.status_code, 200)
-        self.task.assert_called_once_with("reply-token-123", "U123", "熊本強震")
+        # 第四個參數是頻道，這條路徑固定是第一支 bot（見 test_line_multi_channel）
+        self.task.assert_called_once_with(
+            "reply-token-123", "U123", "熊本強震", line_bot.DEFAULT_CHANNEL
+        )
 
     def test_group_message_targets_group_id(self):
         event = text_event("新聞內容", type="group", groupId="G999", userId="U123")

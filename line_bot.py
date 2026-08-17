@@ -9,6 +9,9 @@
 1. 圖片訊息只吃「公開 HTTPS 網址」，不能傳 base64 → 生成後存到 static/ 由 PUBLIC_BASE_URL 對外。
 2. 生圖 30-120 秒遠超過 replyToken 時效 → 先 reply「生成中」（免費），完成後改用 push。
 3. Webhook 必須「先回 200 再處理」，否則 LINE 判逾時並重送 → 實際工作丟到背景任務。
+
+2026-08-17 起支援綁多支 bot：同一個服務、同一份行為，靠 webhook 路徑分辨是哪個
+頻道，各自帶自己的 channel secret 與 access token（見 _channel_env 的命名規則）。
 """
 
 import base64
@@ -117,6 +120,40 @@ def _env(name: str) -> str:
     return value
 
 
+# ============================================================
+# 多頻道（綁多支 LINE bot）
+# ============================================================
+DEFAULT_CHANNEL = "default"
+# 頻道名會直接進環境變數名與 webhook 路徑，限制字元避免兩邊都被亂塞
+_CHANNEL_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+
+
+def _channel_env(base: str, channel: str) -> str:
+    """頻道對應的環境變數名。
+
+    default 頻道刻意沿用原本沒有後綴的 LINE_CHANNEL_SECRET /
+    LINE_CHANNEL_ACCESS_TOKEN，加第二支 bot 就不必動既有的部署設定，
+    也不用回 LINE 後台改第一支的 webhook 網址。
+    """
+    if channel == DEFAULT_CHANNEL:
+        return base
+    return f"{base}_{channel.upper().replace('-', '_')}"
+
+
+def _env_for(base: str, channel: str) -> str:
+    return _env(_channel_env(base, channel))
+
+
+def _client_key(channel: str, to: str) -> str:
+    """頻道內的聊天室識別，用於角色狀態與頻率限制。
+
+    同一個 provider 底下的兩支 bot 會拿到同一個 userId，不加頻道前綴的話，
+    在 A bot 切成編輯模式會莫名其妙影響 B bot。default 維持原本只有 to 的
+    形式，既有的 log 與限流資料不會因為多綁一支就整批對不上。
+    """
+    return to if channel == DEFAULT_CHANNEL else f"{channel}:{to}"
+
+
 def valid_signature(secret: str, body: bytes, signature: str) -> bool:
     """LINE 簽章：channel secret 對 raw body 做 HMAC-SHA256 後 base64。"""
     if not signature:
@@ -127,8 +164,8 @@ def valid_signature(secret: str, body: bytes, signature: str) -> bool:
     return hmac.compare_digest(expected, signature)
 
 
-def _line_post(path: str, payload: dict) -> None:
-    token = _env("LINE_CHANNEL_ACCESS_TOKEN")
+def _line_post(path: str, payload: dict, channel: str = DEFAULT_CHANNEL) -> None:
+    token = _env_for("LINE_CHANNEL_ACCESS_TOKEN", channel)
     response = httpx.post(
         f"{LINE_MESSAGE_API}/{path}",
         json=payload,
@@ -144,15 +181,21 @@ def _line_post(path: str, payload: dict) -> None:
         response.raise_for_status()
 
 
-def reply_text(reply_token: str, text: str) -> None:
-    _line_post("reply", {"replyToken": reply_token, "messages": [{"type": "text", "text": text}]})
+def reply_text(reply_token: str, text: str, channel: str = DEFAULT_CHANNEL) -> None:
+    _line_post(
+        "reply",
+        {"replyToken": reply_token, "messages": [{"type": "text", "text": text}]},
+        channel,
+    )
 
 
-def push_text(to: str, text: str) -> None:
-    _line_post("push", {"to": to, "messages": [{"type": "text", "text": text}]})
+def push_text(to: str, text: str, channel: str = DEFAULT_CHANNEL) -> None:
+    _line_post("push", {"to": to, "messages": [{"type": "text", "text": text}]}, channel)
 
 
-def push_image(to: str, original_url: str, preview_url: str) -> None:
+def push_image(
+    to: str, original_url: str, preview_url: str, channel: str = DEFAULT_CHANNEL
+) -> None:
     _line_post(
         "push",
         {
@@ -165,6 +208,7 @@ def push_image(to: str, original_url: str, preview_url: str) -> None:
                 }
             ],
         },
+        channel,
     )
 
 
@@ -204,7 +248,9 @@ def save_image(raw: bytes, mime_type: str) -> tuple[str, str]:
     return original.name, preview.name
 
 
-def generate_and_push(reply_token: str, to: str, news_text: str) -> None:
+def generate_and_push(
+    reply_token: str, to: str, news_text: str, channel: str = DEFAULT_CHANNEL
+) -> None:
     """背景任務：先秒回收到，再跑完整生成流程並 push 圖片。
 
     main 匯入本模組的 router，這裡若在頂層 import main 會形成循環匯入，
@@ -216,13 +262,15 @@ def generate_and_push(reply_token: str, to: str, news_text: str) -> None:
     """
     from main import NewsImageGenerateRequest, generate_news_image
 
-    role, news_text, standalone = parse_line_role(news_text, _role_by_client.get(to))
+    key = _client_key(channel, to)
+    role, news_text, standalone = parse_line_role(news_text, _role_by_client.get(key))
     if standalone:
-        _role_by_client[to] = role
+        _role_by_client[key] = role
         try:
             reply_text(
                 reply_token,
                 f"已切換成{role}模式。請把新聞稿再送一次，我會用{role}規則生圖。",
+                channel,
             )
         except Exception as exc:  # noqa: BLE001 - 回絕訊息失敗只記 log
             print(f"[line] role reply failed: {exc}", flush=True)
@@ -232,20 +280,21 @@ def generate_and_push(reply_token: str, to: str, news_text: str) -> None:
     # 免費 replyToken 回覆原因後直接結束——不進 ack+push 流程、不消耗 push 額度。
     # client_id 用聊天對象（群組回到群、1:1 回個人），頻率限制以聊天室為單位。
     # 角色指令已剝掉，這裡只檢查真正的新聞正文。
-    verdict = check_input(news_text, client_id=to)
+    verdict = check_input(news_text, client_id=key)
     if not verdict.accepted:
         try:
-            reply_text(reply_token, verdict.user_message)
+            reply_text(reply_token, verdict.user_message, channel)
         except Exception as exc:  # noqa: BLE001 - 回絕訊息失敗只記 log
             print(f"[line] reject reply failed: {exc}", flush=True)
         return
-    note_accepted(news_text, client_id=to)
-    _role_by_client[to] = role
+    note_accepted(news_text, client_id=key)
+    _role_by_client[key] = role
 
     try:
         reply_text(
             reply_token,
             f"收到！以{role}模式消化生圖中，約 30-120 秒，完成後回傳圖片。",
+            channel,
         )
     except Exception as exc:  # noqa: BLE001 - 秒回失敗不該中斷後續生成
         print(f"[line] ack reply failed: {exc}", flush=True)
@@ -280,7 +329,7 @@ def generate_and_push(reply_token: str, to: str, news_text: str) -> None:
         # 把成圖檔名接回 request_id：使用者回報時傳來的是 LINE 下載的圖，檔名
         # 已被 LINE 換掉，只能靠這筆對照從原始檔名回推到那次請求的輸入與 prompt。
         request_log.log_image_file(
-            request_id=result.request_id, image_name=original_name, client_id=to
+            request_id=result.request_id, image_name=original_name, client_id=key
         )
 
         base_url = _env("PUBLIC_BASE_URL").rstrip("/")
@@ -288,17 +337,18 @@ def generate_and_push(reply_token: str, to: str, news_text: str) -> None:
             to,
             f"{base_url}/static/generated/{original_name}",
             f"{base_url}/static/generated/{preview_name}",
+            channel,
         )
     except HTTPException as exc:
-        _notify_failure(to, str(exc.detail))
+        _notify_failure(to, str(exc.detail), channel)
     except Exception as exc:  # noqa: BLE001 - 背景任務不能讓例外靜默消失
         print(f"[line] generate failed: {exc}", flush=True)
-        _notify_failure(to, "生成失敗，請稍後再試")
+        _notify_failure(to, "生成失敗，請稍後再試", channel)
 
 
-def _notify_failure(to: str, detail: str) -> None:
+def _notify_failure(to: str, detail: str, channel: str = DEFAULT_CHANNEL) -> None:
     try:
-        push_text(to, f"⚠️ {detail}")
+        push_text(to, f"⚠️ {detail}", channel)
     except Exception as exc:  # noqa: BLE001
         print(f"[line] failure notice failed: {exc}", flush=True)
 
@@ -319,8 +369,37 @@ async def webhook(
     background_tasks: BackgroundTasks,
     x_line_signature: str = Header(default=""),
 ) -> dict:
+    """第一支 bot。路徑保持原樣，LINE 後台不用改。"""
+    return await _handle_webhook(request, background_tasks, x_line_signature, DEFAULT_CHANNEL)
+
+
+@router.post("/webhook/{channel}")
+async def webhook_for_channel(
+    channel: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_line_signature: str = Header(default=""),
+) -> dict:
+    """加綁的其他 bot。每個頻道一條路徑，各自驗自己的 channel secret。
+
+    不共用同一條路徑再逐一試簽章：那樣既多做無謂的 HMAC，錯誤訊息也分不出
+    是哪支 bot 設錯，路徑分流最直接。
+    """
+    if not _CHANNEL_RE.match(channel):
+        raise HTTPException(status_code=404, detail="未知的頻道")
+    return await _handle_webhook(request, background_tasks, x_line_signature, channel)
+
+
+async def _handle_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_line_signature: str,
+    channel: str,
+) -> dict:
     body = await request.body()
-    if not valid_signature(_env("LINE_CHANNEL_SECRET"), body, x_line_signature):
+    if not valid_signature(
+        _env_for("LINE_CHANNEL_SECRET", channel), body, x_line_signature
+    ):
         raise HTTPException(status_code=403, detail="簽章驗證失敗")
 
     try:
@@ -337,7 +416,9 @@ async def webhook(
             continue
         if not text or not event.get("replyToken") or not target:
             continue
-        background_tasks.add_task(generate_and_push, event["replyToken"], target, text)
+        background_tasks.add_task(
+            generate_and_push, event["replyToken"], target, text, channel
+        )
 
     # 一律先回 200，實際工作在背景跑，避免 LINE 判逾時重送
     return {"ok": True}
