@@ -144,6 +144,18 @@ class EditorAdaptiveShaveTests(unittest.TestCase):
         self.assertEqual(safe_frame.plain_background_margin(img, 100), 0)
         self.assertEqual(safe_frame._shave_plain_edges(img, self.ZONE).size, (1536, 864))
 
+    def test_faint_noise_does_not_stop_the_scan(self):
+        """純背景列上的微量雜訊不該被當成元素。
+
+        實測過的坑：門檻設 3 時，真實生成圖底部那列只有 4 個雜訊像素就讓整個
+        機制失效（可裁 25px 的圖變成 0px）。
+        """
+        img = self._image((1536, 864), 20)
+        draw = ImageDraw.Draw(img)
+        for x in (100, 400, 900, 1300):          # 散落 4 點雜訊，遠少於任何真元素
+            draw.point((x, 0), fill=(120, 130, 160))
+        self.assertEqual(safe_frame.plain_background_margin(img, 100), 20)
+
     def test_asymmetric_margins_use_the_smaller_side(self):
         """只裁一側會讓設計在框內上下偏移，所以取兩側的較小值。"""
         img = Image.new("RGB", (1536, 864), (9, 14, 32))
