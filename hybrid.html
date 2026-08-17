@@ -8,11 +8,15 @@
   :root {
     --bg: #0d1424; --panel: #141d33; --border: #26314d;
     --text: #e8ecf5; --muted: #8a94ad; --accent: #ffc843;
+    /* 全站 UI 縮放，與 index.html 同一套做法（見那邊的註解） */
+    --ui-scale: 1.1;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
+    zoom: var(--ui-scale);
     font-family: "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif;
-    background: var(--bg); color: var(--text); min-height: 100vh;
+    background: var(--bg); color: var(--text);
+    min-height: calc(100vh / var(--ui-scale));
   }
   header {
     padding: 14px 24px; border-bottom: 1px solid var(--border);

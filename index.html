@@ -21,8 +21,15 @@
             --panel-bg: #161311;
             --ease: cubic-bezier(0.16, 1, 0.3, 1);
             --z-toast: 40;
+            /* 全站 UI 縮放。要再放大／縮小改這一個值就好，不必逐個調
+               Tailwind 的 px-／text-[10px]（那些是 px 寫死的，rem 縮放吃不到）。 */
+            --ui-scale: 1.1;
         }
         body {
+            /* 用 zoom 而非 transform: scale()——zoom 會真的參與版面計算，
+               卡片寬度、換行、捲動範圍都照著縮放走；transform 只是視覺放大，
+               會蓋到旁邊並留下原尺寸的捲動範圍。 */
+            zoom: var(--ui-scale);
             background-color: var(--bg);
             background-image:
                 linear-gradient(180deg, rgba(10,9,8,0.78) 0%, rgba(10,9,8,0.92) 55%, #0a0908 100%),
@@ -32,7 +39,8 @@
             background-attachment: fixed;
             color: var(--ink);
             font-family: "Noto Sans TC", sans-serif;
-            min-height: 100vh;
+            /* 100vh 會連同 zoom 一起被放大而憑空多出一截捲軸，先除回去 */
+            min-height: calc(100vh / var(--ui-scale));
         }
         .tally {
             display: flex;
@@ -296,10 +304,8 @@
                             <button id="p1-engine-gpt" onclick="switchEngine('gpt')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all bg-blue-600 text-white">GPT</button>
                             <button id="p1-engine-gemini" onclick="switchEngine('gemini')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all text-slate-500 hover:text-white">Gemini</button>
                         </div>
-                        <div class="flex bg-black/40 p-1 rounded-lg">
-                            <button id="p1-size-1K" onclick="switchImageSize('1K')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all bg-blue-600 text-white">1K</button>
-                            <button id="p1-size-2K" onclick="switchImageSize('2K')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all text-slate-500 hover:text-white">2K</button>
-                        </div>
+                        <!-- 第一頁刻意不放 1K／2K：預設引擎是 GPT，而 GPT 固定 1280×720
+                             忽略這個設定，擺著只會讓人以為按了有用。第二／三頁保留。 -->
                         <button id="p1-btnSafeFrame" onclick="toggleSafeFrame()" title="開啟後滿版生成，後端再置入安全框" class="px-2.5 py-1 rounded text-[9px] font-black transition-all bg-emerald-600 text-white">安全框 ON</button>
                         <span id="p1-aspectBadge" class="text-[9px] font-mono text-slate-500 bg-slate-800 px-2 py-0.5 rounded">16:9 → 記者安全框 1920×1080</span>
                     </div>
@@ -588,7 +594,7 @@
         Prompt Copied
     </div>
 
-    <script src="app.js?v=20260817b"></script>
+    <script src="app.js?v=20260817c"></script>
     <!-- 第三頁（混合版型）；內部包 IIFE，只對外露出 initHybrid()，由 switchPage(3) 首次切頁時呼叫 -->
     <script src="hybrid.js?v=20260815a"></script>
 </body>
