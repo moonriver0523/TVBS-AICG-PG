@@ -296,7 +296,8 @@ let state = {
     currentRole: '記者',
     digestDensity: 'standard',
     currentTab: 'style',
-    engine: 'gemini',
+    // 2026-08-17 改以 GPT 為預設引擎（UI 上 GPT 也排在 Gemini 前面）
+    engine: 'gpt',
     imageSize: '1K',
     // 安全框置框：滿版生成後由後端 safe_frame.py 數學置入 TVBS 安全框
     safeFrame: true,

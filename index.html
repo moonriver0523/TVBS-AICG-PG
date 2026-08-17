@@ -293,8 +293,8 @@
 
                     <div class="flex flex-wrap items-center gap-1.5 mb-3">
                         <div class="flex bg-black/40 p-1 rounded-lg">
-                            <button id="p1-engine-gemini" onclick="switchEngine('gemini')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all bg-blue-600 text-white">Gemini</button>
-                            <button id="p1-engine-gpt" onclick="switchEngine('gpt')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all text-slate-500 hover:text-white">GPT</button>
+                            <button id="p1-engine-gpt" onclick="switchEngine('gpt')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all bg-blue-600 text-white">GPT</button>
+                            <button id="p1-engine-gemini" onclick="switchEngine('gemini')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all text-slate-500 hover:text-white">Gemini</button>
                         </div>
                         <div class="flex bg-black/40 p-1 rounded-lg">
                             <button id="p1-size-1K" onclick="switchImageSize('1K')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all bg-blue-600 text-white">1K</button>
@@ -472,8 +472,8 @@
 
                         <div class="flex items-center gap-3 mt-3">
                             <select id="f-provider" class="flex-1">
-                                <option value="gemini">Gemini</option>
                                 <option value="gpt">GPT</option>
+                                <option value="gemini">Gemini</option>
                             </select>
                             <label class="flex items-center gap-2 text-[10px] font-black text-slate-400 whitespace-nowrap cursor-pointer">
                                 <input id="f-guides" type="checkbox"
@@ -530,8 +530,8 @@
                 <div class="flex items-center gap-2">
                     <!-- Gemini / GPT 語法切換 -->
                     <div class="flex bg-black/40 p-1 rounded-lg">
-                        <button id="engine-gemini" onclick="switchEngine('gemini', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all bg-blue-600 text-white">Gemini</button>
-                        <button id="engine-gpt" onclick="switchEngine('gpt', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all text-slate-500 hover:text-white">GPT</button>
+                        <button id="engine-gpt" onclick="switchEngine('gpt', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all bg-blue-600 text-white">GPT</button>
+                        <button id="engine-gemini" onclick="switchEngine('gemini', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all text-slate-500 hover:text-white">Gemini</button>
                     </div>
                     <!-- Gemini 解析度切換（GPT 固定 1280×720，此選項僅對 Gemini 生效） -->
                     <div id="sizeToggle" class="flex bg-black/40 p-1 rounded-lg">
@@ -567,7 +567,7 @@
                 </label>
                 <button id="generateImageBtn" onclick="handleImageGeneration()" disabled
                         class="mt-4 w-full py-3 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed rounded-lg text-xs font-black transition-all flex items-center justify-center gap-2 shadow-lg shadow-violet-600/10 active:scale-95">
-                    <span id="generateImageBtnText">使用 Gemini 生成圖片</span>
+                    <span id="generateImageBtnText">使用 GPT 生成圖片</span>
                     <div id="generateImageLoading" class="hidden w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
                 </button>
             </div>
@@ -588,7 +588,7 @@
         Prompt Copied
     </div>
 
-    <script src="app.js?v=20260817a"></script>
+    <script src="app.js?v=20260817b"></script>
     <!-- 第三頁（混合版型）；內部包 IIFE，只對外露出 initHybrid()，由 switchPage(3) 首次切頁時呼叫 -->
     <script src="hybrid.js?v=20260815a"></script>
 </body>
