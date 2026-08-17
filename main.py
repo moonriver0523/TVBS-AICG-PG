@@ -151,12 +151,12 @@ MAX_INPUT_REFERENCES = 6
 
 # 使用者上傳參考圖的單筆描述。purpose 決定注入哪一段用途 prompt（見
 # news_prompt.USER_REFERENCE_MODES）：map＝地圖底稿（地理關係以附圖為準）、
-# scene＝實景參考（場景／建物／器材外觀依附圖）。
-# 肖像刻意不開放上傳：具名真人照片由 resolve_portrait() 自動查，
-# 使用者上傳人臉會繞過「兩位以上具名真人不生成臉孔」的鐵律，先不開這個口。
+# scene＝實景參考（場景／建物／器材外觀依附圖）、portrait＝肖像照
+# （2026-08-17 使用者裁決開放；使用者親自上傳時「兩位以上具名真人不畫臉」
+# 鐵律解除，但沒附照片的人仍不畫臉——見 USER_REFERENCE_PORTRAIT_RULES）。
 class UserReferenceImage(BaseModel):
     data_url: str = Field(min_length=1, max_length=2_800_000)  # 約 2MB base64
-    purpose: Literal["map", "scene"] = "scene"
+    purpose: Literal["map", "scene", "portrait"] = "scene"
 
 
 class ImageGenerateRequest(BaseModel):
@@ -1576,7 +1576,16 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
 
     LINE／generate_news_image 已在 build_prompt 處理過，不會傳 portrait_subjects。
     規則字串若已在 prompt 裡，不再灌第二次。
+
+    使用者上傳的肖像照（purpose="portrait"）優先於自動查圖：有上傳就整段跳過
+    ——不查照片、不注入 PORTRAIT_MODES 區塊，臉孔規則改由
+    USER_REFERENCE_PORTRAIT_RULES 接手（apply_user_references_to_image_request
+    注入）。這也是「兩位以上不畫臉」鐵律的唯一解除通道（2026-08-17 使用者裁決）：
+    鐵律成因是通道一次只能對應一人，使用者親自附上多張照片時成因不存在；
+    自動查圖路徑（LINE／未上傳）鐵律原樣維持。
     """
+    if any(ref.purpose == "portrait" for ref in req.reference_images):
+        return req
     subjects = clean_portrait_subjects(req.portrait_subjects)
     if not subjects:
         return req

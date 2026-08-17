@@ -357,5 +357,67 @@ class UserReferenceImageTests(unittest.TestCase):
         )
 
 
+class UserPortraitUploadTests(unittest.TestCase):
+    """使用者上傳肖像照（2026-08-17 使用者裁決開放）。
+
+    鐵律的解除範圍必須精準：只有**使用者親自上傳肖像照**這一條通道解除
+    「兩位以上具名真人不畫臉」，自動查圖路徑原樣維持；且措辭仍要求
+    沒附照片的人不畫臉。
+    """
+
+    PORTRAIT_REF = main.UserReferenceImage(
+        data_url="data:image/jpeg;base64,RkFDRQ==", purpose="portrait"
+    )
+
+    def request(self, **overrides):
+        payload = dict(prompt="P", provider="gpt", aspect_ratio="16:9")
+        payload.update(overrides)
+        return main.ImageGenerateRequest(**payload)
+
+    def test_portrait_upload_skips_auto_lookup_and_no_face_block(self):
+        """有上傳肖像照：不查照片、不注入兩套 PORTRAIT_MODES 區塊。"""
+        req = self.request(
+            portrait_subjects=["鄭明典", "吳軒彤"],
+            reference_images=[self.PORTRAIT_REF],
+        )
+        with patch.object(main.photo_lookup, "find_reference_photo") as mock_lookup:
+            result = main.apply_portrait_to_image_request(req)
+        mock_lookup.assert_not_called()
+        self.assertNotIn("NO REFERENCE AVAILABLE", result.prompt)
+        self.assertNotIn("PORTRAIT TREATMENT", result.prompt)
+
+    def test_portrait_upload_injects_user_portrait_block(self):
+        req = self.request(reference_images=[self.PORTRAIT_REF])
+        result = main.apply_user_references_to_image_request(req)
+        self.assertIn("USER-SUPPLIED PORTRAIT REFERENCE", result.prompt)
+        # REAL_WORLD_RENDERING_RULES 的預設條款認「NAMED REAL PERSON」區塊標題
+        self.assertIn("NAMED REAL PERSON", result.prompt)
+
+    def test_iron_rule_intact_without_portrait_upload(self):
+        """沒上傳肖像照：兩位以上具名真人照舊不畫臉。"""
+        req = self.request(portrait_subjects=["鄭明典", "吳軒彤"])
+        result = main.apply_portrait_to_image_request(req)
+        self.assertIn("NO REFERENCE AVAILABLE", result.prompt)
+
+    def test_scene_upload_does_not_lift_iron_rule(self):
+        """非肖像用途的上傳不解除鐵律。"""
+        req = self.request(
+            portrait_subjects=["鄭明典", "吳軒彤"],
+            reference_images=[
+                main.UserReferenceImage(
+                    data_url="data:image/png;base64,U0NFTkU=", purpose="scene"
+                )
+            ],
+        )
+        result = main.apply_portrait_to_image_request(req)
+        self.assertIn("NO REFERENCE AVAILABLE", result.prompt)
+
+    def test_wording_keeps_faceless_rule_for_uncovered_persons(self):
+        """措辭仍要求：只有附了照片的人可以畫臉，沒附的維持背影／剪影。"""
+        rules = news_prompt.USER_REFERENCE_PORTRAIT_RULES
+        self.assertIn("ONLY for a person whose photograph is attached", rules)
+        self.assertIn("WITHOUT an attached photograph", rules)
+
+
 if __name__ == "__main__":
     unittest.main()

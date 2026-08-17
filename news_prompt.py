@@ -257,9 +257,27 @@ ATTACHED SCENE REFERENCE (CRITICAL)
 - Do not copy any readable text, logo or brand mark visible inside the attached image; the NO UNSOURCED BRANDS rule above still applies in full.
 - Do not copy any recognisable human face from the attached image; how to depict named real people is governed solely by the NAMED REAL PERSON rules."""
 
+# 使用者上傳肖像照（2026-08-17 使用者裁決開放）。
+# 標題刻意含「NAMED REAL PERSON」：REAL_WORLD_RENDERING_RULES 的預設條款寫著
+# 「有 NAMED REAL PERSON 區塊時聽它的」，這段就是那個區塊的使用者上傳版。
+# 「兩位以上具名真人不畫臉」鐵律在**使用者親自上傳照片**時解除——鐵律的成因是
+# 參考圖通道一次只能對應一人（2026-08-05 事故），多圖支援＋使用者明示提供照片
+# 後成因不存在；但**沒有附照片的那位仍然不畫臉**，鐵律只對有照片的人解除。
+USER_REFERENCE_PORTRAIT_RULES = """==================================================
+NAMED REAL PERSON — USER-SUPPLIED PORTRAIT REFERENCE (CRITICAL)
+==================================================
+- The user has attached portrait photograph(s) of the named real person(s) in this graphic. Base each portrait on its attached photograph.
+- Render each portrait as a hand-painted editorial portrait illustration rather than a photograph, while preserving the recognisable likeness of its reference photograph: the same facial structure, hairstyle, glasses and build, so that viewers identify the same individual.
+- When the layout shows more than one named person, match each face to the correct person: use the resemblance between the attached photographs and the name labels, and never swap likenesses between people.
+- Draw a recognisable face ONLY for a person whose photograph is attached. Any named real person WITHOUT an attached photograph must still be shown as a back view or a plain silhouette — never invent or approximate a face for them.
+- Take only each person's likeness from the photographs. Pose, attire, framing and surroundings follow STRUCTURE, not the photographs' own backgrounds or occasions.
+- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible: these are illustrated depictions, not photographs.
+- Never place a person in a scene, action or context that STRUCTURE does not describe."""
+
 USER_REFERENCE_MODES = {
     "map": USER_REFERENCE_MAP_RULES,
     "scene": USER_REFERENCE_SCENE_RULES,
+    "portrait": USER_REFERENCE_PORTRAIT_RULES,
 }
 
 

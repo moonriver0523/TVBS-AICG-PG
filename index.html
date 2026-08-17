@@ -286,7 +286,7 @@
                         <div class="flex items-center gap-2">
                             <button type="button" onclick="document.getElementById('refFileInput').click()"
                                     class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">＋ 附參考圖（選填）</button>
-                            <span class="text-[9px] text-slate-600">地圖底稿／實景參考，單張 ≤1.5MB，最多 3 張</span>
+                            <span class="text-[9px] text-slate-600">地圖底稿／實景參考／肖像照片，單張 ≤1.5MB，最多 3 張</span>
                         </div>
                         <input id="refFileInput" type="file" accept="image/*" multiple class="hidden"
                                onchange="handleRefFilesSelected(this)" />
@@ -626,7 +626,7 @@
         Prompt Copied
     </div>
 
-    <script src="app.js?v=20260817k"></script>
+    <script src="app.js?v=20260817l"></script>
     <!-- 第三頁（混合版型）；內部包 IIFE，只對外露出 initHybrid()，由 switchPage(3) 首次切頁時呼叫 -->
     <script src="hybrid.js?v=20260815a"></script>
 </body>
