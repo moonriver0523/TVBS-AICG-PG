@@ -94,11 +94,41 @@ class ConstantParityTests(unittest.TestCase):
         self.assertNotIn(news_prompt.FULL_BLEED_RULES, editor)
         self.assertIn(news_prompt.FULL_BLEED_RULES, reporter)
         self.assertNotIn(news_prompt.EDITOR_FULL_BLEED_RULES, reporter)
+        # canvas 那一行也要分流，否則「塞滿畫布」會跟留邊要求打架
+        self.assertIn(news_prompt.EDITOR_CANVAS_LINE, editor)
+        self.assertNotIn(news_prompt.CANVAS_FULL_BLEED_LINE, editor)
+        self.assertIn(news_prompt.CANVAS_FULL_BLEED_LINE, reporter)
+
+    def test_editor_prompt_has_no_fill_the_canvas_instruction(self):
+        """編輯的 prompt 不准再出現叫模型塞滿的句子（背景滿版不算）。
+
+        2026-08-17 稽核：消化階段與 canvas 行各有一句 edge-to-edge／fills the
+        canvas，與留邊要求自相矛盾，模型每次選邊站，實測留白從 0px 跳到 25px。
+        """
+        editor = news_prompt.build_prompt(
+            role="編輯", engine="gpt", type_label="資料圖表",
+            style="[S]", structure="[T]", variable="[V]", safe_frame=True,
+        )
+        for banned in (
+            "the design fills the canvas completely",
+            "Use the whole frame:",
+            "uses the entire frame edge to edge",
+            "Use the entire canvas.",
+        ):
+            self.assertNotIn(banned, editor, f"編輯 prompt 還在要求滿版：{banned}")
+
+    def test_editor_digest_instructions_drop_the_full_bleed_sentence(self):
+        editor = main.build_digest_instructions(
+            "編輯", "standard", "資料圖表", full_bleed=True
+        )
+        self.assertNotIn("uses the entire frame edge to edge", editor)
+        self.assertIn("strip of plain background", editor)
 
     def test_canvas_lines(self):
         for name, value in (
             ("CANVAS_MARGIN_LINE", news_prompt.CANVAS_MARGIN_LINE),
             ("CANVAS_FULL_BLEED_LINE", news_prompt.CANVAS_FULL_BLEED_LINE),
+            ("EDITOR_CANVAS_LINE", news_prompt.EDITOR_CANVAS_LINE),
         ):
             with self.subTest(name=name):
                 self.assert_same(name, value)

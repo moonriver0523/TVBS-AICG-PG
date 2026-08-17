@@ -861,7 +861,9 @@ function buildPrompt({ role, engine, typeLabel, style, structure, variable, safe
     const marginRules = safeFrame
         ? (role === '編輯' ? EDITOR_FULL_BLEED_RULES : FULL_BLEED_RULES)
         : (role === '編輯' ? EDITOR_SAFE_AREA : REPORTER_SAFE_AREA);
-    const canvasLine = safeFrame ? CANVAS_FULL_BLEED_LINE : CANVAS_MARGIN_LINE;
+    const canvasLine = safeFrame
+        ? (role === '編輯' ? EDITOR_CANVAS_LINE : CANVAS_FULL_BLEED_LINE)
+        : CANVAS_MARGIN_LINE;
 
     // 視覺忠實度區塊：地圖規則只在已解析的類型是地圖時注入
     // （typeLabel 來自 activeType()，自動判斷模式下已是 AI 解析後的具體類型）
@@ -936,6 +938,11 @@ ${body}`;
 const CANVAS_MARGIN_LINE = `- Scale the whole design down so it fills only the central region, surrounded by a thick empty margin on every side (deeper at the bottom); when unsure, make the margin bigger, never smaller`;
 
 const CANVAS_FULL_BLEED_LINE = `- Use the whole frame: the design fills the canvas completely, with only a slim even breathing space inside the frame edge so that no element is clipped`;
+
+/* 編輯專用：上面那句（記者在用）叫模型塞滿畫布，與 EDITOR_FULL_BLEED_RULES 的
+   「上下留背景帶」直接打架。這句只保留背景滿版的部分。
+   ⚠️ 與 news_prompt.py 必須逐字一致（tests/test_prompt_parity.py 會驗）。 */
+const EDITOR_CANVAS_LINE = `- The background covers the whole canvas edge to edge, while the design itself keeps clear of the top and bottom edges, leaving a strip of plain background across each`;
 
 const FULL_BLEED_RULES =
 `==================================================

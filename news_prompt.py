@@ -132,6 +132,10 @@ CANVAS_MARGIN_LINE = "- Scale the whole design down so it fills only the central
 
 CANVAS_FULL_BLEED_LINE = "- Use the whole frame: the design fills the canvas completely, with only a slim even breathing space inside the frame edge so that no element is clipped"
 
+# 編輯專用。上面那句（記者在用）叫模型「塞滿畫布」，與 EDITOR_FULL_BLEED_RULES
+# 的「上下留背景帶」直接打架，2026-08-17 稽核抓到。這句只保留背景滿版的部分。
+EDITOR_CANVAS_LINE = "- The background covers the whole canvas edge to edge, while the design itself keeps clear of the top and bottom edges, leaving a strip of plain background across each"
+
 FULL_BLEED_RULES = """==================================================
 FULL-FRAME RULES (CRITICAL — MUST PRESERVE)
 ==================================================
@@ -262,7 +266,7 @@ def build_prompt(
         # 編輯換一套：上下留背景帶，後端裁掉它換取更小的水平拉伸失真。
         # 記者是 21:9 FIT，不走拉伸，留帶只會白白縮小畫面。
         margin_rules = EDITOR_FULL_BLEED_RULES if role == "編輯" else FULL_BLEED_RULES
-        canvas_line = CANVAS_FULL_BLEED_LINE
+        canvas_line = EDITOR_CANVAS_LINE if role == "編輯" else CANVAS_FULL_BLEED_LINE
     else:
         margin_rules = EDITOR_SAFE_AREA if role == "編輯" else REPORTER_SAFE_AREA
         canvas_line = CANVAS_MARGIN_LINE
