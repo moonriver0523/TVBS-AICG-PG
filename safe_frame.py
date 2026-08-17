@@ -242,6 +242,25 @@ def _apply_content_shadow(
     return Image.composite(Image.new("RGB", base.size, (0, 0, 0)), base, shadow)
 
 
+def _stretch_to_zone(
+    image_bytes: bytes, canvas: tuple[int, int], profile: str
+) -> bytes:
+    """成品＝生成圖不等比拉伸到安全區大小，就這樣，沒有下一步。
+
+    刻意不輸出 1920×1080 畫布：那樣安全區之外還得補上四周留白，而那圈留白
+    正是編輯 2026-08-17 反映「程式強制加上去、後製很難處理」的東西。既然
+    內容已經精準等於對位框，直接交這一塊就好——編輯把它放進自己的模板即可。
+
+    也因此這條路徑完全不碰 background 參數：沒有任何一個像素需要被補。
+    """
+    x0, y0, x1, y1 = safe_area_spec.safe_rect(*canvas, profile)
+    with Image.open(io.BytesIO(image_bytes)) as opened:
+        stretched = opened.convert("RGB").resize((x1 - x0, y1 - y0), Image.LANCZOS)
+    buffer = io.BytesIO()
+    stretched.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def apply_safe_frame(
     image_bytes: bytes,
     *,
@@ -257,6 +276,9 @@ def apply_safe_frame(
 
     mode 見 plan_placement。省略時一律 FIT（零裁切）。
     background 三種做法見上方 BACKGROUNDS 的說明，預設 backdrop。
+
+    拉伸 profile（編輯）不走置框那條：輸出就是拉伸後的安全區本身，
+    沒有畫布、沒有四周留白。詳見 _stretch_to_zone。
     """
     if mode is None:
         mode = default_crop_ratio(profile)
@@ -264,6 +286,9 @@ def apply_safe_frame(
         raise ValueError(f"未知 mode：{mode}")
     if background not in BACKGROUNDS:
         raise ValueError(f"未知 background：{background}（可用：{list(BACKGROUNDS)}）")
+
+    if uses_stretch(profile):
+        return _stretch_to_zone(image_bytes, canvas, profile)
 
     with Image.open(io.BytesIO(image_bytes)) as opened:
         source = opened.convert("RGB")

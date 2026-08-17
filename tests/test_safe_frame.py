@@ -39,41 +39,68 @@ def full_bleed_image(size: tuple[int, int]) -> bytes:
     return buffer.getvalue()
 
 
-class EditorNoFillerInsideFrameTests(unittest.TestCase):
-    """編輯 2026-08-17 的回報：裁到對位框後，左右仍留著機制補上的底色。
+class EditorOutputIsPureStretchTests(unittest.TestCase):
+    """編輯 2026-08-17 的兩次回報：機制補上去的底色與四周強制留白都要消失。
 
-    這條是那個回報的回歸測試——整個對位框內必須 100% 是生成圖的像素，
-    一個補出來的像素都不准有。
+    成品必須就是「生成圖拉伸到對位框大小」本身——沒有畫布、沒有留白，
+    每一個像素都來自模型。
     """
 
     MARKER = (7, 199, 133)  # 生成圖用這個色填滿，補出來的底色不可能撞到
 
-    def _output(self, source_size):
-        img = Image.new("RGB", source_size, self.MARKER)
+    def _output(self, source_size, colour=None):
+        img = Image.new("RGB", source_size, colour or self.MARKER)
         buffer = io.BytesIO()
         img.save(buffer, format="PNG")
         data = safe_frame.apply_safe_frame(buffer.getvalue(), profile="編輯")
         return Image.open(io.BytesIO(data)).convert("RGB")
 
-    def test_alignment_guide_contains_only_generated_pixels(self):
+    def test_output_is_exactly_the_alignment_guide_size(self):
         x0, y0, x1, y1 = safe_area_spec.safe_rect(*safe_frame.DEFAULT_CANVAS, "編輯")
         for source_size in ((1280, 720), (1536, 864), (1376, 768)):
             with self.subTest(source=source_size):
                 out = self._output(source_size)
-                self.assertEqual(out.size, safe_frame.DEFAULT_CANVAS)
-                inside = out.crop((x0, y0, x1, y1))
-                self.assertEqual(
-                    inside.getcolors(maxcolors=8),
-                    [(inside.width * inside.height, self.MARKER)],
-                    "對位框內出現了非生成圖的像素——補底色又跑回來了",
+                self.assertEqual(out.size, (x1 - x0, y1 - y0))
+                self.assertNotEqual(
+                    out.size, safe_frame.DEFAULT_CANVAS, "又輸出成 1920×1080 畫布了"
                 )
 
-    def test_corners_of_the_guide_are_generated_pixels_too(self):
-        # 四角是最容易被補底色吃掉的地方，單獨釘住
-        x0, y0, x1, y1 = safe_area_spec.safe_rect(*safe_frame.DEFAULT_CANVAS, "編輯")
+    def test_every_pixel_comes_from_the_generated_image(self):
         out = self._output((1536, 864))
-        for point in ((x0, y0), (x1 - 1, y0), (x0, y1 - 1), (x1 - 1, y1 - 1)):
+        self.assertEqual(
+            out.getcolors(maxcolors=8),
+            [(out.width * out.height, self.MARKER)],
+            "出現了非生成圖的像素——補底色或四周留白又跑回來了",
+        )
+
+    def test_corners_are_generated_pixels_too(self):
+        # 四角是最容易被補底色吃掉的地方，單獨釘住
+        out = self._output((1536, 864))
+        for point in ((0, 0), (out.width - 1, 0), (0, out.height - 1),
+                      (out.width - 1, out.height - 1)):
             self.assertEqual(out.getpixel(point), self.MARKER, f"{point} 是補出來的")
+
+    def test_content_is_stretched_not_cropped(self):
+        """來源整張都要進成品：畫一條貼上緣的橫線，拉伸後必須還在最上面。"""
+        img = Image.new("RGB", (1536, 864), (10, 10, 10))
+        ImageDraw.Draw(img).rectangle([0, 0, 1535, 2], fill=(255, 0, 0))
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        out = Image.open(
+            io.BytesIO(safe_frame.apply_safe_frame(buffer.getvalue(), profile="編輯"))
+        ).convert("RGB")
+        self.assertEqual(out.getpixel((out.width // 2, 0)), (255, 0, 0))
+
+    def test_background_choice_is_irrelevant_for_the_editor(self):
+        """沒有任何像素需要補，所以三種背景做法都該給出一模一樣的結果。"""
+        img = Image.new("RGB", (1536, 864), self.MARKER)
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        outputs = {
+            bg: safe_frame.apply_safe_frame(buffer.getvalue(), profile="編輯", background=bg)
+            for bg in safe_frame.BACKGROUNDS
+        }
+        self.assertEqual(len(set(outputs.values())), 1)
 
 
 class PlacementGeometryTests(unittest.TestCase):
