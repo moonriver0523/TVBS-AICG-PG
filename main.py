@@ -118,6 +118,13 @@ app.add_middleware(
 DigestDensity = Literal["standard", "simplified"]
 
 
+# 一張圖最多畫幾張具名真人的臉（2026-08-18 使用者裁定，從「兩人以上一律不畫臉」放寬）。
+# 3 是保守值：2026-08-18 的實驗只驗到 3 人（9/9 張臉正確對應、0 交換、0 捏臉），
+# 沒有 4 人以上的證據。消化端用同一個上限把版面壓在 3 人以內（見
+# REAL_WORLD_FIDELITY_RULES 第 6 條），生圖端則絕不自行截斷（見 resolve_portraits）。
+MAX_PORTRAIT_FACES = 3
+
+
 class GenerateRequest(BaseModel):
     news_text: str
     type_label: str
@@ -129,6 +136,13 @@ class GenerateRequest(BaseModel):
     # 高信賴度通道，不是取代：LINE 是聊天框拆不了欄位，且有人習慣把「逐字保留」
     # 寫在完稿裡，文內解析（USER_INSTRUCTION_RULES）必須原樣保留。
     user_instruction: str = Field(default="", max_length=2_000)
+    # 這些人查不到參考照，版面不得畫他們（2026-08-18 使用者裁決）。
+    # 由第二段消化填入，呼叫端通常不用管。
+    exclude_people: list[str] = Field(default_factory=list, max_length=10)
+    # 網頁版使用者已上傳幾張肖像照。消化端據此判斷「查不到的人」是不是其實有照片：
+    # 使用者上傳的肖像照視為對應**系統查不到的人**（吳軒彤那個原始情境就是這樣），
+    # 依序對應。上傳的圖本身在生圖階段才送，消化階段只需要知道張數。
+    portrait_photo_count: int = Field(default=0, ge=0, le=MAX_PORTRAIT_FACES)
 
 
 class GenerateResponse(BaseModel):
@@ -176,6 +190,13 @@ class ImageGenerateRequest(BaseModel):
     # 上限在 request 層就擋（不是只在 OpenRouter 傳輸層），任何後端路徑都收不進超量。
     reference_images: list[UserReferenceImage] = Field(
         default_factory=list, max_length=MAX_INPUT_REFERENCES
+    )
+    # 後端自動查來的肖像參考照（2-3 人時用；data URL）。刻意與 reference_images
+    # 分開兩個欄位：後者代表「使用者親自提供素材」，會觸發「不標示意圖」override，
+    # 而自動查來的維基照片沒有那個語意——寫實感＋真名＋沒有示意圖標籤是最糟組合。
+    # 由 resolve_portraits 決定內容，呼叫端不該自己填。
+    portrait_reference_data_urls: list[str] = Field(
+        default_factory=list, max_length=MAX_PORTRAIT_FACES
     )
     # 網頁版消化後回傳的具名真人名單。後端據此查參考照並注入肖像規則。
     # LINE／generate_news_image 已在組 prompt 時處理過，不要再傳，以免規則灌兩次。
@@ -358,6 +379,7 @@ REAL-WORLD ACCURACY (governs "style" and "structure" — the pictures you commis
 3. LABEL WHAT IS NOT REAL: if you are not confident the depiction will match the real thing, or the scene is a generic stand-in or a reconstruction rather than a documented view, you MUST plan a clearly visible 示意圖 label — write the word 示意圖 into "variable" and tell "structure" where it sits. An unlabelled reconstruction presented as real is a defect. Do not fabricate identifying detail you do not actually know and pass it off as real.
 4. NO UNSOURCED BRANDS. Signage, storefronts, banners, packaging, product bodies, vehicle liveries, screens, jerseys, badges and building facades must be de-identified: blank surfaces or generic abstract marks, no readable brand text, no trademark, no ticker symbol, no exchange name. A brand may appear ONLY if its name is in the source material, and then only as plain typeset text, never as a reproduced logotype. Whenever the scene contains any object that would normally carry a brand, write this requirement into "structure" explicitly — do not assume the renderer will infer it.
 5. NAMED REAL PEOPLE: you do NOT decide how the face is drawn. List in "portrait_subjects" EVERY specific named real person whose face the graphic would show — one entry per person, names exactly as the source material writes them, no title, no company. If the layout shows two people, list both; listing only the first is a defect. In "structure" describe only WHERE each figure sits and what it wears, never the rendering treatment (do not write "photorealistic", "faithful likeness", "back view", "silhouette", "illustration" or similar). The backend looks up reference photographs and appends the binding portrait rules itself. Leave "portrait_subjects" as an empty array for every other graphic, including crowds and unnamed or generic figures. Always plan the 示意圖 label into "variable" when a person is depicted. Never place a person in a scene, action or context the source material does not describe.
+6. AT MOST THREE FACES: the layout you design may show identifiable faces for AT MOST THREE named real people. When the source material names more, choose the three most central to the story and design "structure" so that ONLY those three appear as identifiable individual figures. The other named people are NOT removed from the story — their names and what they said may still appear as TEXT (a quote panel, a caption, a list item, a label on a chart), and that text should carry their points. What they must not have is a face: do not draw them as an identifiable figure, and never place their name beside any depicted figure, because a name sitting next to a drawn face reads as that person. "portrait_subjects" must be a truthful mirror of the faces you designed: never design a layout with four faces and list only three — the unlisted face is the exact defect this rule exists to prevent.
 """
 
 
@@ -431,12 +453,36 @@ If the news material ALSO contains instructions, obey both. When the two conflic
 """
 
 
+# 查不到參考照的人，改由消化階段把他們排出版面（2026-08-18 使用者裁決）。
+#
+# 為什麼在消化階段而不是生圖階段：2026-08-18 實測證明，叫生圖模型「只畫有照片的人、
+# 沒照片的畫剪影」完全無效（2/2 都被憑空捏臉還掛真名）。消化端是文字模型、遵守
+# 指示可靠得多，而且要拿掉的不只是那張臉——那個人的姓名條、引言框、版位都要一起
+# 重新安排，本來就只有消化端做得到。
+#
+# 同 DEDICATED_INSTRUCTION_RULES_TEMPLATE：只在有人要排除時才注入，沒有時消化
+# prompt 逐字元不變（記者 frozen 測試靠這點維持綠燈）。
+EXCLUDED_PEOPLE_RULES_TEMPLATE = """
+
+PEOPLE WHO MUST NOT BE DRAWN (OVERRIDES THE NAMED REAL PEOPLE RULE ABOVE):
+No usable reference photograph exists for the people listed below, so the graphic must not show their faces.
+- Do not draw any of them as an identifiable figure, and do not list any of them in "portrait_subjects".
+- Their names and what they said may still appear as TEXT — a quote panel, a caption, a list item — and that text should carry their points. Attribute in words, not with a face.
+- Never place one of these names beside a depicted figure: a name sitting next to a drawn face reads as that person, which is exactly what must not happen here.
+- Redesign "structure" around the people who remain. Do not leave an empty figure slot where one of them would have stood.
+<<NO-PORTRAIT PEOPLE START>>
+{people}
+<<NO-PORTRAIT PEOPLE END>>
+"""
+
+
 def build_digest_instructions(
     role: str,
     density: DigestDensity,
     type_label: str,
     full_bleed: bool = False,
     user_instruction: str = "",
+    exclude_people: list[str] | None = None,
 ) -> str:
     is_editor = role == "編輯"
     template = EDITOR_SYSTEM_PROMPT_TEMPLATE if is_editor else SYSTEM_PROMPT_TEMPLATE
@@ -468,6 +514,13 @@ def build_digest_instructions(
     if user_instruction.strip():
         instructions += DEDICATED_INSTRUCTION_RULES_TEMPLATE.format(
             instruction=user_instruction.strip()
+        )
+    # 排除名單放最末：要 OVERRIDE 上方第 5、6 條的「把人畫進來」語意。
+    # 沒有人要排除時完全不注入，消化 prompt 逐字元不變。
+    excluded = clean_portrait_subjects(exclude_people or [])
+    if excluded:
+        instructions += EXCLUDED_PEOPLE_RULES_TEMPLATE.format(
+            people="\n".join(f"- {name}" for name in excluded)
         )
     return instructions
 
@@ -622,6 +675,46 @@ def verify_internal_api_key(x_api_key: str = Header(default="")) -> None:
         raise HTTPException(status_code=401, detail="API Key 無效")
 
 
+def apply_photo_availability(
+    result: GenerateResponse, req: GenerateRequest
+) -> GenerateResponse:
+    """網頁版：查不到參考照的人，重新消化一次把他們排出版面（2026-08-18 使用者裁決）。
+
+    與 LINE 那條（resolve_digest_portraits）同一個道理，差別只在網頁版的消化與生圖
+    是兩支獨立的 API，所以要在消化端就處理完——前端拿到的消化結果已經是「只剩畫得
+    出臉的人」的版面，不需要多一次來回。
+
+    使用者上傳的肖像照視為對應**系統查不到的人**、依序對應：會自己上傳照片，通常
+    正是因為那個人維基查不到（吳軒彤那個原始情境）。這是一個假設，寫在這裡是為了
+    日後有人覺得對應錯了時，知道該改哪裡。
+
+    只重試一次，理由同 resolve_digest_portraits。
+    """
+    subjects = result.portrait_subjects
+    if not subjects:
+        return result
+    _, missing = lookup_portrait_photos(subjects)
+    if req.portrait_photo_count:
+        missing = missing[req.portrait_photo_count :]
+    if not missing:
+        return result
+
+    print(
+        f"[portrait] 網頁版查不到參考照（{'、'.join(missing)}），"
+        "重新消化一次把他們排出版面",
+        flush=True,
+    )
+    # 設 _inside_pipeline 是為了讓第二次消化不要又跑一次可用性檢查（會無限遞迴），
+    # 也不要重複落檔——最終結果由外層那筆記錄。
+    token = _inside_pipeline.set(True)
+    try:
+        return generate(
+            req.model_copy(update={"exclude_people": missing})
+        )
+    finally:
+        _inside_pipeline.reset(token)
+
+
 @app.post(
     "/api/generate",
     response_model=GenerateResponse,
@@ -634,6 +727,7 @@ def generate(req: GenerateRequest):
         type_label=req.type_label,
         full_bleed=req.safe_frame,
         user_instruction=req.user_instruction,
+        exclude_people=req.exclude_people,
     )
 
     # DIGEST_MODEL 可覆寫；沿用舊環境變數 OPENAI_DIGEST_MODEL 作為次要相容
@@ -724,6 +818,9 @@ def generate(req: GenerateRequest):
         # 網頁版走這個端點後自己在前端組生圖 prompt，後端看不到最終 prompt，
         # 因此這裡只記到消化為止——有輸入與消化結果，事後仍可重跑重現。
         if not _inside_pipeline.get():
+            # 網頁版的第二段消化在這裡做（LINE 走 generate_news_image 自己那條，
+            # 兩邊都做會白查一次圖）。落檔放在後面，記的是最終採用的那份。
+            result = apply_photo_availability(result, req)
             request_log.log_generation(
                 request_id=request_log.new_request_id(),
                 source="digest",
@@ -1239,6 +1336,7 @@ def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGener
         for url in (
             [req.reference_image_data_url] if req.reference_image_data_url else []
         )
+        + list(req.portrait_reference_data_urls)
         + [ref.data_url for ref in req.reference_images]
         if url
     ]
@@ -1536,45 +1634,87 @@ def clean_portrait_subjects(raw: object) -> list[str]:
     return cleaned
 
 
+def lookup_portrait_photos(
+    subjects: list[str],
+) -> tuple[dict[str, photo_lookup.ReferencePhoto], list[str]]:
+    """逐位查參考照，回傳 (查到的 {人名: 照片}, 查不到的人名)。
+
+    查圖失敗（網路、逾時、查無此人）一律當成「這位查不到」，不讓整條請求失敗：
+    新聞生產不能因為維基查不到人就整張圖生不出來。
+    """
+    found: dict[str, photo_lookup.ReferencePhoto] = {}
+    missing: list[str] = []
+    for subject in subjects:
+        try:
+            photo = photo_lookup.find_reference_photo(subject)
+        except Exception as exc:  # noqa: BLE001 — 查圖是加分項，不該拖垮生圖
+            print(f"[portrait] 查參考照片失敗（{subject}）：{exc}", flush=True)
+            photo = None
+        if photo is None:
+            missing.append(subject)
+        else:
+            found[subject] = photo
+    return found, missing
+
+
+def resolve_portraits(
+    portrait_subjects: list[str],
+    provider: str,
+    *,
+    photos: dict[str, photo_lookup.ReferencePhoto] | None = None,
+) -> tuple[str, list[photo_lookup.ReferencePhoto]]:
+    """決定這次的肖像處理方式，回傳 (portrait_mode, 參考照片清單)。
+
+    四種結果：
+    - 不是真人肖像題 → ("none", [])，沿用一般規則
+    - 1 位且查到照片 → ("reference", [照片])，措辭與行為與放寬前逐字相同
+    - 2-3 位且**每一位都查到照片** → ("reference_multi", [照片…])
+    - 其餘（有人查不到、超過 3 位、後端送不出參考圖）→ ("no_reference", [])
+
+    **全有或全無，後端絕不自行截斷**（2026-08-18 實驗結論）：只要有一位沒有照片，
+    整張退回不畫臉。理由是實測 2/2 證明「有照片的畫、沒照片的畫剪影」這種逐人區分
+    生圖模型辦不到，沒照片的那位會被憑空捏臉還掛真名。也不能把 4 人截成 3 人——
+    版面是照 4 個人設計的，砍掉一個會留下一個沒人的空位。超過 3 人要在**消化階段**
+    就壓下來（見 REAL_WORLD_FIDELITY_RULES 第 6 條與 EXCLUDED_PEOPLE_RULES_TEMPLATE）。
+
+    `photos` 可由呼叫端先查好傳進來（兩段式消化流程會重複用到同一批查詢結果），
+    沒傳就自己查。
+    """
+    if not portrait_subjects:
+        return "none", []
+    if not supports_reference_image(provider):
+        return "no_reference", []
+    if len(portrait_subjects) > MAX_PORTRAIT_FACES:
+        print(
+            f"[portrait] 畫面有 {len(portrait_subjects)} 位具名真人"
+            f"（{'、'.join(portrait_subjects)}），超過上限 {MAX_PORTRAIT_FACES}，不生成臉孔",
+            flush=True,
+        )
+        return "no_reference", []
+    # 2 位以上要靠多張參考圖通道，原生路徑送不出去（措辭與能力必須一致）
+    if len(portrait_subjects) > 1 and not supports_multiple_reference_images():
+        print("[portrait] 目前後端送不出多張參考圖，多人肖像退回不生成臉孔", flush=True)
+        return "no_reference", []
+    if photos is None:
+        photos, _ = lookup_portrait_photos(portrait_subjects)
+    missing = [name for name in portrait_subjects if name not in photos]
+    if missing:
+        print(
+            f"[portrait] 查不到參考照（{'、'.join(missing)}），整張退回不生成臉孔",
+            flush=True,
+        )
+        return "no_reference", []
+    ordered = [photos[name] for name in portrait_subjects]
+    mode = "reference" if len(ordered) == 1 else "reference_multi"
+    return mode, ordered
+
+
 def resolve_portrait(
     portrait_subjects: list[str], provider: str
 ) -> tuple[str, photo_lookup.ReferencePhoto | None]:
-    """決定這次的肖像處理方式，回傳 (portrait_mode, 參考照片或 None)。
-
-    三種結果：
-    - 不是真人肖像題 → ("none", None)，沿用一般規則
-    - 查到照片且後端送得出去 → ("reference", 照片)，走插畫化肖像
-    - 查不到照片、後端送不出參考圖、或畫面上有兩位以上具名真人
-      → ("no_reference", None)，一律不生成臉孔
-
-    **兩人以上一律不畫臉**（2026-08-05 事故後加）：參考圖通道一次只能對應一個人，
-    附一張照片卻要模型畫兩張臉時，它會把沒有照片的那格自己編出來，而且照樣掛上
-    真名姓名條——掛著真名的假臉比畫得醜嚴重得多。真正的多人支援要能逐格對應
-    參考圖，還沒做到之前，寧可整張退回不畫臉。
-
-    查圖失敗（網路、逾時、查無此人）不讓整條請求失敗：新聞生產不能因為維基
-    查不到人就整張圖生不出來，退回不畫臉仍是可播的結果。
-    """
-    if not portrait_subjects:
-        return "none", None
-    if len(portrait_subjects) > 1:
-        print(
-            f"[portrait] 畫面有 {len(portrait_subjects)} 位具名真人"
-            f"（{'、'.join(portrait_subjects)}），一律不生成臉孔",
-            flush=True,
-        )
-        return "no_reference", None
-    if not supports_reference_image(provider):
-        return "no_reference", None
-    subject = portrait_subjects[0]
-    try:
-        photo = photo_lookup.find_reference_photo(subject)
-    except Exception as exc:  # noqa: BLE001 — 查圖是加分項，不該拖垮生圖
-        print(f"[portrait] 查參考照片失敗（{subject}）：{exc}", flush=True)
-        return "no_reference", None
-    if photo is None:
-        return "no_reference", None
-    return "reference", photo
+    """單人版的舊介面：只回傳第一張照片。網頁版單人路徑仍在用。"""
+    mode, photos = resolve_portraits(portrait_subjects, provider)
+    return mode, (photos[0] if len(photos) == 1 else None)
 
 
 def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateRequest:
@@ -1583,29 +1723,65 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
     LINE／generate_news_image 已在 build_prompt 處理過，不會傳 portrait_subjects。
     規則字串若已在 prompt 裡，不再灌第二次。
 
-    使用者上傳的肖像照（purpose="portrait"）優先於自動查圖：有上傳就整段跳過
-    ——不查照片、不注入 PORTRAIT_MODES 區塊，臉孔規則改由
-    USER_REFERENCE_PORTRAIT_RULES 接手（apply_user_references_to_image_request
-    注入）。這也是「兩位以上不畫臉」鐵律的唯一解除通道（2026-08-17 使用者裁決）：
-    鐵律成因是通道一次只能對應一人，使用者親自附上多張照片時成因不存在；
-    自動查圖路徑（LINE／未上傳）鐵律原樣維持。
+    使用者上傳的肖像照（purpose="portrait"）優先於自動查圖，**不足的人由自動查圖
+    補上**（2026-08-18 使用者裁決，取代 2026-08-17 的「有上傳就整段跳過」）：
+    跳過的舊行為會讓沒附到照片的人被模型憑空捏臉還掛真名（2026-08-18 實測 2/2 重現）。
+
+    補完仍有人沒照片時**擋下不生圖**（400），沿用 2026-08-05 的裁決：對不上就不要
+    花這筆生圖錢。正常情況下不會走到這裡——消化端（apply_photo_availability）
+    已經先把查不到照片的人排出版面了。
     """
-    if any(ref.purpose == "portrait" for ref in req.reference_images):
-        return req
     subjects = clean_portrait_subjects(req.portrait_subjects)
     if not subjects:
         return req
-    mode, photo = resolve_portrait(subjects, req.provider)
-    block = PORTRAIT_MODES.get(mode, "")
-    prompt = req.prompt
-    if block and block not in prompt:
-        prompt = f"{prompt.rstrip()}\n\n{block}"
-    reference = req.reference_image_data_url
-    if photo is not None and not reference:
-        reference = photo.data_url()
-    if prompt == req.prompt and reference == req.reference_image_data_url:
+    uploaded = [ref for ref in req.reference_images if ref.purpose == "portrait"]
+    if not uploaded:
+        mode, photos = resolve_portraits(subjects, req.provider)
+        block = PORTRAIT_MODES.get(mode, "")
+        prompt = req.prompt
+        if block and block not in prompt:
+            prompt = f"{prompt.rstrip()}\n\n{block}"
+        reference = req.reference_image_data_url
+        portrait_urls = list(req.portrait_reference_data_urls)
+        if len(photos) == 1 and not reference:
+            reference = photos[0].data_url()
+        elif len(photos) > 1 and not portrait_urls:
+            portrait_urls = [photo.data_url() for photo in photos]
+        if (
+            prompt == req.prompt
+            and reference == req.reference_image_data_url
+            and portrait_urls == list(req.portrait_reference_data_urls)
+        ):
+            return req
+        return req.model_copy(
+            update={
+                "prompt": prompt,
+                "reference_image_data_url": reference,
+                "portrait_reference_data_urls": portrait_urls,
+            }
+        )
+
+    # 有上傳：把系統查得到的人補上照片，湊齊「每個人都有照片」。
+    # 上傳的照片視為對應「系統查不到的人」（假設與理由見 apply_photo_availability）。
+    photos, missing = lookup_portrait_photos(subjects)
+    still_missing = missing[len(uploaded) :]
+    if still_missing:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"這幾位沒有可用的參考照片：{'、'.join(still_missing)}。"
+                "請補上他們的照片，或重新消化讓版面不要畫他們。"
+            ),
+        )
+    if not photos or req.portrait_reference_data_urls:
         return req
-    return req.model_copy(update={"prompt": prompt, "reference_image_data_url": reference})
+    return req.model_copy(
+        update={
+            "portrait_reference_data_urls": [
+                photos[name].data_url() for name in subjects if name in photos
+            ]
+        }
+    )
 
 
 def apply_user_references_to_image_request(
@@ -1632,7 +1808,12 @@ def apply_user_references_to_image_request(
         if block and block not in prompt:
             prompt = f"{prompt.rstrip()}\n\n{block}"
     # 有上傳就不標「示意圖」（2026-08-17 使用者裁決）；固定放最後才能 OVERRIDE
-    # REAL_WORLD_RENDERING_RULES 的「標籤不得移除」條款
+    # REAL_WORLD_RENDERING_RULES 的「標籤不得移除」條款。
+    # 例外：這張圖裡混了後端自動查來的肖像照時仍要標（2026-08-18）——那個 override
+    # 的語意是「照著使用者親自提供的素材生成」，維基照片沒有那個語意，而
+    # 寫實照片感＋真名＋沒有示意圖標籤是最糟的組合。
+    if req.portrait_reference_data_urls:
+        return req.model_copy(update={"prompt": prompt}) if prompt != req.prompt else req
     if USER_REFERENCE_NO_DISCLAIMER_RULES not in prompt:
         prompt = f"{prompt.rstrip()}\n\n{USER_REFERENCE_NO_DISCLAIMER_RULES}"
     if prompt == req.prompt:
@@ -1721,6 +1902,57 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
     return result
 
 
+def resolve_digest_portraits(
+    digest: GenerateResponse, req: NewsImageGenerateRequest, provider: str
+) -> tuple[GenerateResponse, dict[str, photo_lookup.ReferencePhoto]]:
+    """查參考照；有人查不到就重新消化一次，把那些人排出版面。
+
+    回傳 (最終採用的消化結果, 已查到的照片)。
+
+    為什麼要重新消化而不是在生圖階段處理（2026-08-18 使用者裁決）：
+    2026-08-18 實測 2/2 證明，叫生圖模型「只畫有照片的人、沒照片的畫剪影」完全無效
+    ——沒照片的那位被憑空捏臉還掛上真名。而且要拿掉的不只是一張臉：那個人的姓名條、
+    引言框、版位都要重新安排，本來就只有消化端做得到。消化端是文字模型，遵守指示
+    可靠得多。他們的話仍會以純文字留在圖上（使用者 2026-08-18 補充），只是不畫臉。
+
+    **只重試一次**：第二次消化可能又挑出別的沒照片的人，無限重試會一直燒消化費用。
+    第二次仍有人查不到就交給 resolve_portraits 退回全員不畫臉——那仍是可播的結果。
+    一次消化只要幾分錢，遠比浪費一次生圖便宜。
+    """
+    subjects = digest.portrait_subjects
+    if not subjects or not supports_reference_image(provider):
+        return digest, {}
+
+    photos, missing = lookup_portrait_photos(subjects)
+    if not missing:
+        return digest, photos
+
+    print(
+        f"[portrait] 查不到參考照（{'、'.join(missing)}），重新消化一次把他們排出版面",
+        flush=True,
+    )
+    retried = generate(
+        GenerateRequest(
+            news_text=req.news_text,
+            type_label=req.type_label,
+            role=req.role,
+            density=req.density,
+            safe_frame=req.safe_frame,
+            user_instruction=req.user_instruction,
+            exclude_people=missing,
+        )
+    )
+    if not retried.portrait_subjects:
+        return retried, {}
+    photos, missing = lookup_portrait_photos(retried.portrait_subjects)
+    if missing:
+        print(
+            f"[portrait] 重新消化後仍有人查不到照片（{'、'.join(missing)}），不再重試",
+            flush=True,
+        )
+    return retried, photos
+
+
 def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateResponse:
     # 前置過濾（縱深防禦）：擋垃圾／亂碼／注入輸入，避免燒掉付費呼叫。
     # LINE 路徑在 line_bot 已含頻率限制地查過一次，這裡 client_id 為空時
@@ -1749,8 +1981,9 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 user_instruction=req.user_instruction,
             )
         )
-        portrait_mode, reference_photo = resolve_portrait(
-            digest.portrait_subjects, provider
+        digest, portrait_photos = resolve_digest_portraits(digest, req, provider)
+        portrait_mode, reference_photos = resolve_portraits(
+            digest.portrait_subjects, provider, photos=portrait_photos
         )
         prompt = build_prompt(
             role=req.role,
@@ -1772,8 +2005,17 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                     image_size=req.image_size,
                     safe_frame=req.safe_frame,
                     safe_frame_profile=frame_profile,
+                    # 單人走既有的單張欄位（措辭與行為與放寬前逐字相同），
+                    # 2-3 人才走多張通道
                     reference_image_data_url=(
-                        reference_photo.data_url() if reference_photo is not None else ""
+                        reference_photos[0].data_url()
+                        if len(reference_photos) == 1
+                        else ""
+                    ),
+                    portrait_reference_data_urls=(
+                        [photo.data_url() for photo in reference_photos]
+                        if len(reference_photos) > 1
+                        else []
                     ),
                 )
             )
@@ -1813,8 +2055,10 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             prompt_version=PROMPT_VERSION,
             portrait_subject="、".join(digest.portrait_subjects),
             portrait_mode=portrait_mode,
-            portrait_photo_source=(
-                reference_photo.source_page if reference_photo is not None else ""
+            # 多人時把每一張的出處都記下來——回查時要能一位一位對，
+            # 只記第一張等於另外兩張沒有出處可查
+            portrait_photo_source="、".join(
+                photo.source_page for photo in reference_photos
             ),
         )
         # LINE 版圖檔已由 line_bot.py 存進 static/generated/，這裡只補網頁版的缺口

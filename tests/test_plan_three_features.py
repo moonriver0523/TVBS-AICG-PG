@@ -24,7 +24,9 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
 import main  # noqa: E402
 import news_prompt  # noqa: E402
+import photo_lookup  # noqa: E402
 import safe_area_spec  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
 from PIL import Image  # noqa: E402
 
 
@@ -388,11 +390,11 @@ class UserReferenceImageTests(unittest.TestCase):
 
 
 class UserPortraitUploadTests(unittest.TestCase):
-    """使用者上傳肖像照（2026-08-17 使用者裁決開放）。
+    """使用者上傳肖像照（2026-08-17 開放，2026-08-18 修正）。
 
-    鐵律的解除範圍必須精準：只有**使用者親自上傳肖像照**這一條通道解除
-    「兩位以上具名真人不畫臉」，自動查圖路徑原樣維持；且措辭仍要求
-    沒附照片的人不畫臉。
+    2026-08-17 的行為是「有上傳就整段跳過自動查圖」，靠 prompt 要求「沒附照片的人
+    不畫臉」當安全網。2026-08-18 實測 2/2 證明那條 prompt 規則不成立——沒照片的人
+    被憑空捏臉還掛真名。使用者裁決改成：不足的人回頭走自動查圖補上，補不到就擋下。
     """
 
     PORTRAIT_REF = main.UserReferenceImage(
@@ -404,17 +406,50 @@ class UserPortraitUploadTests(unittest.TestCase):
         payload.update(overrides)
         return main.ImageGenerateRequest(**payload)
 
-    def test_portrait_upload_skips_auto_lookup_and_no_face_block(self):
-        """有上傳肖像照：不查照片、不注入兩套 PORTRAIT_MODES 區塊。"""
+    PHOTO = photo_lookup.ReferencePhoto(
+        image_base64="QUJD",
+        mime_type="image/jpeg",
+        image_url="https://upload.wikimedia.org/x.jpg",
+        source_page="https://zh.wikipedia.org/wiki/x",
+        lang="zh",
+    )
+
+    def test_portrait_upload_fills_the_shortfall_by_lookup(self):
+        """有上傳肖像照：不足的人改由自動查圖補上（2026-08-18 使用者裁決）。"""
         req = self.request(
             portrait_subjects=["鄭明典", "吳軒彤"],
             reference_images=[self.PORTRAIT_REF],
         )
-        with patch.object(main.photo_lookup, "find_reference_photo") as mock_lookup:
+
+        def lookup(name, **kwargs):
+            return None if name == "吳軒彤" else self.PHOTO
+
+        with patch.object(main.photo_lookup, "find_reference_photo", side_effect=lookup):
             result = main.apply_portrait_to_image_request(req)
-        mock_lookup.assert_not_called()
+        # 上傳的那張對應查不到的吳軒彤，鄭明典由維基補上——兩人都有照片才畫臉
+        self.assertEqual(len(result.portrait_reference_data_urls), 1)
         self.assertNotIn("NO REFERENCE AVAILABLE", result.prompt)
-        self.assertNotIn("PORTRAIT TREATMENT", result.prompt)
+
+    def test_portrait_upload_shortfall_that_lookup_cannot_fill_is_blocked(self):
+        """補完仍有人沒照片就擋下不生圖，不要花這筆生圖錢（沿用 2026-08-05 裁決）。"""
+        req = self.request(
+            portrait_subjects=["甲", "乙", "丙"],
+            reference_images=[self.PORTRAIT_REF],
+        )
+        with patch.object(main.photo_lookup, "find_reference_photo", return_value=None):
+            with self.assertRaises(HTTPException) as caught:
+                main.apply_portrait_to_image_request(req)
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_auto_sourced_portrait_keeps_the_disclaimer_label(self):
+        """混了自動查來的照片時不套用「不標示意圖」override（2026-08-18）：
+        那個 override 的語意是「照著使用者親自提供的素材生成」。"""
+        req = self.request(
+            reference_images=[self.PORTRAIT_REF],
+            portrait_reference_data_urls=["data:image/jpeg;base64,QQ=="],
+        )
+        result = main.apply_user_references_to_image_request(req)
+        self.assertNotIn("NO 示意圖 LABEL", result.prompt)
 
     def test_portrait_upload_injects_user_portrait_block(self):
         req = self.request(reference_images=[self.PORTRAIT_REF])
@@ -423,10 +458,15 @@ class UserPortraitUploadTests(unittest.TestCase):
         # REAL_WORLD_RENDERING_RULES 的預設條款認「NAMED REAL PERSON」區塊標題
         self.assertIn("NAMED REAL PERSON", result.prompt)
 
-    def test_iron_rule_intact_without_portrait_upload(self):
-        """沒上傳肖像照：兩位以上具名真人照舊不畫臉。"""
+    def test_missing_photo_still_forbids_every_face_without_upload(self):
+        """沒上傳、又有人查不到照片：全員不畫臉（全有或全無）。"""
         req = self.request(portrait_subjects=["鄭明典", "吳軒彤"])
-        result = main.apply_portrait_to_image_request(req)
+
+        def lookup(name, **kwargs):
+            return None if name == "吳軒彤" else self.PHOTO
+
+        with patch.object(main.photo_lookup, "find_reference_photo", side_effect=lookup):
+            result = main.apply_portrait_to_image_request(req)
         self.assertIn("NO REFERENCE AVAILABLE", result.prompt)
 
     def test_scene_upload_does_not_lift_iron_rule(self):

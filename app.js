@@ -1149,6 +1149,7 @@ async function digestNewsText(input) {
             density: state.digestDensity,
             safe_frame: state.safeFrame,
             user_instruction: currentUserInstruction(),
+            portrait_photo_count: uploadedPortraitCount(),
         }),
     });
     const data = await response.json().catch(() => ({}));
@@ -1282,7 +1283,10 @@ async function handleAIDigestion() {
                 // 安全框 ON 時消化要出滿版版面，否則 STRUCTURE 的「縮小置中」
                 // 開頭句會跟最終 prompt 的 FULL-FRAME RULES 互相打架
                 safe_frame: state.safeFrame,
-                user_instruction: currentUserInstruction()
+                user_instruction: currentUserInstruction(),
+                // 已上傳幾張肖像照。後端據此判斷「維基查不到的人」是不是其實有照片：
+                // 沒有這個數字，後端會把使用者剛上傳照片的那個人排出版面（2026-08-18）
+                portrait_photo_count: uploadedPortraitCount()
             })
         });
         if (!response.ok) {
@@ -1501,6 +1505,12 @@ function renderRefUploads() {
 
 function userRefImagesPayload() {
     return state.userRefImages.map(ref => ({ data_url: ref.dataUrl, purpose: ref.purpose }));
+}
+
+// 消化階段只需要知道使用者上傳了幾張肖像照（圖本身在生圖階段才送）：
+// 後端據此判斷維基查不到的人是不是其實有照片，不會把他排出版面。
+function uploadedPortraitCount() {
+    return state.userRefImages.filter(ref => ref.purpose === 'portrait').length;
 }
 
 /* ============================================================
