@@ -271,7 +271,6 @@ NAMED REAL PERSON — USER-SUPPLIED PORTRAIT REFERENCE (CRITICAL)
 - When the layout shows more than one named person, match each face to the correct person: use the resemblance between the attached photographs and the name labels, and never swap likenesses between people.
 - Draw a recognisable face ONLY for a person whose photograph is attached. Any named real person WITHOUT an attached photograph must still be shown as a back view or a plain silhouette — never invent or approximate a face for them.
 - Take only each person's likeness from the photographs. Pose, attire, framing and surroundings follow STRUCTURE, not the photographs' own backgrounds or occasions.
-- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible: these are illustrated depictions, not photographs.
 - Never place a person in a scene, action or context that STRUCTURE does not describe."""
 
 USER_REFERENCE_MODES = {
@@ -279,6 +278,19 @@ USER_REFERENCE_MODES = {
     "scene": USER_REFERENCE_SCENE_RULES,
     "portrait": USER_REFERENCE_PORTRAIT_RULES,
 }
+
+# 使用者有上傳參考圖時一律注入（2026-08-17 使用者裁決）：既然是照著使用者
+# 提供的實景實物生成，就不再標「示意圖」。REAL_WORLD_RENDERING_RULES 寫著
+# 標籤 never drop or hide，所以這裡必須位置在後＋明文 OVERRIDE（repo 慣例
+# 「位置＋明文 OVERRIDE 雙重表達」）才壓得過去；其餘條款（禁品牌、肖像對應、
+# 地理正確）全部原樣生效。
+USER_REFERENCE_NO_DISCLAIMER_RULES = """==================================================
+USER REFERENCE SUPPLIED — NO 示意圖 LABEL (OVERRIDE)
+==================================================
+- The user has supplied reference image(s) for this graphic, so the depiction is based on real supplied material rather than a generic stand-in.
+- Do NOT render any 示意圖 label anywhere in the image. If the text 示意圖 appears in VARIABLE FIELDS, omit that text and render everything else exactly as supplied.
+- This rule OVERRIDES every earlier instruction that asks for a 示意圖 label to be present or kept visible, including the REAL-WORLD ACCURACY and NAMED REAL PERSON blocks.
+- Every other rule in those blocks still binds in full: the brand bans, likeness and face rules, and geographic accuracy are unchanged."""
 
 
 # ============================================================

@@ -346,6 +346,22 @@ class UserReferenceImageTests(unittest.TestCase):
     def test_no_uploads_leaves_request_untouched(self):
         req = self.openrouter_request()
         self.assertIs(main.apply_user_references_to_image_request(req), req)
+        self.assertNotIn("NO 示意圖 LABEL", req.prompt)
+
+    def test_any_upload_injects_no_disclaimer_override_last(self):
+        """有上傳就不標示意圖（2026-08-17 裁決）：任一用途都注入，且固定在最後
+        （位置＋明文 OVERRIDE 才壓得過 REAL_WORLD 的「標籤不得移除」）。"""
+        for ref in (self.MAP_REF, self.SCENE_REF):
+            with self.subTest(purpose=ref.purpose):
+                req = self.openrouter_request(reference_images=[ref])
+                updated = main.apply_user_references_to_image_request(req)
+                self.assertIn("NO 示意圖 LABEL (OVERRIDE)", updated.prompt)
+                self.assertTrue(
+                    updated.prompt.rstrip().endswith(
+                        news_prompt.USER_REFERENCE_NO_DISCLAIMER_RULES
+                    ),
+                    "OVERRIDE 區塊必須是 prompt 的最後一段",
+                )
 
     def test_backend_without_reference_channel_rejects_uploads(self):
         req = self.openrouter_request(reference_images=[self.MAP_REF])

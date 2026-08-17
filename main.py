@@ -39,6 +39,7 @@ from news_prompt import (
     PORTRAIT_MODES,
     PROMPT_VERSION,
     USER_REFERENCE_MODES,
+    USER_REFERENCE_NO_DISCLAIMER_RULES,
     build_prompt,
     build_refine_prompt,
     compose_variable,
@@ -1630,6 +1631,10 @@ def apply_user_references_to_image_request(
         block = USER_REFERENCE_MODES.get(purpose, "")
         if block and block not in prompt:
             prompt = f"{prompt.rstrip()}\n\n{block}"
+    # 有上傳就不標「示意圖」（2026-08-17 使用者裁決）；固定放最後才能 OVERRIDE
+    # REAL_WORLD_RENDERING_RULES 的「標籤不得移除」條款
+    if USER_REFERENCE_NO_DISCLAIMER_RULES not in prompt:
+        prompt = f"{prompt.rstrip()}\n\n{USER_REFERENCE_NO_DISCLAIMER_RULES}"
     if prompt == req.prompt:
         return req
     return req.model_copy(update={"prompt": prompt})
