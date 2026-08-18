@@ -156,6 +156,10 @@ class GenerateResponse(BaseModel):
     # 為什麼是陣列不是單一字串：2026-08-05 出過事——使用者要「鄭明典／吳軒彤兩顆人頭」，
     # 單一欄位只裝得下第一個人，第二格因此完全沒進肖像流程，被模型自由發揮還掛上真名。
     portrait_subjects: list[str] = Field(default_factory=list)
+    # 同順序同長度的英文原名，查參考照的備援（2026-08-18）。臺灣譯名常常不是中文
+    # 維基的條目名——「卡利巴夫」「阿拉奇」「巴薩尼」「瓦希迪」實測全部查無條目，
+    # 但英文名查得到。不確定就留空字串，絕不亂猜拼寫。
+    portrait_subjects_en: list[str] = Field(default_factory=list)
 
 
 # input_references 的上限。模型端 gpt-image-2 收 0–16、Gemini 0–14（PLAN.md 查證），
@@ -201,6 +205,8 @@ class ImageGenerateRequest(BaseModel):
     # 網頁版消化後回傳的具名真人名單。後端據此查參考照並注入肖像規則。
     # LINE／generate_news_image 已在組 prompt 時處理過，不要再傳，以免規則灌兩次。
     portrait_subjects: list[str] = Field(default_factory=list)
+    # 同順序的英文原名，查圖備援（見 GenerateResponse.portrait_subjects_en）
+    portrait_subjects_en: list[str] = Field(default_factory=list)
 
 
 class ImageGenerateResponse(BaseModel):
@@ -235,8 +241,18 @@ DIGEST_OUTPUT_SCHEMA = {
         # 版面會畫出臉孔的具名真實人物，全部列出；其餘一律空陣列
         # （見 REAL_WORLD_FIDELITY_RULES 第 5 條）
         "portrait_subjects": {"type": "array", "items": {"type": "string"}},
+        # 與 portrait_subjects 同順序同長度的英文（或原文拉丁拼寫）姓名，
+        # 後端查參考照時當備援：臺灣譯名常常不是中文維基的條目名（見第 7 條）
+        "portrait_subjects_en": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["style", "structure", "variable", "chart_type", "portrait_subjects"],
+    "required": [
+        "style",
+        "structure",
+        "variable",
+        "chart_type",
+        "portrait_subjects",
+        "portrait_subjects_en",
+    ],
     "additionalProperties": False,
 }
 
@@ -380,6 +396,7 @@ REAL-WORLD ACCURACY (governs "style" and "structure" — the pictures you commis
 4. NO UNSOURCED BRANDS. Signage, storefronts, banners, packaging, product bodies, vehicle liveries, screens, jerseys, badges and building facades must be de-identified: blank surfaces or generic abstract marks, no readable brand text, no trademark, no ticker symbol, no exchange name. A brand may appear ONLY if its name is in the source material, and then only as plain typeset text, never as a reproduced logotype. Whenever the scene contains any object that would normally carry a brand, write this requirement into "structure" explicitly — do not assume the renderer will infer it.
 5. NAMED REAL PEOPLE: you do NOT decide how the face is drawn. List in "portrait_subjects" EVERY specific named real person whose face the graphic would show — one entry per person, names exactly as the source material writes them, no title, no company. If the layout shows two people, list both; listing only the first is a defect. In "structure" describe only WHERE each figure sits and what it wears, never the rendering treatment (do not write "photorealistic", "faithful likeness", "back view", "silhouette", "illustration" or similar). The backend looks up reference photographs and appends the binding portrait rules itself. Leave "portrait_subjects" as an empty array for every other graphic, including crowds and unnamed or generic figures. Always plan the 示意圖 label into "variable" when a person is depicted. Never place a person in a scene, action or context the source material does not describe.
 6. AT MOST THREE FACES: the layout you design may show identifiable faces for AT MOST THREE named real people. When the source material names more, choose the three most central to the story and design "structure" so that ONLY those three appear as identifiable individual figures. The other named people are NOT removed from the story — their names and what they said may still appear as TEXT (a quote panel, a caption, a list item, a label on a chart), and that text should carry their points. What they must not have is a face: do not draw them as an identifiable figure, and never place their name beside any depicted figure, because a name sitting next to a drawn face reads as that person. "portrait_subjects" must be a truthful mirror of the faces you designed: never design a layout with four faces and list only three — the unlisted face is the exact defect this rule exists to prevent.
+7. NAMES IN ENGLISH TOO: fill "portrait_subjects_en" with the same people in the same order and the same length as "portrait_subjects" — each entry being that person's name in English or its original Latin spelling (e.g. 川普 → "Donald Trump", 瓦希迪 → "Ahmad Vahidi", 巴薩尼 → "Masoud Barzani"). Take it from the source material when it gives one, otherwise from your own knowledge of the person. Use an empty string ONLY when you genuinely do not know it; never guess a spelling you are unsure of, and never translate the meaning of a Chinese name into English words. This is how the backend finds the reference photograph: Taiwanese transliterations are frequently not the title of any Chinese encyclopedia article, so without the English name the person cannot be looked up and no face can be drawn.
 """
 
 
@@ -693,7 +710,7 @@ def apply_photo_availability(
     subjects = result.portrait_subjects
     if not subjects:
         return result
-    _, missing = lookup_portrait_photos(subjects)
+    _, missing = lookup_portrait_photos(subjects, result.portrait_subjects_en)
     if req.portrait_photo_count:
         missing = missing[req.portrait_photo_count :]
     if not missing:
@@ -814,6 +831,11 @@ def generate(req: GenerateRequest):
             variable=data.get("variable", ""),
             chart_type=chart_type,
             portrait_subjects=clean_portrait_subjects(data.get("portrait_subjects")),
+            portrait_subjects_en=align_english_names(
+                clean_portrait_subjects(data.get("portrait_subjects")),
+                data.get("portrait_subjects_en"),
+                data.get("portrait_subjects"),
+            ),
         )
         # 網頁版走這個端點後自己在前端組生圖 prompt，後端看不到最終 prompt，
         # 因此這裡只記到消化為止——有輸入與消化結果，事後仍可重跑重現。
@@ -1634,19 +1656,50 @@ def clean_portrait_subjects(raw: object) -> list[str]:
     return cleaned
 
 
+def align_english_names(
+    subjects: list[str], raw_en: object, raw_subjects: object
+) -> list[str]:
+    """把消化端的英文名單對齊到清洗後的 portrait_subjects，回傳同長度的清單。
+
+    模型是以「原始 portrait_subjects」的順序給英文名的，而 clean_portrait_subjects
+    會去掉空值與重複——直接按索引取會錯位（第 2 個人拿到第 3 個人的英文名，
+    等於用別人的名字去查照片）。所以先用原始名單建對照表再取。
+    """
+    if isinstance(raw_en, str):
+        raw_en = [raw_en]
+    if isinstance(raw_subjects, str):
+        raw_subjects = [raw_subjects]
+    if not isinstance(raw_en, list) or not isinstance(raw_subjects, list):
+        return ["" for _ in subjects]
+    pairs: dict[str, str] = {}
+    for original, english in zip(raw_subjects, raw_en):
+        if not isinstance(original, str) or not isinstance(english, str):
+            continue
+        key, value = original.strip(), english.strip()
+        if key and key not in pairs:
+            pairs[key] = value
+    return [pairs.get(name, "") for name in subjects]
+
+
 def lookup_portrait_photos(
     subjects: list[str],
+    english_names: list[str] | None = None,
 ) -> tuple[dict[str, photo_lookup.ReferencePhoto], list[str]]:
     """逐位查參考照，回傳 (查到的 {人名: 照片}, 查不到的人名)。
 
     查圖失敗（網路、逾時、查無此人）一律當成「這位查不到」，不讓整條請求失敗：
     新聞生產不能因為維基查不到人就整張圖生不出來。
+
+    `english_names` 與 subjects 同順序（消化端的 portrait_subjects_en），中文譯名
+    查不到時用它再查一次——臺灣譯名常常不是中文維基的條目名（2026-08-18）。
     """
     found: dict[str, photo_lookup.ReferencePhoto] = {}
     missing: list[str] = []
-    for subject in subjects:
+    english_names = english_names or []
+    for index, subject in enumerate(subjects):
+        alt = english_names[index : index + 1] if index < len(english_names) else []
         try:
-            photo = photo_lookup.find_reference_photo(subject)
+            photo = photo_lookup.find_reference_photo(subject, alt_names=alt)
         except Exception as exc:  # noqa: BLE001 — 查圖是加分項，不該拖垮生圖
             print(f"[portrait] 查參考照片失敗（{subject}）：{exc}", flush=True)
             photo = None
@@ -1662,6 +1715,7 @@ def resolve_portraits(
     provider: str,
     *,
     photos: dict[str, photo_lookup.ReferencePhoto] | None = None,
+    english_names: list[str] | None = None,
 ) -> tuple[str, list[photo_lookup.ReferencePhoto]]:
     """決定這次的肖像處理方式，回傳 (portrait_mode, 參考照片清單)。
 
@@ -1696,7 +1750,7 @@ def resolve_portraits(
         print("[portrait] 目前後端送不出多張參考圖，多人肖像退回不生成臉孔", flush=True)
         return "no_reference", []
     if photos is None:
-        photos, _ = lookup_portrait_photos(portrait_subjects)
+        photos, _ = lookup_portrait_photos(portrait_subjects, english_names)
     missing = [name for name in portrait_subjects if name not in photos]
     if missing:
         print(
@@ -1734,9 +1788,14 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
     subjects = clean_portrait_subjects(req.portrait_subjects)
     if not subjects:
         return req
+    english = align_english_names(
+        subjects, req.portrait_subjects_en, req.portrait_subjects
+    )
     uploaded = [ref for ref in req.reference_images if ref.purpose == "portrait"]
     if not uploaded:
-        mode, photos = resolve_portraits(subjects, req.provider)
+        mode, photos = resolve_portraits(
+            subjects, req.provider, english_names=english
+        )
         block = PORTRAIT_MODES.get(mode, "")
         prompt = req.prompt
         if block and block not in prompt:
@@ -1763,7 +1822,7 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
 
     # 有上傳：把系統查得到的人補上照片，湊齊「每個人都有照片」。
     # 上傳的照片視為對應「系統查不到的人」（假設與理由見 apply_photo_availability）。
-    photos, missing = lookup_portrait_photos(subjects)
+    photos, missing = lookup_portrait_photos(subjects, english)
     still_missing = missing[len(uploaded) :]
     if still_missing:
         raise HTTPException(
@@ -1923,7 +1982,7 @@ def resolve_digest_portraits(
     if not subjects or not supports_reference_image(provider):
         return digest, {}
 
-    photos, missing = lookup_portrait_photos(subjects)
+    photos, missing = lookup_portrait_photos(subjects, digest.portrait_subjects_en)
     if not missing:
         return digest, photos
 
@@ -1944,7 +2003,9 @@ def resolve_digest_portraits(
     )
     if not retried.portrait_subjects:
         return retried, {}
-    photos, missing = lookup_portrait_photos(retried.portrait_subjects)
+    photos, missing = lookup_portrait_photos(
+        retried.portrait_subjects, retried.portrait_subjects_en
+    )
     if missing:
         print(
             f"[portrait] 重新消化後仍有人查不到照片（{'、'.join(missing)}），不再重試",

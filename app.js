@@ -310,6 +310,9 @@ let state = {
     digestResolvedType: null,
     // 最近一次消化回傳的具名真人，生圖時交給後端查參考照
     portraitSubjects: [],
+    // 同順序的英文原名，生圖時一併送給後端當查圖備援：
+    // 臺灣譯名常常不是中文維基的條目名（2026-08-18）
+    portraitSubjectsEn: [],
     // 最終 Prompt 的類型標籤聽誰的：'digest'（第一頁自動生成）或 'library'（第二頁調版型）
     // 由「最後一次動作」決定
     promptTypeSource: 'library',
@@ -1166,9 +1169,7 @@ function applyDigestToForm(data) {
     document.getElementById("field-style").value = data.style || "";
     document.getElementById("field-structure").value = data.structure || "";
     document.getElementById("field-variable").value = (data.variable || "").replace(SYSTEM_DISCLAIMER, "").trim();
-    state.portraitSubjects = Array.isArray(data.portrait_subjects)
-        ? data.portrait_subjects.filter(name => typeof name === "string" && name.trim())
-        : [];
+    applyPortraitSubjects(data);
     if (state.digestChartType === AUTO_TYPE_KEY) {
         const resolvedKey = Object.keys(CHART_TYPES).find(k => CHART_TYPES[k].label === data.chart_type);
         state.digestResolvedType = resolvedKey || null;
@@ -1224,6 +1225,7 @@ async function handleOneClickGenerate() {
                 safe_frame: state.safeFrame,
                 safe_frame_profile: state.currentRole,
                 portrait_subjects: state.portraitSubjects,
+                portrait_subjects_en: state.portraitSubjectsEn,
                 reference_images: userRefImagesPayload(),
             }),
         });
@@ -1299,9 +1301,7 @@ async function handleAIDigestion() {
         document.getElementById('field-style').value = data.style || '';
         document.getElementById('field-structure').value = data.structure || '';
         document.getElementById('field-variable').value = (data.variable || '').replace(SYSTEM_DISCLAIMER, '').trim();
-        state.portraitSubjects = Array.isArray(data.portrait_subjects)
-            ? data.portrait_subjects.filter(name => typeof name === 'string' && name.trim())
-            : [];
+        applyPortraitSubjects(data);
 
         // 自動判斷模式：記下 AI 實際選了哪一類，供徽章與按鈕顯示
         if (state.digestChartType === AUTO_TYPE_KEY) {
@@ -1401,7 +1401,8 @@ async function handleImageGeneration() {
                 image_size: state.imageSize,
                 safe_frame: state.safeFrame,
                 safe_frame_profile: state.currentRole,
-                portrait_subjects: state.portraitSubjects
+                portrait_subjects: state.portraitSubjects,
+                portrait_subjects_en: state.portraitSubjectsEn
             })
         });
         const data = await response.json();
@@ -1501,6 +1502,21 @@ function renderRefUploads() {
         row.append(img, name, select, remove);
         list.appendChild(row);
     });
+}
+
+// 具名真人名單與英文原名**必須成對處理**：兩個陣列各自過濾會錯位，
+// 第 2 個人就會拿到第 3 個人的英文名去查照片，等於用別人的臉。
+function applyPortraitSubjects(data) {
+    const names = Array.isArray(data.portrait_subjects) ? data.portrait_subjects : [];
+    const english = Array.isArray(data.portrait_subjects_en) ? data.portrait_subjects_en : [];
+    const pairs = names
+        .map((name, index) => ({
+            name: typeof name === 'string' ? name.trim() : '',
+            en: typeof english[index] === 'string' ? english[index].trim() : ''
+        }))
+        .filter(pair => pair.name);
+    state.portraitSubjects = pairs.map(pair => pair.name);
+    state.portraitSubjectsEn = pairs.map(pair => pair.en);
 }
 
 function userRefImagesPayload() {
