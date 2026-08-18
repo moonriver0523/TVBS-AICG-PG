@@ -217,6 +217,53 @@ class ResolvePortraitTests(unittest.TestCase):
         self.assertEqual(mode, "reference")
 
 
+class EnglishNameLookupTests(unittest.TestCase):
+    """臺灣譯名查不到時改用英文原名（2026-08-18）。
+
+    起因：一則美伊新聞的「卡利巴夫」「阿拉奇」「巴薩尼」「瓦希迪」在中文維基
+    全部查無條目（連重導向都沒有），整張圖因此一個真人臉都畫不出來；但英文名
+    `Ahmad Vahidi` 查得到。
+    """
+
+    def test_english_name_is_tried_when_the_chinese_name_misses(self):
+        def by_name(name, *_args):
+            return PHOTO if name == "Ahmad Vahidi" else None
+
+        with patch.object(photo_lookup, "_lookup_lang", side_effect=by_name):
+            photo = photo_lookup.find_reference_photo("瓦希迪", alt_names=["Ahmad Vahidi"])
+        self.assertIs(photo, PHOTO)
+
+    def test_chinese_name_wins_when_both_resolve(self):
+        """中文條目優先——臺灣新聞的人物用中文維基的照片較貼近本地認知。"""
+        with patch.object(photo_lookup, "_lookup_lang", return_value=PHOTO):
+            photo = photo_lookup.find_reference_photo("賴清德", alt_names=["Lai Ching-te"])
+        self.assertIs(photo, PHOTO)
+
+    def test_blank_english_name_is_ignored(self):
+        with patch.object(photo_lookup, "_lookup_lang", return_value=None) as lookup:
+            self.assertIsNone(
+                photo_lookup.find_reference_photo("某人", alt_names=["", "  "], langs=("zh",))
+            )
+        # 只查中文名那一次，空字串不該變成一次無謂的查詢
+        self.assertEqual(lookup.call_count, 1)
+
+    def test_english_names_are_paired_by_original_name_not_by_index(self):
+        """清洗會去掉空值與重複，直接按索引取會讓第 2 個人拿到第 3 個人的英文名。"""
+        raw_subjects = ["", "瓦希迪", "瓦希迪", "巴薩尼"]
+        raw_en = ["", "Ahmad Vahidi", "Ahmad Vahidi", "Masoud Barzani"]
+        cleaned = main.clean_portrait_subjects(raw_subjects)
+        self.assertEqual(cleaned, ["瓦希迪", "巴薩尼"])
+        self.assertEqual(
+            main.align_english_names(cleaned, raw_en, raw_subjects),
+            ["Ahmad Vahidi", "Masoud Barzani"],
+        )
+
+    def test_missing_english_list_degrades_to_blanks(self):
+        self.assertEqual(
+            main.align_english_names(["甲", "乙"], None, ["甲", "乙"]), ["", ""]
+        )
+
+
 class ExcludePeopleDigestTests(unittest.TestCase):
     """查不到照片的人改在消化階段排出版面（2026-08-18 使用者裁決）。
 

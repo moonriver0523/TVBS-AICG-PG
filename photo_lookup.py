@@ -198,15 +198,34 @@ def _guess_mime(url: str) -> str:
 def find_reference_photo(
     name: str,
     *,
+    alt_names: tuple[str, ...] | list[str] = (),
     langs: tuple[str, ...] = DEFAULT_LANGS,
     timeout: int = _TIMEOUT,
 ) -> ReferencePhoto | None:
-    """依人名查一張參考照片；查不到回 None（呼叫端必須能接受沒有照片）。"""
-    cleaned = (name or "").strip()
-    if not cleaned:
-        return None
-    for lang in langs:
-        photo = _lookup_lang(cleaned, lang, timeout)
-        if photo is not None:
-            return photo
+    """依人名查一張參考照片；查不到回 None（呼叫端必須能接受沒有照片）。
+
+    `alt_names` 通常是英文原名（2026-08-18 加）。**臺灣譯名往往不是中文維基的
+    條目名、也沒有重導向**——實測「卡利巴夫」「阿拉奇」「巴薩尼」「瓦希迪」四位
+    中東／庫德人物在中文維基全部查無，但英文名 `Ahmad Vahidi` 查得到。整類國際
+    新聞的肖像都卡在這裡。
+
+    刻意不用「中文全文搜尋」補救：實測 4 個譯名裡 2 個搜到完全不相干的條目
+    （阿拉奇→阿布拉莫維奇、巴薩尼→威尼斯商人），抓錯人比查不到嚴重得多。
+    英文原名是結構化的事實，由消化端從新聞原文或既有知識給出，不用猜。
+    """
+    candidates = [
+        candidate
+        for candidate in [(name or "").strip(), *[(alt or "").strip() for alt in alt_names]]
+        if candidate
+    ]
+    # 同名去重但保留順序：中文優先（臺灣新聞的人物多半中文條目較貼近本地認知）
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        for lang in langs:
+            photo = _lookup_lang(candidate, lang, timeout)
+            if photo is not None:
+                return photo
     return None
