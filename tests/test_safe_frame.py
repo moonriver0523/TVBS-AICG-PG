@@ -284,13 +284,24 @@ class FramedOutputTests(unittest.TestCase):
         self.assertEqual(output.getpixel((left - 1, mid_y)), output.getpixel((left, mid_y)))
         self.assertEqual(output.getpixel((right, mid_y)), output.getpixel((right - 1, mid_y)))
 
-    def test_backdrop_is_darker_at_the_bottom(self):
-        """襯底是上亮下暗的漸層；反了會讓下方字卡區搶視覺。"""
+    def test_backdrop_is_a_single_flat_colour(self):
+        """襯底必須是單色（使用者 2026-08-19 指定，取代原本的上亮下暗漸層）。
+
+        原測試斷言「上亮下暗」，那是漸層版的性質；改單色後那個斷言不再成立，
+        改為守住新的要求：整片襯底任兩點都同色，出現任何漸層都算違規。
+        """
         output = self.framed((1280, 720), background=safe_frame.BACKDROP)
         width, height = output.size
-        top_strip = sum(output.getpixel((width // 2, 4)))
-        bottom_strip = sum(output.getpixel((width // 2, height - 5)))
-        self.assertGreater(top_strip, bottom_strip)
+        left, top, right, bottom = safe_frame.plan_placement((1280, 720))
+        # 取安全區之外的四個點，涵蓋上下左右
+        points = [
+            (width // 2, 4),
+            (width // 2, height - 5),
+            (4, height // 2),
+            (width - 5, height // 2),
+        ]
+        colours = {output.getpixel(p) for p in points}
+        self.assertEqual(len(colours), 1, f"襯底不是單色：{colours}")
 
     def test_cover_mode_uses_more_of_the_safe_area_than_fit(self):
         fit = safe_frame.plan_placement((1280, 720), mode=safe_frame.FIT)
@@ -472,10 +483,10 @@ class EditorTwoFrameModesTests(unittest.TestCase):
             (True, True, safe_area_spec.REPORTER_PROFILE),
         )
 
-    THIN_FRAME_RATIO = 0.04  # 使用者 2026-08-19 指定（先 2% 後改 4%）
+    THIN_FRAME_RATIO = 0.03  # 使用者 2026-08-19 指定（2% → 4% → 3%）
 
     def test_thin_frame_margins_are_the_requested_percent_on_every_side(self):
-        """4% 是使用者指定的數字，四邊都要精準吃到，不能只對兩邊。"""
+        """3% 是使用者指定的數字，四邊都要精準吃到，不能只對兩邊。"""
         width, height = safe_frame.DEFAULT_CANVAS
         margins = safe_area_spec.required_margins_px(
             width, height, safe_area_spec.EDITOR_FRAME_PROFILE
@@ -572,15 +583,33 @@ class BackdropMatchesContentTests(unittest.TestCase):
         self.assertGreater(warm[0], warm[2], "暖色內容的襯底應該偏紅")
         self.assertGreater(cool[2], cool[0], "冷色內容的襯底應該偏藍")
 
-    def test_backdrop_is_close_to_the_adjacent_content_edge(self):
-        """襯底與緊鄰它的內容邊緣色差要小——這正是編輯反映的那圈外框感。"""
-        x0, y0, _x1, _y1 = safe_area_spec.safe_rect(*safe_frame.DEFAULT_CANVAS)
+    def test_backdrop_is_close_to_the_content_top_edge(self):
+        """襯底與內容上緣色差要小——這正是編輯反映的那圈外框感。
+
+        單色版以上緣為準（見 safe_frame._backdrop_colour 的實測比較）。
+        """
+        _x0, y0, _x1, _y1 = safe_area_spec.safe_rect(*safe_frame.DEFAULT_CANVAS)
         output = self._framed((36, 44, 58), (18, 22, 30))
         mid_x = safe_frame.DEFAULT_CANVAS[0] // 2
         backdrop = output.getpixel((mid_x, y0 // 2))
         content_edge = output.getpixel((mid_x, y0 + 4))
         gap = sum((a - b) ** 2 for a, b in zip(backdrop, content_edge)) ** 0.5
-        self.assertLess(gap, 12, f"襯底與內容邊緣差 {gap:.1f}，會讀成一圈外框")
+        self.assertLess(gap, 12, f"襯底與內容上緣差 {gap:.1f}，會讀成一圈外框")
+
+    def test_single_colour_cannot_match_both_ends_of_a_strong_gradient(self):
+        """已知取捨，明寫出來免得日後被當成 bug 重查。
+
+        使用者 2026-08-19 指定襯底改單色。內容上下色差大時，單色只能貼合上緣，
+        下緣一定會偏——這是單色的先天限制。漸層版兩端都能貼（實測 上 8.0／下 5.9），
+        要改回去見 git log。
+        """
+        _x0, _y0, _x1, y1 = safe_area_spec.safe_rect(*safe_frame.DEFAULT_CANVAS)
+        output = self._framed((90, 100, 120), (18, 22, 30))  # 上下差很大
+        mid_x = safe_frame.DEFAULT_CANVAS[0] // 2
+        backdrop = output.getpixel((mid_x, y1 + 40))
+        content_bottom = output.getpixel((mid_x, y1 - 4))
+        gap = sum((a - b) ** 2 for a, b in zip(backdrop, content_bottom)) ** 0.5
+        self.assertGreater(gap, 12, "這個取捨消失了？單色不該貼合得了下緣，請確認取樣改了什麼")
 
     def test_backdrop_never_goes_black_on_dark_content(self):
         """深底 CG 是最常見的情況，襯底不能被壓成黑邊。"""

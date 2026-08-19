@@ -93,10 +93,10 @@ DEFAULT_BACKGROUND = BACKDROP
 # ⚠️ 這推翻了 2026-07-30 使用者選定的「刻意做成襯底（deliberate mat）」設計方向，
 # 是使用者 2026-08-19 看過還原重組對照圖後改的決定，不是程式自作主張。
 BACKDROP_DIM = 0.95
-# 底部再多壓一點：記者框底部是跑馬燈預留區，襯底若比內容亮會搶走下方字卡的視覺。
-# 真實 CG 本來就上亮下暗（實測 10/10），這個係數只是讓「下不亮於上」變成結構保證，
-# 而不是碰運氣依賴輸入。
-BACKDROP_BOTTOM_DIM = 0.92
+# 2026-08-19 二次修改：使用者要求襯底改**單色**，不要漸層。
+# 漸層版是上下端點各取自內容上／下緣，能重現 CG 自己的明暗走勢；單色版改取
+# 整圈邊緣的中位數，代價是內容上下色差很大時只能取折衷（無法兩端都貼合）。
+# 這是使用者明確指定的取捨，不是實作限制。要改回漸層見 git log。
 # 取樣帶：自內容邊緣往內 1%～4%。跳過最外層那一絲是因為生成圖邊緣常有光暈，
 # 與 safe_area_spec.TOLERANCE 存在的理由相同。
 EDGE_SAMPLE_INSET = 0.01
@@ -179,53 +179,67 @@ def _blurred_background(source: Image.Image, canvas: tuple[int, int]) -> Image.I
     return ImageEnhance.Brightness(blurred).enhance(BACKGROUND_DIM)
 
 
-def _edge_strip_colour(content: Image.Image, edge: str) -> tuple[int, int, int]:
-    """取內容上緣或下緣往內一條窄帶的逐通道中位數。
+def _edge_strips(content: Image.Image) -> list[tuple[int, int, int, int]]:
+    """內容四邊各一條取樣帶，位置是自邊緣往內 1%～4%。
 
-    用中位數而不是平均：橫幅標題、發光數字這種高亮元素只佔窄帶的一小部分，
-    平均會被它們整個拉高（實測讓襯底比內容亮 14–29），中位數則會忽略它們、
-    回報這一帶真正的底色。
+    跳過最外層那一絲是因為生成圖邊緣常有光暈，與 safe_area_spec.TOLERANCE 同理。
+    上下用高度算、左右用寬度算，四條帶的實際厚度才一致。
     """
     width, height = content.size
-    inset = round(height * EDGE_SAMPLE_INSET)
-    depth = max(1, round(height * EDGE_SAMPLE_DEPTH))
-    if edge == "top":
-        box = (0, inset, width, inset + depth)
-    else:
-        box = (0, max(0, height - inset - depth), width, max(1, height - inset))
+    v_inset = round(height * EDGE_SAMPLE_INSET)
+    v_depth = max(1, round(height * EDGE_SAMPLE_DEPTH))
+    h_inset = round(width * EDGE_SAMPLE_INSET)
+    h_depth = max(1, round(width * EDGE_SAMPLE_DEPTH))
+    return [
+        (0, v_inset, width, v_inset + v_depth),
+        (0, max(0, height - v_inset - v_depth), width, max(1, height - v_inset)),
+        (h_inset, 0, h_inset + h_depth, height),
+        (max(0, width - h_inset - h_depth), 0, max(1, width - h_inset), height),
+    ]
 
+
+def _backdrop_colour(content: Image.Image) -> tuple[int, int, int]:
+    """襯底的單一顏色：取內容**上緣**那條取樣帶的逐通道中位數。
+
+    用中位數而不是平均：橫幅標題、發光數字這種高亮元素只佔取樣帶的一小部分，
+    平均會被它們整個拉高（實測讓襯底比內容亮 14–29），中位數則會忽略它們、
+    回報這一帶真正的底色。
+
+    只取上緣，是拿 10 張線上成品實測比出來的（數字＝襯底與內容邊緣的平均色差，
+    愈小愈貼合，同時看上下兩邊的最差值）：
+
+        只取上緣          7.2   ← 採用
+        上下左右整圈     17.8
+        上＋左右         22.6
+        只取左右         28.1
+
+    差距大到不像抽樣雜訊，原因也說得通：CG 底部常有 <蓋章> 橫幅、出處行與暗角，
+    左右常是側欄卡片，都不是背景；上緣（標題所在那一帶的底）才是乾淨的背景色。
+
+    代價：內容上下色差大時，單色只能貼合上緣。這是使用者 2026-08-19 指定改單色
+    的先天限制，不是 bug——漸層版可以兩端都貼合（實測 上 8.0／下 5.9）。
+    """
+    box = _edge_strips(content)[0]  # 上緣
     strip = content.crop(box)
     # 先降到固定取樣數再排序：夠精準，又不會因為來源解析度變大而變慢。
-    strip = strip.resize((64, max(1, min(strip.height, 32))), Image.LANCZOS)
+    strip = strip.resize((min(64, strip.width), min(64, strip.height)), Image.LANCZOS)
     pixels = list(strip.getdata())
-    return tuple(sorted(p[channel] for p in pixels)[len(pixels) // 2] for channel in range(3))
+    return tuple(
+        sorted(p[channel] for p in pixels)[len(pixels) // 2] for channel in range(3)
+    )
 
 
 def _backdrop_background(content: Image.Image, canvas: tuple[int, int]) -> Image.Image:
-    """垂直漸層襯底，上下端點各自取自內容的上／下緣顏色。
+    """單色襯底，顏色取自內容整圈邊緣（2026-08-19 使用者指定改單色，不要漸層）。
 
     目標是四周留白讀起來像 CG 背景自己延伸出去的，而不是外掛的一圈色塊。
-    因為端點分開取，襯底會自然重現這張 CG 本身的上下明暗走勢——單一顏色做不到
-    這件事（實測同一張圖上緣 (31,48,66)、下緣 (29,38,43)，差很多）。
     """
-    canvas_w, canvas_h = canvas
-    top_rgb = _edge_strip_colour(content, "top")
-    bottom_rgb = _edge_strip_colour(content, "bottom")
-    top_rgb = tuple(value * BACKDROP_DIM for value in top_rgb)
-    bottom_rgb = tuple(value * BACKDROP_DIM * BACKDROP_BOTTOM_DIM for value in bottom_rgb)
-
-    backdrop = Image.new("RGB", canvas)
-    draw = ImageDraw.Draw(backdrop)
-    for y in range(canvas_h):
-        ratio = y / max(1, canvas_h - 1)
-        draw.line(
-            [(0, y), (canvas_w, y)],
-            fill=tuple(
-                max(0, min(255, round(top_rgb[c] + (bottom_rgb[c] - top_rgb[c]) * ratio)))
-                for c in range(3)
-            ),
-        )
-    return backdrop
+    base = _backdrop_colour(content)
+    return Image.new(
+        "RGB",
+        canvas,
+        tuple(max(0, min(255, round(value * BACKDROP_DIM))) for value in base),
+    )
 
 
 def _clamp_background(
