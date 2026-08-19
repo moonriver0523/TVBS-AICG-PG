@@ -381,13 +381,19 @@ def build_prompt(
     safe_frame=True 時輸出滿版指示（留白由後端 safe_frame.py 置框處理）。
     """
     text_rules = EDITOR_TEXT_RULES if role == "編輯" else REPORTER_TEXT_RULES
-    if safe_frame:
-        # 編輯換一套：上下留背景帶，後端裁掉它換取更小的水平拉伸失真。
-        # 記者是 21:9 FIT，不走拉伸，留帶只會白白縮小畫面。
-        margin_rules = EDITOR_FULL_BLEED_RULES if role == "編輯" else FULL_BLEED_RULES
+    # 分流的依據是「後端會不會水平拉伸」，不是安全框開關本身：
+    #   編輯 OFF → 拉伸填滿對位框，要上下背景帶把拉伸失真吃掉
+    #   編輯 ON  → 2% 薄框走 FIT 不拉伸，再留背景帶會讓實際邊界遠超過 2%
+    #   記者 ON  → 21:9 FIT，同理不留帶
+    # 編輯版自 2026-08-19 起兩檔都是滿版生成，沒有「叫模型自己縮小置中」那條路。
+    if role == "編輯" and not safe_frame:
+        margin_rules = EDITOR_FULL_BLEED_RULES
+        canvas_line = CANVAS_FULL_BLEED_LINE
+    elif role == "編輯" or safe_frame:
+        margin_rules = FULL_BLEED_RULES
         canvas_line = CANVAS_FULL_BLEED_LINE
     else:
-        margin_rules = EDITOR_SAFE_AREA if role == "編輯" else REPORTER_SAFE_AREA
+        margin_rules = REPORTER_SAFE_AREA
         canvas_line = CANVAS_MARGIN_LINE
 
     # 視覺忠實度區塊：地圖規則只在已解析的類型是地圖時注入

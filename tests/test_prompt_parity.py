@@ -76,24 +76,57 @@ class ConstantParityTests(unittest.TestCase):
             "EDITOR_FULL_BLEED_RULES", news_prompt.EDITOR_FULL_BLEED_RULES
         )
 
+    def _prompt(self, role: str, safe_frame: bool) -> str:
+        return news_prompt.build_prompt(
+            role=role, engine="gpt", type_label="資料圖表",
+            style="S", structure="T", variable="V", safe_frame=safe_frame,
+        )
+
     def test_editor_replaces_the_full_bleed_block_rather_than_appending(self):
-        """編輯要換掉整段滿版規則，不能兩段並存。
+        """編輯的拉伸路徑要換掉整段滿版規則，不能兩段並存。
 
         兩段並存實測只留 0-8px 背景帶：FULL_BLEED_RULES 開頭就寫「不准留白」
         並聲明 OVERRIDE 衝突指令，模型會聽它而不是後面的留邊要求。
+
+        2026-08-19 起「哪一檔是拉伸」對調了——編輯的拉伸路徑改掛在 safe_frame=False
+        （見 main.resolve_frame_plan）。規則本身沒變，斷言跟著換到對的那一檔，
+        並補上「四種組合都不得並存」的檢查。
         """
-        editor = news_prompt.build_prompt(
-            role="編輯", engine="gpt", type_label="資料圖表",
-            style="S", structure="T", variable="V", safe_frame=True,
-        )
-        reporter = news_prompt.build_prompt(
-            role="記者", engine="gpt", type_label="資料圖表",
-            style="S", structure="T", variable="V", safe_frame=True,
-        )
-        self.assertIn(news_prompt.EDITOR_FULL_BLEED_RULES, editor)
-        self.assertNotIn(news_prompt.FULL_BLEED_RULES, editor)
+        editor_stretch = self._prompt("編輯", False)  # 拉伸填滿對位框
+        self.assertIn(news_prompt.EDITOR_FULL_BLEED_RULES, editor_stretch)
+        self.assertNotIn(news_prompt.FULL_BLEED_RULES, editor_stretch)
+
+        # 2% 薄框走 FIT 不拉伸，用與記者相同的滿版規則（不留背景帶）
+        editor_thin = self._prompt("編輯", True)
+        self.assertIn(news_prompt.FULL_BLEED_RULES, editor_thin)
+        self.assertNotIn(news_prompt.EDITOR_FULL_BLEED_RULES, editor_thin)
+
+        reporter = self._prompt("記者", True)
         self.assertIn(news_prompt.FULL_BLEED_RULES, reporter)
         self.assertNotIn(news_prompt.EDITOR_FULL_BLEED_RULES, reporter)
+
+        for role in ("編輯", "記者"):
+            for safe_frame in (True, False):
+                with self.subTest(role=role, safe_frame=safe_frame):
+                    prompt = self._prompt(role, safe_frame)
+                    both = (
+                        news_prompt.FULL_BLEED_RULES in prompt
+                        and news_prompt.EDITOR_FULL_BLEED_RULES in prompt
+                    )
+                    self.assertFalse(both, "兩段滿版規則並存，模型會只聽前面那段")
+
+    def test_editor_never_asks_the_model_to_shrink_and_centre(self):
+        """編輯版兩檔都是滿版生成——縮小置中那條路 2026-08-19 已廢除。
+
+        漏接的症狀很隱蔽：圖照樣出得來，只是模型自己留了厚邊、後端再壓一次框，
+        變成雙重留白，不會有任何執行期錯誤。
+        """
+        for safe_frame in (True, False):
+            with self.subTest(safe_frame=safe_frame):
+                prompt = self._prompt("編輯", safe_frame)
+                self.assertNotIn(news_prompt.EDITOR_SAFE_AREA, prompt)
+                self.assertNotIn(news_prompt.REPORTER_SAFE_AREA, prompt)
+                self.assertIn(news_prompt.CANVAS_FULL_BLEED_LINE, prompt)
 
     def test_canvas_lines(self):
         for name, value in (

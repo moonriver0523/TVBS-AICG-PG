@@ -183,9 +183,14 @@ class ImageGenerateRequest(BaseModel):
     provider: Literal["gemini", "gpt"] = "gemini"
     aspect_ratio: str = "16:9"
     image_size: str = "1K"
-    # True＝生成後用 safe_frame 把整張圖置入 TVBS 安全框並補背景
+    # 使用者的安全框開關。⚠️ 不等於「要不要後製」——編輯版兩檔都會後製，
+    # 這個旗標只決定用哪一種（見 resolve_frame_plan）。
     safe_frame: bool = False
-    # 記者＝官方 Locked-Frame（底部較深）；編輯＝對位框（四邊接近均匀）
+    # 帶的是**角色**（記者／編輯），不是解析後的 profile 名稱。
+    # 實際用哪個框由 resolve_frame_plan 依（角色, safe_frame）決定：
+    #   記者      → 官方 Locked-Frame（底部較深）
+    #   編輯 OFF  → 對位框，拉伸填滿
+    #   編輯 ON   → 2% 薄框，等比例置中
     safe_frame_profile: str = "記者"
     # 真人肖像的參考照片（data URL）。空字串＝這次不附參考圖。
     reference_image_data_url: str = ""
@@ -742,7 +747,8 @@ def generate(req: GenerateRequest):
         role=req.role,
         density=req.density,
         type_label=req.type_label,
-        full_bleed=req.safe_frame,
+        # 編輯版兩檔都要滿版版面，不能直接看 safe_frame（見 resolve_frame_plan）
+        full_bleed=resolve_frame_plan(req.role, req.safe_frame)[0],
         user_instruction=req.user_instruction,
         exclude_people=req.exclude_people,
     )
@@ -1031,11 +1037,16 @@ def generate_image(req: ImageGenerateRequest):
     req = apply_user_references_to_image_request(req)
     request_id = request_log.new_request_id()
     try:
+        # safe_frame_profile 帶的是「角色」，實際要用哪個框在這裡才決定——
+        # 全系統只有這一個解析點，pipeline 與網頁版直呼都會經過。
+        _, needs_frame, frame_profile = resolve_frame_plan(
+            req.safe_frame_profile, req.safe_frame
+        )
         result = finalize_image_result(
             generate_image_raw(req),
             aspect_ratio=req.aspect_ratio,
-            safe_frame=req.safe_frame,
-            profile=req.safe_frame_profile,
+            safe_frame=needs_frame,
+            profile=frame_profile,
         )
     except Exception as exc:
         if not _inside_pipeline.get():
@@ -1625,6 +1636,30 @@ SAFE_FRAME_ASPECT_RATIO = "21:9"
 DEFAULT_ASPECT_RATIO = "16:9"
 
 
+def resolve_frame_plan(role: str, safe_frame: bool) -> tuple[bool, bool, str]:
+    """把（角色, 安全框開關）翻成（要滿版版面?, 要後製置框?, 置框 profile）。
+
+    這是編輯版兩種模式的唯一決定點，三個呼叫端（消化、生圖、整條 pipeline）
+    都問這裡，才不會有人漏接就悄悄退回舊行為。
+
+    編輯版（2026-08-19 起）：**兩檔都是滿版生成＋後製**，開關只決定後製方式——
+      OFF → 拉伸填滿對位框（即 2026-08-17～08-19 掛在 ON 的那個行為）
+      ON  → 四周各壓 2% 薄框，輸出完整 1920×1080
+    原本 OFF 那條「靠 prompt 叫模型自己縮小置中留厚邊、完全不後製」已依使用者
+    2026-08-19 裁決廢除，編輯版不再有任何不後製的路徑。
+
+    記者版不受影響：OFF 就是不出滿版版面、也不後製。
+    """
+    if role == safe_area_spec.EDITOR_PROFILE:
+        profile = (
+            safe_area_spec.EDITOR_FRAME_PROFILE
+            if safe_frame
+            else safe_area_spec.EDITOR_PROFILE
+        )
+        return True, True, profile
+    return safe_frame, safe_frame, safe_area_spec.REPORTER_PROFILE
+
+
 def resolve_aspect_ratio(
     requested: str | None, safe_frame: bool, role: str = "記者"
 ) -> str:
@@ -1925,11 +1960,16 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
     )
     request_id = request_log.new_request_id()
     try:
+        # 追加修改也要走同一個解析點，否則編輯 OFF 改完圖會整個跳過後製，
+        # 出來一張沒置框的原始生成圖（尺寸與版面都不對，卻不會報錯）。
+        _, needs_frame, frame_profile = resolve_frame_plan(
+            req.safe_frame_profile, req.safe_frame
+        )
         result = finalize_image_result(
             generate_image_raw(image_req),
             aspect_ratio=req.aspect_ratio,
-            safe_frame=req.safe_frame,
-            profile=req.safe_frame_profile,
+            safe_frame=needs_frame,
+            profile=frame_profile,
         )
     except Exception as exc:
         request_log.log_failure(
@@ -2026,9 +2066,6 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
     request_id = request_log.new_request_id()
     # 編輯固定 GPT＋16:9＋對位框；記者維持呼叫端 provider、safe_frame 時 21:9
     provider = "gpt" if req.role == "編輯" else req.provider
-    frame_profile = (
-        req.role if req.role in safe_area_spec.PROFILES else safe_area_spec.REPORTER_PROFILE
-    )
     aspect_ratio = resolve_aspect_ratio(req.aspect_ratio, req.safe_frame, req.role)
     token = _inside_pipeline.set(True)
     try:
@@ -2065,7 +2102,9 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                     aspect_ratio=aspect_ratio,
                     image_size=req.image_size,
                     safe_frame=req.safe_frame,
-                    safe_frame_profile=frame_profile,
+                    # 傳角色而非解析後的 profile：generate_image 會解析一次，
+                    # 這裡先解析會讓它拿「編輯安全框」當角色再解析一次而解錯。
+                    safe_frame_profile=req.role,
                     # 單人走既有的單張欄位（措辭與行為與放寬前逐字相同），
                     # 2-3 人才走多張通道
                     reference_image_data_url=(
