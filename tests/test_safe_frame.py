@@ -472,17 +472,21 @@ class EditorTwoFrameModesTests(unittest.TestCase):
             (True, True, safe_area_spec.REPORTER_PROFILE),
         )
 
-    def test_thin_frame_margins_are_two_percent_on_every_side(self):
-        """2% 是使用者指定的數字，四邊都要精準吃到，不能只對兩邊。"""
+    THIN_FRAME_RATIO = 0.04  # 使用者 2026-08-19 指定（先 2% 後改 4%）
+
+    def test_thin_frame_margins_are_the_requested_percent_on_every_side(self):
+        """4% 是使用者指定的數字，四邊都要精準吃到，不能只對兩邊。"""
         width, height = safe_frame.DEFAULT_CANVAS
         margins = safe_area_spec.required_margins_px(
             width, height, safe_area_spec.EDITOR_FRAME_PROFILE
         )
         self.assertEqual(margins["left"], margins["right"])
         self.assertEqual(margins["top"], margins["bottom"])
-        for edge, expected in (("left", width * 0.02), ("top", height * 0.02)):
+        for edge, full in (("left", width), ("top", height)):
             with self.subTest(edge=edge):
-                self.assertAlmostEqual(margins[edge], expected, delta=1)
+                self.assertAlmostEqual(
+                    margins[edge], full * self.THIN_FRAME_RATIO, delta=1
+                )
 
     def test_thin_frame_fits_sixteen_by_nine_without_cropping(self):
         """2% 內容區的比例幾乎正好是 16:9，FIT 進去不該裁掉任何東西。"""
@@ -582,6 +586,42 @@ class BackdropMatchesContentTests(unittest.TestCase):
         """深底 CG 是最常見的情況，襯底不能被壓成黑邊。"""
         output = self._framed((16, 20, 28), (10, 13, 18))
         self.assertGreater(sum(output.getpixel((5, 5))), 20)
+
+    def test_shadow_is_dropped_when_the_margin_is_too_thin(self):
+        """留白比投影窄時要停用投影，否則薄邊會整條變暗邊。
+
+        投影伸展 SHADOW_DROP+SHADOW_BLUR＝36px，編輯薄框的邊只有 43px（4%）：
+        投影鋪滿整條且沒有空間衰減回襯底色，留白就從「配色一致」變成「暗邊」。
+        實測亮度 200 的內容（襯底真色 175）：43px 底邊 132→167，整條回不到 175。
+        門檻因此取伸展的兩倍——43 只差 7px 就過「剛好大於」，卻一樣難看。
+        """
+        canvas = safe_frame.DEFAULT_CANVAS
+        self.assertFalse(
+            safe_frame._shadow_fits(canvas, safe_area_spec.EDITOR_FRAME_PROFILE)
+        )
+        self.assertTrue(
+            safe_frame._shadow_fits(canvas, safe_area_spec.REPORTER_PROFILE)
+        )
+
+        bright = Image.new("RGB", (1536, 864), (200, 200, 200))
+        buffer = io.BytesIO()
+        bright.save(buffer, format="PNG")
+        output = Image.open(
+            io.BytesIO(
+                safe_frame.apply_safe_frame(
+                    buffer.getvalue(), profile=safe_area_spec.EDITOR_FRAME_PROFILE
+                )
+            )
+        ).convert("RGB")
+
+        _x0, _y0, _x1, y1 = safe_area_spec.safe_rect(
+            *canvas, safe_area_spec.EDITOR_FRAME_PROFILE
+        )
+        mid_x = canvas[0] // 2
+        band = [output.getpixel((mid_x, y))[0] for y in range(y1 + 1, canvas[1])]
+        self.assertLess(
+            max(band) - min(band), 6, f"薄邊上下差 {max(band) - min(band)}，投影沒停掉"
+        )
 
     def test_bright_headline_in_the_sample_strip_does_not_lift_the_backdrop(self):
         """取樣帶裡有亮元素時襯底不能被帶亮——這正是中位數存在的理由。

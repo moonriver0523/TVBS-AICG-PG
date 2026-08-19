@@ -261,6 +261,27 @@ def _clamp_background(
     return out
 
 
+def _shadow_fits(canvas: tuple[int, int], profile: str) -> bool:
+    """留白夠不夠寬到容得下投影。
+
+    投影的用意是讓內容讀起來像浮在襯底上的卡片，這需要一圈明顯比投影還寬的襯底。
+    留白比投影窄時效果會整個反過來：投影鋪滿整條邊、且沒有空間衰減回襯底色，
+    薄邊就從「配色一致的留白」變成「一圈暗邊」。
+
+    門檻取投影伸展的兩倍，不是「剛好大於」——留白必須寬到讓投影衰減完還剩下
+    一段乾淨襯底，看起來才是「浮起的卡片」而非「一圈暗邊」。實測（亮度 200
+    的內容，襯底真色 175）：
+
+        2% 薄邊 22px：整條 128→139，回不到 175
+        4% 薄邊 43px：整條 132→167，仍然回不到 175（只差 7px 就過「剛好大於」
+                      這個門檻，卻一樣難看，這就是門檻要加倍的理由）
+        記者   109px 起：衰減得回去，投影是它原本就設計好的樣子
+    """
+    reach = (SHADOW_DROP + SHADOW_BLUR) * 2
+    margins = safe_area_spec.required_margins_px(*canvas, profile)
+    return min(margins.values()) > reach
+
+
 def _apply_content_shadow(
     base: Image.Image, box: tuple[int, int, int, int]
 ) -> Image.Image:
@@ -350,7 +371,9 @@ def apply_safe_frame(
         if background == BACKDROP:
             # 取樣對象是「實際會被貼上去的 content」而非原圖：mode>0 時 content 被裁過，
             # 緊鄰襯底的是裁切後的邊緣，拿原圖取樣會對到一條根本不在成品上的色帶。
-            base = _apply_content_shadow(_backdrop_background(content, canvas), box)
+            base = _backdrop_background(content, canvas)
+            if _shadow_fits(canvas, profile):
+                base = _apply_content_shadow(base, box)
         elif background == CLAMP:
             base = _clamp_background(content, box, canvas)
         else:
