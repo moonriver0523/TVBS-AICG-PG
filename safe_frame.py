@@ -79,14 +79,33 @@ BLUR = "blur"
 BACKGROUNDS = (BACKDROP, CLAMP, BLUR)
 DEFAULT_BACKGROUND = BACKDROP
 
-# backdrop：襯底由邊緣色做的垂直漸層構成，上亮下暗。這兩個係數是對照時定下來的，
-# 夠暗讓中央內容跳出來，又不會暗到看起來像黑邊。
-BACKDROP_TOP_FACTOR = 0.62
-BACKDROP_FALLOFF = 0.18
+# backdrop：襯底是垂直漸層，上下端點各自取自內容上／下緣的顏色。
+#
+# 2026-08-19 改版。原本的做法是「整張圖外圈的平均色 × 0.62（頂）～0.44（底）」，
+# 實測 10 張線上成品（歷史紀錄 0818–0819）發現襯底**每一張都比內容亮**，色差
+# 14–29，在深底 CG 上會讀成一圈灰紫色的外框。兩個成因疊加：
+#   1. 取樣：整張外圈的「平均」被標題列、光暈這種亮元素拉高
+#      （例：外圈平均 (44,44,44)，內容緊鄰邊界處其實只有 (12,12,12)）。
+#   2. 合成：0.62/0.44 是憑空的壓暗係數，與內容實際亮度無關。
+# 只修其中一個會讓誤差翻面（取樣修好、係數不動 → 襯底變成系統性偏暗），
+# 所以兩個一起改：改取中位數、端點直接取自內容邊緣、壓暗降到僅 5%。
+#
+# ⚠️ 這推翻了 2026-07-30 使用者選定的「刻意做成襯底（deliberate mat）」設計方向，
+# 是使用者 2026-08-19 看過還原重組對照圖後改的決定，不是程式自作主張。
+BACKDROP_DIM = 0.95
+# 底部再多壓一點：記者框底部是跑馬燈預留區，襯底若比內容亮會搶走下方字卡的視覺。
+# 真實 CG 本來就上亮下暗（實測 10/10），這個係數只是讓「下不亮於上」變成結構保證，
+# 而不是碰運氣依賴輸入。
+BACKDROP_BOTTOM_DIM = 0.92
+# 取樣帶：自內容邊緣往內 1%～4%。跳過最外層那一絲是因為生成圖邊緣常有光暈，
+# 與 safe_area_spec.TOLERANCE 存在的理由相同。
+EDGE_SAMPLE_INSET = 0.01
+EDGE_SAMPLE_DEPTH = 0.03
 # 內容下方的柔和投影，讓它像浮在襯底上的卡片而不是硬貼上去的方塊。
+# 襯底改成與內容同色後，原本的 170 會變成一圈明顯的黑暈，2026-08-19 降到 90。
 SHADOW_SPREAD = 6
 SHADOW_DROP = 14
-SHADOW_ALPHA = 170
+SHADOW_ALPHA = 90
 SHADOW_BLUR = 22
 
 # blur 模式的參數（保留作對照與回溯）：模糊半徑取畫布寬的比例，
@@ -160,33 +179,51 @@ def _blurred_background(source: Image.Image, canvas: tuple[int, int]) -> Image.I
     return ImageEnhance.Brightness(blurred).enhance(BACKGROUND_DIM)
 
 
-def _edge_colour(source: Image.Image) -> tuple[int, int, int]:
-    """取原圖外圈的平均色。縮成 9×9 後只採邊框那一圈，中央的主視覺不參與。"""
-    small = source.resize((9, 9), Image.LANCZOS)
-    border = [
-        small.getpixel((x, y))
-        for x in range(9)
-        for y in range(9)
-        if x in (0, 8) or y in (0, 8)
-    ]
-    return tuple(round(sum(channel) / len(border)) for channel in zip(*border))
+def _edge_strip_colour(content: Image.Image, edge: str) -> tuple[int, int, int]:
+    """取內容上緣或下緣往內一條窄帶的逐通道中位數。
+
+    用中位數而不是平均：橫幅標題、發光數字這種高亮元素只佔窄帶的一小部分，
+    平均會被它們整個拉高（實測讓襯底比內容亮 14–29），中位數則會忽略它們、
+    回報這一帶真正的底色。
+    """
+    width, height = content.size
+    inset = round(height * EDGE_SAMPLE_INSET)
+    depth = max(1, round(height * EDGE_SAMPLE_DEPTH))
+    if edge == "top":
+        box = (0, inset, width, inset + depth)
+    else:
+        box = (0, max(0, height - inset - depth), width, max(1, height - inset))
+
+    strip = content.crop(box)
+    # 先降到固定取樣數再排序：夠精準，又不會因為來源解析度變大而變慢。
+    strip = strip.resize((64, max(1, min(strip.height, 32))), Image.LANCZOS)
+    pixels = list(strip.getdata())
+    return tuple(sorted(p[channel] for p in pixels)[len(pixels) // 2] for channel in range(3))
 
 
-def _backdrop_background(source: Image.Image, canvas: tuple[int, int]) -> Image.Image:
-    """用邊緣色做上亮下暗的垂直漸層襯底。
+def _backdrop_background(content: Image.Image, canvas: tuple[int, int]) -> Image.Image:
+    """垂直漸層襯底，上下端點各自取自內容的上／下緣顏色。
 
-    刻意不追求「與內容無縫」——內容會另外加投影，讀起來是一張卡片放在襯底上。
-    這樣就沒有 blur 那種「像壞掉」的觀感，也不會出現鬼影或拉伸條紋。
+    目標是四周留白讀起來像 CG 背景自己延伸出去的，而不是外掛的一圈色塊。
+    因為端點分開取，襯底會自然重現這張 CG 本身的上下明暗走勢——單一顏色做不到
+    這件事（實測同一張圖上緣 (31,48,66)、下緣 (29,38,43)，差很多）。
     """
     canvas_w, canvas_h = canvas
-    base_rgb = _edge_colour(source)
+    top_rgb = _edge_strip_colour(content, "top")
+    bottom_rgb = _edge_strip_colour(content, "bottom")
+    top_rgb = tuple(value * BACKDROP_DIM for value in top_rgb)
+    bottom_rgb = tuple(value * BACKDROP_DIM * BACKDROP_BOTTOM_DIM for value in bottom_rgb)
+
     backdrop = Image.new("RGB", canvas)
     draw = ImageDraw.Draw(backdrop)
     for y in range(canvas_h):
-        factor = BACKDROP_TOP_FACTOR - BACKDROP_FALLOFF * (y / canvas_h)
+        ratio = y / max(1, canvas_h - 1)
         draw.line(
             [(0, y), (canvas_w, y)],
-            fill=tuple(max(0, min(255, round(value * factor))) for value in base_rgb),
+            fill=tuple(
+                max(0, min(255, round(top_rgb[c] + (bottom_rgb[c] - top_rgb[c]) * ratio)))
+                for c in range(3)
+            ),
         )
     return backdrop
 
@@ -311,7 +348,9 @@ def apply_safe_frame(
         box = (paste_x, paste_y, paste_x + content.width, paste_y + content.height)
 
         if background == BACKDROP:
-            base = _apply_content_shadow(_backdrop_background(source, canvas), box)
+            # 取樣對象是「實際會被貼上去的 content」而非原圖：mode>0 時 content 被裁過，
+            # 緊鄰襯底的是裁切後的邊緣，拿原圖取樣會對到一條根本不在成品上的色帶。
+            base = _apply_content_shadow(_backdrop_background(content, canvas), box)
         elif background == CLAMP:
             base = _clamp_background(content, box, canvas)
         else:
