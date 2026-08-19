@@ -102,38 +102,52 @@ class RefineEndpointTests(unittest.TestCase):
 
         證明沒有二次拉伸：每輪都拿 source_image_base64（置框前）繼續改，
         成品永遠等於 apply_safe_frame(原圖) 一次的結果。
+
+        2026-08-19：編輯版兩檔都會後製（見 main.resolve_frame_plan），所以兩檔
+        都要驗——OFF 是拉伸到對位框、ON 是 2% 薄框，任一檔疊加失真都是缺陷。
         """
+        import safe_area_spec
         import safe_frame
 
-        expected = safe_frame.apply_safe_frame(
-            base64.b64decode(EDITOR_RAW), profile="編輯"
-        )
-        source = EDITOR_RAW
-        for round_number in range(3):
-            with patch.object(
-                main, "generate_image_raw", return_value=fake_raw_response(EDITOR_RAW)
-            ) as mock_raw:
-                result = main.refine_image(
-                    self.refine_request(source_image_base64=source)
-                )
-            # 下一輪一律用新的置框前原圖，成品只拿來顯示
-            self.assertEqual(result.source_image_base64, EDITOR_RAW)
-            sent = mock_raw.call_args[0][0]
-            self.assertNotIn(
-                result.image_data_base64,
-                sent.reference_image_data_url,
-                f"第 {round_number + 1} 輪把置框後成品餵回去了（會失真疊加）",
+        for safe_frame_on, profile in (
+            (False, safe_area_spec.EDITOR_PROFILE),
+            (True, safe_area_spec.EDITOR_FRAME_PROFILE),
+        ):
+            expected = safe_frame.apply_safe_frame(
+                base64.b64decode(EDITOR_RAW), profile=profile
             )
-            with Image.open(
-                io.BytesIO(base64.b64decode(result.image_data_base64))
-            ) as image:
-                self.assertEqual(image.size, EDITOR_FRAMED_SIZE)
-            self.assertEqual(
-                base64.b64decode(result.image_data_base64),
-                expected,
-                "成品必須與原圖直接置框逐位元相符（無二次拉伸）",
-            )
-            source = result.source_image_base64
+            expected_size = Image.open(io.BytesIO(expected)).size
+            source = EDITOR_RAW
+            for round_number in range(3):
+                with self.subTest(safe_frame=safe_frame_on, round=round_number + 1):
+                    with patch.object(
+                        main,
+                        "generate_image_raw",
+                        return_value=fake_raw_response(EDITOR_RAW),
+                    ) as mock_raw:
+                        result = main.refine_image(
+                            self.refine_request(
+                                source_image_base64=source, safe_frame=safe_frame_on
+                            )
+                        )
+                    # 下一輪一律用新的置框前原圖，成品只拿來顯示
+                    self.assertEqual(result.source_image_base64, EDITOR_RAW)
+                    sent = mock_raw.call_args[0][0]
+                    self.assertNotIn(
+                        result.image_data_base64,
+                        sent.reference_image_data_url,
+                        f"第 {round_number + 1} 輪把置框後成品餵回去了（會失真疊加）",
+                    )
+                    with Image.open(
+                        io.BytesIO(base64.b64decode(result.image_data_base64))
+                    ) as image:
+                        self.assertEqual(image.size, expected_size)
+                    self.assertEqual(
+                        base64.b64decode(result.image_data_base64),
+                        expected,
+                        "成品必須與原圖直接置框逐位元相符（無二次處理）",
+                    )
+                    source = result.source_image_base64
 
     def test_source_mime_type_reports_raw_mime(self):
         """置框前原圖的實際 MIME 要回給前端；模型回 jpeg 時不能被硬當成 png。"""
@@ -164,12 +178,31 @@ class RefineEndpointTests(unittest.TestCase):
             self.assertEqual(image.size, (1920, 1080))
 
     def test_no_safe_frame_returns_empty_source(self):
+        """不置框時成品就是原圖本身，沒有「置框前原圖」可回。
+
+        2026-08-19 起唯一還會不置框的是記者 OFF——編輯版兩檔都會後製，
+        所以這裡改用記者驗（見 main.resolve_frame_plan）。
+        """
+        with patch.object(
+            main, "generate_image_raw", return_value=fake_raw_response(EDITOR_RAW)
+        ):
+            result = main.refine_image(
+                self.refine_request(safe_frame=False, safe_frame_profile="記者")
+            )
+        self.assertEqual(result.source_image_base64, "")
+        self.assertEqual(result.image_data_base64, EDITOR_RAW)
+
+    def test_editor_off_is_still_framed_on_refine(self):
+        """編輯 OFF 追加修改仍要置框——漏接會回一張沒置框的生成圖且不報錯。"""
         with patch.object(
             main, "generate_image_raw", return_value=fake_raw_response(EDITOR_RAW)
         ):
             result = main.refine_image(self.refine_request(safe_frame=False))
-        self.assertEqual(result.source_image_base64, "")
-        self.assertEqual(result.image_data_base64, EDITOR_RAW)
+        self.assertEqual(result.source_image_base64, EDITOR_RAW)
+        with Image.open(
+            io.BytesIO(base64.b64decode(result.image_data_base64))
+        ) as image:
+            self.assertEqual(image.size, EDITOR_FRAMED_SIZE)
 
 
 class GenerateImageSourceFieldTests(unittest.TestCase):

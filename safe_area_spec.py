@@ -14,6 +14,10 @@ BASE_CANVAS = (1920, 1080)
 
 REPORTER_PROFILE = "記者"
 EDITOR_PROFILE = "編輯"
+# 編輯的第二種框（2026-08-19 使用者指定）：四邊各留畫布的 2%，內容等比例置入。
+# ⚠️ 這一組**不是** TVBS 官方安全框規格，是編輯自己要的薄邊。上面那段
+# 「凡驗收一律以這組數值換算」只約束記者與編輯對位框那兩組官方數值。
+EDITOR_FRAME_PROFILE = "編輯安全框"
 
 # 記者：Studio Locked-Frame（預留跑馬燈，底部較深）
 # 編輯：對位框紅線內緣 90/70/1748/924（1.892）。
@@ -24,9 +28,14 @@ EDITOR_PROFILE = "編輯"
 #
 # 改回整個紅框，靠 safe_frame 的水平拉伸填滿（見那邊 STRETCH_PROFILES 的說明）：
 # 零裁切、零機制底色。試過的其他做法與淘汰原因記在 safe_frame.STRETCH_PROFILES。
+#
+# 編輯安全框：1920×1080 的 2% 是 38.4／21.6，取整成 38／22，內容區 1844×1036。
+# 這個內容區的長寬比 1.780 與 16:9（1.778）幾乎相同，所以 16:9 生成圖 FIT 進去
+# 零裁切、零拉伸，四周只剩那圈 2% 由襯底填滿——不像對位框（1.892）必須二選一。
 PROFILES = {
     REPORTER_PROFILE: (140, 109, 1634, 751),
     EDITOR_PROFILE: (90, 70, 1748, 924),
+    EDITOR_FRAME_PROFILE: (38, 22, 1844, 1036),
 }
 
 BASE_SAFE_RECT = PROFILES[REPORTER_PROFILE]  # 預設記者，舊呼叫端不用改

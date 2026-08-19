@@ -7,6 +7,8 @@
 
 import io
 import os
+import pathlib
+import re
 import unittest
 from unittest.mock import patch
 
@@ -424,6 +426,188 @@ class DigestFullBleedTests(unittest.TestCase):
                     role, "standard", "資料圖表", full_bleed=full_bleed
                 )
                 self.assertNotIn("{layout_rule}", prompt)
+
+
+class EditorTwoFrameModesTests(unittest.TestCase):
+    """編輯版的兩種模式（2026-08-19 使用者指定的對調）。
+
+    對調本身容易做對，容易漏的是**編輯 OFF 仍然要後製**——舊的
+    `if not safe_frame: return` 會讓它悄悄退回「完全不置框」：圖照樣出得來，
+    只是尺寸與版面全錯，不會有任何執行期錯誤提醒你。
+    """
+
+    def _output(self, profile: str, source_size=(1536, 864)):
+        img = Image.new("RGB", source_size, (20, 30, 60))
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        data = safe_frame.apply_safe_frame(buffer.getvalue(), profile=profile)
+        return Image.open(io.BytesIO(data)).convert("RGB")
+
+    def test_editor_off_still_gets_post_processed(self):
+        """OFF ＝ 舊的 ON：滿版生成＋拉伸到對位框，不是「不後製」。"""
+        full_bleed, needs_frame, profile = main.resolve_frame_plan("編輯", False)
+        self.assertTrue(full_bleed, "編輯 OFF 仍要出滿版版面")
+        self.assertTrue(needs_frame, "編輯 OFF 仍要後製，漏了會退回已廢除的舊行為")
+        self.assertEqual(profile, safe_area_spec.EDITOR_PROFILE)
+
+    def test_editor_on_uses_the_thin_frame(self):
+        full_bleed, needs_frame, profile = main.resolve_frame_plan("編輯", True)
+        self.assertTrue(full_bleed)
+        self.assertTrue(needs_frame)
+        self.assertEqual(profile, safe_area_spec.EDITOR_FRAME_PROFILE)
+
+    def test_reporter_is_untouched_by_the_editor_change(self):
+        self.assertEqual(
+            main.resolve_frame_plan("記者", True),
+            (True, True, safe_area_spec.REPORTER_PROFILE),
+        )
+        self.assertEqual(
+            main.resolve_frame_plan("記者", False),
+            (False, False, safe_area_spec.REPORTER_PROFILE),
+        )
+
+    def test_unknown_role_falls_back_to_reporter(self):
+        self.assertEqual(
+            main.resolve_frame_plan("", True),
+            (True, True, safe_area_spec.REPORTER_PROFILE),
+        )
+
+    def test_thin_frame_margins_are_two_percent_on_every_side(self):
+        """2% 是使用者指定的數字，四邊都要精準吃到，不能只對兩邊。"""
+        width, height = safe_frame.DEFAULT_CANVAS
+        margins = safe_area_spec.required_margins_px(
+            width, height, safe_area_spec.EDITOR_FRAME_PROFILE
+        )
+        self.assertEqual(margins["left"], margins["right"])
+        self.assertEqual(margins["top"], margins["bottom"])
+        for edge, expected in (("left", width * 0.02), ("top", height * 0.02)):
+            with self.subTest(edge=edge):
+                self.assertAlmostEqual(margins[edge], expected, delta=1)
+
+    def test_thin_frame_fits_sixteen_by_nine_without_cropping(self):
+        """2% 內容區的比例幾乎正好是 16:9，FIT 進去不該裁掉任何東西。"""
+        for source in ((1536, 864), (1024, 576), (1280, 720)):
+            with self.subTest(source=source):
+                left, top, right, bottom = safe_frame.plan_placement(
+                    source,
+                    safe_frame.DEFAULT_CANVAS,
+                    safe_frame.FIT,
+                    safe_area_spec.EDITOR_FRAME_PROFILE,
+                )
+                placed = (right - left) / (bottom - top)
+                self.assertAlmostEqual(placed, source[0] / source[1], delta=0.005)
+
+    def test_the_two_modes_produce_different_shaped_output(self):
+        """兩檔的成品形狀不同：ON 是完整畫布，OFF 是對位框那一塊。"""
+        self.assertEqual(
+            self._output(safe_area_spec.EDITOR_FRAME_PROFILE).size,
+            safe_frame.DEFAULT_CANVAS,
+        )
+        x0, y0, x1, y1 = safe_area_spec.safe_rect(
+            *safe_frame.DEFAULT_CANVAS, safe_area_spec.EDITOR_PROFILE
+        )
+        self.assertEqual(
+            self._output(safe_area_spec.EDITOR_PROFILE).size, (x1 - x0, y1 - y0)
+        )
+
+    def test_thin_frame_is_not_stretched(self):
+        """薄框走等比例置入；混進 STRETCH_PROFILES 會讓它變成不等比拉伸。"""
+        self.assertFalse(safe_frame.uses_stretch(safe_area_spec.EDITOR_FRAME_PROFILE))
+        self.assertTrue(safe_frame.uses_stretch(safe_area_spec.EDITOR_PROFILE))
+
+    def test_every_framing_path_goes_through_the_resolver(self):
+        """新增置框路徑時漏接 resolve_frame_plan 不會報錯，只會悄悄出錯圖。
+
+        目前兩個呼叫點是 generate_image 與 refine_image。直接把 req.safe_frame／
+        req.safe_frame_profile 餵給 finalize_image_result 就是漏接的樣子——
+        編輯 OFF 會退回「完全不置框」。
+        """
+        source = pathlib.Path(main.__file__).read_text(encoding="utf-8")
+        calls = re.findall(
+            r"finalize_image_result\(\s*(.*?)\n    \)", source, re.S
+        )
+        self.assertGreaterEqual(len(calls), 2, "找不到置框呼叫點，這個測試需要更新")
+        for call in calls:
+            with self.subTest(call=call.strip()[:60]):
+                self.assertNotIn("safe_frame=req.safe_frame", call)
+                self.assertNotIn("profile=req.safe_frame_profile", call)
+
+
+class BackdropMatchesContentTests(unittest.TestCase):
+    """襯底要取自內容邊緣（2026-08-19）。
+
+    舊做法取整張外圈的平均再乘固定係數，線上 10 張成品每一張襯底都比 CG 亮，
+    深底 CG 上會讀成一圈灰紫色外框。
+    """
+
+    def _framed(self, top_rgb, bottom_rgb, size=(1536, 864)):
+        """做一張上下不同色的滿版圖，置框後回傳成品。"""
+        img = Image.new("RGB", size)
+        draw = ImageDraw.Draw(img)
+        for y in range(size[1]):
+            ratio = y / (size[1] - 1)
+            draw.line(
+                [(0, y), (size[0], y)],
+                fill=tuple(
+                    round(top_rgb[c] + (bottom_rgb[c] - top_rgb[c]) * ratio)
+                    for c in range(3)
+                ),
+            )
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        data = safe_frame.apply_safe_frame(
+            buffer.getvalue(), background=safe_frame.BACKDROP
+        )
+        return Image.open(io.BytesIO(data)).convert("RGB")
+
+    def test_backdrop_tracks_the_content_colour(self):
+        """內容換色，襯底要跟著換——舊做法的固定係數做不到這件事。"""
+        width = safe_frame.DEFAULT_CANVAS[0]
+        warm = self._framed((90, 40, 20), (60, 25, 12)).getpixel((width // 2, 6))
+        cool = self._framed((20, 40, 90), (12, 25, 60)).getpixel((width // 2, 6))
+        self.assertGreater(warm[0], warm[2], "暖色內容的襯底應該偏紅")
+        self.assertGreater(cool[2], cool[0], "冷色內容的襯底應該偏藍")
+
+    def test_backdrop_is_close_to_the_adjacent_content_edge(self):
+        """襯底與緊鄰它的內容邊緣色差要小——這正是編輯反映的那圈外框感。"""
+        x0, y0, _x1, _y1 = safe_area_spec.safe_rect(*safe_frame.DEFAULT_CANVAS)
+        output = self._framed((36, 44, 58), (18, 22, 30))
+        mid_x = safe_frame.DEFAULT_CANVAS[0] // 2
+        backdrop = output.getpixel((mid_x, y0 // 2))
+        content_edge = output.getpixel((mid_x, y0 + 4))
+        gap = sum((a - b) ** 2 for a, b in zip(backdrop, content_edge)) ** 0.5
+        self.assertLess(gap, 12, f"襯底與內容邊緣差 {gap:.1f}，會讀成一圈外框")
+
+    def test_backdrop_never_goes_black_on_dark_content(self):
+        """深底 CG 是最常見的情況，襯底不能被壓成黑邊。"""
+        output = self._framed((16, 20, 28), (10, 13, 18))
+        self.assertGreater(sum(output.getpixel((5, 5))), 20)
+
+    def test_bright_headline_in_the_sample_strip_does_not_lift_the_backdrop(self):
+        """取樣帶裡有亮元素時襯底不能被帶亮——這正是中位數存在的理由。
+
+        真實 CG 的標題橫幅、發光數字常常就壓在內容最上緣那一帶。改成平均值
+        就會被它們拉高，回到 2026-08-19 之前那圈灰紫色外框的行為。
+        （平滑漸層的測試案例抓不到這件事，平均與中位數在那裡相等。）
+        """
+        size = (1536, 864)
+        dark = (18, 22, 30)
+        img = Image.new("RGB", size, dark)
+        draw = ImageDraw.Draw(img)
+        # 佔取樣帶約四成寬的亮標題條，高度覆蓋整條取樣帶（內容高的 1%～4%）
+        draw.rectangle(
+            [0, 0, round(size[0] * 0.4), round(size[1] * 0.05)], fill=(240, 230, 90)
+        )
+        buffer = io.BytesIO()
+        img.save(buffer, format="PNG")
+        data = safe_frame.apply_safe_frame(
+            buffer.getvalue(), background=safe_frame.BACKDROP
+        )
+        output = Image.open(io.BytesIO(data)).convert("RGB")
+
+        backdrop = output.getpixel((safe_frame.DEFAULT_CANVAS[0] // 2, 6))
+        gap = sum((a - b) ** 2 for a, b in zip(backdrop, dark)) ** 0.5
+        self.assertLess(gap, 12, f"襯底被亮標題帶亮了（差 {gap:.1f}），應該用中位數而非平均")
 
 
 if __name__ == "__main__":

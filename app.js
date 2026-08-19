@@ -746,11 +746,22 @@ function currentAspectRatio() {
 
 // GPT 固定 1280×720（忽略解析度切換）；Gemini 才依 1K／2K 變動
 function updateAspectBadge() {
-    const text = state.safeFrame
-        ? `${currentAspectRatio()} → ${state.currentRole === '編輯' ? '編輯對位框' : '記者安全框'} 1920×1080`
-        : (state.engine === 'gpt'
+    // 編輯版兩檔都會後製，只是出來的東西不一樣，所以兩檔都要標出成品尺寸。
+    // 對位框那檔的成品是 1748×924（拉伸後的那一塊本身），不是 1920×1080——
+    // 舊文案寫 1920×1080 是錯的，2026-08-19 一併更正。
+    const isEditor = state.currentRole === '編輯';
+    let text;
+    if (isEditor) {
+        text = state.safeFrame
+            ? `${currentAspectRatio()} → 編輯安全框（四邊 2%）1920×1080`
+            : `${currentAspectRatio()} → 編輯對位框 1748×924`;
+    } else if (state.safeFrame) {
+        text = `${currentAspectRatio()} → 記者安全框 1920×1080`;
+    } else {
+        text = state.engine === 'gpt'
             ? `${DEFAULT_ASPECT_RATIO} / 720p`
-            : `${DEFAULT_ASPECT_RATIO} / ${state.imageSize}`);
+            : `${DEFAULT_ASPECT_RATIO} / ${state.imageSize}`;
+    }
     ['aspectBadge', 'p1-aspectBadge'].forEach(id => {
         const badge = document.getElementById(id);
         if (badge) badge.innerText = text;
@@ -866,13 +877,15 @@ function syncOutput() {
 function buildPrompt({ role, engine, typeLabel, style, structure, variable, safeFrame = false, aspectRatio = '16:9' }) {
     // 共用的正文區塊（style / structure / variable）
     const textRules = role === '編輯' ? EDITOR_TEXT_RULES : REPORTER_TEXT_RULES;
-    // safeFrame=true：留白改由後端 safe_frame.py 數學置框，這裡改下滿版指示
-    // 編輯換一套：上下留背景帶，後端裁掉它換取更小的水平拉伸失真。
-    // 記者是 21:9 FIT，不走拉伸，留帶只會白白縮小畫面。
-    const marginRules = safeFrame
-        ? (role === '編輯' ? EDITOR_FULL_BLEED_RULES : FULL_BLEED_RULES)
-        : (role === '編輯' ? EDITOR_SAFE_AREA : REPORTER_SAFE_AREA);
-    const canvasLine = safeFrame ? CANVAS_FULL_BLEED_LINE : CANVAS_MARGIN_LINE;
+    // 分流的依據是「後端會不會水平拉伸」，不是安全框開關本身：
+    //   編輯 OFF → 拉伸填滿對位框，要上下背景帶把拉伸失真吃掉
+    //   編輯 ON  → 2% 薄框走 FIT 不拉伸，再留背景帶會讓實際邊界遠超過 2%
+    //   記者 ON  → 21:9 FIT，同理不留帶
+    // 編輯版自 2026-08-19 起兩檔都是滿版生成，沒有「叫模型自己縮小置中」那條路。
+    const marginRules = (role === '編輯' && !safeFrame)
+        ? EDITOR_FULL_BLEED_RULES
+        : ((role === '編輯' || safeFrame) ? FULL_BLEED_RULES : REPORTER_SAFE_AREA);
+    const canvasLine = (role === '編輯' || safeFrame) ? CANVAS_FULL_BLEED_LINE : CANVAS_MARGIN_LINE;
 
     // 視覺忠實度區塊：地圖規則只在已解析的類型是地圖時注入
     // （typeLabel 來自 activeType()，自動判斷模式下已是 AI 解析後的具體類型）
