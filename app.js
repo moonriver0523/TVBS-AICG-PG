@@ -7,6 +7,10 @@ const SYSTEM_DISCLAIMER = '"< >" "[ ]" 是給你的指令 不要生成在結果�
 const DEFAULT_VARIABLE_TEMPLATE = '[標題]\n[內文]';
 
 /* ---------- 共用：品牌風格包（四類共用同一組視覺語言） ---------- */
+const LIGHT_LUXURY_TECH_STYLE = {
+    zh: '銀藍香檳金',
+    en: 'Professional Taiwanese broadcast infographic in a light-luxury technology aesthetic: overall high-brightness, low-to-medium saturation; misty blue-grey, silver-blue and pearl-white background tones (#B4C7D5, #D1DADB, #A3B8CA); semi-transparent ice-blue, silvery-white and cool-grey glass information panels; champagne-gold, soft-gold and restrained antique-bronze accents (#CBA352, #D6CDAF, #966F30); all text in deep steel-grey or deep blue-grey; never use pure black text, a large dark-blue or black background, neon colours or saturated tech blue; use translucent glass, brushed metal, fine line-grid textures and soft high-key studio lighting for a clean upscale broadcast finish. Taiwan directional colour convention is mandatory: rise and increase use red, fall and decrease use green; do not use red or green as unrelated decoration.'
+};
 const SHARED_STYLES = {
     '標準電視': [
         { zh:'TVBS紫橘', en:'TV news infographic illustration with analysis-driven visual layout, broadcast-friendly arrangement, 16:9 widescreen, strong left-right division, TVBS signature blue/purple (#4A3C91) primary with accent orange (#F36F21).' },
@@ -28,7 +32,8 @@ const SHARED_STYLES = {
         { zh:'Luxury Art Deco', en:'Luxury / High-End Art Deco, opulent metallic textures, Dark Blue velvet background, Gold leaf accents, Silver highlights, high-contrast premium feel.' },
         { zh:'Soft Art Deco', en:'Soft Art Deco, subtle geometric patterns, diffused lighting, Dark Blue, Gold, and Silver color scheme, balanced broadcast composition.' },
         { zh:'Minimal Art Deco', en:'Minimal Art Deco, stripped-back geometric structure, clean lines, Dark Blue, Gold, Silver palette, essential data focus.' }
-    ]
+    ],
+    '淺色風格': [LIGHT_LUXURY_TECH_STYLE]
 };
 
 /* ---------- 卡牌陳列（資料圖表類共用） ---------- */
@@ -130,7 +135,8 @@ const CHART_TYPES = {
                 { zh:'WPA Poster', en:'WPA Poster 向量插畫風格。Color palette: parchment cream base (#EBE4D1), tan shading (#D8C7A5), navy blue title blocks (#1D2A38), classic gold accents (#B79440), steel blue icon backgrounds (#ADC2D1), white text on dark backgrounds.' },
                 { zh:'UE5電影渲染', en:'UE5電影等級精緻渲染風格。' },
                 { zh:'軍事UI', en:'軍事科幻UI風格，標籤有飄浮的科技UI立體感，字體立體、統一的UI風格配色。' }
-            ]
+            ],
+            '淺色風格': [LIGHT_LUXURY_TECH_STYLE]
         },
         structures: {
             '自訂': [ { zh:'預設', en:'Manual scene description', template: '[標題]\n[場景描述]\n<重點標記>' } ],
@@ -183,7 +189,8 @@ const CHART_TYPES = {
             '復古插畫': [
                 { zh:'WPA Poster', en:'WPA Poster 向量插畫風格，適合用在地圖的風格與配色。Color palette: parchment cream base (#EBE4D1), tan land shading (#D8C7A5), navy blue title blocks (#1D2A38), ocean blue water (#446E82), classic gold accents (#B79440), steel blue icon backgrounds (#ADC2D1), white text on dark backgrounds.' },
                 { zh:'威權宣傳向量', en:'威權國家宣傳向量插畫風格，不要明顯的國家標誌元素(如 紅星)。' }
-            ]
+            ],
+            '淺色風格': [LIGHT_LUXURY_TECH_STYLE]
         },
         structures: {
             '自訂': [ { zh:'預設', en:'Manual map specification', template: '[標題]\n[地區]\n<地點標記>' } ],
@@ -239,7 +246,8 @@ const CHART_TYPES = {
                 { zh:'New Deal立體', en:'New Deal Graphic Style 有立體感。' },
                 { zh:'教科書立體', en:'設計精緻、極度有視覺創意、有立體感的資訊圖表，風格是國家地理雜誌的精緻資訊圖表。' },
                 { zh:'UE5電影渲染', en:'UE5電影等級精緻渲染風格。' }
-            ]
+            ],
+            '淺色風格': [LIGHT_LUXURY_TECH_STYLE]
         },
         structures: {
             '自訂': [ { zh:'預設', en:'Manual process specification', template: '[標題]\n[步驟]\n<步驟1>\n<步驟2>' } ],
@@ -753,7 +761,7 @@ function updateAspectBadge() {
     let text;
     if (isEditor) {
         text = state.safeFrame
-            ? `${currentAspectRatio()} → 編輯安全框（四邊 2%）1920×1080`
+            ? `${currentAspectRatio()} → 編輯安全框（四邊 4%）1920×1080`
             : `${currentAspectRatio()} → 編輯對位框 1748×924`;
     } else if (state.safeFrame) {
         text = `${currentAspectRatio()} → 記者安全框 1920×1080`;

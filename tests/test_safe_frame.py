@@ -483,10 +483,16 @@ class EditorTwoFrameModesTests(unittest.TestCase):
             (True, True, safe_area_spec.REPORTER_PROFILE),
         )
 
-    THIN_FRAME_RATIO = 0.03  # 使用者 2026-08-19 指定（2% → 4% → 3%）
+    THIN_FRAME_RATIO = 0.04  # 使用者 2026-08-20 指定（2% → 4% → 3% → 4%）
+
+    def test_thin_frame_uses_the_four_percent_base_geometry(self):
+        self.assertEqual(
+            safe_area_spec.PROFILES[safe_area_spec.EDITOR_FRAME_PROFILE],
+            (77, 43, 1766, 994),
+        )
 
     def test_thin_frame_margins_are_the_requested_percent_on_every_side(self):
-        """3% 是使用者指定的數字，四邊都要精準吃到，不能只對兩邊。"""
+        """4% 是使用者指定的數字，四邊都要精準吃到，不能只對兩邊。"""
         width, height = safe_frame.DEFAULT_CANVAS
         margins = safe_area_spec.required_margins_px(
             width, height, safe_area_spec.EDITOR_FRAME_PROFILE
@@ -500,7 +506,7 @@ class EditorTwoFrameModesTests(unittest.TestCase):
                 )
 
     def test_thin_frame_fits_sixteen_by_nine_without_cropping(self):
-        """2% 內容區的比例幾乎正好是 16:9，FIT 進去不該裁掉任何東西。"""
+        """4% 內容區的比例幾乎正好是 16:9，FIT 進去不該裁掉任何東西。"""
         for source in ((1536, 864), (1024, 576), (1280, 720)):
             with self.subTest(source=source):
                 left, top, right, bottom = safe_frame.plan_placement(

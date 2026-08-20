@@ -53,6 +53,15 @@ class DigestPromptTests(unittest.TestCase):
         self.assertIn("<蓋章> is optional", prompt)
         self.assertIn("counts as one of the maximum three points", prompt)
 
+    def test_editor_style_rule_chooses_colours_without_examples(self):
+        prompt = build_digest_instructions("編輯", "standard", "資料圖表")
+        self.assertIn(
+            '根據新聞調性（財經、災難、溫馨、政治）自行選擇最合適的主色調與畫面風格',
+            prompt,
+        )
+        self.assertNotIn("深藍色科技感", prompt)
+        self.assertNotIn("紅白色警戒感", prompt)
+
     def test_specified_type_pins_chart_type_and_has_no_auto_rules(self):
         prompt = build_digest_instructions("記者", "standard", "地圖／位置")
         self.assertIn('The "chart_type" field MUST be exactly "地圖／位置"', prompt)
