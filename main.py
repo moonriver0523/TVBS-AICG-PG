@@ -116,6 +116,46 @@ app.add_middleware(
 )
 
 
+# 站台密碼門（2026-08-20 搬遷到 Zeabur 時加）。app.js:1160 的 _INTERNAL_API_KEY
+# 是 entrypoint.sh 在容器啟動時烙進前端的——頁面公開就等於 NEWS_IMAGE_API_KEY
+# 公開，任何拿到網址的人都能呼叫生成端點、消耗 API 額度。部署到公開網址時要有
+# 一道門擋在最前面，把範圍收斂回「知道密碼的自己人」。
+#
+# 設計取捨：
+# - 設了 SITE_PASSWORD 才啟用。不設就完全是舊行為，不影響本機開發與既有部署。
+# - LINE webhook 走自己的 HMAC 簽章驗證（line_bot.py:158），被這道門擋住就收不到
+#   訊息，必須放行。
+# - /static/generated/ 也要放行：LINE 傳圖只吃公開 HTTPS 網址（line_bot.py:9），
+#   LINE 伺服器抓圖時不會帶密碼。檔名帶隨機碼，不列目錄。
+SITE_PASSWORD = os.getenv("SITE_PASSWORD", "").strip()
+SITE_PASSWORD_EXEMPT_PREFIXES = ("/line/", "/static/generated/", "/healthz")
+
+
+@app.middleware("http")
+async def site_password_gate(request, call_next):
+    if not SITE_PASSWORD:
+        return await call_next(request)
+    if request.url.path.startswith(SITE_PASSWORD_EXEMPT_PREFIXES):
+        return await call_next(request)
+
+    header = request.headers.get("authorization", "")
+    if header.startswith("Basic "):
+        try:
+            decoded = base64.b64decode(header[6:]).decode("utf-8")
+        except Exception:
+            decoded = ""
+        # 帳號欄不檢查，只認密碼——少一個要交代給使用者的欄位。
+        _, _, supplied = decoded.partition(":")
+        if hmac.compare_digest(supplied, SITE_PASSWORD):
+            return await call_next(request)
+
+    return PlainTextResponse(
+        "需要密碼",
+        status_code=401,
+        headers={"WWW-Authenticate": 'Basic realm="TVBS AICG"'},
+    )
+
+
 DigestDensity = Literal["standard", "simplified"]
 
 
