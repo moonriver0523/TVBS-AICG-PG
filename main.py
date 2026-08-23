@@ -38,6 +38,7 @@ from news_prompt import (
     MAP_TYPE_LABEL,
     PORTRAIT_MODES,
     PROMPT_VERSION,
+    USER_REFERENCE_ASIS_DIGEST_RULES,
     USER_REFERENCE_MODES,
     USER_REFERENCE_NO_DISCLAIMER_RULES,
     build_prompt,
@@ -143,6 +144,12 @@ class GenerateRequest(BaseModel):
     # 使用者上傳的肖像照視為對應**系統查不到的人**（吳軒彤那個原始情境就是這樣），
     # 依序對應。上傳的圖本身在生圖階段才送，消化階段只需要知道張數。
     portrait_photo_count: int = Field(default=0, ge=0, le=MAX_PORTRAIT_FACES)
+    # 網頁版使用者已上傳幾張「原圖放置」參考圖（2026-08-23）。消化端據此讓
+    # STRUCTURE 明確交代這塊版位放的是使用者原圖、不是插畫描繪——不注入時
+    # 消化端有時會隨手寫成「illustrative depiction」，把生圖階段的原圖放置
+    # 規則蓋掉，模型因此憑空捏一張替代圖（記者/編輯版都各出過一次）。
+    # 上傳的圖本身在生圖階段才送，消化階段只需要知道張數。
+    asis_reference_count: int = Field(default=0, ge=0, le=3)
 
 
 class GenerateResponse(BaseModel):
@@ -508,6 +515,7 @@ def build_digest_instructions(
     full_bleed: bool = False,
     user_instruction: str = "",
     exclude_people: list[str] | None = None,
+    asis_reference_count: int = 0,
 ) -> str:
     is_editor = role == "編輯"
     template = EDITOR_SYSTEM_PROMPT_TEMPLATE if is_editor else SYSTEM_PROMPT_TEMPLATE
@@ -532,6 +540,9 @@ def build_digest_instructions(
         instructions += MAP_ACCURACY_RULES
     if density == "simplified":
         instructions += SIMPLIFIED_DENSITY_RULES
+    # 沒有 asis 附圖時完全不注入，消化 prompt 逐字元不變。
+    if asis_reference_count:
+        instructions += USER_REFERENCE_ASIS_DIGEST_RULES
     # 固定放最後：逐字模式必須壓過 SIMPLIFIED_DENSITY_RULES（位置＋明文 OVERRIDE 同向）
     instructions += USER_INSTRUCTION_RULES
     # 專用欄位緊接在文內解析規則之後（要引用「the block above」），沒填時不注入，
@@ -754,6 +765,7 @@ def generate(req: GenerateRequest):
         full_bleed=resolve_frame_plan(req.role, req.safe_frame)[0],
         user_instruction=req.user_instruction,
         exclude_people=req.exclude_people,
+        asis_reference_count=req.asis_reference_count,
     )
 
     # DIGEST_MODEL 可覆寫；沿用舊環境變數 OPENAI_DIGEST_MODEL 作為次要相容

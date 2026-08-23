@@ -312,6 +312,19 @@ USER_REFERENCE_MODES = {
     "asis": USER_REFERENCE_ASIS_RULES,
 }
 
+# 消化階段（build_digest_instructions）專用，與上面 USER_REFERENCE_ASIS_RULES
+# 是兩個不同階段：消化端寫 STRUCTURE 時完全不知道使用者附了 asis 圖，隨手寫成
+# 「插畫式描繪」是常態機率事件，寫出來的措辭又比生圖端後注入的 ASIS 規則更具體、
+# 更晚不了——生圖模型會照著 STRUCTURE 的具體描述憑空畫，等於蓋掉 ASIS 規則
+# （2026-08-23 記者/編輯版各出過一次「附圖被忽略、模型自己畫一張替代圖」）。
+# 這段是消化端專屬的措辭護欄，只在使用者有上傳 asis 圖時注入。
+USER_REFERENCE_ASIS_DIGEST_RULES = """
+
+ATTACHED IMAGE TO BE PLACED AS-IS (STRUCTURE MUST MATCH THIS):
+The user has attached at least one image that a later stage will place into the graphic exactly as supplied, completely unaltered. Wherever "structure" describes the visual area that will hold this image, describe it ONLY as the user's original supplied photograph placed unaltered.
+NEVER use wording such as "depiction", "illustration", "portrait-style", "artistic rendering", "reinterpreted", or any phrase that asks for that area to be redrawn or reimagined — that wording gets carried into the image-generation step and causes it to fabricate a replacement image instead of using the real supplied photograph.
+Do not invent an alternative scene, outfit, setting or pose for this image area; simply reserve its position, size and framing in the layout."""
+
 # 使用者有上傳參考圖時一律注入（2026-08-17 使用者裁決）：既然是照著使用者
 # 提供的實景實物生成，就不再標「示意圖」。REAL_WORLD_RENDERING_RULES 寫著
 # 標籤 never drop or hide，所以這裡必須位置在後＋明文 OVERRIDE（repo 慣例

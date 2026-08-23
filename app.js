@@ -1174,6 +1174,7 @@ async function digestNewsText(input) {
             safe_frame: state.safeFrame,
             user_instruction: currentUserInstruction(),
             portrait_photo_count: uploadedPortraitCount(),
+            asis_reference_count: uploadedAsisCount(),
         }),
     });
     const data = await response.json().catch(() => ({}));
@@ -1309,7 +1310,8 @@ async function handleAIDigestion() {
                 user_instruction: currentUserInstruction(),
                 // 已上傳幾張肖像照。後端據此判斷「維基查不到的人」是不是其實有照片：
                 // 沒有這個數字，後端會把使用者剛上傳照片的那個人排出版面（2026-08-18）
-                portrait_photo_count: uploadedPortraitCount()
+                portrait_photo_count: uploadedPortraitCount(),
+                asis_reference_count: uploadedAsisCount()
             })
         });
         if (!response.ok) {
@@ -1548,6 +1550,13 @@ function userRefImagesPayload() {
 // 後端據此判斷維基查不到的人是不是其實有照片，不會把他排出版面。
 function uploadedPortraitCount() {
     return state.userRefImages.filter(ref => ref.purpose === 'portrait').length;
+}
+
+// 消化階段同樣只需要知道張數（圖本身在生圖階段才送）：後端據此讓 STRUCTURE
+// 明確交代這塊版位放使用者原圖，避免消化端隨手寫成「插畫式描繪」蓋掉生圖階段
+// 的原圖放置規則（2026-08-23 記者/編輯版各出過一次附圖被忽略的案例）。
+function uploadedAsisCount() {
+    return state.userRefImages.filter(ref => ref.purpose === 'asis').length;
 }
 
 /* ============================================================
