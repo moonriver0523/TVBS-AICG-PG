@@ -1470,7 +1470,7 @@ const REF_MAX_FILES = 3;
 const REF_MAX_BYTES = 1.5 * 1024 * 1024;
 // portrait＝肖像照：使用者親自上傳時，「兩位以上具名真人不畫臉」鐵律解除
 // （2026-08-17 使用者裁決）；沒附照片的人後端規則仍要求不畫臉。
-const REF_PURPOSES = { map: '地圖底稿', scene: '實景參考', portrait: '肖像照片' };
+const REF_PURPOSES = { map: '地圖底稿', scene: '實景參考', portrait: '肖像照片', asis: '原圖放置' };
 
 function handleRefFilesSelected(input) {
     const files = Array.from(input.files || []);

@@ -297,10 +297,19 @@ NAMED REAL PERSON — USER-SUPPLIED PORTRAIT REFERENCE (CRITICAL)
 - Take only each person's likeness from the photographs. Pose, attire, framing and surroundings follow STRUCTURE, not the photographs' own backgrounds or occasions.
 - Never place a person in a scene, action or context that STRUCTURE does not describe."""
 
+USER_REFERENCE_ASIS_RULES = """==================================================
+ATTACHED IMAGE — PLACE AS-IS, DO NOT REDRAW (CRITICAL)
+==================================================
+- One of the attached images must be placed into the graphic exactly as supplied: unchanged pixels, colours, proportions and content. Do NOT re-draw, re-style, repaint, colour-grade, stylise or reinterpret it in the graphic's own illustration style.
+- Do not crop, stretch, rotate, mirror or otherwise distort the attached image; if it must be resized to fit the layout, scale it uniformly (preserve aspect ratio) only.
+- This attached image is exempt from the "re-draw in the graphic's own visual style" instruction that applies to other attached reference images; place it as its own distinct element in the composition (e.g. an inset panel or designated area), not blended or repainted into the surrounding artwork.
+- Any brand marks, logos, readable text or real human faces already present in this attached image may remain exactly as supplied — the NO UNSOURCED BRANDS rule and the face-rendering rules above govern what you generate elsewhere in the graphic, not this attached image's own untouched content."""
+
 USER_REFERENCE_MODES = {
     "map": USER_REFERENCE_MAP_RULES,
     "scene": USER_REFERENCE_SCENE_RULES,
     "portrait": USER_REFERENCE_PORTRAIT_RULES,
+    "asis": USER_REFERENCE_ASIS_RULES,
 }
 
 # 使用者有上傳參考圖時一律注入（2026-08-17 使用者裁決）：既然是照著使用者

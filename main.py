@@ -172,10 +172,13 @@ MAX_INPUT_REFERENCES = 6
 # news_prompt.USER_REFERENCE_MODES）：map＝地圖底稿（地理關係以附圖為準）、
 # scene＝實景參考（場景／建物／器材外觀依附圖）、portrait＝肖像照
 # （2026-08-17 使用者裁決開放；使用者親自上傳時「兩位以上具名真人不畫臉」
-# 鐵律解除，但沒附照片的人仍不畫臉——見 USER_REFERENCE_PORTRAIT_RULES）。
+# 鐵律解除，但沒附照片的人仍不畫臉——見 USER_REFERENCE_PORTRAIT_RULES）、
+# asis＝原圖放置（2026-08-23 使用者裁決；不重繪、原封不動放進成圖指定
+# 區塊——注意這是 prompt 層級要求，模型仍可能有壓縮/色偏等落差，不保證
+# 像素級一致，見 USER_REFERENCE_ASIS_RULES）。
 class UserReferenceImage(BaseModel):
     data_url: str = Field(min_length=1, max_length=2_800_000)  # 約 2MB base64
-    purpose: Literal["map", "scene", "portrait"] = "scene"
+    purpose: Literal["map", "scene", "portrait", "asis"] = "scene"
 
 
 class ImageGenerateRequest(BaseModel):
