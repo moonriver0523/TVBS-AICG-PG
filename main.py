@@ -628,7 +628,10 @@ DIGEST_ALLOWED_CHARS = re.compile(
 DIGEST_MAX_STRAY_CHARS = 3
 # variable 是繁中新聞文字，正常情況拉丁字母只佔少數（地名、機型代號）。比例過高
 # 代表模型開始用英文自言自語（實測撞到 "Need correct. We accidentally weird."）。
-DIGEST_MAX_LATIN_RATIO = 0.35
+# 2026-08-24 熱修：asis 消化規則區塊整段英文，疑似把正常輸出的拉丁字母比例推到
+# 36~46%，卡在舊門檻 0.35 造成 5 次重試全滅、拖到 502。先放寬到 0.55 止血，
+# 真正的自言自語（實測撞過 100%）仍會被擋下。
+DIGEST_MAX_LATIN_RATIO = 0.55
 # 放寬 token 上限後出現的另一種失控：模型不再截斷，改成把原文每個詞都拆成一條
 # [內文小標] 灌到幾十行（實測撞到 90 行、同一詞重複出現）。長度本身不能當判準——
 # 逐字模式本來就會產生長 variable——但大量重複的行是失控獨有的訊號。
