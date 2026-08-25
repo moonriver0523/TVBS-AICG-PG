@@ -7,6 +7,7 @@ import os
 import pathlib
 import re
 import ssl
+import threading
 import time
 from typing import Literal
 from urllib.error import HTTPError, URLError
@@ -171,20 +172,68 @@ def current_user() -> dict:
     return _current_user.get() or {}
 
 
+# 消化與生圖是兩次獨立的請求（app.js:1145-1146 的 AI_BACKEND_URL / IMAGE_BACKEND_URL），
+# 生圖那支只收到 prompt，專案原本就把 news_text 寫死成 ""（見 main.py 的 web-image
+# 歸檔呼叫）。但稽核要求「完整記錄同仁生成的內容」，新聞原文是其中最重要的一項，
+# 所以在這裡把同一位使用者最近一次消化的原文補回去。
+#
+# 為什麼用「使用者＋時間窗」關聯而不是嚴格的請求 ID：前端兩次呼叫之間沒有傳遞任何
+# 關聯欄位，要做嚴格關聯就得改 app.js 的呼叫參數與後端的 request model，動到一萬多行
+# 的前端主檔，風險高於效益。同一人短時間內換稿再生圖時，補上的是最近一次消化的原文,
+# 與使用者當下畫面上看到的內容一致。
+_DIGEST_MEMO_TTL = 1800
+_digest_memo: dict[str, tuple[float, dict]] = {}
+_digest_memo_lock = threading.Lock()
+
+
+def _remember_digest(**fields) -> None:
+    """記下這位使用者最近一次消化的新聞原文與消化結果。"""
+    user_id = current_user().get("user_id") or ""
+    if not user_id:
+        return
+    now = time.time()
+    with _digest_memo_lock:
+        _digest_memo[user_id] = (now, fields)
+        # 順手清掉過期的，避免這個 dict 隨使用者數無限成長。
+        for key in [k for k, (ts, _) in _digest_memo.items() if now - ts > _DIGEST_MEMO_TTL]:
+            _digest_memo.pop(key, None)
+
+
+def _recall_digest() -> dict:
+    user_id = current_user().get("user_id") or ""
+    if not user_id:
+        return {}
+    with _digest_memo_lock:
+        found = _digest_memo.get(user_id)
+    if not found or time.time() - found[0] > _DIGEST_MEMO_TTL:
+        return {}
+    return found[1]
+
+
 def _archive_generation(**kwargs) -> None:
     """歸檔一次生成：既有的 GCS 備份，加上帶身分的本機稽核歸檔。
 
     包成一支的理由：三個生成端點（news-image、web-refine、hybrid）都要歸檔，
-    身分注入只想寫一次；日後要換／加歸檔目的地也只改這裡。
+    身分注入與原文補齊只想寫一次；日後要換／加歸檔目的地也只改這裡。
     兩支底層函式都自己吞例外，這裡不需要再包 try。
     """
     gcs_archive.archive_generation(**kwargs)
+
+    # 只補「這條路徑本來就沒有」的欄位，不覆蓋呼叫端已經給值的欄位——
+    # news-image 那條路徑自己就帶著正確的原文，補寫反而可能蓋成舊的。
+    enriched = dict(kwargs)
+    memo = _recall_digest()
+    if memo:
+        for key, value in memo.items():
+            if not enriched.get(key):
+                enriched[key] = value
+
     user = current_user()
     audit_archive.archive_generation(
         user_id=user.get("user_id", ""),
         user_email=user.get("email", ""),
         user_name=user.get("name", ""),
-        **kwargs,
+        **enriched,
     )
 
 
@@ -985,6 +1034,18 @@ def generate(req: GenerateRequest):
             request_log.log_generation(
                 request_id=request_log.new_request_id(),
                 source="digest",
+                news_text=req.news_text,
+                style=result.style,
+                structure=result.structure,
+                variable=result.variable,
+                chart_type=result.chart_type,
+                type_label=req.type_label,
+                role=req.role,
+                density=req.density,
+            )
+            # 存給稍後的生圖請求取用：那支端點只收到 prompt，拿不到新聞原文，
+            # 稽核歸檔要靠這裡記住的內容才補得齊（見 _archive_generation）。
+            _remember_digest(
                 news_text=req.news_text,
                 style=result.style,
                 structure=result.structure,

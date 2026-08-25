@@ -53,6 +53,13 @@ def archive_generation(
         target = _month_dir(now)
         target.mkdir(parents=True, exist_ok=True)
         stem = f"{now:%Y%m%d-%H%M%S}-{request_id}"
+        # 檔名理論上唯一（秒 + request_id），但稽核紀錄被無聲覆蓋是不可接受的失敗
+        # 模式——寧可多一個檔名也不要少一筆紀錄。
+        if (target / f"{stem}.json").exists():
+            suffix = 2
+            while (target / f"{stem}-{suffix}.json").exists():
+                suffix += 1
+            stem = f"{stem}-{suffix}"
 
         image_name = ""
         if image_base64:
