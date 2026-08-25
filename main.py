@@ -28,6 +28,9 @@ from openai import (
 from PIL import Image
 from pydantic import BaseModel, Field
 
+import admin_console
+import audit_archive
+import clerk_auth
 import gcs_archive
 import photo_lookup
 import request_log
@@ -130,9 +133,71 @@ SITE_PASSWORD = os.getenv("SITE_PASSWORD", "").strip()
 SITE_PASSWORD_EXEMPT_PREFIXES = ("/line/", "/static/generated/", "/healthz")
 
 
+# Clerk 登入門（2026-08-25 加）。動機：稽核需求要每一筆生成都能對到人，但站台密碼門
+# 是全體共用一組密碼，系統分不出誰是誰。設了 CLERK_PUBLISHABLE_KEY 就改由 Clerk 把關，
+# 並接手 SITE_PASSWORD 的角色（兩道門都要過只是徒增麻煩，身分驗證本來就更嚴格）。
+#
+# 哪些路徑不需要登入：
+# - `/` 與 `/hybrid.html` 是空殼頁，本身不含任何金鑰（entrypoint.sh 只烙進 app.js／
+#   hybrid.js）。**必須放行**，否則使用者連 Clerk 的登入畫面都載不出來，變成死結。
+# - `/static/` 是 logo 與 LINE 用的成圖，本來就要公開讀取。
+# - `/line/` 走自己的 HMAC 驗簽、`/healthz` 給健康檢查，與 SITE_PASSWORD 的豁免一致。
+# 其餘一律要有效 session——特別是 `/app.js`／`/hybrid.js`（帶著 NEWS_IMAGE_API_KEY）
+# 與所有 `/api/`，這才是真正要守住的東西。
+_current_user = contextvars.ContextVar("current_user", default=None)
+
+CLERK_PUBLIC_PATHS = ("/", "/index.html", "/hybrid.html", "/auth-config.json")
+CLERK_PUBLIC_PREFIXES = ("/line/", "/static/", "/healthz", "/favicon")
+
+
+def current_user() -> dict:
+    """目前這個請求的登入者。沒啟用 Clerk 或走 LINE 時回空 dict。"""
+    return _current_user.get() or {}
+
+
+def _archive_generation(**kwargs) -> None:
+    """歸檔一次生成：既有的 GCS 備份，加上帶身分的本機稽核歸檔。
+
+    包成一支的理由：三個生成端點（news-image、web-refine、hybrid）都要歸檔，
+    身分注入只想寫一次；日後要換／加歸檔目的地也只改這裡。
+    兩支底層函式都自己吞例外，這裡不需要再包 try。
+    """
+    gcs_archive.archive_generation(**kwargs)
+    user = current_user()
+    audit_archive.archive_generation(
+        user_id=user.get("user_id", ""),
+        user_email=user.get("email", ""),
+        user_name=user.get("name", ""),
+        **kwargs,
+    )
+
+
+@app.middleware("http")
+async def clerk_login_gate(request, call_next):
+    if not clerk_auth.ENABLED:
+        return await call_next(request)
+    path = request.url.path
+    # 後台由 ADMIN_PASSWORD 自己把關，不吃同仁的登入（見 admin_console.py）。
+    if path.startswith("/admin"):
+        return await call_next(request)
+    if path in CLERK_PUBLIC_PATHS or path.startswith(CLERK_PUBLIC_PREFIXES):
+        return await call_next(request)
+
+    user = clerk_auth.verify_token(clerk_auth.extract_token(request))
+    if user is None:
+        return PlainTextResponse("請先登入", status_code=401)
+
+    token = _current_user.set(user)
+    try:
+        return await call_next(request)
+    finally:
+        _current_user.reset(token)
+
+
 @app.middleware("http")
 async def site_password_gate(request, call_next):
-    if not SITE_PASSWORD:
+    # 啟用 Clerk 後由上面那道門負責，不再另外要密碼。
+    if not SITE_PASSWORD or clerk_auth.ENABLED:
         return await call_next(request)
     if request.url.path.startswith(SITE_PASSWORD_EXEMPT_PREFIXES):
         return await call_next(request)
@@ -1108,7 +1173,7 @@ def generate_image(req: ImageGenerateRequest):
             provider=req.provider,
             image_model=result.model,
         )
-        gcs_archive.archive_generation(
+        _archive_generation(
             request_id=request_id,
             image_base64=result.image_data_base64,
             mime_type=result.mime_type,
@@ -2029,7 +2094,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
         provider=req.provider,
         image_model=result.model,
     )
-    gcs_archive.archive_generation(
+    _archive_generation(
         request_id=request_id,
         image_base64=result.image_data_base64,
         mime_type=result.mime_type,
@@ -2203,7 +2268,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
         )
         # LINE 版圖檔已由 line_bot.py 存進 static/generated/，這裡只補網頁版的缺口
         if req.source != "line":
-            gcs_archive.archive_generation(
+            _archive_generation(
                 request_id=request_id,
                 image_base64=image.image_data_base64,
                 mime_type=image.mime_type,
@@ -2262,6 +2327,21 @@ def serve_index():
     return _frontend_file("index.html", "text/html; charset=utf-8")
 
 
+@app.get("/auth-config.json")
+def auth_config() -> dict:
+    """前端用來判斷「這個部署有沒有開登入」，以及要用哪個 Clerk 實例。
+
+    publishable key 依 Clerk 的設計本來就是公開值（會出現在任何前端原始碼裡），
+    放在這個免登入端點沒有外洩問題；真正的機密是 CLERK_SECRET_KEY，只留在後端。
+    不寫死在 index.html 是為了讓同一份前端能跑在不同環境（本機、box、東京）。
+    """
+    return {
+        "enabled": clerk_auth.ENABLED,
+        "publishableKey": clerk_auth.PUBLISHABLE_KEY,
+        "frontendApi": clerk_auth.FRONTEND_API,
+    }
+
+
 # app.js／hybrid.js 進 git 時 _INTERNAL_API_KEY 只是占位符，容器啟動時由
 # entrypoint.sh sed 換成真實值。本機直跑 uvicorn 沒有那一步，瀏覽器會拿著
 # 占位符打 API 吃 401——所以 serve 時做同一件事：占位符還在且環境有金鑰就換掉。
@@ -2301,6 +2381,9 @@ from line_bot import GENERATED_DIR, STATIC_ROOT, router as line_router  # noqa: 
 GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_ROOT), name="static")
 app.include_router(line_router)
+
+# 生成紀錄後台。沒設 ADMIN_PASSWORD 就完全不掛載（/admin 會是 404）。
+admin_console.register(app)
 
 
 def main():
