@@ -31,6 +31,21 @@ PUBLISHABLE_KEY = os.getenv("CLERK_PUBLISHABLE_KEY", "").strip()
 SECRET_KEY = os.getenv("CLERK_SECRET_KEY", "").strip()
 ENABLED = PUBLISHABLE_KEY != ""
 
+# 允許使用的 email 網域，逗號分隔，例：tvbs.com.tw,innov.tvbs.com.tw
+#
+# 為什麼在自家程式做而不用 Clerk 的 allowlist（2026-08-25 決策）：
+# 1. Clerk 的 allowlist 要 Pro 方案才能用。
+# 2. 更關鍵的是它是「整個實例」層級的設定——clerk.tvbs.ai 是共用正式實例，
+#    330 位使用者背後不只這個專案，改它會牽動其他 TVBS 服務的註冊規則。
+#    在這裡檢查只影響本服務，staging 與 production 也能各自設不同規則。
+#
+# 不設就是舊行為（任何登入成功的人都能用），維持「預設不改變既有部署」的慣例。
+ALLOWED_EMAIL_DOMAINS = tuple(
+    d.strip().lower().lstrip("@")
+    for d in os.getenv("ALLOWED_EMAIL_DOMAINS", "").split(",")
+    if d.strip()
+)
+
 # 使用者資料快取存活時間。同事改名字的頻率以月計，一小時內用舊值完全可接受，
 # 換來的是每次生成少一次對 Clerk 的往返。
 _USER_CACHE_TTL = 3600
@@ -109,9 +124,26 @@ def _user_info(user_id: str) -> dict:
         if cached and now - cached[0] < _USER_CACHE_TTL:
             return cached[1]
     info = _fetch_user(user_id)
-    with _user_cache_lock:
-        _user_cache[user_id] = (now, info)
+    # 查詢失敗（回空 dict）不進快取：否則 Clerk 一次短暫的故障會被記住一小時，
+    # 而在網域檢查啟用時「查不到 email」等於擋人，代價太高。
+    if info:
+        with _user_cache_lock:
+            _user_cache[user_id] = (now, info)
     return info
+
+
+def _domain_allowed(email: str) -> bool:
+    """檢查 email 網域是否在允許清單內。未設定清單時一律放行。"""
+    if not ALLOWED_EMAIL_DOMAINS:
+        return True
+    domain = email.rsplit("@", 1)[-1].strip().lower() if "@" in email else ""
+    if not domain:
+        return False
+    # 完全相符，或是允許網域的子網域（mail.tvbs.com.tw 也算 tvbs.com.tw）。
+    return any(
+        domain == allowed or domain.endswith("." + allowed)
+        for allowed in ALLOWED_EMAIL_DOMAINS
+    )
 
 
 def verify_token(token: str) -> dict | None:
@@ -143,9 +175,22 @@ def verify_token(token: str) -> dict | None:
     if not user_id:
         return None
     info = _user_info(user_id)
+    email = info.get("email", "")
+
+    # 網域檢查是 fail-closed：查不到 email 就擋。這裡的代價不對稱——放行的代價是
+    # 陌生人可以消耗會花錢的 API，擋掉的代價只是使用者重試一次。
+    # 查詢失敗不會被快取（見 _user_info），所以 Clerk 短暫故障會自行恢復。
+    if ALLOWED_EMAIL_DOMAINS and not _domain_allowed(email):
+        print(
+            f"[clerk_auth] denied: user={user_id} email={email or '(查不到)'} "
+            f"不在允許網域 {list(ALLOWED_EMAIL_DOMAINS)}",
+            flush=True,
+        )
+        return None
+
     return {
         "user_id": user_id,
-        "email": info.get("email", ""),
+        "email": email,
         "name": info.get("name", ""),
     }
 
