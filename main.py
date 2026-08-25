@@ -146,7 +146,23 @@ SITE_PASSWORD_EXEMPT_PREFIXES = ("/line/", "/static/generated/", "/healthz")
 # 與所有 `/api/`，這才是真正要守住的東西。
 _current_user = contextvars.ContextVar("current_user", default=None)
 
-CLERK_PUBLIC_PATHS = ("/", "/index.html", "/hybrid.html", "/auth-config.json")
+CLERK_PUBLIC_PATHS = (
+    "/",
+    "/index.html",
+    "/hybrid.html",
+    "/auth-config.json",
+    # 2026-08-25 修正：app.js／hybrid.js 必須放行。原本擋著它們，想靠 __session
+    # cookie 驗身分，實測失敗——`<script src>` 這類子資源請求帶不到 Clerk 的 cookie
+    # （Clerk 的 cookie 由它自己的前端程式管理），結果登入後 app.js 仍一路 401，
+    # 頁面變成沒有任何程式碼的空殼，所有按鈕都沒反應。
+    #
+    # 改成：這兩支公開，但**不烙進真實金鑰**（見 _serve_js_with_key），
+    # 真正的防線移到 API 端——verify_internal_api_key 改認 Clerk 權杖，
+    # 而權杖由 index.html 包的那層 fetch 自動帶上。
+    # 少了金鑰的 app.js 對匿名訪客沒有價值：它呼叫任何生成端點都會被擋。
+    "/app.js",
+    "/hybrid.js",
+)
 CLERK_PUBLIC_PREFIXES = ("/line/", "/static/", "/healthz", "/favicon")
 
 
@@ -790,7 +806,19 @@ def digest_quality_problem(data: dict, finish_reason: str) -> str:
     return ""
 
 
-def verify_internal_api_key(x_api_key: str = Header(default="")) -> None:
+def verify_internal_api_key(
+    x_api_key: str = Header(default=""),
+    authorization: str = Header(default=""),
+) -> None:
+    # 啟用 Clerk 後，登入本身就是憑證：前端拿不到 NEWS_IMAGE_API_KEY（公開的
+    # app.js 不烙金鑰），改由 index.html 包的那層 fetch 帶上 Bearer 權杖。
+    # 這裡再驗一次而不是信任 middleware，是為了讓這支 Depends 自成防線——
+    # 日後有人改動 middleware 的放行清單，這道門不會跟著破掉。
+    # JWKS 有快取，重複驗證不會產生額外的對外請求。
+    if clerk_auth.ENABLED and authorization.startswith("Bearer "):
+        if clerk_auth.verify_token(authorization[7:].strip()):
+            return
+
     # 未設定金鑰時 fail-closed（與 LINE webhook 的驗簽同一原則），
     # 避免忘記設定就把端點裸奔給外部呼叫。這把金鑰同時保護所有內部
     # 生成端點（news-image / generate / hybrid-digest / images-generate），
@@ -2349,7 +2377,10 @@ def auth_config() -> dict:
 def _serve_js_with_key(name: str) -> PlainTextResponse:
     text = (_REPO_ROOT / name).read_text(encoding="utf-8")
     key = os.getenv("NEWS_IMAGE_API_KEY", "").strip()
-    if key:
+    # 啟用 Clerk 時**不烙金鑰**：這兩支檔案是公開的（不公開就載不進來，見
+    # CLERK_PUBLIC_PATHS 的說明），烙進去等於把金鑰送給任何訪客。
+    # 改由 Clerk 權杖認身分，verify_internal_api_key 兩種都收。
+    if key and not clerk_auth.ENABLED:
         text = text.replace("__NEWS_IMAGE_API_KEY__", key)
     return PlainTextResponse(
         text,
