@@ -455,6 +455,20 @@ REAL-WORLD ACCURACY (governs "style" and "structure" — the pictures you commis
 """
 
 
+# 小孩肖像過審率。生圖供應商（GPT／Gemini）對「寫實風格畫出兒童」的安全過濾器
+# 誤殺率高，同一張圖只要把兒童角色改成插畫／卡通風格就能過關（2026-09-01 使用者
+# 實測發現的解法）。只調整「有兒童角色」那個 figure 的畫風，其餘版面與人物維持
+# 原本選定的 style，避免整張圖為了一個小孩角色被迫變成兒童繪本風。
+CHILD_DEPICTION_STYLE_RULES = """
+
+CHILD DEPICTION STYLE (governs "style" and "structure" — applies whenever the scene includes a child):
+1. Whenever the scene you are designing would depict one or more children or minors as a figure (a schoolchild, a young child in a family/rescue/incident scene, a student, etc.), rendering that figure photorealistically frequently triggers the image generator's safety filter and the whole image fails to generate. To avoid this, explicitly render ONLY those child figures in a simple, flat CARTOON / CHILDREN'S-BOOK ILLUSTRATION style — never photorealistic, never lifelike skin or facial detail. Every other element of the graphic (background, adults, icons, charts) keeps the graphic's normal chosen style unchanged.
+2. Write this into "style" explicitly, e.g. "the child figure is rendered in a soft flat cartoon illustration style, simplified features, no photorealistic skin or facial detail, while the rest of the scene stays photorealistic/[chosen style]". Note in "structure" which figure this applies to and where it sits.
+3. This does not relax the NAMED REAL PEOPLE / AT MOST THREE FACES rules above: if the child is a specific named real person, the portrait and 示意圖 rules there still apply on top of this cartoon treatment.
+4. If no child or minor would be shown in the scene, ignore this rule entirely — do not mention children or cartoon style in "style" or "structure".
+"""
+
+
 # 台灣漲跌配色慣例（漲紅跌綠，與西方相反）。第 3 條同時回答 TODO 的疑問：
 # 禁數字條款只管畫布幾何，顏色語意與箭頭方向屬於內容、不受該條款拘束。
 DIRECTIONAL_COLOR_RULES = """
@@ -573,6 +587,7 @@ def build_digest_instructions(
     instructions += chart_type_directive(type_label)
     instructions += CONTENT_FIDELITY_RULES
     instructions += REAL_WORLD_FIDELITY_RULES
+    instructions += CHILD_DEPICTION_STYLE_RULES
     instructions += DIRECTIONAL_COLOR_RULES
     # 自動判斷模式組 prompt 時還不知道 AI 會選哪一類，也要注入；
     # 區塊開頭自我限縮「非地圖類整段忽略」。明確指定非地圖類型時完全不注入。
