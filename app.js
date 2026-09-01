@@ -1474,7 +1474,53 @@ const REF_MAX_BYTES = 1.5 * 1024 * 1024;
 // （2026-08-17 使用者裁決）；沒附照片的人後端規則仍要求不畫臉。
 const REF_PURPOSES = { map: '地圖底稿', scene: '實景參考', portrait: '肖像照片', asis: '原圖放置' };
 
-function handleRefFilesSelected(input) {
+// data URL 的 base64 部分解碼回原始 bytes 的實際大小（含 padding 校正）。
+function dataUrlByteLength(dataUrl) {
+    const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+    const padding = (base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0);
+    return Math.floor(base64.length * 0.75) - padding;
+}
+
+// 超過 REF_MAX_BYTES 時自動壓縮，不再直接擋掉使用者：
+// 依序降 JPEG 品質，再不行就等比縮小長邊，兩層都到底仍超標就取最後一次結果
+// （交給後端的 max_length 校驗把關，不在前端硬擋）。
+// 轉檔統一輸出 JPEG——參考圖（地圖底稿／實景／肖像／原圖放置）不需要透明度。
+function compressImageFile(file, maxBytes) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        const objectUrl = URL.createObjectURL(file);
+        img.onload = () => {
+            URL.revokeObjectURL(objectUrl);
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            let scale = 1;
+            const qualitySteps = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4];
+            let best = null;
+            const renderAt = (currentScale) => {
+                canvas.width = Math.max(1, Math.round(img.naturalWidth * currentScale));
+                canvas.height = Math.max(1, Math.round(img.naturalHeight * currentScale));
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            };
+            outer:
+            for (let round = 0; round < 6; round += 1) {
+                renderAt(scale);
+                for (const quality of qualitySteps) {
+                    const dataUrl = canvas.toDataURL('image/jpeg', quality);
+                    const size = dataUrlByteLength(dataUrl);
+                    if (!best || size < dataUrlByteLength(best)) best = dataUrl;
+                    if (size <= maxBytes) break outer;
+                }
+                scale *= 0.75; // 品質降到底仍超標，縮小長邊再重試
+            }
+            resolve(best);
+        };
+        img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error('圖片讀取失敗')); };
+        img.src = objectUrl;
+    });
+}
+
+async function handleRefFilesSelected(input) {
     const files = Array.from(input.files || []);
     input.value = '';
     for (const file of files) {
@@ -1482,16 +1528,27 @@ function handleRefFilesSelected(input) {
             showToast(`參考圖最多 ${REF_MAX_FILES} 張`);
             break;
         }
-        if (file.size > REF_MAX_BYTES) {
-            showToast(`「${file.name}」超過 1.5MB，請縮小後再上傳`);
+        if (file.size <= REF_MAX_BYTES) {
+            const reader = new FileReader();
+            reader.onload = () => {
+                state.userRefImages.push({ dataUrl: reader.result, purpose: 'scene', name: file.name });
+                renderRefUploads();
+            };
+            reader.readAsDataURL(file);
             continue;
         }
-        const reader = new FileReader();
-        reader.onload = () => {
-            state.userRefImages.push({ dataUrl: reader.result, purpose: 'scene', name: file.name });
+        try {
+            const dataUrl = await compressImageFile(file, REF_MAX_BYTES);
+            if (dataUrlByteLength(dataUrl) > REF_MAX_BYTES) {
+                showToast(`「${file.name}」壓縮後仍過大，請換一張較小的圖`);
+                continue;
+            }
+            showToast(`「${file.name}」已自動壓縮上傳`);
+            state.userRefImages.push({ dataUrl, purpose: 'scene', name: file.name });
             renderRefUploads();
-        };
-        reader.readAsDataURL(file);
+        } catch (err) {
+            showToast(`「${file.name}」壓縮失敗：${err.message}`);
+        }
     }
 }
 
