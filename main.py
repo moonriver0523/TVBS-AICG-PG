@@ -38,6 +38,7 @@ from news_prompt import (
     MAP_TYPE_LABEL,
     PORTRAIT_MODES,
     PROMPT_VERSION,
+    USER_REFERENCE_ASIS_DIGEST_RULES,
     USER_REFERENCE_MODES,
     USER_REFERENCE_NO_DISCLAIMER_RULES,
     build_prompt,
@@ -183,6 +184,12 @@ class GenerateRequest(BaseModel):
     # 使用者上傳的肖像照視為對應**系統查不到的人**（吳軒彤那個原始情境就是這樣），
     # 依序對應。上傳的圖本身在生圖階段才送，消化階段只需要知道張數。
     portrait_photo_count: int = Field(default=0, ge=0, le=MAX_PORTRAIT_FACES)
+    # 網頁版使用者已上傳幾張「原圖放置」參考圖（2026-08-23）。消化端據此讓
+    # STRUCTURE 明確交代這塊版位放的是使用者原圖、不是插畫描繪——不注入時
+    # 消化端有時會隨手寫成「illustrative depiction」，把生圖階段的原圖放置
+    # 規則蓋掉，模型因此憑空捏一張替代圖（記者/編輯版都各出過一次）。
+    # 上傳的圖本身在生圖階段才送，消化階段只需要知道張數。
+    asis_reference_count: int = Field(default=0, ge=0, le=3)
 
 
 class GenerateResponse(BaseModel):
@@ -212,10 +219,13 @@ MAX_INPUT_REFERENCES = 6
 # news_prompt.USER_REFERENCE_MODES）：map＝地圖底稿（地理關係以附圖為準）、
 # scene＝實景參考（場景／建物／器材外觀依附圖）、portrait＝肖像照
 # （2026-08-17 使用者裁決開放；使用者親自上傳時「兩位以上具名真人不畫臉」
-# 鐵律解除，但沒附照片的人仍不畫臉——見 USER_REFERENCE_PORTRAIT_RULES）。
+# 鐵律解除，但沒附照片的人仍不畫臉——見 USER_REFERENCE_PORTRAIT_RULES）、
+# asis＝原圖放置（2026-08-23 使用者裁決；不重繪、原封不動放進成圖指定
+# 區塊——注意這是 prompt 層級要求，模型仍可能有壓縮/色偏等落差，不保證
+# 像素級一致，見 USER_REFERENCE_ASIS_RULES）。
 class UserReferenceImage(BaseModel):
     data_url: str = Field(min_length=1, max_length=2_800_000)  # 約 2MB base64
-    purpose: Literal["map", "scene", "portrait"] = "scene"
+    purpose: Literal["map", "scene", "portrait", "asis"] = "scene"
 
 
 class ImageGenerateRequest(BaseModel):
@@ -545,6 +555,7 @@ def build_digest_instructions(
     full_bleed: bool = False,
     user_instruction: str = "",
     exclude_people: list[str] | None = None,
+    asis_reference_count: int = 0,
 ) -> str:
     is_editor = role == "編輯"
     template = EDITOR_SYSTEM_PROMPT_TEMPLATE if is_editor else SYSTEM_PROMPT_TEMPLATE
@@ -569,6 +580,9 @@ def build_digest_instructions(
         instructions += MAP_ACCURACY_RULES
     if density == "simplified":
         instructions += SIMPLIFIED_DENSITY_RULES
+    # 沒有 asis 附圖時完全不注入，消化 prompt 逐字元不變。
+    if asis_reference_count:
+        instructions += USER_REFERENCE_ASIS_DIGEST_RULES
     # 固定放最後：逐字模式必須壓過 SIMPLIFIED_DENSITY_RULES（位置＋明文 OVERRIDE 同向）
     instructions += USER_INSTRUCTION_RULES
     # 專用欄位緊接在文內解析規則之後（要引用「the block above」），沒填時不注入，
@@ -654,7 +668,10 @@ DIGEST_ALLOWED_CHARS = re.compile(
 DIGEST_MAX_STRAY_CHARS = 3
 # variable 是繁中新聞文字，正常情況拉丁字母只佔少數（地名、機型代號）。比例過高
 # 代表模型開始用英文自言自語（實測撞到 "Need correct. We accidentally weird."）。
-DIGEST_MAX_LATIN_RATIO = 0.35
+# 2026-08-24 熱修：asis 消化規則區塊整段英文，疑似把正常輸出的拉丁字母比例推到
+# 36~46%，卡在舊門檻 0.35 造成 5 次重試全滅、拖到 502。先放寬到 0.55 止血，
+# 真正的自言自語（實測撞過 100%）仍會被擋下。
+DIGEST_MAX_LATIN_RATIO = 0.55
 # 放寬 token 上限後出現的另一種失控：模型不再截斷，改成把原文每個詞都拆成一條
 # [內文小標] 灌到幾十行（實測撞到 90 行、同一詞重複出現）。長度本身不能當判準——
 # 逐字模式本來就會產生長 variable——但大量重複的行是失控獨有的訊號。
@@ -791,6 +808,7 @@ def generate(req: GenerateRequest):
         full_bleed=resolve_frame_plan(req.role, req.safe_frame)[0],
         user_instruction=req.user_instruction,
         exclude_people=req.exclude_people,
+        asis_reference_count=req.asis_reference_count,
     )
 
     # DIGEST_MODEL 可覆寫；沿用舊環境變數 OPENAI_DIGEST_MODEL 作為次要相容
