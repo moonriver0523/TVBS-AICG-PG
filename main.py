@@ -1,5 +1,6 @@
 import base64
 import concurrent.futures
+import copy
 import contextvars
 import datetime
 import hmac
@@ -33,6 +34,7 @@ from pydantic import BaseModel, Field
 import compose
 import editor_formats
 import gcs_archive
+import map_lookup
 import photo_lookup
 import request_log
 import safe_area_spec
@@ -240,6 +242,22 @@ class GenerateRequest(BaseModel):
     editor_format: str = editor_formats.DEFAULT_FORMAT
 
 
+class MapPoint(BaseModel):
+    """一個查得到真實座標的地點。name 是要標在圖上的名字，不是查詢字串。"""
+
+    name: str = Field(min_length=1, max_length=40)
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+
+
+# 一張圖上最多查幾個地點。Nominatim 要求每秒一次，四個就是四秒的等待——
+# 再多，使用者等待的時間就開始比省下來的錯誤還貴。
+MAX_MAP_PLACES = 4
+# 少於兩個點不做底圖：一個點沒有「相對位置」可言，那正是地圖類存在的理由，
+# 而且單點底圖只會是一張放大的街廓，不如讓模型自己畫示意圖。
+MIN_MAP_POINTS = 2
+
+
 class GenerateResponse(BaseModel):
     style: str
     structure: str
@@ -255,6 +273,10 @@ class GenerateResponse(BaseModel):
     # 維基的條目名——「卡利巴夫」「阿拉奇」「巴薩尼」「瓦希迪」實測全部查無條目，
     # 但英文名查得到。不確定就留空字串，絕不亂猜拼寫。
     portrait_subjects_en: list[str] = Field(default_factory=list)
+    # 地圖類專用：消化端列出的地點裡，**實查得到真實座標**的那些。
+    # 查不到的不會出現在這裡——標錯地點在新聞畫面上就是播出事故，寧可少標。
+    # 前端把它原樣帶進生圖請求，後端據此產生真實底圖（見 build_map_reference）。
+    map_points: list[MapPoint] = Field(default_factory=list)
 
 
 # input_references 的上限。模型端 gpt-image-2 收 0–16、Gemini 0–14（PLAN.md 查證），
@@ -301,6 +323,9 @@ class ImageGenerateRequest(BaseModel):
     reference_images: list[UserReferenceImage] = Field(
         default_factory=list, max_length=MAX_INPUT_REFERENCES
     )
+    # 地圖類的真實座標（來自 /api/generate 的 map_points）。後端據此拼一張真實
+    # 底圖、把標點畫在正確位置，再當參考圖附上去——地理不交給模型憑印象畫。
+    map_points: list[MapPoint] = Field(default_factory=list, max_length=MAX_MAP_PLACES)
     # 後端自動查來的肖像參考照（2-3 人時用；data URL）。刻意與 reference_images
     # 分開兩個欄位：後者代表「使用者親自提供素材」，會觸發「不標示意圖」override，
     # 而自動查來的維基照片沒有那個語意——寫實感＋真名＋沒有示意圖標籤是最糟組合。
@@ -361,6 +386,22 @@ DIGEST_OUTPUT_SCHEMA = {
     ],
     "additionalProperties": False,
 }
+
+
+# 地圖類專用的 schema 變體。刻意做成變體而不是直接加欄位：strict 模式下新欄位必須
+# 進 required，等於每一則新聞（含記者、含非地圖類）都要多回一個永遠是空陣列的欄位。
+# 只有地圖類與自動判斷會拿到它，非地圖類的 schema 物件與過去逐位元組相同。
+MAP_PLACES_PROPERTY = {"type": "array", "items": {"type": "string"}}
+
+
+def digest_schema(type_label: str) -> dict:
+    """這次消化要用哪份 schema。地圖／自動判斷多一個 map_places。"""
+    if type_label not in (MAP_TYPE_LABEL, AUTO_TYPE_LABEL):
+        return DIGEST_OUTPUT_SCHEMA
+    schema = copy.deepcopy(DIGEST_OUTPUT_SCHEMA)
+    schema["properties"]["map_places"] = MAP_PLACES_PROPERTY
+    schema["required"] = [*schema["required"], "map_places"]
+    return schema
 
 
 AUTO_TYPE_SELECTION_RULES = """
@@ -660,8 +701,9 @@ MAP ACCURACY RULES (SCOPE IS SET BY WHAT YOU ASK FOR, NOT BY THE LABEL YOU REPOR
 8. When the story spans a wide area, ask for two map levels: a small north-up locator overview showing the true relative positions of the places involved, and a larger detail map centred on the incident. One map rarely serves both, and forcing it is what makes models drag distant places closer together.
 9. Disputed or claimed zones (EEZ, 主張海域, 爭議邊界) must be drawn as a thin schematic boundary, never as a settled international border, and must carry the label 主張範圍 示意. Because the renderer may only draw text that was supplied to it, write that label text into "variable" as well.
 10. "Simplified" applies to line styling and visual detail ONLY. Never simplify geographic positions, distances, bearings or relative scale. Use the phrase "geographically accurate simplified cartography" in "style".
-11. NEVER ASK FOR A FAITHFUL MAP YOU HAVE NOT SUPPLIED THE DATA FOR. If "structure" asks for a real place to be drawn, mapped or marked at its real location, then for EVERY place it names it must also carry the positioning data rule 3 requires. If you cannot supply that data for a place, you may not use "faithful", "accurate", "real" or "geographic" map wording for it: switch that graphic to the rule 6 fallback — a labelled coordinate grid or a schematic locator with the place names as labels, stated as such in "structure" — and say plainly there that the layout is schematic. Asking for a truthful map with no coordinates behind it is precisely what makes the renderer invent geography.
-12. ONE SUBJECT PLACE IN THE HEADLINE. Decide which place the incident actually happened in, and let only that place be the subject of the 標題 line in "variable". Other countries that merely reacted, commented, protested or announced a response are secondary: put them in a 內文小標 or a callout, never in the headline as the acting subject. A headline that names a reacting country beside the incident location reads as if the incident happened there, and the renderer will place that country's callout on the incident itself. Name the reacting country inside its own callout wording so the two can never be confused.
+11. LIST THE PLACES YOU WANT MARKED, SO THE PROGRAM CAN LOOK THEM UP. Put every place that should carry a marker into the "map_places" field, one entry each, in the order you want them read. Write each entry as a lookup query, not as a caption: include the city and district that disambiguate it (「基隆市 西定路」, not 「西定路」), because a bare street or hill name matches dozens of places nationwide. Use the place's real name, never a description. If the graphic is not a map, leave the array empty. The program geocodes these names against a real gazetteer and may attach a real basemap with the markers already drawn — that is why the entries must be findable names rather than pretty labels.
+12. NEVER ASK FOR A FAITHFUL MAP YOU HAVE NOT SUPPLIED THE DATA FOR. If "structure" asks for a real place to be drawn, mapped or marked at its real location, then for EVERY place it names it must also carry the positioning data rule 3 requires. If you cannot supply that data for a place, you may not use "faithful", "accurate", "real" or "geographic" map wording for it: switch that graphic to the rule 6 fallback — a labelled coordinate grid or a schematic locator with the place names as labels, stated as such in "structure" — and say plainly there that the layout is schematic. Asking for a truthful map with no coordinates behind it is precisely what makes the renderer invent geography.
+13. ONE SUBJECT PLACE IN THE HEADLINE. Decide which place the incident actually happened in, and let only that place be the subject of the 標題 line in "variable". Other countries that merely reacted, commented, protested or announced a response are secondary: put them in a 內文小標 or a callout, never in the headline as the acting subject. A headline that names a reacting country beside the incident location reads as if the incident happened there, and the renderer will place that country's callout on the incident itself. Name the reacting country inside its own callout wording so the two can never be confused.
 """
 
 
@@ -731,6 +773,43 @@ No usable reference photograph exists for the people listed below, so the graphi
 {people}
 <<NO-PORTRAIT PEOPLE END>>
 """
+
+
+def resolve_map_points(chart_type: str, places: list[str] | None) -> list[MapPoint]:
+    """把消化端列出的地名查成真實座標。查不到就少一個，全程不丟例外。
+
+    為什麼要實查而不用模型寫的經緯度：2026-09-04 量過，「基隆廟口」差 107 公尺
+    還可用，「西定路」差 1,470 公尺、「大武崙」差 2,296 公尺——在市區地圖上
+    已經標到別的行政區。地名越冷門越不準，而新聞要標的往往正是冷門地名。
+
+    失敗一律 fail-open：查不到、逾時、服務掛掉都只是沒有底圖，退回原本那條
+    純 prompt 的路。地理編碼打嗝不可以讓一則本來出得了圖的新聞變成錯誤。
+    """
+    if chart_type != MAP_TYPE_LABEL or not places:
+        return []
+    points: list[MapPoint] = []
+    for place in places[:MAX_MAP_PLACES]:
+        name = (place or "").strip()
+        if not name:
+            continue
+        try:
+            found = map_lookup.geocode(name)
+        except Exception as exc:  # noqa: BLE001 — 監控用，不能拖垮消化
+            print(f"[map] geocode 例外 {name}：{type(exc).__name__}: {exc}", flush=True)
+            continue
+        if found is None:
+            print(f"[map] 查無座標，略過：{name}", flush=True)
+            continue
+        # 標在圖上的是最後一段（「基隆市 西定路」→「西定路」）：查詢字串要夠明確
+        # 才找得到，但畫面上不該出現「基隆市 西定路」這種查詢用的寫法。
+        label = name.split()[-1] if " " in name else name
+        points.append(MapPoint(name=label[:40], lat=found[0], lon=found[1]))
+    if len(points) < MIN_MAP_POINTS:
+        if points:
+            print(f"[map] 只查到 {len(points)} 個點，不足以構成相對位置，不做底圖", flush=True)
+        return []
+    print(f"[map] 已定位 {len(points)} 個地點：{'、'.join(p.name for p in points)}", flush=True)
+    return points
 
 
 def build_digest_instructions(
@@ -1129,7 +1208,7 @@ def generate(req: GenerateRequest):
                 news_text=req.news_text,
                 max_output_tokens=max_output_tokens,
                 schema_name="news_cg_digest",
-                schema=DIGEST_OUTPUT_SCHEMA,
+                schema=digest_schema(req.type_label),
                 site="generate",
             )
         except AuthenticationError as exc:
@@ -1212,6 +1291,9 @@ def generate(req: GenerateRequest):
             structure=data.get("structure", ""),
             variable=strip_wrapping_quotes(data.get("variable", "")),
             chart_type=chart_type,
+            # 只有地圖類會真的去查（resolve_map_points 自己擋掉其他類型）。
+            # 查不到就是空陣列，後續一切照舊，不會有人拿到錯誤。
+            map_points=resolve_map_points(chart_type, data.get("map_places")),
             portrait_subjects=clean_portrait_subjects(data.get("portrait_subjects")),
             portrait_subjects_en=align_english_names(
                 clean_portrait_subjects(data.get("portrait_subjects")),
@@ -1411,6 +1493,9 @@ def generate_image(req: ImageGenerateRequest):
     generate_news_image 已組好 prompt，走這支時不要重複落檔。
     """
     req = apply_portrait_to_image_request(req)
+    # 順序有意義：自動底圖要先加進 reference_images，下一行才會替它注入
+    # ATTACHED MAP REFERENCE 那段用途規則（「標點已在真實位置，不要移動」）。
+    req = apply_map_reference_to_image_request(req)
     req = apply_user_references_to_image_request(req)
     request_id = request_log.new_request_id()
     try:
@@ -2293,6 +2378,56 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
     )
 
 
+def apply_map_reference_to_image_request(
+    req: ImageGenerateRequest,
+) -> ImageGenerateRequest:
+    """地圖類：把真實底圖（標點已畫在正確座標上）加進參考圖。
+
+    三個「不做」是刻意的：
+    1. **後端送不出參考圖時完全不做。** 原生 OpenAI 這條沒有多圖通道，硬加只會讓
+       apply_user_references_to_image_request 丟 400——那是使用者沒做錯任何事卻
+       收到的錯誤。沒有通道就安靜退回原本的純 prompt 路徑。
+    2. **失敗不擋成圖。** 圖磚抓不到、範圍太大、Pillow 出事，一律只是沒有底圖。
+       地圖底圖是加分項，不是必要條件。
+    3. **不覆寫使用者自己上傳的地圖底稿。** 使用者親自附的圖永遠優先，
+       自動底圖只在他沒附的時候補位。
+    """
+    if not req.map_points:
+        return req
+    if not supports_multiple_reference_images():
+        print("[map] 目前的生圖後端送不出參考圖，略過自動底圖", flush=True)
+        return req
+    if any(ref.purpose == "map" for ref in req.reference_images):
+        print("[map] 使用者已自行附上地圖底稿，不再自動產生", flush=True)
+        return req
+    if len(req.reference_images) >= MAX_INPUT_REFERENCES:
+        print("[map] 參考圖已達上限，略過自動底圖", flush=True)
+        return req
+    try:
+        png = map_lookup.render_basemap(
+            [(point.lat, point.lon) for point in req.map_points],
+            width=1024,
+            height=576,
+            mark=True,
+        )
+    except Exception as exc:  # noqa: BLE001 — 底圖是加分項，不能拖垮成圖
+        print(f"[map] 底圖產生失敗（照舊出圖）：{type(exc).__name__}: {exc}", flush=True)
+        return req
+    data_url = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+    print(
+        f"[map] 已附上真實底圖（{len(req.map_points)} 個標點，{len(png)} bytes）",
+        flush=True,
+    )
+    return req.model_copy(
+        update={
+            "reference_images": [
+                *req.reference_images,
+                UserReferenceImage(data_url=data_url, purpose="map"),
+            ]
+        }
+    )
+
+
 def apply_user_references_to_image_request(
     req: ImageGenerateRequest,
 ) -> ImageGenerateRequest:
@@ -2531,6 +2666,9 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                     # 傳角色而非解析後的 profile：generate_image 會解析一次，
                     # 這裡先解析會讓它拿「編輯安全框」當角色再解析一次而解錯。
                     safe_frame_profile=req.role,
+                    # 地圖類的真實座標。generate_image 會據此拼底圖並附上去；
+                    # 送不出參考圖的後端會安靜略過（見 apply_map_reference_to_image_request）。
+                    map_points=digest.map_points,
                     # 單人走既有的單張欄位（措辭與行為與放寬前逐字相同），
                     # 2-3 人才走多張通道
                     reference_image_data_url=(

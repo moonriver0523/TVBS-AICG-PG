@@ -86,10 +86,11 @@ class NoDataNoFaithfulMapTests(unittest.TestCase):
         self.assertIn('"faithful", "accurate", "real" or "geographic" map wording', digest())
 
     def test_headline_rule_survived_the_renumbering(self):
-        # 原第 11 條被推成第 12 條，內容不能掉
+        # 這條被往後推過兩次（加「沒資料不准畫忠實地圖」、加 map_places），
+        # 每次都要確認它沒有在重新編號時被吃掉
         text = digest()
         self.assertIn("ONE SUBJECT PLACE IN THE HEADLINE", text)
-        self.assertIn("\n12. ONE SUBJECT PLACE", text)
+        self.assertIn("\n13. ONE SUBJECT PLACE", text)
 
     def test_cross_references_still_point_at_real_rules(self):
         text = digest()

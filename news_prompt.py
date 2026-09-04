@@ -271,7 +271,9 @@ ATTACHED MAP REFERENCE (CRITICAL)
 - One of the attached images is a map supplied by the user. Treat it as the geographic ground truth for this graphic.
 - The relative positions, coastlines, routes and boundaries shown in that attached map override your own geographic memory. Do not move, rotate, mirror, compress or "improve" any of them.
 - Re-draw the geography in the graphic's own visual style; do not paste or photographically reproduce the attached map itself.
-- Labels and callout text still come ONLY from VARIABLE FIELDS, never from text visible inside the attached map."""
+- Labels and callout text still come ONLY from VARIABLE FIELDS, never from text visible inside the attached map.
+- IF THE ATTACHED MAP CARRIES ROUND MARKER DOTS, those dots are already at the true real-world positions of the places this story is about. Keep every marker at its dot: do not move it, do not re-space the markers to balance the composition, do not add a marker where there is no dot, and do not drop one. Restyle the dot into the graphic's own pin design and attach the place name beside it — the dot's position is the one thing you may not change.
+- Any coordinates written in STRUCTURE are secondary to the attached map. Where the two disagree, the attached map wins; never nudge a marker to match a coordinate."""
 
 USER_REFERENCE_SCENE_RULES = """==================================================
 ATTACHED SCENE REFERENCE (CRITICAL)

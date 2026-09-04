@@ -311,6 +311,8 @@ let state = {
     // 兩檔都會送給後端並注入 prompt（不是「預設不注入」），因為只寫亮不寫暗時，
     // 樣板裡本來就偏暗的措辭會跟亮色調各聽一半，出半亮半暗的圖。
     tone: 'dark',
+    // 最近一次消化查到的地圖座標；非地圖類一律空陣列
+    mapPoints: [],
     // 編輯專屬版型（2026-09-03）。切回記者角色時一律重置成 default——
     // 這是「記者不可能誤用」的第二層防呆（第一層是下拉根本不顯示，第三層在後端）。
     // 寫字面值而不是 EDITOR_FORMAT_DEFAULT：那個 const 宣告在 state 之後，
@@ -1426,6 +1428,7 @@ function noteChartTypeOverride(data) {
 }
 
 function applyDigestToForm(data) {
+    state.mapPoints = Array.isArray(data.map_points) ? data.map_points : [];
     const s = curSelected();
     s.style = {};
     s.structure = {};
@@ -1564,6 +1567,10 @@ async function handleOneClickGenerate() {
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
                 broadcast_hole: editorFormat().hole || '',
+                // 地圖類的真實座標（消化端列地名、後端實查 Nominatim）。後端據此
+                // 拼一張真實底圖、把標點畫在正確位置再當參考圖附上——模型記憶裡的
+                // 經緯度實測差到 2.3 公里，冷門地名尤其不準。
+                map_points: state.mapPoints,
                 portrait_subjects: state.portraitSubjects,
                 portrait_subjects_en: state.portraitSubjectsEn,
                 reference_images: userRefImagesPayload(),
@@ -1750,6 +1757,10 @@ async function handleImageGeneration() {
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
                 broadcast_hole: editorFormat().hole || '',
+                // 地圖類的真實座標（消化端列地名、後端實查 Nominatim）。後端據此
+                // 拼一張真實底圖、把標點畫在正確位置再當參考圖附上——模型記憶裡的
+                // 經緯度實測差到 2.3 公里，冷門地名尤其不準。
+                map_points: state.mapPoints,
                 portrait_subjects: state.portraitSubjects,
                 portrait_subjects_en: state.portraitSubjectsEn
             })
