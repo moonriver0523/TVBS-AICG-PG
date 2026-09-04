@@ -373,14 +373,14 @@ const EDITOR_FORMATS = {
     },
     broadcast_left: {
         label: '播出鏡面（左側挖空）',
-        hint: '左下角留一塊 16:9 空位給後製合成影片，內容自動靠右編排。',
+        hint: '畫面左半、垂直置中留一塊 16:9 空位給後製合成影片，內容自動靠右編排。',
         inputs: 'news',
         locks: { safeFrame: true, stamp: true, density: 'simplified', chartType: true },
         hole: 'left',
     },
     broadcast_right: {
         label: '播出鏡面（右側挖空）',
-        hint: '右下角留一塊 16:9 空位給後製合成影片，內容自動靠左編排。',
+        hint: '畫面右半、垂直置中留一塊 16:9 空位給後製合成影片，內容自動靠左編排。',
         inputs: 'news',
         locks: { safeFrame: true, stamp: true, density: 'simplified', chartType: true },
         hole: 'right',
