@@ -109,6 +109,37 @@ GEMINI_DIGEST_MIN_TOKENS = 6000
 DIGEST_MAX_TOKENS = 1500
 MAP_DIGEST_MAX_TOKENS = 6000
 
+# 「不消化」的輸出長度**由輸入長度決定**——模型要把整篇原文一字不差抄進 variable，
+# 再另外寫 style/structure。固定 1500 等於「原文超過某個長度就一定失敗」。
+# 2026-09-04 實測（正式站）：943 字過關且逐字相符；1850 字連續 5 次
+# finish_reason=length 且 raw content 是空字串——DEFAULT_DIGEST_MODEL 是推理模型，
+# 思考 token 也算進 max_completion_tokens，1500 在吐出第一個字之前就用光了，
+# 使用者等 90 秒收到 502。中文在 o200k 約 1 字 1 token，這裡抓 2 倍當保險，
+# OVERHEAD 要同時吃下 style/structure 與看不見的思考 token。
+# 上限是天花板不是用量，只有真的寫出來的 token 才計費，因此寧可寬裕。
+VERBATIM_TOKENS_PER_CHAR = 2
+VERBATIM_DIGEST_OVERHEAD = 2500
+# 天花板的天花板：news_text 上限 20000 字，照公式會算到 42500。真要那麼長的原文
+# 本來就不該用不消化，讓它撞 length 收到明確錯誤，比默默燒一次大額呼叫好。
+VERBATIM_DIGEST_MAX_TOKENS = 24000
+
+
+def digest_token_budget(type_label: str, density: str, news_text: str) -> int:
+    """這次消化該給多少輸出上限。
+
+    地圖類與不消化各有各的理由要比一般寬裕，但兩者的依據不同：地圖是「要寫的
+    東西本來就多」，是固定加碼；不消化是「輸出長度等於輸入長度」，必須隨輸入縮放。
+    """
+    base = (
+        MAP_DIGEST_MAX_TOKENS
+        if type_label in (MAP_TYPE_LABEL, AUTO_TYPE_LABEL)
+        else DIGEST_MAX_TOKENS
+    )
+    if density != "verbatim":
+        return base
+    needed = len(news_text) * VERBATIM_TOKENS_PER_CHAR + VERBATIM_DIGEST_OVERHEAD
+    return min(max(base, needed), VERBATIM_DIGEST_MAX_TOKENS)
+
 # 消化重試次數。上游（OpenRouter 輪替的 provider）會間歇性脫軌——2026-08-01 實測
 # 休達那則新聞，模型會在 variable 裡吐出韓文／西里爾／馬拉雅拉姆等隨機文字碎片，
 # 單次成功率約 2/3，3 次重試仍整組摃摃、使用者收到 502 拿不到圖。消化是純文字
@@ -1000,13 +1031,8 @@ def generate(req: GenerateRequest):
     # 上游（OpenRouter 多 provider 輪替）偶發 502、輸出截斷或不合 schema 的回傳是常態，
     # 重試圈必須涵蓋「呼叫＋解析」全程——只重試呼叫，解析失敗一樣會把錯誤丟給使用者。
     # 作法比照 hybrid_digest：金鑰／用量問題不重試（重試也沒用），其餘 3 次 × 1.5 秒。
-    # 地圖類（含自動判斷，因為 AI 可能選地圖）要寫雙層地圖與多組座標，字數本來就多，
-    # 用一般預算幾乎必定截斷，見 MAP_DIGEST_MAX_TOKENS 的說明。
-    max_output_tokens = (
-        MAP_DIGEST_MAX_TOKENS
-        if req.type_label in (MAP_TYPE_LABEL, AUTO_TYPE_LABEL)
-        else DIGEST_MAX_TOKENS
-    )
+    # 輸出上限依類型與消化程度分開給，理由見 digest_token_budget。
+    max_output_tokens = digest_token_budget(req.type_label, req.density, req.news_text)
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
     for attempt in range(DIGEST_ATTEMPTS):
         try:
@@ -1050,6 +1076,15 @@ def generate(req: GenerateRequest):
                 f"[generate] raw content: {raw_content[:800]}",
                 flush=True,
             )
+            if req.density == "verbatim" and finish_reason == "length":
+                # 不消化的預算已經照原文長度放大過（digest_token_budget），還撞到
+                # length 就是這篇真的塞不下——重試每次都會撞同一面牆，5 次要燒掉
+                # 90 秒才讓使用者收到一句看不懂的「格式無法解析」。直接講清楚。
+                raise HTTPException(
+                    status_code=400,
+                    detail="原文太長，「不消化」要模型逐字抄完整篇才做得到；"
+                    "請改用「字少」／「字多」，或把原文縮短再試。",
+                )
             time.sleep(1.5)
             continue
 
