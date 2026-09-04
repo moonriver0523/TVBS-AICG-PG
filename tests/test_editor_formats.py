@@ -386,5 +386,56 @@ class FrontendParityTests(unittest.TestCase):
                 )
 
 
+
+class LockScopeTests(FrontendParityTests):
+    """2026-09-04 使用者回報「播出鏡面下面的按鈕全都不能選」。
+
+    查下來我當初鎖了四個，只有版面形式是真的必要——它跟挖空框互相打架。
+    安全框（ON／OFF 都是合法安全區，挖空框都算得出正確位置）、蓋章、字多字少
+    都只是建議值，鎖住是我鎖過頭。使用者裁決：只鎖版面形式。
+    """
+
+    def test_broadcast_locks_only_the_chart_type(self):
+        for key in ("broadcast_left", "broadcast_right"):
+            with self.subTest(key=key):
+                entry = self.js_entries()[key]
+                locks = re.search(r"locks:\s*\{([^}]*)\}", entry).group(1)
+                self.assertIn("chartType", locks)
+                for freed in ("safeFrame", "stamp", "density"):
+                    self.assertNotIn(freed, locks, f"{freed} 不該再被鎖住")
+
+    def test_broadcast_still_presets_the_recommended_values(self):
+        # 解鎖不等於不幫忙：切過去仍要幫使用者調好，只是調完可以改
+        for key in ("broadcast_left", "broadcast_right"):
+            with self.subTest(key=key):
+                presets = re.search(r"presets:\s*\{([^}]*)\}", self.js_entries()[key])
+                self.assertIsNotNone(presets, "播出鏡面應該還有預設值")
+                for field in ("safeFrame", "stamp", "density"):
+                    self.assertIn(field, presets.group(1))
+
+    def test_cover_hides_the_controls_it_cannot_use(self):
+        # /api/editor/cover 不收 density／stamp／safe_frame／tone，
+        # 留一排點不動的灰按鈕只會被當成壞掉——收起來，不是鎖起來
+        for key in ("ten_cover", "ten_cover_composite"):
+            with self.subTest(key=key):
+                entry = self.js_entries()[key]
+                hides = re.search(r"hides:\s*\{([^}]*)\}", entry)
+                self.assertIsNotNone(hides, "封面應該把用不到的控制項收起來")
+                for field in ("digestControls", "safeFrame", "stamp"):
+                    self.assertIn(field, hides.group(1))
+                self.assertNotIn("chartType", re.search(r"locks:\s*\{([^}]*)\}", entry).group(1))
+
+    def test_default_format_locks_and_hides_nothing(self):
+        entry = self.js_entries()["default"]
+        self.assertNotIn("hides", entry)
+        self.assertEqual(re.search(r"locks:\s*\{([^}]*)\}", entry).group(1).strip(), "")
+
+    def test_cover_still_lets_the_user_pick_the_engine(self):
+        # provider 是 TenCoverRequest 真的會用到的欄位，不可以一起收掉
+        for key in ("ten_cover", "ten_cover_composite"):
+            with self.subTest(key=key):
+                hides = re.search(r"hides:\s*\{([^}]*)\}", self.js_entries()[key]).group(1)
+                self.assertNotIn("engine", hides)
+
 if __name__ == "__main__":
     unittest.main()

@@ -364,7 +364,10 @@ function curType() { return CHART_TYPES[state.chartType]; }
    改成「同一頁、選了格式就換裝輸入區」。
 
    inputs：'news'＝現行的新聞原文那組；'cover'＝左右標題那組
-   locks ：這個版型規定死的開關，UI 會鎖住並標示
+   presets：切到這個版型時**幫忙調好**的開關——調完使用者仍可自己改
+   locks ：真的不准動的開關（只剩版面形式：它跟挖空框互相打架）
+   hides ：這個版型用不到、整組收起來的控制項（收起來勝過鎖起來——
+           留一排點不動的灰按鈕，使用者只會以為壞了；2026-09-04 使用者回報）
    hole  ：播出鏡面的挖空側，生圖時送給後端由程式數學貼框
    ============================================================ */
 const EDITOR_FORMATS = {
@@ -379,14 +382,16 @@ const EDITOR_FORMATS = {
         label: '播出鏡面（左側挖空）',
         hint: '畫面左半、垂直置中留一塊 16:9 空位給後製合成影片，內容自動靠右編排。',
         inputs: 'news',
-        locks: { safeFrame: true, stamp: true, density: 'simplified', chartType: true },
+        presets: { safeFrame: true, stamp: true, density: 'simplified' },
+        locks: { chartType: true },
         hole: 'left',
     },
     broadcast_right: {
         label: '播出鏡面（右側挖空）',
         hint: '畫面右半、垂直置中留一塊 16:9 空位給後製合成影片，內容自動靠左編排。',
         inputs: 'news',
-        locks: { safeFrame: true, stamp: true, density: 'simplified', chartType: true },
+        presets: { safeFrame: true, stamp: true, density: 'simplified' },
+        locks: { chartType: true },
         hole: 'right',
     },
     // 純 prompt 版：整張由生圖模型畫（含節目名、標題、日期、標籤），只有 Logo 後製貼上
@@ -395,8 +400,10 @@ const EDITOR_FORMATS = {
         hint: '整張由生圖模型設計，美術字有設計感；只有正版 Logo 由程式貼上。',
         inputs: 'cover',
         coverMode: 'ai',
-        // densityLocked 與 density 分開：這裡不是「鎖在某一檔」，而是整組不適用
-        locks: { safeFrame: false, stamp: false, density: null, densityLocked: true, chartType: true },
+        // 封面沒有消化這道程序：/api/editor/cover 不收 density／stamp／safe_frame／tone，
+        // 留著只會是四顆按了沒反應的按鈕，所以收起來而不是鎖起來
+        locks: {},
+        hides: { digestControls: true, safeFrame: true, stamp: true },
         hole: null,
     },
     // 合成版備援：零錯字但沒有設計感。保留供對照，不要順手刪掉。
@@ -405,7 +412,8 @@ const EDITOR_FORMATS = {
         hint: 'AI 只生左右兩張無文字底圖，所有文字由程式繪製：零錯字，但沒有美術字設計感。',
         inputs: 'cover',
         coverMode: 'composite',
-        locks: { safeFrame: false, stamp: false, density: null, densityLocked: true, chartType: true },
+        locks: {},
+        hides: { digestControls: true, safeFrame: true, stamp: true },
         hole: null,
     },
 };
@@ -704,17 +712,27 @@ function _lock(el, locked) {
 }
 
 function applyEditorFormatLocks() {
-    const locks = editorFormat().locks || {};
-    if (typeof locks.safeFrame === 'boolean' && state.safeFrame !== locks.safeFrame) toggleSafeFrame();
-    if (typeof locks.stamp === 'boolean' && state.stamp !== locks.stamp) toggleStamp();
-    if (locks.density && state.digestDensity !== locks.density) switchDigestDensity(locks.density);
+    const format = editorFormat();
+    const presets = format.presets || {};
+    const locks = format.locks || {};
+    const hides = format.hides || {};
 
-    _lock(document.getElementById('p1-btnSafeFrame'), typeof locks.safeFrame === 'boolean');
-    _lock(document.getElementById('p1-btnStamp'), typeof locks.stamp === 'boolean');
-    const densityLocked = !!locks.density || !!locks.densityLocked;
-    document.querySelectorAll('[data-density]').forEach(btn => _lock(btn.parentElement, densityLocked));
-    // 播出鏡面的版面由挖空框決定，讓使用者再選一次版面形式只會互相打架
+    // 預設值：幫忙調好，但不擋——2026-09-04 使用者回報「全都不能選」，查下來
+    // 播出鏡面四個鎖裡只有版面形式是真的必要，其餘三個鎖過頭了。
+    if (typeof presets.safeFrame === 'boolean' && state.safeFrame !== presets.safeFrame) toggleSafeFrame();
+    if (typeof presets.stamp === 'boolean' && state.stamp !== presets.stamp) toggleStamp();
+    if (presets.density && state.digestDensity !== presets.density) switchDigestDensity(presets.density);
+
+    _hide(document.getElementById('digestControlsRow'), !!hides.digestControls);
+    _hide(document.getElementById('p1-btnSafeFrame'), !!hides.safeFrame);
+    _hide(document.getElementById('p1-btnStamp'), !!hides.stamp);
+
+    // 唯一真的鎖著的：版面由挖空框決定，讓使用者再選一次只會互相打架
     _lock(document.getElementById('digestTypeRow'), !!locks.chartType);
+}
+
+function _hide(el, hidden) {
+    if (el) el.classList.toggle('hidden', hidden);
 }
 
 // 換裝輸入區：同一頁、同一個位置，只有上半部欄位跟著版型換
