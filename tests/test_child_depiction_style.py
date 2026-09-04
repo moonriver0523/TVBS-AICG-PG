@@ -16,7 +16,7 @@ from main import CHART_TYPE_CHOICES, build_digest_instructions  # noqa: E402
 class ChildDepictionStyleTests(unittest.TestCase):
     def test_block_present_for_every_variant(self):
         for role in ("記者", "編輯"):
-            for density in ("standard", "simplified"):
+            for density in ("standard", "simplified", "verbatim"):
                 for type_label in CHART_TYPE_CHOICES:
                     with self.subTest(role=role, density=density, type_label=type_label):
                         prompt = build_digest_instructions(role, density, type_label)

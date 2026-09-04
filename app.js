@@ -302,7 +302,16 @@ const TAB_META = {
 let state = {
     chartType: 'data',
     currentRole: '記者',
-    digestDensity: 'standard',
+    // 2026-09-03：三檔（verbatim=不消化／simplified=字少／standard=字多），預設字少
+    digestDensity: 'simplified',
+    // 蓋章由使用者決定（2026-09-03）。以前是消化階段自己決定，同一個產品三種行為。
+    // 預設 ON；指令欄若提到蓋章，後端以指令欄為準（見 main.py 的優先序規則）。
+    stamp: true,
+    // 編輯專屬版型（2026-09-03）。切回記者角色時一律重置成 default——
+    // 這是「記者不可能誤用」的第二層防呆（第一層是下拉根本不顯示，第三層在後端）。
+    // 寫字面值而不是 EDITOR_FORMAT_DEFAULT：那個 const 宣告在 state 之後，
+    // 引用它會在載入時就 ReferenceError（TDZ）。
+    editorFormat: 'default',
     currentTab: 'style',
     // 2026-08-17 改以 GPT 為預設引擎（UI 上 GPT 也排在 Gemini 前面）
     engine: 'gpt',
@@ -337,6 +346,77 @@ let state = {
 };
 
 function curType() { return CHART_TYPES[state.chartType]; }
+
+/* ============================================================
+   編輯專屬版型（2026-09-03）
+   記者沒有這些需求，切到編輯角色才會出現這個下拉。
+   key 與 label 需與 editor_formats.py 一致（test_prompt_parity 守著）。
+
+   為什麼不併進「版面形式」：那組在後端是 strict JSON schema enum，
+   而「AI 自動判斷」就是叫模型從那組裡自己挑——加進去等於模型會主動挑給記者，
+   UI 藏得掉、模型挑不掉。
+   為什麼不另開分頁：編輯的工作流是連貫的（同一則新聞先出鏡面、再做封面），
+   而且輸入區以外的東西（產出、下載、追加修改）全部共用。
+   改成「同一頁、選了格式就換裝輸入區」。
+
+   inputs：'news'＝現行的新聞原文那組；'cover'＝左右標題那組
+   locks ：這個版型規定死的開關，UI 會鎖住並標示
+   hole  ：播出鏡面的挖空側，生圖時送給後端由程式數學貼框
+   ============================================================ */
+const EDITOR_FORMATS = {
+    default: {
+        label: '預設（現行）',
+        hint: '',
+        inputs: 'news',
+        locks: {},
+        hole: null,
+    },
+    broadcast_left: {
+        label: '播出鏡面（左側挖空）',
+        hint: '左下角留一塊 16:9 空位給後製合成影片，內容自動靠右編排。',
+        inputs: 'news',
+        locks: { safeFrame: true, stamp: true, density: 'simplified', chartType: true },
+        hole: 'left',
+    },
+    broadcast_right: {
+        label: '播出鏡面（右側挖空）',
+        hint: '右下角留一塊 16:9 空位給後製合成影片，內容自動靠左編排。',
+        inputs: 'news',
+        locks: { safeFrame: true, stamp: true, density: 'simplified', chartType: true },
+        hole: 'right',
+    },
+    // 純 prompt 版：整張由生圖模型畫（含節目名、標題、日期、標籤），只有 Logo 後製貼上
+    ten_cover: {
+        label: '十點不一樣封面',
+        hint: '整張由生圖模型設計，美術字有設計感；只有正版 Logo 由程式貼上。',
+        inputs: 'cover',
+        coverMode: 'ai',
+        // densityLocked 與 density 分開：這裡不是「鎖在某一檔」，而是整組不適用
+        locks: { safeFrame: false, stamp: false, density: null, densityLocked: true, chartType: true },
+        hole: null,
+    },
+    // 合成版備援：零錯字但沒有設計感。保留供對照，不要順手刪掉。
+    ten_cover_composite: {
+        label: '十點不一樣封面（合成版・備份）',
+        hint: 'AI 只生左右兩張無文字底圖，所有文字由程式繪製：零錯字，但沒有美術字設計感。',
+        inputs: 'cover',
+        coverMode: 'composite',
+        locks: { safeFrame: false, stamp: false, density: null, densityLocked: true, chartType: true },
+        hole: null,
+    },
+};
+const EDITOR_FORMAT_DEFAULT = 'default';
+
+function editorFormat() {
+    return EDITOR_FORMATS[state.editorFormat] || EDITOR_FORMATS[EDITOR_FORMAT_DEFAULT];
+}
+
+/* 消化程度三檔。key 與後端 DigestDensity 一致，改這裡要同步改 main.py */
+const DENSITY_LABELS = {
+    verbatim: '不消化',
+    simplified: '字少',
+    standard: '字多',
+};
 
 /* 第一頁「AI 自動判斷版型」的懶人選項，非真實 CHART_TYPES 成員 */
 const AUTO_TYPE_KEY = 'auto';
@@ -409,6 +489,13 @@ window.onload = () => {
         btn.className = "px-3 py-1 rounded text-[9px] font-black transition-all " + (state.safeFrame ? "bg-emerald-600 text-white" : "text-slate-500 hover:text-white");
         btn.innerText = state.safeFrame ? "安全框 ON" : "安全框 OFF";
     });
+    updateStampButton();
+    renderEditorFormats();
+    document.querySelectorAll('[data-density]').forEach(btn => {
+        const isActive = btn.dataset.density === state.digestDensity;
+        btn.classList.toggle('density-active', isActive);
+        btn.classList.toggle('text-slate-500', !isActive);
+    });
     switchPage(1);
 };
 
@@ -477,23 +564,22 @@ function resetToType(key) {
    切換它不會重置第二頁已選的版型與已填的矩陣
    ============================================================ */
 function renderDigestTypes() {
-    const c = document.getElementById('digestTypeSelector');
+    const c = document.getElementById('digestTypeSelect');
     if (!c) return;
     c.innerHTML = '';
     // 懶人機制擺第一個並為預設
     const entries = [[AUTO_TYPE_KEY, AUTO_TYPE], ...Object.entries(CHART_TYPES)];
     entries.forEach(([key, t]) => {
-        const btn = document.createElement('button');
+        const opt = document.createElement('option');
         const isAuto = key === AUTO_TYPE_KEY;
-        const isActive = key === state.digestChartType;
-        btn.className = `digest-type-btn px-3 py-2 rounded-lg text-[10px] font-black border transition-all tracking-wide ${isActive ? 'digest-type-active' : ''}`;
-        // 自動判斷完成後，按鈕顯示 AI 選了什麼
-        btn.innerText = (isAuto && isActive && state.digestResolvedType)
+        opt.value = key;
+        // 自動判斷完成後，選項顯示 AI 選了什麼
+        opt.text = (isAuto && key === state.digestChartType && state.digestResolvedType)
             ? `AI 自動判斷：${CHART_TYPES[state.digestResolvedType].label}`
             : t.label;
-        btn.onclick = () => setDigestType(key);
-        c.appendChild(btn);
+        c.appendChild(opt);
     });
+    c.value = state.digestChartType;
     const hint = document.getElementById('digestTypeHint');
     if (hint) {
         hint.innerText = (state.digestChartType === AUTO_TYPE_KEY && !state.digestResolvedType)
@@ -572,10 +658,87 @@ function switchRole(role) {
     state.activeParent = Object.keys(curType().styles)[0];
     renderTabs();
     renderAll();
+    // 記者沒有編輯專屬版型，切回去一律重置，免得開關卡在被鎖住的狀態
+    if (role !== '編輯' && state.editorFormat !== EDITOR_FORMAT_DEFAULT) {
+        state.editorFormat = EDITOR_FORMAT_DEFAULT;
+    }
+    renderEditorFormats();
+    applyEditorFormatInputs();
+    applyEditorFormatLocks();
     updateAIBtnRoleHint();
     updateAspectBadge();
     updateImageGenerationControls();
     showToast(`已切換至 ${role} 模式`);
+}
+
+/* ============================================================
+   編輯專屬版型：下拉、鎖開關、換裝輸入區
+   ============================================================ */
+function renderEditorFormats() {
+    const row = document.getElementById('editorFormatRow');
+    const select = document.getElementById('editorFormatSelect');
+    if (!row || !select) return;
+    row.classList.toggle('hidden', state.currentRole !== '編輯');
+    if (!select.options.length) {
+        Object.entries(EDITOR_FORMATS).forEach(([key, fmt]) => {
+            const opt = document.createElement('option');
+            opt.value = key;
+            opt.text = fmt.label;
+            select.appendChild(opt);
+        });
+    }
+    select.value = state.editorFormat;
+    const hint = document.getElementById('editorFormatHint');
+    if (hint) hint.innerText = editorFormat().hint || '';
+}
+
+// 鎖住的開關要看得出來是「這個版型規定的」而不是壞掉。淡化＋擋點擊是外觀，
+// 真正生效的是 state——applyEditorFormatLocks 會先把 state 改成版型要求的值。
+function _lock(el, locked) {
+    if (el) el.classList.toggle('locked-by-format', locked);
+}
+
+function applyEditorFormatLocks() {
+    const locks = editorFormat().locks || {};
+    if (typeof locks.safeFrame === 'boolean' && state.safeFrame !== locks.safeFrame) toggleSafeFrame();
+    if (typeof locks.stamp === 'boolean' && state.stamp !== locks.stamp) toggleStamp();
+    if (locks.density && state.digestDensity !== locks.density) switchDigestDensity(locks.density);
+
+    _lock(document.getElementById('p1-btnSafeFrame'), typeof locks.safeFrame === 'boolean');
+    _lock(document.getElementById('p1-btnStamp'), typeof locks.stamp === 'boolean');
+    const densityLocked = !!locks.density || !!locks.densityLocked;
+    document.querySelectorAll('[data-density]').forEach(btn => _lock(btn.parentElement, densityLocked));
+    // 播出鏡面的版面由挖空框決定，讓使用者再選一次版面形式只會互相打架
+    _lock(document.getElementById('digestTypeRow'), !!locks.chartType);
+}
+
+// 換裝輸入區：同一頁、同一個位置，只有上半部欄位跟著版型換
+function applyEditorFormatInputs() {
+    const wantsCover = editorFormat().inputs === 'cover';
+    const news = document.getElementById('newsInputs');
+    const cover = document.getElementById('coverInputs');
+    const digestRow = document.getElementById('digestTypeRow');
+    if (news) news.classList.toggle('hidden', wantsCover);
+    if (cover) cover.classList.toggle('hidden', !wantsCover);
+    // 封面模式完全沒有消化這一段，版面形式用不到，整組收起來
+    if (digestRow) digestRow.classList.toggle('hidden', wantsCover);
+    const dateField = document.getElementById('coverDate');
+    if (wantsCover && dateField && !dateField.value) {
+        const now = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        dateField.value = `${now.getFullYear()}/${pad(now.getMonth() + 1)}/${pad(now.getDate())}`;
+    }
+}
+
+function setEditorFormat(key) {
+    state.editorFormat = EDITOR_FORMATS[key] ? key : EDITOR_FORMAT_DEFAULT;
+    renderEditorFormats();
+    applyEditorFormatInputs();
+    applyEditorFormatLocks();
+    updateAIBtnRoleHint();
+    if (state.editorFormat !== EDITOR_FORMAT_DEFAULT) {
+        showToast(`已切換版型：${editorFormat().label}`);
+    }
 }
 
 function switchDigestDensity(density) {
@@ -586,7 +749,10 @@ function switchDigestDensity(density) {
         btn.classList.toggle('text-slate-500', !isActive);
     });
     updateAIBtnRoleHint();
-    showToast(`AI 消化已切換至${density === 'simplified' ? '簡化' : '標準'}模式`);
+    const label = DENSITY_LABELS[density] || density;
+    showToast(density === 'verbatim'
+        ? '已切換至「不消化」：貼上的內文一字不改，AI 只做版面'
+        : `AI 消化已切換至「${label}」`);
 }
 
 // Prompt 顯示區高度壓低後，用字元數讓使用者確認 Prompt 已生成、長度多少
@@ -616,10 +782,15 @@ function updateAIBtnRoleHint() {
     const buttonText = document.getElementById('aiBtnText');
     // 生成中按鈕正顯示進度，切角色／密度不該把進度文字蓋掉
     if (_genTicker) return;
-    const densityLabel = state.digestDensity === 'simplified' ? '簡化' : '標準';
-    if (buttonText) {
-        buttonText.innerText = `一鍵生成（${state.currentRole}・${densityLabel}）`;
+    if (!buttonText) return;
+    if (editorFormat().inputs === 'cover') {
+        buttonText.innerText = '生成十點不一樣封面';
+        return;
     }
+    const densityLabel = DENSITY_LABELS[state.digestDensity] || state.digestDensity;
+    const formatLabel = state.editorFormat === EDITOR_FORMAT_DEFAULT
+        ? '' : `・${editorFormat().label}`;
+    buttonText.innerText = `一鍵生成（${state.currentRole}・${densityLabel}${formatLabel}）`;
 }
 
 /* ============================================================
@@ -736,6 +907,22 @@ function toggleSafeFrame() {
     });
     updateAspectBadge();
     syncOutput();
+}
+
+// 蓋章開關（2026-09-03）。安全框是綠的，這顆用琥珀色，避免兩個開關看起來同一組。
+function updateStampButton() {
+    const btn = document.getElementById('p1-btnStamp');
+    if (!btn) return;
+    btn.className = 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
+        + (state.stamp ? 'bg-amber-600 text-white' : 'text-slate-500 hover:text-white');
+    btn.innerText = state.stamp ? '蓋章 ON' : '蓋章 OFF';
+}
+
+function toggleStamp() {
+    state.stamp = !state.stamp;
+    updateStampButton();
+    updateInstructionOverrideHint();
+    showToast(state.stamp ? '蓋章：開（最後一行加結論條）' : '蓋章：關（不放結論條）');
 }
 
 /* 置框模式送 21:9 生成：官方安全區本身是 2.176:1，用 21:9（2.333）去塞，
@@ -1171,6 +1358,8 @@ async function digestNewsText(input) {
             type_label: digestTypeLabelForApi(),
             role: state.currentRole,
             density: state.digestDensity,
+            stamp: state.stamp,
+            editor_format: state.editorFormat,
             safe_frame: state.safeFrame,
             user_instruction: currentUserInstruction(),
             portrait_photo_count: uploadedPortraitCount(),
@@ -1182,6 +1371,15 @@ async function digestNewsText(input) {
         throw new Error(_apiError(data, response.status));
     }
     return data;
+}
+
+// 指令欄可蓋過版面形式（2026-09-03），AI 回報的類型因此可能跟下拉選的不一樣。
+// 指定類型時把實際採用的類型講出來，免得下拉顯示 A、圖卻是 B。
+function noteChartTypeOverride(data) {
+    if (state.digestChartType === AUTO_TYPE_KEY) return;
+    const label = data && data.chart_type;
+    if (!label || label === digestType().label) return;
+    showToast(`依指令欄改用「${label}」版面`);
 }
 
 function applyDigestToForm(data) {
@@ -1196,13 +1394,87 @@ function applyDigestToForm(data) {
         const resolvedKey = Object.keys(CHART_TYPES).find(k => CHART_TYPES[k].label === data.chart_type);
         state.digestResolvedType = resolvedKey || null;
         renderDigestTypes();
+    } else {
+        noteChartTypeOverride(data);
     }
     renderTags();
     updateCounter();
     claimPromptType("digest");
 }
 
+const COVER_BACKEND_URL = `${API_BASE}/api/editor/cover`;
+
+// 十點不一樣封面：使用者直接給兩個標題，中間沒有消化這一段，所以走自己的端點。
+// 下拉、產出區、下載都還在同一頁同一個位置，編輯不用切分頁。
+async function handleTenCoverGenerate() {
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    const titleLeft = val('coverTitleLeft');
+    const titleRight = val('coverTitleRight');
+    const visualLeft = val('coverVisualLeft');
+    const visualRight = val('coverVisualRight');
+    if (!titleLeft || !titleRight) return showToast('左右標題都要填');
+
+    const btn = document.getElementById('aiBtn');
+    const loading = document.getElementById('aiLoading');
+    btn.disabled = true;
+    loading.classList.remove('hidden');
+    let completed = false;
+    try {
+        const composite = editorFormat().coverMode === 'composite';
+        const deriving = !visualLeft || !visualRight;
+        showToast(composite
+            ? '生成左右底圖中，兩張平行跑，約 60–120 秒…'
+            : (deriving ? 'AI 補畫面描述後開始設計封面，約 40–140 秒…' : '設計封面中，約 30–120 秒…'));
+        beginGenerationProgress('image', composite ? 1.6 : 1.3);
+        const res = await fetch(COVER_BACKEND_URL, {
+            method: 'POST',
+            headers: _apiHeaders(),
+            body: JSON.stringify({
+                title_left: titleLeft,
+                title_right: titleRight,
+                visual_left: visualLeft,
+                visual_right: visualRight,
+                date_text: val('coverDate'),
+                badge: document.getElementById('coverBadge')?.value || 'on_air',
+                mode: editorFormat().coverMode || 'ai',
+                provider: effectiveImageProvider(),
+            }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(_apiError(data, res.status));
+
+        const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
+        document.getElementById('oneClickImage').src = imageUrl;
+        const download = document.getElementById('oneClickDownload');
+        download.href = imageUrl;
+        download.download = 'tvbs-ten-cover.png';
+        download.innerText = '下載 PNG';
+        // 封面是程式合成的，沒有可以餵回生圖模型的「置框前原圖」，追加修改不適用
+        resetRefineState(null, null);
+        // 回填實際採用的畫面描述（留空時是 AI 補的）。不填回去，使用者永遠不知道
+        // AI 幫他決定了什麼，也沒辦法在此基礎上微調重生。
+        [['coverVisualLeft', data.visual_left], ['coverVisualRight', data.visual_right]]
+            .forEach(([id, value]) => {
+                const field = document.getElementById(id);
+                if (field && value) field.value = value;
+            });
+        document.getElementById('oneClickLabel').innerText = editorFormat().label;
+        document.getElementById('oneClickMeta').innerText = `${titleLeft}｜${titleRight}`;
+        document.getElementById('oneClickEmpty').classList.add('hidden');
+        document.getElementById('oneClickResult').classList.remove('hidden');
+        completed = true;
+        showToast('封面已完成');
+    } catch (err) {
+        showToast(`封面生成失敗：${err.message}`);
+    } finally {
+        btn.disabled = false;
+        loading.classList.add('hidden');
+        endGenerationProgress(completed);
+    }
+}
+
 async function handleOneClickGenerate() {
+    if (editorFormat().inputs === 'cover') return handleTenCoverGenerate();
     const input = document.getElementById("aiInput").value.trim();
     if (!input) return showToast("請輸入欲生成的新聞內容");
 
@@ -1246,6 +1518,9 @@ async function handleOneClickGenerate() {
                 image_size: state.imageSize,
                 safe_frame: state.safeFrame,
                 safe_frame_profile: state.currentRole,
+                // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
+                // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
+                broadcast_hole: editorFormat().hole || '',
                 portrait_subjects: state.portraitSubjects,
                 portrait_subjects_en: state.portraitSubjectsEn,
                 reference_images: userRefImagesPayload(),
@@ -1304,6 +1579,8 @@ async function handleAIDigestion() {
                 type_label: typeLabel,
                 role: state.currentRole,
                 density: state.digestDensity,
+                stamp: state.stamp,
+                editor_format: state.editorFormat,
                 // 安全框 ON 時消化要出滿版版面，否則 STRUCTURE 的「縮小置中」
                 // 開頭句會跟最終 prompt 的 FULL-FRAME RULES 互相打架
                 safe_frame: state.safeFrame,
@@ -1332,6 +1609,8 @@ async function handleAIDigestion() {
                 .find(k => CHART_TYPES[k].label === data.chart_type);
             state.digestResolvedType = resolvedKey || null;
             renderDigestTypes();
+        } else {
+            noteChartTypeOverride(data);
         }
 
         renderTags(); updateCounter();
@@ -1424,6 +1703,9 @@ async function handleImageGeneration() {
                 image_size: state.imageSize,
                 safe_frame: state.safeFrame,
                 safe_frame_profile: state.currentRole,
+                // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
+                // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
+                broadcast_hole: editorFormat().hole || '',
                 portrait_subjects: state.portraitSubjects,
                 portrait_subjects_en: state.portraitSubjectsEn
             })
@@ -1461,6 +1743,31 @@ async function handleImageGeneration() {
 function currentUserInstruction() {
     const el = document.getElementById('aiInstruction');
     return el ? el.value.trim() : '';
+}
+
+// 指令欄的需求蓋過 UI 按鈕（2026-09-03 使用者裁決），後端已明文寫進優先序規則。
+// 前端只負責讓使用者看得出來「你在指令欄寫的會贏過旁邊那顆按鈕」，刻意不自動去
+// 翻開關——「不要蓋章／蓋章拿掉／要有蓋章」這類否定句用關鍵字判，翻錯比不翻更糟。
+const INSTRUCTION_OVERRIDE_HINTS = [
+    { re: /蓋章/, text: '蓋章' },
+    { re: /逐字|不要刪|不刪|完全依照|原文照|一字不|精簡|濃縮|字數|簡短|多一點字/, text: '消化程度' },
+    { re: /版面|版型|圖表|地圖|流程|示意|長條|折線|圓餅/, text: '版面形式' },
+    { re: /風格|色調|手繪|寫實|扁平|質感/, text: '風格' },
+    { re: /附圖|參考圖|原圖|照片/, text: '參考附圖' },
+];
+
+function updateInstructionOverrideHint() {
+    const hint = document.getElementById('instructionOverrideHint');
+    if (!hint) return;
+    const text = currentUserInstruction();
+    const hits = text ? INSTRUCTION_OVERRIDE_HINTS.filter(h => h.re.test(text)).map(h => h.text) : [];
+    if (!hits.length) {
+        hint.classList.add('hidden');
+        hint.innerText = '';
+        return;
+    }
+    hint.classList.remove('hidden');
+    hint.innerText = `指令欄提到${hits.join('、')}：以指令欄為準，會蓋過上面的按鈕設定。`;
 }
 
 /* ============================================================
@@ -1682,6 +1989,9 @@ async function handleRefine() {
                 image_size: state.imageSize,
                 safe_frame: state.safeFrame,
                 safe_frame_profile: state.currentRole,
+                // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
+                // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
+                broadcast_hole: editorFormat().hole || '',
             }),
         });
         const data = await response.json().catch(() => ({}));

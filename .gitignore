@@ -17,3 +17,6 @@ logs/
 # 安全框量測／實驗的原始輸出（只把有代表性的挑進 docs/error-cases/）
 scripts/output/
 **/overlay/
+
+# .env 的手動備份（含真實金鑰），絕對不能進版控
+.env.bak-*

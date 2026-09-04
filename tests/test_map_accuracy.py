@@ -47,7 +47,7 @@ class DigestInjectionTests(unittest.TestCase):
 
     def test_block_present_for_both_roles_and_densities(self):
         for role in ("記者", "編輯"):
-            for density in ("standard", "simplified"):
+            for density in ("standard", "simplified", "verbatim"):
                 with self.subTest(role=role, density=density):
                     self.assertIn("MAP ACCURACY RULES", digest(MAP_TYPE_LABEL, role, density))
 

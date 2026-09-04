@@ -1,5 +1,7 @@
 import base64
+import concurrent.futures
 import contextvars
+import datetime
 import hmac
 import io
 import json
@@ -28,6 +30,8 @@ from openai import (
 from PIL import Image
 from pydantic import BaseModel, Field
 
+import compose
+import editor_formats
 import gcs_archive
 import photo_lookup
 import request_log
@@ -73,7 +77,12 @@ if DIGEST_BACKEND == "gemini":
         api_key=_gemini_key,
     )
     DEFAULT_DIGEST_MODEL = os.getenv("GEMINI_DIGEST_MODEL", "gemini-3.6-flash")
-elif _openrouter_key:
+# 2026-09-03：這裡原本寫 `elif _openrouter_key:`，等於只要環境裡有一把
+# OPENROUTER_API_KEY 就一定走 OpenRouter，DIGEST_BACKEND=native 完全沒有效果——
+# 上面那段註解講的「設回 openrouter 即可切回」暗示這個變數是說了算的，實際上
+# 切不回原生。使用者的 OPENROUTER_API_KEY 同時存在於 .env 與 Windows 使用者
+# 環境變數，光在 .env 註解掉沒有用，因此改成 DIGEST_BACKEND 明說時聽它的。
+elif DIGEST_BACKEND == "openrouter" and _openrouter_key:
     openai_client = OpenAI(
         base_url="https://openrouter.ai/api/v1", api_key=_openrouter_key
     )
@@ -156,7 +165,7 @@ async def site_password_gate(request, call_next):
     )
 
 
-DigestDensity = Literal["standard", "simplified"]
+DigestDensity = Literal["standard", "simplified", "verbatim"]
 
 
 # 一張圖最多畫幾張具名真人的臉（2026-08-18 使用者裁定，從「兩人以上一律不畫臉」放寬）。
@@ -190,6 +199,11 @@ class GenerateRequest(BaseModel):
     # 規則蓋掉，模型因此憑空捏一張替代圖（記者/編輯版都各出過一次）。
     # 上傳的圖本身在生圖階段才送，消化階段只需要知道張數。
     asis_reference_count: int = Field(default=0, ge=0, le=3)
+    # 蓋章開關（2026-09-03）。None＝呼叫端不表態，維持舊行為（由消化階段自行決定）；
+    # 網頁版一律送明確的 True／False。
+    stamp: bool | None = None
+    # 編輯專屬版型（2026-09-03）。記者角色帶了也會被忽略，見 editor_formats。
+    editor_format: str = editor_formats.DEFAULT_FORMAT
 
 
 class GenerateResponse(BaseModel):
@@ -242,6 +256,9 @@ class ImageGenerateRequest(BaseModel):
     #   編輯 OFF  → 對位框，拉伸填滿
     #   編輯 ON   → 2% 薄框，等比例置中
     safe_frame_profile: str = "記者"
+    # 播出鏡面的挖空側（'left'／'right'）。空字串＝不挖。挖空框在**置框之後**才貼，
+    # 因為置框會縮放平移內容，在原圖座標算好的框置框後會跑掉（見 compose.py）。
+    broadcast_hole: str = ""
     # 真人肖像的參考照片（data URL）。空字串＝這次不附參考圖。
     reference_image_data_url: str = ""
     # 使用者上傳的參考圖（地圖底稿／實景參考）。與肖像參考照分開兩個欄位：
@@ -422,6 +439,76 @@ SIMPLIFIED MODE OVERRIDE — THESE RULES OVERRIDE ANY EARLIER STANDARD-MODE LENG
 """
 
 
+# 「不消化」檔（2026-09-03 使用者要求）。原本只有標準／簡化兩檔，兩檔都會改寫使用者
+# 的字。這一檔把消化整個關掉：使用者貼的內文一個字都不准動。
+#
+# 為什麼要獨立一塊而不是重用 USER_INSTRUCTION_RULES 第 5 條的 VERBATIM MODE：
+# 那一條是「使用者在文字裡寫了逐字保留才觸發」，觸發與否要靠模型自己判斷；
+# 這一檔是使用者按下按鈕的結構事實，不該再讓模型判斷一次。兩者同向，同時成立。
+#
+# 放在 SIMPLIFIED_DENSITY_RULES 的同一個位置（density 二選一），並且明文列出它
+# 蓋掉哪幾條——編輯版樣板的「嚴禁『，』與『。』」「標題強制拆兩行」「150-180 字」
+# 是 NON-NEGOTIABLE 措辭，不逐條點名的話模型會兩邊都想遵守，結果還是動了字。
+VERBATIM_DENSITY_RULES = """
+
+VERBATIM MODE (THE USER TURNED DIGESTION OFF) — THIS BLOCK OVERRIDES EVERY LENGTH, COUNT, PUNCTUATION AND FORMAT REQUIREMENT STATED ABOVE:
+1. Do not digest. Do not summarise, shorten, lengthen, re-order, re-word, translate, correct, polish or otherwise "improve" the news material in any way.
+2. "variable" MUST reproduce the news material exactly: the same characters, in the same order, with the same figures, the same punctuation and the same line breaks. Not one character may be added, and not one character may be removed.
+3. THIS OVERRIDES, EXPLICITLY: the 150-180 character target, the maximum-three-points rule, the SIMPLIFIED MODE OVERRIDE, "Concise phrases, no punctuation", the ban on 「，」and「。」, the forced two-line 標題 split, the 15-characters-per-line limit, and every other length or format requirement above. If the source contains 「，」or「。」, they stay. If a line is long, it stays long.
+4. THIS CANCELS THE FRAMING OF THE WHOLE TASK ABOVE. The opening sentence told you to digest the raw news text and requirement 1 told you to extract key points as concise phrases without punctuation. In this mode you are not digesting and not extracting: you are laying out text you may not touch.
+5. The ONLY things you may add to "variable" are the structural markers [標題] and [內文小標] at the start of a line, angle brackets placed around wording that is already there, and the <蓋章> marker. A marker wraps or prefixes wording the user already wrote — it never introduces new wording. Never write out the NAME of a marker (for example the characters 強調文字) as if it were content. If you cannot place a marker without inventing text, place no marker.
+6. The NUMERAL FORMAT requirement above does NOT apply here. Numbers stay exactly as the user wrote them, Chinese numerals included.
+7. TEXT THAT IS NOT NEWS MATERIAL IS STILL NOT CONTENT. An instruction the user wrote to you — in the dedicated instruction field, or on an instruction line inside the material — is not part of the news material, must never be reproduced in "variable", and must never be drawn in the graphic. Verbatim reproduction applies to the news material only.
+8. "style" and "structure" are still yours to design — in this mode your entire job is visual design for text you are forbidden to change. Design a layout that fits ALL of the supplied wording legibly; when there is a lot of it, say so in "structure" and lay it out as a dense but readable text-forward composition rather than dropping any of it.
+"""
+
+
+# 蓋章開關（2026-09-03 使用者要求）。原本有沒有蓋章是消化階段自己決定的：編輯版樣板
+# 規定最後一行必須是 <蓋章>，簡化檔又說「optional」，記者版則整段沒提——同一個產品
+# 三種行為，使用者無從控制。改成由使用者按鈕決定，兩塊規則明文蓋掉上面的樣板措辭。
+#
+# stamp=None（沒帶這個欄位的呼叫端，例如 LINE）時兩塊都不注入，消化 prompt 逐字元
+# 不變，記者 frozen 測試靠這點維持綠燈。
+STAMP_ON_RULES = """
+
+STAMP BANNER: ON (USER SETTING — OVERRIDES ANY EARLIER RULE THAT MAKES <蓋章> OPTIONAL OR OMITS IT):
+1. "variable" MUST end with a line that begins with the marker <蓋章>, followed by the single most important conclusion or quote of the whole graphic, written short and punchy.
+2. There is exactly one <蓋章> line and it is the last line of "variable".
+3. The stamp wording must come from the source material — a condensation of what is already there, never an invented claim, figure or slogan.
+4. Design for it in "structure": the stamp banner is a solid full-box highlight bar and is the lowest row of the content area.
+5. IN VERBATIM MODE THE STAMP IS A MARKER ONLY. Mark the line the user already wrote that best serves as the conclusion; never write a new one. If no existing line can serve as the conclusion, place no stamp — rule 2 of the verbatim block (add not one character) wins over this block.
+6. <蓋章> IS THE ONLY MARKER WHOSE NAME IS WRITTEN OUT. Every other angle-bracket marker wraps wording that belongs in the graphic — you write <today's record high>, never <強調文字>today's record high. Never emit the characters 強調文字 (or any other placeholder name) as if they were content, and never write a closing tag.
+"""
+
+
+# 擺在所有規則的最後（含指令欄），因為本 repo 的慣例是「位置＋明文 OVERRIDE 同向」，
+# 而 VERBATIM_DENSITY_RULES 夾在中間，實測（2026-09-03 gpt-5.6-terra）壓不住樣板
+# 開頭的「Digest the raw news text」：83 字的原文被改寫成 59 字、標點全刪。
+# 最後一句刻意保留指令欄的優先權：使用者自己叫你精簡時，這塊要讓路。
+VERBATIM_FINAL_REMINDER = """
+
+FINAL CHECK BEFORE YOU ANSWER — DIGESTION IS OFF FOR THIS REQUEST:
+You were told at the top to digest the news text and to extract key points as concise phrases without punctuation. FOR THIS REQUEST THAT IS CANCELLED. You are not digesting anything; you are designing a layout for text you may not alter.
+Read your draft "variable" against the news material one character at a time before you answer:
+- Every character of the news material appears in "variable", in the same order — 「，」「。」and every other punctuation mark included.
+- Nothing has been rephrased, compressed, merged, re-ordered or dropped: not one word, not one 的, not one figure. 「今天下午出現強降雨」may not become 「午後強降雨」.
+- Nothing has been added except the structural markers, and no marker name has been written out as text.
+If the draft fails any of these, throw it away and rebuild it from the user's exact wording.
+The only thing that may relax this is an explicit request from the user asking you to shorten or rewrite. The interface setting alone never does.
+"""
+
+
+STAMP_OFF_RULES = """
+
+STAMP BANNER: OFF (USER SETTING — OVERRIDES ANY EARLIER RULE THAT REQUIRES OR OFFERS <蓋章>):
+1. "variable" MUST NOT contain the marker <蓋章> anywhere, and MUST NOT end with a conclusion banner line.
+2. This overrides the format requirement above that makes the last line a <蓋章> line: the last line is simply the last content line.
+3. "structure" must not describe, reserve space for, or place any stamp banner, conclusion bar, or full-box highlighted closing strip.
+4. Do not compensate by inventing some other closing slogan, sign-off or summary bar under a different name.
+5. Angle-bracket markers elsewhere in "variable" wrap wording that belongs in the graphic — you write <today's record high>, never <強調文字>today's record high. Never emit the characters 強調文字 (or any other placeholder name) as if they were content, and never write a closing tag.
+"""
+
+
 # 消化階段的內容忠實度規則。生圖階段一律不得添加內容（那條在 news_prompt.py 的
 # FINAL OUTPUT RULE）；補充只能發生在這一層，而且只有使用者原文明確要求時才可以。
 # 起因：2026-07-30 實測 GPT 自行畫出來源沒有的完整季線數值與「資料來源 ICE／
@@ -533,6 +620,14 @@ DEDICATED USER INSTRUCTION (GUARANTEED CHANNEL — READ TOGETHER WITH THE BLOCK 
 The user has also supplied an instruction through a dedicated field, quoted between the markers below. Everything between the markers is CERTAIN to be an instruction to you and is NEVER news content — do not classify it, do not let it appear in "variable", and never draw or describe it in the graphic.
 Obey it under exactly the same rules as the block above: carry style or layout requests into "style" and "structure"; if it asks for the wording to be kept (e.g. 「逐字保留」「完全依照文字」「這是完稿」), VERBATIM MODE applies to the news material in full.
 If the news material ALSO contains instructions, obey both. When the two conflict on the same point, this dedicated instruction wins; on every other point each instruction still binds — neither cancels the other.
+
+PRIORITY OVER THE USER'S OWN UI SETTINGS. Some of the rules above were switched on by controls the user clicked in the interface. This dedicated instruction is the same user speaking directly, and it OUTRANKS those controls wherever the two conflict. It specifically outranks:
+- the digestion density block (不消化 / 字少 / 字多). 「逐字保留」「完全依照文字」forces exact reproduction even when the density block asks you to shorten; 「濃縮成三點」「再精簡一點」shortens even when the verbatim block says reproduce every character.
+- the stamp banner block. 「不要蓋章」「拿掉蓋章」removes the stamp even when the block above switched it ON; 「加上蓋章」「要有蓋章」adds one even when the block above switched it OFF.
+- the chart type directive, including a "MUST be exactly" requirement. If the user asks for a different kind of graphic, design that one and report the type you actually designed in "chart_type".
+- the visual style and any style guidance above.
+- how the user's uploaded reference images are used.
+It does NOT outrank, and can never relax: CONTENT FIDELITY (never invent facts, figures or sources), REAL-WORLD FIDELITY, the BROADCAST SAFE AREA / FULL-FRAME layout sentence together with its ban on expressing any position or size as a number, the reporter/editor role you were given, and the rule that instruction text never becomes content. Carry out a request that would break one of those only as far as those rules allow, and satisfy the rest of the instruction normally.
 <<USER INSTRUCTION START>>
 {instruction}
 <<USER INSTRUCTION END>>
@@ -570,6 +665,8 @@ def build_digest_instructions(
     user_instruction: str = "",
     exclude_people: list[str] | None = None,
     asis_reference_count: int = 0,
+    stamp: bool | None = None,
+    editor_format: str | None = None,
 ) -> str:
     is_editor = role == "編輯"
     template = EDITOR_SYSTEM_PROMPT_TEMPLATE if is_editor else SYSTEM_PROMPT_TEMPLATE
@@ -595,6 +692,17 @@ def build_digest_instructions(
         instructions += MAP_ACCURACY_RULES
     if density == "simplified":
         instructions += SIMPLIFIED_DENSITY_RULES
+    elif density == "verbatim":
+        instructions += VERBATIM_DENSITY_RULES
+    # 蓋章緊接在 density 之後：ON 的第 5 條要引用逐字模式，順序不能倒過來。
+    # None＝呼叫端沒表態（LINE、舊呼叫端），完全不注入，維持既有行為。
+    if stamp is True:
+        instructions += STAMP_ON_RULES
+    elif stamp is False:
+        instructions += STAMP_OFF_RULES
+    # 編輯專屬版型（播出鏡面）。editor_formats.digest_rules 對非編輯角色一律回空字串，
+    # 這是「記者不可能誤用」的第三層防呆（前兩層在前端）。
+    instructions += editor_formats.digest_rules(editor_format, role)
     # 沒有 asis 附圖時完全不注入，消化 prompt 逐字元不變。
     if asis_reference_count:
         instructions += USER_REFERENCE_ASIS_DIGEST_RULES
@@ -613,6 +721,10 @@ def build_digest_instructions(
         instructions += EXCLUDED_PEOPLE_RULES_TEMPLATE.format(
             people="\n".join(f"- {name}" for name in excluded)
         )
+    # 真正的最後一塊：不消化必須壓過樣板開頭的「Digest the raw news text」，
+    # 中段的 VERBATIM_DENSITY_RULES 實測壓不住（見該區塊上方的註解）。
+    if density == "verbatim":
+        instructions += VERBATIM_FINAL_REMINDER
     return instructions
 
 
@@ -708,6 +820,57 @@ def parse_digest_json(raw_content: str) -> dict:
             lines = lines[:-1]
         text = "\n".join(lines).strip()
     return json.loads(text)
+
+
+# 不消化模式的逐字守門員（2026-09-03）。
+#
+# 為什麼還需要它：prompt 已經寫得夠死，實測內容也確實一字不差了，但模型會在
+# variable 的頭尾多吐東西——實測撞到兩種：整段被 " 包起來、以及尾巴接上
+# 「}】}⟦json_schema_error_recovery: remove extraneous⟧{」。內容對、外殼不對，
+# 而這些字元會原樣被畫進鏡面。通用的 DIGEST_ALLOWED_CHARS 檢查抓不到（雜訊只有
+# 兩個字元超出白名單，沒到 3 個的門檻）。
+#
+# 只在「指令欄是空的」時才啟用：指令欄的優先序高於消化程度（使用者裁決），
+# 「濃縮成三點」本來就該把逐字要求放掉，這時候拿原文去比對會把正確結果判成錯的。
+_VERBATIM_MARKER_RE = re.compile(r"\[標題\]|\[內文小標\]|<蓋章>|[<>]")
+_VERBATIM_WS_RE = re.compile(r"\s+")
+
+
+# 逐字要求（不消化那一檔，或指令欄寫「逐字保留」）會誘發模型把整段 variable 用
+# 引號包起來——它以為自己在「引用」使用者的原文。那對引號會被原樣畫進鏡面。
+# 只在「頭尾是同一個引號、且整段只出現這兩次」時才剝，正常的 CG 文案不會長這樣，
+# 內文自己帶引號的句子（例如 他說「…」）也不會被誤傷。
+_WRAPPING_QUOTES = ('"', "'", "「", "『", "“", "‘")
+_CLOSING_QUOTES = {"「": "」", "『": "』", "“": "”", "‘": "’"}
+
+
+def strip_wrapping_quotes(variable: str) -> str:
+    text = (variable or "").strip()
+    for opening in _WRAPPING_QUOTES:
+        closing = _CLOSING_QUOTES.get(opening, opening)
+        if not (text.startswith(opening) and text.endswith(closing) and len(text) > 2):
+            continue
+        inner = text[len(opening):-len(closing)]
+        if opening in inner or closing in inner:
+            continue
+        return inner.strip()
+    return text
+
+
+def verbatim_fidelity_problem(variable: str, news_text: str) -> str:
+    """不消化模式：variable 去掉標記與空白後必須與原文逐字相同。"""
+    body = _VERBATIM_WS_RE.sub(
+        "", _VERBATIM_MARKER_RE.sub("", strip_wrapping_quotes(variable))
+    )
+    source = _VERBATIM_WS_RE.sub("", news_text or "")
+    if body == source:
+        return ""
+    missing = "".join(dict.fromkeys(ch for ch in source if ch not in body))
+    extra = "".join(dict.fromkeys(ch for ch in body if ch not in source))
+    return (
+        f"不消化模式但 variable 與原文不符（原文 {len(source)} 字、輸出 {len(body)} 字；"
+        f"缺 {ascii(missing[:20])}；多 {ascii(extra[:20])}）"
+    )
 
 
 def digest_quality_problem(data: dict, finish_reason: str) -> str:
@@ -824,6 +987,8 @@ def generate(req: GenerateRequest):
         user_instruction=req.user_instruction,
         exclude_people=req.exclude_people,
         asis_reference_count=req.asis_reference_count,
+        stamp=req.stamp,
+        editor_format=req.editor_format,
     )
 
     # DIGEST_MODEL 可覆寫；沿用舊環境變數 OPENAI_DIGEST_MODEL 作為次要相容
@@ -890,6 +1055,21 @@ def generate(req: GenerateRequest):
 
         # 能解析不代表能用：截斷與字元污染都要跟解析失敗一樣重試，不能送去生圖
         problem = digest_quality_problem(data, finish_reason)
+        # 不消化的逐字比對排在通用檢查之後：兩者都過不了時，先報通用的那個。
+        # 最後一次刻意不擋——擋了就是整條 502，而這時手上的結果通常只是頭尾多了
+        # 雜訊，仍比沒有圖好；改成印警告讓回查時看得到。
+        if not problem and req.density == "verbatim" and not req.user_instruction.strip():
+            verbatim_problem = verbatim_fidelity_problem(
+                data.get("variable") or "", req.news_text
+            )
+            if verbatim_problem:
+                if attempt < DIGEST_ATTEMPTS - 1:
+                    problem = verbatim_problem
+                else:
+                    print(
+                        f"[generate] 最後一次嘗試仍未逐字相符，放行：{verbatim_problem}",
+                        flush=True,
+                    )
         if problem:
             last_detail = "AI 回傳內容異常，請稍後重試"
             print(
@@ -907,7 +1087,7 @@ def generate(req: GenerateRequest):
         result = GenerateResponse(
             style=data.get("style", ""),
             structure=data.get("structure", ""),
-            variable=data.get("variable", ""),
+            variable=strip_wrapping_quotes(data.get("variable", "")),
             chart_type=chart_type,
             portrait_subjects=clean_portrait_subjects(data.get("portrait_subjects")),
             portrait_subjects_en=align_english_names(
@@ -1120,6 +1300,7 @@ def generate_image(req: ImageGenerateRequest):
             aspect_ratio=req.aspect_ratio,
             safe_frame=needs_frame,
             profile=frame_profile,
+            broadcast_hole=req.broadcast_hole,
         )
     except Exception as exc:
         if not _inside_pipeline.get():
@@ -1390,12 +1571,36 @@ def frame_image_response(
     )
 
 
+def apply_broadcast_hole_response(
+    result: ImageGenerateResponse, side: str, profile: str
+) -> ImageGenerateResponse:
+    """在置框後的成品上貼出播出鏡面的挖空框。
+
+    與置框同一個原則：失敗就整支失敗。悄悄回傳一張沒有挖空框的圖，編輯會直接
+    拿去給後製，那邊才發現沒有位置放影片。
+    """
+    try:
+        holed = compose.apply_broadcast_hole(
+            base64.b64decode(result.image_data_base64), side, profile=profile
+        )
+    except Exception as exc:  # noqa: BLE001 — 影像處理失敗必須讓呼叫端知道
+        print(f"[compose] 挖空框失敗：{type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=500, detail=f"播出鏡面挖空框失敗：{exc}") from exc
+    return result.model_copy(
+        update={
+            "image_data_base64": base64.b64encode(holed).decode("ascii"),
+            "mime_type": "image/png",
+        }
+    )
+
+
 def finalize_image_result(
     result: ImageGenerateResponse,
     *,
     aspect_ratio: str,
     safe_frame: bool,
     profile: str,
+    broadcast_hole: str = "",
 ) -> ImageGenerateResponse:
     """生成後的共同收尾：驗比例，需要時置框並保留置框前原圖。
 
@@ -1405,9 +1610,17 @@ def finalize_image_result(
     """
     verify_output_aspect_ratio(result, aspect_ratio)
     if not safe_frame:
+        # 沒有置框就沒有可靠的成品座標系，挖空框無處可貼。播出鏡面一律開安全框，
+        # 走到這裡代表呼叫端組錯了，出聲比默默少一個框好。
+        if broadcast_hole:
+            print("[compose] safe_frame=False，跳過播出鏡面挖空框", flush=True)
         return result
-    return frame_image_response(result, profile).model_copy(
+    framed = frame_image_response(result, profile)
+    if broadcast_hole:
+        framed = apply_broadcast_hole_response(framed, broadcast_hole, profile)
+    return framed.model_copy(
         update={
+            # 追加修改要餵**置框前**原圖回去，不是挖過洞的成品（見欄位說明）
             "source_image_base64": result.image_data_base64,
             "source_mime_type": result.mime_type,
         }
@@ -1678,6 +1891,10 @@ class NewsImageGenerateRequest(BaseModel):
     # 專用指令欄位（PLAN.md ①），語意同 GenerateRequest.user_instruction。
     # LINE 端不傳（聊天框拆不了欄位，維持文內解析）。
     user_instruction: str = Field(default="", max_length=2_000)
+    # 蓋章開關（2026-09-03），語意同 GenerateRequest.stamp。LINE 端不傳。
+    stamp: bool | None = None
+    # 編輯專屬版型（2026-09-03），語意同 GenerateRequest.editor_format。
+    editor_format: str = editor_formats.DEFAULT_FORMAT
 
 
 class NewsImageGenerateResponse(BaseModel):
@@ -2001,6 +2218,8 @@ class ImageRefineRequest(BaseModel):
     image_size: str = "1K"
     safe_frame: bool = False
     safe_frame_profile: str = "記者"
+    # 追加修改要沿用同一個挖空側，否則改完圖那塊空位就不見了
+    broadcast_hole: str = ""
 
 
 @app.post(
@@ -2027,6 +2246,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
         image_size=req.image_size,
         safe_frame=req.safe_frame,
         safe_frame_profile=req.safe_frame_profile,
+        broadcast_hole=req.broadcast_hole,
         reference_image_data_url=(
             f"data:{req.source_mime_type};base64,{req.source_image_base64}"
         ),
@@ -2043,6 +2263,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             aspect_ratio=req.aspect_ratio,
             safe_frame=needs_frame,
             profile=frame_profile,
+            broadcast_hole=req.broadcast_hole,
         )
     except Exception as exc:
         request_log.log_failure(
@@ -2111,6 +2332,8 @@ def resolve_digest_portraits(
             density=req.density,
             safe_frame=req.safe_frame,
             user_instruction=req.user_instruction,
+            stamp=req.stamp,
+            editor_format=req.editor_format,
             exclude_people=missing,
         )
     )
@@ -2150,6 +2373,8 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 density=req.density,
                 safe_frame=req.safe_frame,
                 user_instruction=req.user_instruction,
+                stamp=req.stamp,
+                editor_format=req.editor_format,
             )
         )
         digest, portrait_photos = resolve_digest_portraits(digest, req, provider)
@@ -2172,6 +2397,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 ImageGenerateRequest(
                     prompt=prompt,
                     provider=provider,
+                    broadcast_hole=editor_formats.hole_side(req.editor_format, req.role) or "",
                     aspect_ratio=aspect_ratio,
                     image_size=req.image_size,
                     safe_frame=req.safe_frame,
@@ -2275,6 +2501,181 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
 )
 def news_image_generate(req: NewsImageGenerateRequest) -> NewsImageGenerateResponse:
     return generate_news_image(req)
+
+
+# ============================================================
+# 編輯專屬版型 B：十點不一樣封面圖
+#
+# 刻意不走 generate_news_image：那條是「新聞原文 → 消化 → 一張 CG」，這裡是
+# 「使用者給兩個標題 → 兩張無文字底圖 → 程式合成」，中間根本沒有消化這一段。
+# 硬塞進同一條會讓兩邊都變醜。前端仍在同一頁、同一個下拉選到它（見 app.js）。
+#
+# 文字全部由 compose.compose_ten_cover 用字型畫，不交給模型：Logo 畫了會變形、
+# 中文標題畫了會有錯字，而封面圖上的錯字是對外事故。
+# ============================================================
+
+
+class TenCoverRequest(BaseModel):
+    title_left: str = Field(min_length=1, max_length=40)
+    title_right: str = Field(min_length=1, max_length=40)
+    # 給生圖模型的視覺描述（畫什麼場景），不會出現在成品文字上。
+    # 2026-09-03 起改選填：留空時由 resolve_cover_visuals 依標題請文字模型補。
+    visual_left: str = Field(default="", max_length=500)
+    visual_right: str = Field(default="", max_length=500)
+    date_text: str = Field(default="", max_length=20)
+    badge: str = compose.COVER_DEFAULT_BADGE
+    provider: Literal["gemini", "gpt"] = "gpt"
+    # ai＝整張交給生圖模型畫（預設，2026-09-03 使用者裁決要設計感）
+    # composite＝AI 只出兩張無文字底圖、文字由 Pillow 畫（零錯字但沒設計感，留作備援）
+    mode: Literal["ai", "composite"] = editor_formats.COVER_MODE_AI
+
+
+class TenCoverResponse(ImageGenerateResponse):
+    # 這次實際採用的畫面描述（使用者留空時是 AI 補的）。前端會填回欄位——
+    # 不回報的話使用者永遠不知道 AI 幫他決定了什麼，也沒辦法微調後重生。
+    visual_left: str = ""
+    visual_right: str = ""
+
+
+def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
+    """畫面描述留空時依標題補齊；兩欄都有值就原樣回傳，不打 API。"""
+    left, right = req.visual_left.strip(), req.visual_right.strip()
+    if left and right:
+        return left, right
+
+    material = 'LEFT headline: {}\\nLEFT description already supplied: {}\\nRIGHT headline: {}\\nRIGHT description already supplied: {}'.format(
+        req.title_left.strip(),
+        left or "(none — write one)",
+        req.title_right.strip(),
+        right or "(none — write one)",
+    )
+    model = (
+        os.getenv("DIGEST_MODEL")
+        or os.getenv("OPENAI_DIGEST_MODEL")
+        or DEFAULT_DIGEST_MODEL
+    )
+    try:
+        response = digest_completion(
+            model=model,
+            system_prompt=editor_formats.COVER_VISUAL_DERIVE_SYSTEM,
+            news_text=material,
+            max_output_tokens=600,
+            schema_name="cover_visuals",
+            schema=editor_formats.COVER_VISUAL_SCHEMA,
+        )
+        data = parse_digest_json(response.choices[0].message.content or "")
+    except Exception as exc:  # noqa: BLE001
+        # 補描述失敗不該讓整張封面失敗：退回用標題本身當畫面提示，
+        # 畫出來會比較平淡但仍是一張可用的封面。
+        print(f"[cover] 自動補畫面描述失敗，改用標題：{type(exc).__name__}: {exc}", flush=True)
+        return left or req.title_left.strip(), right or req.title_right.strip()
+
+    derived_left = (data.get("visual_left") or "").strip()
+    derived_right = (data.get("visual_right") or "").strip()
+    # 使用者填的永遠優先，AI 只補空的那一欄
+    return (
+        left or derived_left or req.title_left.strip(),
+        right or derived_right or req.title_right.strip(),
+    )
+
+
+def _cover_panel_image(visual: str, provider: str) -> bytes:
+    """生一張 1:1 的無文字底圖。"""
+    result = generate_image_raw(
+        ImageGenerateRequest(
+            prompt=editor_formats.COVER_VISUAL_PROMPT_TEMPLATE.format(visual=visual.strip()),
+            provider=provider,
+            aspect_ratio="1:1",
+            image_size="1K",
+            safe_frame=False,
+        )
+    )
+    return base64.b64decode(result.image_data_base64)
+
+
+def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) -> bytes:
+    """純 prompt 版：整張封面由生圖模型畫，之後只補貼正版 Logo。"""
+    badge_text = compose.COVER_BADGES[req.badge][0]
+    prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE.format(
+        badge_text=badge_text,
+        date_text=date_text,
+        title_left=req.title_left.strip(),
+        title_right=req.title_right.strip(),
+        visual_left=visuals[0],
+        visual_right=visuals[1],
+    )
+    result = generate_image_raw(
+        ImageGenerateRequest(
+            prompt=prompt,
+            provider=req.provider,
+            aspect_ratio="16:9",
+            image_size="1K",
+            safe_frame=False,
+        )
+    )
+    return compose.paste_cover_logo(base64.b64decode(result.image_data_base64))
+
+
+def _cover_composite(
+    req: TenCoverRequest, date_text: str, visuals: tuple[str, str]
+) -> bytes:
+    """合成版（備援）：AI 只出兩張無文字底圖，文字全部由 Pillow 畫。"""
+    # 兩張圖平行生。序列跑會讓等待時間直接加倍——單張本來就要 30–90 秒。
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(_cover_panel_image, visual, req.provider)
+            for visual in visuals
+        ]
+        left_image, right_image = (future.result() for future in futures)
+    return compose.compose_ten_cover(
+        left_image,
+        right_image,
+        title_left=req.title_left.strip(),
+        title_right=req.title_right.strip(),
+        date_text=date_text,
+        badge=req.badge,
+    )
+
+
+@app.post(
+    "/api/editor/cover",
+    response_model=TenCoverResponse,
+    dependencies=[Depends(verify_internal_api_key)],
+)
+def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
+    if req.badge not in compose.COVER_BADGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"未知的標籤：{req.badge}（可用：{list(compose.COVER_BADGES)}）",
+        )
+    date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
+
+    visuals = resolve_cover_visuals(req)
+    try:
+        if req.mode == editor_formats.COVER_MODE_AI:
+            cover = _cover_ai(req, date_text, visuals)
+        else:
+            cover = _cover_composite(req, date_text, visuals)
+    except compose.ComposeError as exc:
+        print(f"[compose] 封面失敗：{exc}", flush=True)
+        raise HTTPException(status_code=500, detail=f"封面生成失敗：{exc}") from exc
+
+    request_log.log_generation(
+        request_id=request_log.new_request_id(),
+        source="editor-cover",
+        news_text=f"{req.title_left} ｜ {req.title_right}",
+        variable=f"{req.title_left}\n{req.title_right}",
+        prompt=f"L: {visuals[0]}\nR: {visuals[1]}",
+        role="編輯",
+        provider=req.provider,
+    )
+    return TenCoverResponse(
+        image_data_base64=base64.b64encode(cover).decode("ascii"),
+        mime_type="image/png",
+        model=f"ten-cover:{req.mode}",
+        visual_left=visuals[0],
+        visual_right=visuals[1],
+    )
 
 
 # 遠端／隧道測試：前端與 API 同一 origin，瀏覽器才打得到後端。
