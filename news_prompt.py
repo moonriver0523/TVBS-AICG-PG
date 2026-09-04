@@ -273,6 +273,7 @@ ATTACHED MAP REFERENCE (CRITICAL)
 - Re-draw the geography in the graphic's own visual style; do not paste or photographically reproduce the attached map itself.
 - Labels and callout text still come ONLY from VARIABLE FIELDS, never from text visible inside the attached map.
 - IF THE ATTACHED MAP CARRIES ROUND MARKER DOTS, those dots are already at the true real-world positions of the places this story is about. Keep every marker at its dot: do not move it, do not re-space the markers to balance the composition, do not add a marker where there is no dot, and do not drop one. Restyle the dot into the graphic's own pin design and attach the place name beside it — the dot's position is the one thing you may not change.
+- THE PIN AND THE DOT MUST RESOLVE TO ONE POINT. A teardrop pin points at a location with its TIP, so put the tip exactly on the dot's centre — do not centre the pin's round head on the dot, and do not float the pin above it. Never leave the original dot behind as a separate ring, ripple, halo or glow sitting under a pin that hovers somewhere else: that reads as two different positions for one place, and the lower one is the true one.
 - Any coordinates written in STRUCTURE are secondary to the attached map. Where the two disagree, the attached map wins; never nudge a marker to match a coordinate."""
 
 USER_REFERENCE_SCENE_RULES = """==================================================

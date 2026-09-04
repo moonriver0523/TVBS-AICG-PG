@@ -188,6 +188,13 @@ class BackendGuardTests(unittest.TestCase):
         self.assertIn("ROUND MARKER DOTS", USER_REFERENCE_MAP_RULES)
         self.assertIn("Keep every marker at its dot", USER_REFERENCE_MAP_RULES)
 
+    def test_the_pin_tip_must_land_on_the_dot(self):
+        # 2026-09-04 實測（基隆淹水圖）：模型把底圖圓點畫成地面漣漪、pin 浮在漣漪上方，
+        # 等於一個地點出現兩個位置，真正的座標落在下方那圈。錨點必須講明是尖端。
+        self.assertIn("MUST RESOLVE TO ONE POINT", USER_REFERENCE_MAP_RULES)
+        self.assertIn("tip exactly on the dot's centre", USER_REFERENCE_MAP_RULES)
+        self.assertIn("ripple", USER_REFERENCE_MAP_RULES)
+
     def test_the_attached_map_outranks_coordinates_in_structure(self):
         # STRUCTURE 裡仍會有模型寫的經緯度，兩者衝突時附圖要贏
         self.assertIn("secondary to the attached map", USER_REFERENCE_MAP_RULES)

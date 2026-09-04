@@ -86,6 +86,37 @@ class ExemptionScopeTests(unittest.TestCase):
         self.assertIn("主張範圍 示意", digest(MAP_TYPE_LABEL))
 
 
+class DigestWordingTests(unittest.TestCase):
+    """2026-09-04 基隆淹水圖的三個病灶，全在消化端措辭（見 docs/error-cases）。"""
+
+    def test_legend_and_duplicate_place_lists_are_banned(self):
+        # 病灶一：三個地名已經標在地圖上，又被寫成 [內文小標]，渲染成左下角圖例框
+        prompt = digest(MAP_TYPE_LABEL)
+        self.assertIn("NEVER BUILD A LEGEND", prompt)
+        self.assertIn("圖例", prompt)
+
+    def test_instruction_words_may_not_become_printed_text(self):
+        # 病灶二：variable 寫成「標示<基隆廟口>」，renderer 逐字印出「標示 基隆廟口」
+        prompt = digest(MAP_TYPE_LABEL)
+        self.assertIn("標示", prompt)
+        self.assertIn("INSTRUCTION WORD BECOME PRINTED TEXT", prompt)
+
+    def test_gazetteer_form_stays_out_of_structure_and_variable(self):
+        # 病灶三：查詢用的「基隆廟口夜市」被寫進 structure，畫面上與內文的「基隆廟口」不一致
+        prompt = digest(MAP_TYPE_LABEL)
+        self.assertIn("ONE PLACE, ONE NAME ON SCREEN", prompt)
+        self.assertIn("基隆廟口夜市", prompt)
+
+    def test_map_places_is_declared_never_rendered(self):
+        self.assertIn("Nothing you write in this field is ever printed", digest(MAP_TYPE_LABEL))
+
+    def test_the_new_rules_only_reach_map_and_auto_types(self):
+        for type_label in NON_MAP_TYPES:
+            with self.subTest(type_label=type_label):
+                self.assertNotIn("NEVER BUILD A LEGEND", digest(type_label))
+        self.assertIn("NEVER BUILD A LEGEND", digest(AUTO_TYPE_LABEL))
+
+
 class ContentFidelityUntouchedTests(unittest.TestCase):
     """使用者指示本輪不修改 CONTENT_FIDELITY_RULES 的機械保證。"""
 
