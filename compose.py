@@ -19,6 +19,7 @@
 出現第三個版型時再抽表。
 """
 
+import functools
 import io
 import pathlib
 
@@ -30,14 +31,49 @@ BRAND_DIR = pathlib.Path(__file__).resolve().parent / "static" / "brand"
 TVBS_LOGO_WHITE = BRAND_DIR / "tvbs-logo-white.png"
 
 # 中文字型：Pillow 不吃系統字型後備，必須指名檔案。依序找，第一個存在的就用。
-# 容器裡沒有微軟字型時會落到 Noto，兩者都沒有就在載入時明確報錯——
+# 開發機是 Windows，正式環境是 python:3.14-slim（Debian）——後者一個中文字型都沒有，
+# Dockerfile 因此裝 fonts-noto-cjk。Debian 各版的 Noto CJK 檔名／目錄不一致
+# （opentype/ vs truetype/、-Bold.ttc vs Black.otf），寫死路徑等於賭檔名，
+# 所以 Linux 這段改用萬用字元掃出來。兩邊都找不到就明確報錯——
 # 悄悄改用預設點陣字會畫出一整排豆腐，比直接失敗糟得多。
-FONT_CANDIDATES_BOLD = (
+FONT_CANDIDATES_WINDOWS = (
     pathlib.Path("C:/Windows/Fonts/msjhbd.ttc"),
     pathlib.Path("C:/Windows/Fonts/NotoSansTC-VF.ttf"),
-    pathlib.Path("/usr/share/fonts/opentype/noto/NotoSansCJKtc-Black.otf"),
-    pathlib.Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc"),
 )
+FONT_ROOTS_LINUX = (pathlib.Path("/usr/share/fonts"),)
+# 粗體優先：這些字全是要壓在圖上的標題／浮水印，Regular 在照片上會糊掉。
+FONT_GLOBS_LINUX = (
+    "**/NotoSansCJK*Bold*",
+    "**/NotoSansCJK*Black*",
+    "**/NotoSansTC*Bold*",
+    "**/NotoSansCJK*",
+    "**/NotoSansTC*",
+    "**/NotoSans*CJK*",
+)
+
+
+@functools.lru_cache(maxsize=None)
+def discover_font(
+    windows_candidates=FONT_CANDIDATES_WINDOWS,
+    linux_roots=FONT_ROOTS_LINUX,
+    linux_globs=FONT_GLOBS_LINUX,
+):
+    """找出這台機器上可用的中文粗體字型，找不到回 None。
+
+    順序即優先序：先具名的 Windows 字型，再依 glob 由粗到細掃 Linux 字型目錄。
+    同一個 glob 命中多個檔案時取排序後第一個，讓結果在不同機器上可重現。
+    """
+    for path in windows_candidates:
+        if path.exists():
+            return path
+    for pattern in linux_globs:
+        hits = []
+        for root in linux_roots:
+            if root.exists():
+                hits.extend(p for p in root.glob(pattern) if p.is_file())
+        if hits:
+            return sorted(hits)[0]
+    return None
 
 
 class ComposeError(RuntimeError):
@@ -45,13 +81,14 @@ class ComposeError(RuntimeError):
 
 
 def _font(size: int) -> ImageFont.FreeTypeFont:
-    for path in FONT_CANDIDATES_BOLD:
-        if path.exists():
-            return ImageFont.truetype(str(path), size)
-    raise ComposeError(
-        "找不到可用的中文粗體字型，合成會畫出豆腐。"
-        f"找過：{'、'.join(str(p) for p in FONT_CANDIDATES_BOLD)}"
-    )
+    path = discover_font()
+    if path is None:
+        raise ComposeError(
+            "找不到可用的中文粗體字型，合成會畫出豆腐。"
+            f"找過：{'、'.join(str(p) for p in FONT_CANDIDATES_WINDOWS)}"
+            f"，以及 {FONT_ROOTS_LINUX[0]} 底下的 Noto CJK"
+        )
+    return ImageFont.truetype(str(path), size)
 
 
 def _fit_font(text: str, max_width: int, start_size: int, min_size: int) -> ImageFont.FreeTypeFont:
