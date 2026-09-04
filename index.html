@@ -132,19 +132,24 @@
             background: var(--accent) !important;
             color: white !important;
         }
-        /* 色調亮／暗：刻意不用紅（紅是角色與消化程度的顏色），用靛藍區隔，
-           選中的那顆本身就照它代表的色調長——亮是淺底深字、暗是深底亮字，
-           不必讀字也看得出來自己選了什麼 */
-        .tone-btn { color: #93a3c9; }
+        /* 色調亮／暗：刻意不用紅（紅是角色與消化程度的顏色），用靛藍區隔。
+           2026-09-04 修正：原本讓選中的那顆「長成它代表的色調」，結果選中「色調暗」
+           時是深藍底配在本來就深色的面板上，看起來像沒選——使用者實際回報以為
+           預設是亮色。改成兩檔選中都用同一種明亮實心底（跟其他開關一致，一眼看得出
+           被選中），明暗改用左邊那顆小圓點表示。 */
+        .tone-btn { color: #93a3c9; display: flex; align-items: center; justify-content: center; gap: 5px; }
         .tone-btn:hover { color: #cdd8ef; }
-        .tone-active[data-tone="dark"] {
-            background: #1e2b4d !important;
-            color: #dce6ff !important;
+        .tone-active {
+            background: #4059ad !important;
+            color: #fff !important;
         }
-        .tone-active[data-tone="light"] {
-            background: #e7ecf7 !important;
-            color: #1b2540 !important;
+        .tone-dot {
+            width: 9px; height: 9px; border-radius: 50%;
+            border: 1px solid rgba(255, 255, 255, 0.55);
+            display: inline-block; flex: none;
         }
+        .tone-dot-light { background: #f4ece4; }
+        .tone-dot-dark { background: #10192f; }
         .parent-active {
             background: #2a211c !important;
             border-color: var(--accent) !important;
@@ -386,10 +391,10 @@
                         <div class="flex bg-black/40 p-1 rounded-lg">
                             <button data-tone="light" onclick="switchTone('light')"
                                     title="亮色調：淺底深字，白天／日常題材"
-                                    class="tone-btn flex-1 px-2 py-1.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">色調亮</button>
+                                    class="tone-btn flex-1 px-2 py-1.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all"><span class="tone-dot tone-dot-light"></span>色調亮</button>
                             <button data-tone="dark" onclick="switchTone('dark')"
                                     title="暗色調：深底亮字，災害／突發題材（預設）"
-                                    class="tone-btn tone-active flex-1 px-2 py-1.5 rounded-md text-[10px] font-black transition-all">色調暗</button>
+                                    class="tone-btn tone-active flex-1 px-2 py-1.5 rounded-md text-[10px] font-black transition-all"><span class="tone-dot tone-dot-dark"></span>色調暗</button>
                         </div>
                         <div class="flex bg-black/40 p-1 rounded-lg">
                             <button data-density="verbatim" onclick="switchDigestDensity('verbatim')"
