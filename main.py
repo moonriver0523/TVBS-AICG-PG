@@ -368,6 +368,7 @@ No chart type was specified. Read the news material and choose the ONE most suit
 - "情境示意圖": the story's core is what a scene or incident looked like (accidents, disasters,人物場景).
 - "地圖／位置": the story's core is where something is — location, route, territory, or geographic relationship.
 - "3D示意／流程": the story's core is how something happened step by step, or how a mechanism works.
+GEOGRAPHY WINS OVER THE INCIDENT. If the user asks for a place to be located, marked or drawn (「請畫出地理位置」「標出…的位置」「位置圖」), or if the named places in the material only make sense when the viewer sees where they are relative to one another, the answer is "地圖／位置" — even when the incident itself (a flood, a fire, a crash, a protest) would otherwise read as 情境示意圖. Drawing what the scene looked like is NOT a substitute for showing where it happened, and a request naming several places in one city is a location story, not a scene story.
 Pick the single best fit; do not blend types. Report it in the "chart_type" field, and design "style" and
 "structure" for the type you picked.
 """
@@ -600,13 +601,22 @@ DIRECTIONAL COLOUR CONVENTION (Taiwan convention — the Western one is wrong he
 
 
 # 地圖準確性。對「禁數字」與「內容忠實度」各開一個範圍受限的豁免：
+#
+# 2026-09-04 正式站實測（基隆廟口／西定路／大武崙淹水）：本區塊原本的開頭句是
+# 「只在你指定的是地圖類圖表時適用，不是就整段忽略」，把適用範圍綁在模型自己回報的
+# chart_type 上。模型把那則判成「情境示意圖」，於是整套地理安全規則被它自己關掉——
+# 但它照樣在 structure 寫「Show a faithful geographic map of Keelung City」並要求
+# 把三個地名標在正確位置，卻一個經緯度、一句正北朝上、一個比例尺都沒給。生圖端
+# 手上只有地名，只能亂擺。因此適用範圍改成由「你要求了什麼」決定（開頭句），
+# 並補第 11 條：沒有定位資料就不准寫「忠實地圖」，只能改用示意型 fallback。
+# 分類本身也補強在 AUTO_TYPE_SELECTION_RULES：明確的地理需求一律選地圖類。
 # 座標／距離／方位角只做定位資料、永不印在畫面上，畫布幾何禁數字仍全面生效。
 # 座標來自模型記憶、冷門地點可能錯（沖之鳥島案例）——沒把握就改用座標網格；
 # 真正的解法是以圖生圖落地後改走 GIS 底圖路線（見 TODO.md）。
 # 措辭沿用 docs/error-cases/2026-07-23-沖之鳥島-位置偏移-分析.md 的通則化版本。
 MAP_ACCURACY_RULES = """
 
-MAP ACCURACY RULES (apply ONLY when the graphic you are specifying is a 地圖／位置 map graphic; if it is not, ignore this whole block):
+MAP ACCURACY RULES (SCOPE IS SET BY WHAT YOU ASK FOR, NOT BY THE LABEL YOU REPORT): this block binds whenever the graphic you specify puts real, named places on a map or shows them in their true relative positions — a map, a locator, a coastline, a road or district layout, a route, or markers pinned to real geography. It binds even when you report "chart_type" as 情境示意圖, 資料圖表 or 3D示意／流程: writing "a faithful map of X" or "mark these places at their real locations" into "structure" while treating this block as inapplicable is the exact failure it exists to prevent. Ignore this block ONLY when nothing you ask for places a real location — if that is the case, ignore this whole block.
 1. Geographic accuracy outranks visual balance. Never ask for a place, island, coastline, border, route or marker to be moved, compressed, rotated, enlarged or rearranged so the composition fits. If everything will not fit truthfully on one map, use two maps (rule 8), never a distorted one.
 2. Require a north-up orientation: north at the top, east on the right, west on the left, south at the bottom. Ask for a north arrow and a scale bar.
 3. SCOPED EXCEPTION TO THE NO-NUMBERS RULE ABOVE. That rule bans percentages, pixels, ratios and numbers used for LAYOUT geometry — positions, insets, gutters and sizes on the canvas — and it still binds in full; never describe canvas geometry with a number. It does NOT cover real-world geography. For a map you MUST write into "structure": the latitude and longitude of every named place you are confident about, the coverage window of each map in degrees, real distances in kilometres, and true bearings in degrees.
@@ -617,7 +627,8 @@ MAP ACCURACY RULES (apply ONLY when the graphic you are specifying is a 地圖�
 8. When the story spans a wide area, ask for two map levels: a small north-up locator overview showing the true relative positions of the places involved, and a larger detail map centred on the incident. One map rarely serves both, and forcing it is what makes models drag distant places closer together.
 9. Disputed or claimed zones (EEZ, 主張海域, 爭議邊界) must be drawn as a thin schematic boundary, never as a settled international border, and must carry the label 主張範圍 示意. Because the renderer may only draw text that was supplied to it, write that label text into "variable" as well.
 10. "Simplified" applies to line styling and visual detail ONLY. Never simplify geographic positions, distances, bearings or relative scale. Use the phrase "geographically accurate simplified cartography" in "style".
-11. ONE SUBJECT PLACE IN THE HEADLINE. Decide which place the incident actually happened in, and let only that place be the subject of the 標題 line in "variable". Other countries that merely reacted, commented, protested or announced a response are secondary: put them in a 內文小標 or a callout, never in the headline as the acting subject. A headline that names a reacting country beside the incident location reads as if the incident happened there, and the renderer will place that country's callout on the incident itself. Name the reacting country inside its own callout wording so the two can never be confused.
+11. NEVER ASK FOR A FAITHFUL MAP YOU HAVE NOT SUPPLIED THE DATA FOR. If "structure" asks for a real place to be drawn, mapped or marked at its real location, then for EVERY place it names it must also carry the positioning data rule 3 requires. If you cannot supply that data for a place, you may not use "faithful", "accurate", "real" or "geographic" map wording for it: switch that graphic to the rule 6 fallback — a labelled coordinate grid or a schematic locator with the place names as labels, stated as such in "structure" — and say plainly there that the layout is schematic. Asking for a truthful map with no coordinates behind it is precisely what makes the renderer invent geography.
+12. ONE SUBJECT PLACE IN THE HEADLINE. Decide which place the incident actually happened in, and let only that place be the subject of the 標題 line in "variable". Other countries that merely reacted, commented, protested or announced a response are secondary: put them in a 內文小標 or a callout, never in the headline as the acting subject. A headline that names a reacting country beside the incident location reads as if the incident happened there, and the renderer will place that country's callout on the incident itself. Name the reacting country inside its own callout wording so the two can never be confused.
 """
 
 
@@ -765,6 +776,37 @@ def build_digest_instructions(
 _inside_pipeline = contextvars.ContextVar("inside_pipeline", default=False)
 
 
+# 截斷監控。三個呼叫端（generate／hybrid／cover）各有各的預算，過去只有真的炸了
+# 才看得到蛛絲馬跡，而且訊息是「AI 回傳格式無法解析」這種看不出病因的話——
+# 2026-09-04 的不消化截斷就是這樣被埋掉的，raw content 空字串，連截在哪都看不到。
+# 這裡在唯一的收斂點記一行可 grep 的結構化紀錄，並在「差一點就截斷」時就先示警：
+# 該提早看到的是逼近上限，不是已經撞牆。cover 那條寫死 600、hybrid 寫死 1200，
+# 兩個都沒有隨輸入縮放，是下一個會撞的地方，靠這行紀錄提前現形。
+DIGEST_USAGE_WARN_RATIO = 0.8
+
+
+def log_digest_usage(site: str, model: str, budget: int, response) -> None:
+    """把這次消化的用量記成一行。純觀測，絕不改變回傳或丟例外。"""
+    try:
+        usage = getattr(response, "usage", None)
+        completion = getattr(usage, "completion_tokens", None) or 0
+        finish = response.choices[0].finish_reason if response.choices else "?"
+        ratio = completion / budget if budget else 0.0
+        flag = ""
+        if finish == "length":
+            flag = " TRUNCATED"
+        elif ratio >= DIGEST_USAGE_WARN_RATIO:
+            flag = " NEAR-LIMIT"
+        print(
+            f"[digest_usage] site={site} model={model} budget={budget} "
+            f"completion_tokens={completion} ratio={ratio:.2f} "
+            f"finish={finish}{flag}",
+            flush=True,
+        )
+    except Exception as exc:  # 監控壞掉不可以拖垮消化
+        print(f"[digest_usage] 記錄失敗（不影響本次消化）：{exc}", flush=True)
+
+
 def digest_completion(
     *,
     model: str,
@@ -773,6 +815,7 @@ def digest_completion(
     max_output_tokens: int,
     schema_name: str,
     schema: dict,
+    site: str = "digest",
 ):
     """呼叫 Chat Completions 取結構化消化結果。
 
@@ -798,15 +841,17 @@ def digest_completion(
         },
     }
     try:
-        return openai_client.chat.completions.create(
+        response = openai_client.chat.completions.create(
             **payload, max_tokens=max_output_tokens
         )
     except BadRequestError as exc:
         if "max_completion_tokens" not in str(exc):
             raise
-        return openai_client.chat.completions.create(
+        response = openai_client.chat.completions.create(
             **payload, max_completion_tokens=max_output_tokens
         )
+    log_digest_usage(site, model, max_output_tokens, response)
+    return response
 
 
 # 消化輸出健檢用：新聞稿消化結果應該只由中文、日文假名、拉丁字母（含歐洲人名的
@@ -1043,6 +1088,7 @@ def generate(req: GenerateRequest):
                 max_output_tokens=max_output_tokens,
                 schema_name="news_cg_digest",
                 schema=DIGEST_OUTPUT_SCHEMA,
+                site="generate",
             )
         except AuthenticationError as exc:
             raise HTTPException(
@@ -1254,6 +1300,7 @@ def hybrid_digest(req: HybridDigestRequest):
                 max_output_tokens=1200,
                 schema_name="hybrid_card_digest",
                 schema=HYBRID_DIGEST_SCHEMA,
+                site="hybrid",
             )
         except AuthenticationError as exc:
             raise HTTPException(
@@ -2597,6 +2644,7 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
             max_output_tokens=600,
             schema_name="cover_visuals",
             schema=editor_formats.COVER_VISUAL_SCHEMA,
+            site="cover",
         )
         data = parse_digest_json(response.choices[0].message.content or "")
     except Exception as exc:  # noqa: BLE001
