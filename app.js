@@ -307,6 +307,10 @@ let state = {
     // 蓋章由使用者決定（2026-09-03）。以前是消化階段自己決定，同一個產品三種行為。
     // 預設 ON；指令欄若提到蓋章，後端以指令欄為準（見 main.py 的優先序規則）。
     stamp: true,
+    // 色調（2026-09-04）。預設暗色調＝維持既有畫面風格，改成亮色調是使用者的主動選擇。
+    // 兩檔都會送給後端並注入 prompt（不是「預設不注入」），因為只寫亮不寫暗時，
+    // 樣板裡本來就偏暗的措辭會跟亮色調各聽一半，出半亮半暗的圖。
+    tone: 'dark',
     // 編輯專屬版型（2026-09-03）。切回記者角色時一律重置成 default——
     // 這是「記者不可能誤用」的第二層防呆（第一層是下拉根本不顯示，第三層在後端）。
     // 寫字面值而不是 EDITOR_FORMAT_DEFAULT：那個 const 宣告在 state 之後，
@@ -490,6 +494,7 @@ window.onload = () => {
         btn.innerText = state.safeFrame ? "安全框 ON" : "安全框 OFF";
     });
     updateStampButton();
+    updateToneButtons();
     renderEditorFormats();
     document.querySelectorAll('[data-density]').forEach(btn => {
         const isActive = btn.dataset.density === state.digestDensity;
@@ -923,6 +928,25 @@ function toggleStamp() {
     updateStampButton();
     updateInstructionOverrideHint();
     showToast(state.stamp ? '蓋章：開（最後一行加結論條）' : '蓋章：關（不放結論條）');
+}
+
+// 色調切換（2026-09-04）。取代原本擺在這個位置的角色選擇——角色已移到最上方，
+// 因為它決定底下所有選項的可用範圍，要先選。
+function updateToneButtons() {
+    document.querySelectorAll('.tone-btn').forEach(btn => {
+        btn.classList.toggle('tone-active', btn.dataset.tone === state.tone);
+        btn.classList.toggle('text-slate-500', btn.dataset.tone !== state.tone);
+        btn.classList.toggle('hover:text-white', btn.dataset.tone !== state.tone);
+    });
+}
+
+function switchTone(tone) {
+    if (tone !== 'light' && tone !== 'dark') return;
+    state.tone = tone;
+    updateToneButtons();
+    updateInstructionOverrideHint();
+    invalidateGeneratedImage();
+    showToast(tone === 'dark' ? '色調：暗（深底亮字）' : '色調：亮（淺底深字）');
 }
 
 /* 置框模式送 21:9 生成：官方安全區本身是 2.176:1，用 21:9（2.333）去塞，
@@ -1359,6 +1383,7 @@ async function digestNewsText(input) {
             role: state.currentRole,
             density: state.digestDensity,
             stamp: state.stamp,
+            tone: state.tone,
             editor_format: state.editorFormat,
             safe_frame: state.safeFrame,
             user_instruction: currentUserInstruction(),
@@ -1580,6 +1605,7 @@ async function handleAIDigestion() {
                 role: state.currentRole,
                 density: state.digestDensity,
                 stamp: state.stamp,
+                tone: state.tone,
                 editor_format: state.editorFormat,
                 // 安全框 ON 時消化要出滿版版面，否則 STRUCTURE 的「縮小置中」
                 // 開頭句會跟最終 prompt 的 FULL-FRAME RULES 互相打架
@@ -1752,7 +1778,8 @@ const INSTRUCTION_OVERRIDE_HINTS = [
     { re: /蓋章/, text: '蓋章' },
     { re: /逐字|不要刪|不刪|完全依照|原文照|一字不|精簡|濃縮|字數|簡短|多一點字/, text: '消化程度' },
     { re: /版面|版型|圖表|地圖|流程|示意|長條|折線|圓餅/, text: '版面形式' },
-    { re: /風格|色調|手繪|寫實|扁平|質感/, text: '風格' },
+    { re: /色調|亮一點|暗一點|亮色|暗色|淺底|深底|白底|黑底/, text: '色調' },
+    { re: /風格|手繪|寫實|扁平|質感/, text: '風格' },
     { re: /附圖|參考圖|原圖|照片/, text: '參考附圖' },
 ];
 

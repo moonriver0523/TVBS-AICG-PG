@@ -197,6 +197,8 @@ async def site_password_gate(request, call_next):
 
 
 DigestDensity = Literal["standard", "simplified", "verbatim"]
+# 色調。None＝呼叫端沒表態（LINE、舊呼叫端），完全不注入。
+DigestTone = Literal["light", "dark"]
 
 
 # 一張圖最多畫幾張具名真人的臉（2026-08-18 使用者裁定，從「兩人以上一律不畫臉」放寬）。
@@ -233,6 +235,7 @@ class GenerateRequest(BaseModel):
     # 蓋章開關（2026-09-03）。None＝呼叫端不表態，維持舊行為（由消化階段自行決定）；
     # 網頁版一律送明確的 True／False。
     stamp: bool | None = None
+    tone: DigestTone | None = None
     # 編輯專屬版型（2026-09-03）。記者角色帶了也會被忽略，見 editor_formats。
     editor_format: str = editor_formats.DEFAULT_FORMAT
 
@@ -541,6 +544,36 @@ STAMP BANNER: OFF (USER SETTING — OVERRIDES ANY EARLIER RULE THAT REQUIRES OR 
 """
 
 
+# 色調（2026-09-04 使用者要求）。原本畫面一律偏深藍夜色系——災害、突發題材對，
+# 但民生、政策、財經、生活題材用同一套會顯得每則都在出事。因此交給使用者選。
+#
+# 兩檔都明說「這是使用者設定、蓋過上面的風格描述」：樣板與各類型規則裡本來就
+# 散落著偏暗的措辭，只寫「請用亮色」而不點名要蓋過誰，模型會兩邊各聽一半、
+# 出一張半亮半暗的圖。tone=None（LINE 與舊呼叫端）完全不注入，維持既有行為，
+# 記者 frozen 快照也靠這點維持綠燈——作法比照 STAMP_ON_RULES／STAMP_OFF_RULES。
+#
+# 只寫「亮／暗」是不夠的：實務上出問題的是**對比**。淺底配淺字、深底配深字都
+# 會在電視上糊掉，所以兩檔各自把「字要怎麼配」寫死，不讓模型自己配。
+TONE_DARK_RULES = """
+
+COLOUR TONE: DARK (USER SETTING — OVERRIDES ANY TONE WORDING IN THE STYLE GUIDANCE ABOVE):
+1. Write "style" around a DARK ground: deep navy, charcoal, slate or near-black, with the imagery lit against it.
+2. All headline and body text on that ground must be light — white or near-white — with enough weight to hold up against a busy photographic background. Never place dark text on the dark ground.
+3. Accent colours stay saturated and bright (amber, red, cyan) so they read against the dark ground. Keep the directional colour rules above unchanged: a rise is still red, a fall is still green.
+4. This is the mood the user asked for, not a description of the subject. Do not brighten it because the story is upbeat, and do not ask for a light panel behind the text to "make it readable" — the contrast requirement in rule 2 already handles that.
+"""
+
+TONE_LIGHT_RULES = """
+
+COLOUR TONE: LIGHT (USER SETTING — OVERRIDES ANY TONE WORDING IN THE STYLE GUIDANCE ABOVE):
+1. Write "style" around a LIGHT ground: off-white, warm paper, pale grey or a soft daylight photograph, with the imagery sitting on it.
+2. All headline and body text on that ground must be DARK — near-black, deep navy or deep charcoal — heavy enough to read at broadcast distance. Never place white text on the light ground.
+3. Accent colours must be deep enough to hold against a pale ground: use deep red, deep amber and strong blue rather than pastel or neon. Keep the directional colour rules above unchanged: a rise is still red, a fall is still green.
+4. Any dark banner that the format requires (the <蓋章> stamp strip, a headline bar) may keep its dark fill with light text on it — that is a deliberate block of contrast, not a return to the dark tone. Everything outside those blocks stays light.
+5. This is the mood the user asked for, not a description of the subject. Do not darken it because the story is grim.
+"""
+
+
 # 消化階段的內容忠實度規則。生圖階段一律不得添加內容（那條在 news_prompt.py 的
 # FINAL OUTPUT RULE）；補充只能發生在這一層，而且只有使用者原文明確要求時才可以。
 # 起因：2026-07-30 實測 GPT 自行畫出來源沒有的完整季線數值與「資料來源 ICE／
@@ -666,6 +699,7 @@ If the news material ALSO contains instructions, obey both. When the two conflic
 PRIORITY OVER THE USER'S OWN UI SETTINGS. Some of the rules above were switched on by controls the user clicked in the interface. This dedicated instruction is the same user speaking directly, and it OUTRANKS those controls wherever the two conflict. It specifically outranks:
 - the digestion density block (不消化 / 字少 / 字多). 「逐字保留」「完全依照文字」forces exact reproduction even when the density block asks you to shorten; 「濃縮成三點」「再精簡一點」shortens even when the verbatim block says reproduce every character.
 - the stamp banner block. 「不要蓋章」「拿掉蓋章」removes the stamp even when the block above switched it ON; 「加上蓋章」「要有蓋章」adds one even when the block above switched it OFF.
+- the colour tone block (色調亮／色調暗). 「用亮一點的底」「不要那麼暗」forces the light tone even when the block above set DARK, and the reverse likewise. If the instruction names a specific palette («用米白底»、«深藍底»), follow the instruction's palette and keep the contrast requirement from the tone block that matches it.
 - the chart type directive, including a "MUST be exactly" requirement. If the user asks for a different kind of graphic, design that one and report the type you actually designed in "chart_type".
 - the visual style and any style guidance above.
 - how the user's uploaded reference images are used.
@@ -709,6 +743,7 @@ def build_digest_instructions(
     asis_reference_count: int = 0,
     stamp: bool | None = None,
     editor_format: str | None = None,
+    tone: DigestTone | None = None,
 ) -> str:
     is_editor = role == "編輯"
     template = EDITOR_SYSTEM_PROMPT_TEMPLATE if is_editor else SYSTEM_PROMPT_TEMPLATE
@@ -742,6 +777,12 @@ def build_digest_instructions(
         instructions += STAMP_ON_RULES
     elif stamp is False:
         instructions += STAMP_OFF_RULES
+    # 色調緊接在蓋章之後：亮色調第 4 條要引用蓋章那條深色橫幅的例外，順序不能倒。
+    # None＝不注入（見 DigestTone 的說明）。
+    if tone == "dark":
+        instructions += TONE_DARK_RULES
+    elif tone == "light":
+        instructions += TONE_LIGHT_RULES
     # 編輯專屬版型（播出鏡面）。editor_formats.digest_rules 對非編輯角色一律回空字串，
     # 這是「記者不可能誤用」的第三層防呆（前兩層在前端）。
     instructions += editor_formats.digest_rules(editor_format, role)
@@ -1064,6 +1105,7 @@ def generate(req: GenerateRequest):
         exclude_people=req.exclude_people,
         asis_reference_count=req.asis_reference_count,
         stamp=req.stamp,
+        tone=req.tone,
         editor_format=req.editor_format,
     )
 
@@ -1975,6 +2017,7 @@ class NewsImageGenerateRequest(BaseModel):
     user_instruction: str = Field(default="", max_length=2_000)
     # 蓋章開關（2026-09-03），語意同 GenerateRequest.stamp。LINE 端不傳。
     stamp: bool | None = None
+    tone: DigestTone | None = None
     # 編輯專屬版型（2026-09-03），語意同 GenerateRequest.editor_format。
     editor_format: str = editor_formats.DEFAULT_FORMAT
 
@@ -2415,6 +2458,7 @@ def resolve_digest_portraits(
             safe_frame=req.safe_frame,
             user_instruction=req.user_instruction,
             stamp=req.stamp,
+            tone=req.tone,
             editor_format=req.editor_format,
             exclude_people=missing,
         )
@@ -2456,6 +2500,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 safe_frame=req.safe_frame,
                 user_instruction=req.user_instruction,
                 stamp=req.stamp,
+                tone=req.tone,
                 editor_format=req.editor_format,
             )
         )
