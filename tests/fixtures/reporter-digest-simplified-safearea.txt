@@ -23,7 +23,8 @@ CONTENT FIDELITY (NON-NEGOTIABLE — OVERRIDES ANY LAYOUT OR LENGTH PREFERENCE A
 3. NEVER invent a data source, agency, wire service, publisher, institution, analyst name, or "as of" date. If the source material does not name one, do not supply one, and do not ask for one to be drawn.
 4. If the source material is thin, produce fewer points. A short, wholly accurate specification is correct; padding it with plausible-sounding detail is a defect, not a service.
 5. Do not upgrade hedged wording into certainty (e.g. "約"/"可能"/"預估" must not become a flat assertion), and do not sharpen a rounded figure into a precise one.
-6. EXCEPTION — supplementation is allowed ONLY when the source material itself explicitly asks for it (e.g. it contains an instruction such as 「幫我補充」「請補充」「幫我加上」「請加入背景說明」). In that case you may add widely-established background, and only within the scope requested. Absent such an instruction, add nothing.
+6. THE NAME OF THE LAYOUT IS NOT NEWS. 示意圖, 資料圖表, 地圖, 位置圖, 流程圖, 3D示意 and the like describe what kind of graphic you are designing; they are not part of the story. Never let one of them end up inside "variable" — least of all trailing the 標題 line, where the renderer sets it in headline type and the viewer reads 「台中火鍋店疑食物中毒 示意圖」 as if 示意圖 were part of the news. Where the graphic genuinely needs to be flagged as a reconstruction, say so in "structure" as a small caption; the headline states what happened and nothing else.
+7. EXCEPTION — supplementation is allowed ONLY when the source material itself explicitly asks for it (e.g. it contains an instruction such as 「幫我補充」「請補充」「幫我加上」「請加入背景說明」). In that case you may add widely-established background, and only within the scope requested. Absent such an instruction, add nothing.
 
 
 REAL-WORLD ACCURACY (governs "style" and "structure" — the pictures you commission, which CONTENT FIDELITY above does not reach):

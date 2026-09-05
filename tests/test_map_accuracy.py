@@ -3,7 +3,7 @@
 豁免的自洽性靠三條護欄釘住：
 1. 畫布幾何禁數字句在同一份 prompt 內原封不動（豁免只涵蓋真實世界地理）；
 2. 座標永不印成可見標籤（「數字被畫進圖」的病灶保持關閉）；
-3. CONTENT_FIDELITY_RULES 常數一字未改（使用者指示本輪不動它，另案檢視）。
+3. CONTENT_FIDELITY_RULES 原有條款的實質內容與順序不被後續增修稀釋。
 """
 
 import os
@@ -118,18 +118,39 @@ class DigestWordingTests(unittest.TestCase):
 
 
 class ContentFidelityUntouchedTests(unittest.TestCase):
-    """使用者指示本輪不修改 CONTENT_FIDELITY_RULES 的機械保證。"""
+    """原有的忠實度條款不得被後續改動悄悄稀釋。
 
-    def test_constant_starts_and_ends_as_before(self):
-        rules = main.CONTENT_FIDELITY_RULES
-        self.assertTrue(rules.startswith("\n\nCONTENT FIDELITY (NON-NEGOTIABLE"))
-        self.assertIn("6. EXCEPTION", rules)
+    原本是「本輪不修改 CONTENT_FIDELITY_RULES」的凍結測試。2026-09-05 使用者
+    指示補上「版面類型名稱不是新聞」那條（見 HeadlineHasNoChartTypeTests），
+    因此改成守住原有五條的實質內容與順序、以及 EXCEPTION 的墊底位置，
+    而不是鎖死條數——鎖條數只會讓下一次正當的增修卡在這裡。
+    """
 
-    def test_constant_has_exactly_six_numbered_rules(self):
+    ORIGINAL_CLAUSES = (
+        "Use ONLY facts, figures, names, dates and quotes",
+        "NEVER invent or infer",
+        "NEVER invent a data source",
+        "If the source material is thin, produce fewer points",
+        "Do not upgrade hedged wording into certainty",
+    )
+
+    def test_constant_starts_as_before(self):
+        self.assertTrue(
+            main.CONTENT_FIDELITY_RULES.startswith("\n\nCONTENT FIDELITY (NON-NEGOTIABLE")
+        )
+
+    def test_the_original_clauses_survive_in_order(self):
         rules = main.CONTENT_FIDELITY_RULES
-        numbers = [f"\n{i}." for i in range(1, 8)]
-        present = [n for n in numbers if n in rules]
-        self.assertEqual(present, [f"\n{i}." for i in range(1, 7)])
+        positions = [rules.find(text) for text in self.ORIGINAL_CLAUSES]
+        self.assertNotIn(-1, positions, "原有條款被刪掉或改寫了")
+        self.assertEqual(positions, sorted(positions), "原有條款的順序被打亂了")
+
+    def test_the_exception_clause_stays_last(self):
+        rules = main.CONTENT_FIDELITY_RULES.rstrip()
+        exception = rules.rfind("EXCEPTION — supplementation is allowed")
+        self.assertGreater(exception, 0)
+        # EXCEPTION 是墊底的例外條款，後面不該再冒出新的編號條目
+        self.assertNotRegex(rules[exception:], r"\n\d+\.")
 
 
 class ImageStageTests(unittest.TestCase):
@@ -153,8 +174,6 @@ class ImageStageTests(unittest.TestCase):
         self.assertIn(news_prompt.MAP_TYPE_LABEL, CHART_TYPE_CHOICES)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class LookupablePlacesOnlyTests(unittest.TestCase):
@@ -198,3 +217,52 @@ class FacilityLookupNameTests(unittest.TestCase):
 
     def test_the_district_qualified_form_is_offered(self):
         self.assertIn("桃園市 中壢區 中壢交流道", main.MAP_ACCURACY_RULES)
+
+
+class UnassignedFactTests(unittest.TestCase):
+    """沒有綁定地點的事實，不准派給某一支標記。
+
+    2026-09-05 實測（SOT2 第三輪，高雄積水）。消化端的 variable 是：
+        [內文小標] 三民建工路 左營博愛二路 鳳山中山西路
+                   最深積水40公分 多輛機車熄火
+                   水利局出動抽水機
+    「最深積水40公分 多輛機車熄火」自己一行、沒有指名哪一處，但成品把
+    「最深積水 40 公分」掛在三民、「多輛機車熄火」掛在左營與鳳山。原文
+    根本沒說是哪一處——這是生圖階段憑空生出來的歸屬，屬於內容真實性問題。
+    消化端沒有錯（GCS 存檔的 prompt 可查），所以規則要加在圖面端。
+    """
+
+    def test_the_image_rules_forbid_assigning_a_loose_fact_to_one_marker(self):
+        rules = news_prompt.MAP_ACCURACY_IMAGE_RULES
+        self.assertIn("does not itself name a place", rules)
+        self.assertIn("do not attach it to one marker", rules)
+
+
+class StampNotADuplicateTests(unittest.TestCase):
+    """蓋章不可以跟某條內文小標講同一句話。
+
+    2026-09-05 實測（SOT2 第二輪，高雄積水）：內文小標「水利局出動抽水機
+    預計傍晚前退水」與蓋章「水利局已出動抽水機 預計傍晚前退水」幾乎同句，
+    成品上同一件事出現兩次。
+    """
+
+    def test_the_stamp_must_not_repeat_a_subhead(self):
+        self.assertIn("MUST NOT REPEAT A 內文小標", main.STAMP_ON_RULES)
+
+
+class HeadlineHasNoChartTypeTests(unittest.TestCase):
+    """版面類型名稱不是新聞內容，不准寫進標題。
+
+    2026-09-05 實測（SOT2 第二輪）：標題被寫成「台中火鍋店疑食物中毒 示意圖」，
+    「示意圖」三個字以大黃字直接畫在標題尾巴。
+    """
+
+    def test_the_chart_type_name_is_banned_from_the_headline(self):
+        rules = main.CONTENT_FIDELITY_RULES
+        self.assertIn("示意圖", rules)
+        self.assertIn("資料圖表", rules)
+        self.assertIn("headline", rules.lower())
+
+
+if __name__ == "__main__":
+    unittest.main()

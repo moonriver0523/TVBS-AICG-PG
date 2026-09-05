@@ -569,6 +569,7 @@ STAMP BANNER: ON (USER SETTING — OVERRIDES ANY EARLIER RULE THAT MAKES <蓋章
 4. Design for it in "structure": the stamp banner is a solid full-box highlight bar and is the lowest row of the content area.
 5. IN VERBATIM MODE THE STAMP IS A MARKER ONLY. Mark the line the user already wrote that best serves as the conclusion; never write a new one. If no existing line can serve as the conclusion, place no stamp — rule 2 of the verbatim block (add not one character) wins over this block.
 6. <蓋章> IS THE ONLY MARKER WHOSE NAME IS WRITTEN OUT. Every other angle-bracket marker wraps wording that belongs in the graphic — you write <today's record high>, never <強調文字>today's record high. Never emit the characters 強調文字 (or any other placeholder name) as if they were content, and never write a closing tag.
+7. THE STAMP MUST NOT REPEAT A 內文小標. It is the conclusion of everything above it, so it may not say what one of the lines above it already said. Rewording is not enough — 「水利局出動抽水機 預計傍晚前退水」 as a 內文小標 and 「水利局已出動抽水機 預計傍晚前退水」 as the stamp are the same sentence twice, and the graphic prints both, one under the other. Before you settle on the stamp, read it against every 內文小標: if it carries the same fact as one of them, either pick a different conclusion, or drop that 內文小標 and let the stamp carry it alone.
 """
 
 
@@ -642,7 +643,8 @@ CONTENT FIDELITY (NON-NEGOTIABLE — OVERRIDES ANY LAYOUT OR LENGTH PREFERENCE A
 3. NEVER invent a data source, agency, wire service, publisher, institution, analyst name, or "as of" date. If the source material does not name one, do not supply one, and do not ask for one to be drawn.
 4. If the source material is thin, produce fewer points. A short, wholly accurate specification is correct; padding it with plausible-sounding detail is a defect, not a service.
 5. Do not upgrade hedged wording into certainty (e.g. "約"/"可能"/"預估" must not become a flat assertion), and do not sharpen a rounded figure into a precise one.
-6. EXCEPTION — supplementation is allowed ONLY when the source material itself explicitly asks for it (e.g. it contains an instruction such as 「幫我補充」「請補充」「幫我加上」「請加入背景說明」). In that case you may add widely-established background, and only within the scope requested. Absent such an instruction, add nothing.
+6. THE NAME OF THE LAYOUT IS NOT NEWS. 示意圖, 資料圖表, 地圖, 位置圖, 流程圖, 3D示意 and the like describe what kind of graphic you are designing; they are not part of the story. Never let one of them end up inside "variable" — least of all trailing the 標題 line, where the renderer sets it in headline type and the viewer reads 「台中火鍋店疑食物中毒 示意圖」 as if 示意圖 were part of the news. Where the graphic genuinely needs to be flagged as a reconstruction, say so in "structure" as a small caption; the headline states what happened and nothing else.
+7. EXCEPTION — supplementation is allowed ONLY when the source material itself explicitly asks for it (e.g. it contains an instruction such as 「幫我補充」「請補充」「幫我加上」「請加入背景說明」). In that case you may add widely-established background, and only within the scope requested. Absent such an instruction, add nothing.
 """
 
 
