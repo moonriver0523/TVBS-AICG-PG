@@ -447,6 +447,93 @@ def chart_type_directive(type_label: str) -> str:
     return f'\n\nThe "chart_type" field MUST be exactly "{type_label}".'
 
 
+# ---- 兩段式消化：先便宜分類、再只注入該類型的規則（條件注入）----
+#
+# 為什麼：網頁預設是「自動判斷」，而自動判斷組 prompt 時不知道 AI 會選哪一類，
+# 只好把 MAP_ACCURACY_RULES 一律注入——每一則新聞都在付地圖稅，即使內容跟地理
+# 無關。2026-09-05 量測（同一則稿、n=7）：自動判斷 28,501 字元思考 2,184、
+# 耗時 38.7s；不注入地圖規則 19,615 字元思考 1,063、耗時 23.7s。同日另一組對照
+# 證明「合併精簡」省不到（約束數不變、字元 −6%，思考沒降）：思考量是被約束數量
+# 推高的，不是字元數。所以要省，就得讓非地圖新聞真的少掉那一整塊約束。
+#
+# 作法：分類呼叫只帶 AUTO_TYPE_SELECTION_RULES 與原文，輸出只有一個 enum；
+# 分類成功就把這次消化當成「使用者明確指定該類型」來組 prompt、選 schema、給預算。
+#
+# 失敗一律退回舊路徑（注入地圖規則的自動判斷）：逾時、例外、finish=length、
+# 空內容、不認得的類型都算失敗。單次呼叫、不重試——多一個呼叫不可以變成新的
+# 失敗模式（當天已有一次 502 是重試風暴造成的）。
+#
+# 旗標預設關：DIGEST_TWO_STAGE=1 才啟用。分類正確率與總延遲要先量過再上，
+# 分類錯的代價是整張圖用錯類型，比多花思考 token 嚴重。
+DIGEST_TWO_STAGE = os.getenv("DIGEST_TWO_STAGE", "") == "1"
+# 推理模型的思考 token 算在輸出上限內；給太小會 finish=length → 全數退回舊路徑，
+# 測試全綠、零效益、沒人知道。實測請以「分類器實際回標籤率」為準。
+CLASSIFY_MAX_TOKENS = 1500
+CLASSIFY_TIMEOUT_SECONDS = 20.0
+CLASSIFY_SYSTEM_PROMPT = (
+    "You are a broadcast news graphics director for a Taiwanese news desk. "
+    "Read the news material (and any user instruction that follows it) and decide "
+    "which ONE chart type the graphic should be. Return ONLY the JSON object."
+    + AUTO_TYPE_SELECTION_RULES
+)
+CLASSIFY_SCHEMA = {
+    "type": "object",
+    "properties": {"chart_type": {"type": "string", "enum": CHART_TYPE_CHOICES}},
+    "required": ["chart_type"],
+    "additionalProperties": False,
+}
+
+
+def classify_chart_type(
+    news_text: str, user_instruction: str, model: str
+) -> str | None:
+    """先用一次便宜的呼叫決定圖表類型。回 None 代表「用舊路徑」。
+
+    一定要連 user_instruction 一起看：現行 DEDICATED_INSTRUCTION_RULES 允許指令欄
+    改類型（「請畫出地理位置」），改成明確指定後那條路就沒了，分類器若只看原文，
+    會重演 test_map_gate_and_usage 記錄的那個病灶。
+    """
+    material = f'News Source Material:\n"{news_text}"'
+    if user_instruction.strip():
+        material += f"\n\nUser instruction:\n{user_instruction.strip()}"
+    try:
+        response = digest_completion(
+            model=model,
+            system_prompt=CLASSIFY_SYSTEM_PROMPT,
+            news_text=material,
+            max_output_tokens=CLASSIFY_MAX_TOKENS,
+            schema_name="news_cg_chart_type",
+            schema=CLASSIFY_SCHEMA,
+            site="classify",
+            raw_user_message=True,
+            timeout=CLASSIFY_TIMEOUT_SECONDS,
+        )
+        choice = response.choices[0]
+        if choice.finish_reason != "stop":
+            print(f"[classify] finish_reason={choice.finish_reason}，退回舊路徑", flush=True)
+            return None
+        data = json.loads(choice.message.content or "")
+    except Exception as exc:  # noqa: BLE001 — 任何失敗都只是退回舊路徑
+        print(f"[classify] 失敗，退回舊路徑：{type(exc).__name__}: {exc}", flush=True)
+        return None
+    label = data.get("chart_type") if isinstance(data, dict) else None
+    if label not in CHART_TYPE_CHOICES:
+        print(f"[classify] 回了不認得的類型 {label!r}，退回舊路徑", flush=True)
+        return None
+    return label
+
+
+def resolve_effective_type_label(req: "GenerateRequest", model: str) -> str:
+    """這次消化實際依哪個類型組 prompt。只有自動判斷＋旗標開才會去分類。"""
+    if req.type_label != AUTO_TYPE_LABEL or not DIGEST_TWO_STAGE:
+        return req.type_label
+    label = classify_chart_type(req.news_text, req.user_instruction, model)
+    if label is None:
+        return AUTO_TYPE_LABEL
+    print(f"[classify] 自動判斷 → {label}，只注入該類型規則", flush=True)
+    return label
+
+
 def extract_image_content(result: dict) -> dict | None:
     """Extract the final image from SDK, current REST, or legacy REST shapes."""
     output_image = result.get("output_image")
@@ -735,6 +822,21 @@ MAP ACCURACY RULES (SCOPE IS SET BY WHAT YOU ASK FOR, NOT BY THE LABEL YOU REPOR
 """
 
 
+# 兩段式分類成「非地圖」時注入的 SCOPE 守門，取代整塊 MAP_ACCURACY_RULES。
+#
+# 為什麼不能整塊刪：MAP_ACCURACY_RULES 開頭刻意寫成「就算你報成情境示意圖也照樣
+# 綁住你」——SOT2 2026-09-05 第五輪實例：模糊地名那則被判成情境，成品仍畫了臺灣
+# 輪廓的示意地圖。分類成非地圖就把整塊拿掉，等於那張畫著真實地理的圖完全不受
+# 地理準確性約束。
+# 為什麼不整塊留：座標、指北針、雙層地圖、map_places 寫法只有真的要畫準確地圖時
+# 才用得到，而這條路徑的前提正是「不畫」。所以只留兩件事：範圍那句的精神
+# （要放真實地名上地圖就不該用這個類型）＋退路（示意定位圖／座標網格並明說示意）。
+MAP_SCOPE_GUARD_RULES = """
+
+MAP SCOPE GUARD (the chart type above was chosen for you and is NOT a map): if the graphic you end up specifying would put real, named places on a map or show them in their true relative positions — a locator, a coastline, a road or district layout, a route, or markers pinned to real geography — that is a map, and drawing one under this chart type is the exact failure this block exists to prevent. Do not ask for one. Where the story genuinely needs a sense of place, ask instead for a schematic locator or a plain coordinate grid with the place names as labels, say plainly in "structure" that the layout is schematic, and never invent coastlines, islands, landmasses or borders.
+"""
+
+
 # 訊息內夾帶指令與逐字模式。放在指令組裝的最後：逐字指令必須壓過
 # SIMPLIFIED_DENSITY_RULES（LINE 端 density 預設就是 simplified，衝突每次都會發生），
 # 本 repo 慣例是「位置＋明文 OVERRIDE」雙重表達優先序，兩者須同向。
@@ -851,6 +953,7 @@ def build_digest_instructions(
     stamp: bool | None = None,
     editor_format: str | None = None,
     tone: DigestTone | None = None,
+    map_scope_guard: bool = False,
 ) -> str:
     is_editor = role == "編輯"
     template = EDITOR_SYSTEM_PROMPT_TEMPLATE if is_editor else SYSTEM_PROMPT_TEMPLATE
@@ -874,6 +977,9 @@ def build_digest_instructions(
     # 區塊開頭自我限縮「非地圖類整段忽略」。明確指定非地圖類型時完全不注入。
     if type_label in (MAP_TYPE_LABEL, AUTO_TYPE_LABEL):
         instructions += MAP_ACCURACY_RULES
+    elif map_scope_guard:
+        # 只有兩段式把自動判斷分類成非地圖時才會是 True（見 resolve_effective_type_label）
+        instructions += MAP_SCOPE_GUARD_RULES
     if density == "simplified":
         instructions += SIMPLIFIED_DENSITY_RULES
     elif density == "verbatim":
@@ -990,8 +1096,14 @@ def digest_completion(
     schema_name: str,
     schema: dict,
     site: str = "digest",
+    raw_user_message: bool = False,
+    timeout: float | None = None,
 ):
     """呼叫 Chat Completions 取結構化消化結果。
+
+    raw_user_message：呼叫端已自行組好 user 訊息（分類器要把指令欄一起帶上），
+    不再套 News Source Material 包裝。timeout：只有分類呼叫會給——它必須快、
+    失敗就退回舊路徑；主消化維持 client 預設，行為不變。
 
     輸出長度上限的參數名兩邊不同：OpenRouter 吃 max_tokens，OpenAI 原生的新模型
     （如 gpt-5.6-terra）只吃 max_completion_tokens，送錯直接 400。因此先送
@@ -1007,21 +1119,27 @@ def digest_completion(
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f'News Source Material:\n"{news_text}"'},
+            {
+                "role": "user",
+                "content": news_text
+                if raw_user_message
+                else f'News Source Material:\n"{news_text}"',
+            },
         ],
         "response_format": {
             "type": "json_schema",
             "json_schema": {"name": schema_name, "strict": True, "schema": schema},
         },
     }
+    client = openai_client if timeout is None else openai_client.with_options(timeout=timeout)
     try:
-        response = openai_client.chat.completions.create(
+        response = client.chat.completions.create(
             **payload, max_tokens=max_output_tokens
         )
     except BadRequestError as exc:
         if "max_completion_tokens" not in str(exc):
             raise
-        response = openai_client.chat.completions.create(
+        response = client.chat.completions.create(
             **payload, max_completion_tokens=max_output_tokens
         )
     log_digest_usage(site, model, max_output_tokens, response)
@@ -1057,6 +1175,7 @@ DIGEST_MAX_LATIN_RATIO = 0.55
 # DIGEST_MAX_STRAY_CHARS），其餘是 CJK 與 ASCII。於是它通過健檢、原樣寫進最終
 # prompt 被畫上成品。真正的指紋是標記本身，字元統計看不到。
 # 「assistant」單獨出現是正常英文字（AI assistant），只有帶 to= 的路由形式才算。
+#
 # 簡體與異體字。2026-09-05 實測撞到「貨櫃車起火脱困」——「脱」（U+8131）不是
 # 臺灣標準的「脫」（U+812B），單字級的異體形，消化端那句「台灣繁體中文」擋不住，
 # 成品照樣印出來。這是程式判得出來的事，而同日已經證明「再加一條 prompt 規則」
@@ -1181,6 +1300,7 @@ def digest_quality_problem(data: dict, finish_reason: str) -> str:
             bad = sorted({ch for ch in value if ch in DIGEST_NON_TW_CHARS})
             if bad:
                 return f"{field} 含簡體／異體字「{''.join(bad)}」，非臺灣標準字形"
+
     variable = data.get("variable") or ""
     latin = sum(1 for ch in variable if "a" <= ch.lower() <= "z")
     if variable and latin / len(variable) > DIGEST_MAX_LATIN_RATIO:
@@ -1262,10 +1382,26 @@ def apply_photo_availability(
     dependencies=[Depends(verify_internal_api_key)],
 )
 def generate(req: GenerateRequest):
+    # DIGEST_MODEL 可覆寫；沿用舊環境變數 OPENAI_DIGEST_MODEL 作為次要相容
+    model = (
+        os.getenv("DIGEST_MODEL")
+        or os.getenv("OPENAI_DIGEST_MODEL")
+        or DEFAULT_DIGEST_MODEL
+    )
+    # 兩段式（條件注入）：分類成功就整段當成使用者指定了該類型——組 prompt、
+    # 選 schema、給預算、chart_type 退路四處一致；分類失敗則 type_label 原樣，
+    # 下面每一行都與舊路徑逐字元相同。
+    type_label = resolve_effective_type_label(req, model)
+    # 分類成非地圖時仍要一道短的地理範圍守門（理由見 MAP_SCOPE_GUARD_RULES）；
+    # 使用者自己指定非地圖類型時維持舊行為，不注入。
+    classified_non_map = (
+        req.type_label == AUTO_TYPE_LABEL and type_label not in (AUTO_TYPE_LABEL, MAP_TYPE_LABEL)
+    )
     system_prompt = build_digest_instructions(
         role=req.role,
         density=req.density,
-        type_label=req.type_label,
+        type_label=type_label,
+        map_scope_guard=classified_non_map,
         # 編輯版兩檔都要滿版版面，不能直接看 safe_frame（見 resolve_frame_plan）
         full_bleed=resolve_frame_plan(req.role, req.safe_frame)[0],
         user_instruction=req.user_instruction,
@@ -1276,17 +1412,11 @@ def generate(req: GenerateRequest):
         editor_format=req.editor_format,
     )
 
-    # DIGEST_MODEL 可覆寫；沿用舊環境變數 OPENAI_DIGEST_MODEL 作為次要相容
-    model = (
-        os.getenv("DIGEST_MODEL")
-        or os.getenv("OPENAI_DIGEST_MODEL")
-        or DEFAULT_DIGEST_MODEL
-    )
     # 上游（OpenRouter 多 provider 輪替）偶發 502、輸出截斷或不合 schema 的回傳是常態，
     # 重試圈必須涵蓋「呼叫＋解析」全程——只重試呼叫，解析失敗一樣會把錯誤丟給使用者。
     # 作法比照 hybrid_digest：金鑰／用量問題不重試（重試也沒用），其餘 3 次 × 1.5 秒。
     # 輸出上限依類型與消化程度分開給，理由見 digest_token_budget。
-    max_output_tokens = digest_token_budget(req.type_label, req.density, req.news_text)
+    max_output_tokens = digest_token_budget(type_label, req.density, req.news_text)
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
     for attempt in range(DIGEST_ATTEMPTS):
         try:
@@ -1296,7 +1426,7 @@ def generate(req: GenerateRequest):
                 news_text=req.news_text,
                 max_output_tokens=max_output_tokens,
                 schema_name="news_cg_digest",
-                schema=digest_schema(req.type_label),
+                schema=digest_schema(type_label),
                 site="generate",
             )
         except AuthenticationError as exc:
@@ -1372,7 +1502,7 @@ def generate(req: GenerateRequest):
         chart_type = data.get("chart_type", "")
         if chart_type not in CHART_TYPE_CHOICES:
             # AI 未回報或回報不在清單內；指定類型時退回原值，自動判斷時留空由前端處理
-            chart_type = "" if req.type_label == AUTO_TYPE_LABEL else req.type_label
+            chart_type = "" if type_label == AUTO_TYPE_LABEL else type_label
 
         result = GenerateResponse(
             style=data.get("style", ""),
