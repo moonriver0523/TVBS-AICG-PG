@@ -217,4 +217,5 @@ class MissingDotTests(unittest.TestCase):
     def test_a_place_without_a_dot_gets_no_pin(self):
         rules = USER_REFERENCE_MAP_RULES
         self.assertIn("no dot for it", rules)
-        self.assertIn("do not invent a position", rules.lower())
+        self.assertIn("put nothing on the map for it", rules)
+        self.assertIn("the position is what you are inventing", rules)

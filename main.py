@@ -644,7 +644,10 @@ CONTENT FIDELITY (NON-NEGOTIABLE — OVERRIDES ANY LAYOUT OR LENGTH PREFERENCE A
 4. If the source material is thin, produce fewer points. A short, wholly accurate specification is correct; padding it with plausible-sounding detail is a defect, not a service.
 5. Do not upgrade hedged wording into certainty (e.g. "約"/"可能"/"預估" must not become a flat assertion), and do not sharpen a rounded figure into a precise one.
 6. THE NAME OF THE LAYOUT IS NOT NEWS. 示意圖, 資料圖表, 地圖, 位置圖, 流程圖, 3D示意 and the like describe what kind of graphic you are designing; they are not part of the story. Never let one of them end up inside "variable" — least of all trailing the 標題 line, where the renderer sets it in headline type and the viewer reads 「台中火鍋店疑食物中毒 示意圖」 as if 示意圖 were part of the news. Where the graphic genuinely needs to be flagged as a reconstruction, say so in "structure" as a small caption; the headline states what happened and nothing else.
-7. PAIRING A FACT WITH A PLACE IS ITSELF A CLAIM. When the source lists several places and separately lists what happened, it has not told you which detail belongs to which place — and you may not decide. 「三處路段積水，最深40公分，多輛機車熄火，水利局出動抽水機」 does not license 「左營區博愛二路 多輛機車熄火」: the source never said the scooters stalled there. Keep the places in one line and the unassigned details in their own, so the graphic can present them as belonging to the whole story. The same holds for times, casualty counts, causes and severities. Pair a detail with a place only where the source itself pairs them.
+7. PAIRING A FACT WITH A PLACE IS ITSELF A CLAIM — AND SO IS UNPAIRING ONE. Two halves, and you need both.
+   KEEP EVERY PAIRING THE SOURCE ALREADY MADE. Where the source says what happened at a named place, that pairing is reported fact and belongs in the graphic, tied to that place: 「楊梅路段砂石車追撞2人受傷」「中壢交流道4車連環1人輕傷」「湖口路段貨櫃車起火駕駛脫困」 must survive as three place-specific lines. On a location graphic「哪裡發生什麼」IS the story; stripping the places out to be safe empties the graphic of the only thing it exists to show.
+   INVENT NO PAIRING THE SOURCE DID NOT MAKE. Where the source lists several places and separately lists what happened, it has not told you which detail belongs to which — and you may not decide. 「三處路段積水，最深40公分，多輛機車熄火，水利局出動抽水機」 does not license 「左營區博愛二路 多輛機車熄火」: the source never said the scooters stalled there. Keep those places in one line and the unassigned details in their own.
+   The test is simply whether the source itself put the two together. It usually did so in the same clause; when in doubt, quote its own sentence order rather than redistributing.
 8. EXCEPTION — supplementation is allowed ONLY when the source material itself explicitly asks for it (e.g. it contains an instruction such as 「幫我補充」「請補充」「幫我加上」「請加入背景說明」). In that case you may add widely-established background, and only within the scope requested. Absent such an instruction, add nothing.
 """
 
@@ -2474,6 +2477,10 @@ def apply_map_reference_to_image_request(
             width=1024,
             height=576,
             mark=True,
+            # 地名跟著點一起烙進底圖。少了這個，模型只看得到三個一模一樣的
+            # 橘點，只能自己猜哪個是誰——2026-09-05 連兩輪把最北的中壢交流道
+            # 標成楊梅，連旁邊的事故圖示都跟著配錯。
+            labels=[point.name for point in req.map_points],
         )
     except Exception as exc:  # noqa: BLE001 — 底圖是加分項，不能拖垮成圖
         print(f"[map] 底圖產生失敗（照舊出圖）：{type(exc).__name__}: {exc}", flush=True)

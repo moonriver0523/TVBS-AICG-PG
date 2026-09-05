@@ -307,5 +307,58 @@ class CalloutBelongsToItsPinTests(unittest.TestCase):
         self.assertIn("NAMES THE SAME PLACE", rules)
 
 
+class PairingRuleIsNotABlanketBanTests(unittest.TestCase):
+    """禁止「自己配」不等於禁止「照抄原文已經配好的」。
+
+    2026-09-05 第五輪實測（SOT2）：規則加上去之後，國道車禍那則的三段
+    「楊梅路段砂石車追撞2人受傷」「中壢交流道4車連環1人輕傷」
+    「湖口路段貨櫃車起火駕駛脫困」全部從 variable 消失——這些是原文本來就
+    綁好地點的事實，第四輪（加規則前）都有寫。地圖類最有價值的「哪裡發生
+    什麼」整個不見了，是我的措辭寫太寬造成的回歸。
+    """
+
+    def test_the_rule_says_to_keep_what_the_source_already_paired(self):
+        rules = main.CONTENT_FIDELITY_RULES
+        self.assertIn("KEEP EVERY PAIRING THE SOURCE ALREADY MADE", rules)
+        self.assertIn("楊梅路段砂石車追撞", rules)
+
+    def test_the_rule_still_forbids_inventing_a_pairing(self):
+        self.assertIn("PAIRING A FACT WITH A PLACE IS ITSELF A CLAIM",
+                      main.CONTENT_FIDELITY_RULES)
+
+
+class NoMarkerOfAnyShapeTests(unittest.TestCase):
+    """沒有橘點的地點，換什麼形狀的標記都不准畫。
+
+    2026-09-05 第五輪實測：規則只講 pin，模型改用紅色三角形警示圖示加標籤框
+    加引線，照樣把「國道1號北向68公里」釘在國道路面上——而那幾個字根本不在
+    variable 裡。措辭只要指名某一種形狀，模型就換一種繞過去。
+    """
+
+    def test_the_ban_covers_any_marker_not_just_pins(self):
+        rules = news_prompt.USER_REFERENCE_MAP_RULES
+        self.assertIn("marker, icon, arrow, triangle, leader line", rules)
+        self.assertIn("whatever shape", rules)
+
+
+class BasemapLabelsAreAuthoritativeTests(unittest.TestCase):
+    """底圖橘點旁烙上的地名，就是那個點的身分，不准重新配對。
+
+    2026-09-05 第四、五輪連續兩輪同一稿：pin 位置照橘點畫對了，名字卻配錯
+    （最北的橘點是中壢交流道，成品標成楊梅）。根因是底圖只有橘點、沒有身分
+    線索，模型只能自己猜。程式端改成把地名烙在點旁邊，prompt 端要告訴模型
+    那些字是權威來源——否則會撞到既有的「標籤只能來自 VARIABLE FIELDS」。
+    """
+
+    def test_the_burned_in_names_are_declared_authoritative(self):
+        rules = news_prompt.USER_REFERENCE_MAP_RULES
+        self.assertIn("THE NAME PRINTED BESIDE A DOT IS THAT DOT'S IDENTITY", rules)
+
+    def test_it_carves_an_exception_to_the_no_text_from_the_map_rule(self):
+        rules = news_prompt.USER_REFERENCE_MAP_RULES
+        # 既有規則說「附圖裡的文字一律不可入圖」，這裡是唯一例外，必須講明
+        self.assertIn("the one exception", rules.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

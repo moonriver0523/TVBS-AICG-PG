@@ -209,6 +209,7 @@ def render_basemap(
     zoom: int | None = None,
     tile_url: str | None = None,
     mark: bool = True,
+    labels: list[str] | None = None,
 ) -> bytes:
     """把涵蓋所有座標的 OSM 底圖拼成一張 PNG（含出處標註）。
 
@@ -254,10 +255,32 @@ def render_basemap(
 
     draw = ImageDraw.Draw(canvas)
     if mark:
-        for point in points:
+        # 地名也由程式烙上去。2026-09-05 第四、五輪連續兩輪撞到：pin 位置照著
+        # 橘點畫對了，名字卻配錯（最北的橘點是中壢交流道，成品標成楊梅），
+        # 連帶旁邊的事故圖示也跟著錯。原因是底圖只有點、沒有身分線索，模型
+        # 只能自己猜哪個點是誰。點的身分是已知事實，不該讓模型猜——比照
+        # safe_frame／compose 的原則，這種事程式做。
+        try:
+            import compose
+
+            label_font = compose._font(20)
+        except Exception:  # 找不到字型不能讓底圖整個失敗，退回只有點
+            label_font = None
+        for index, point in enumerate(points):
             px, py = project(point, (centre_lat, centre_lon), level, width, height)
             draw.ellipse((px - 16, py - 16, px + 16, py + 16), fill=(255, 138, 0),
                          outline=(255, 255, 255), width=5)
+            name = (labels[index] if labels and index < len(labels) else "").strip()
+            if not name or label_font is None:
+                continue
+            box = draw.textbbox((0, 0), name, font=label_font)
+            tw, th = box[2] - box[0], box[3] - box[1]
+            # 預設標在點的右側；貼到右緣就翻到左側，免得字被裁掉
+            tx = px + 24 if px + 24 + tw + 12 <= width else px - 24 - tw - 12
+            ty = max(0, min(py - th // 2 - 6, height - th - 12))
+            draw.rectangle((tx - 6, ty - 4, tx + tw + 6, ty + th + 8),
+                           fill=(255, 255, 255), outline=(255, 138, 0), width=2)
+            draw.text((tx, ty - box[1] + 2), name, font=label_font, fill=(20, 20, 20))
 
     # ODbL 要求標註出處；沒有關掉它的參數，因為關掉就是違反授權
     try:

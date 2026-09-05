@@ -265,3 +265,31 @@ class ModelCoordinateDriftTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BasemapLabelTests(unittest.TestCase):
+    """底圖上的橘點要帶地名，否則生圖模型只能猜哪個點是誰。
+
+    2026-09-05 第四、五輪連續兩輪：pin 位置照橘點畫對，名字卻配錯（最北的
+    橘點是中壢交流道，成品標成楊梅）。點的身分交給模型猜，就是這個結果；
+    比照 safe_frame／compose 的原則，這種事程式做。
+    """
+
+    def _render(self, **kwargs):
+        with mock.patch.object(map_lookup, "_tile_bytes", return_value=_blank_tile()):
+            return map_lookup.render_basemap(KEELUNG, width=512, height=288, **kwargs)
+
+    def test_labels_change_the_rendered_image(self):
+        plain = self._render()
+        labelled = self._render(labels=["廟口夜市", "西定路", "大武崙"])
+        self.assertNotEqual(plain, labelled)
+
+    def test_missing_labels_are_tolerated(self):
+        # 標籤數量對不上不能炸——底圖是加分項，不能拖垮成圖
+        self.assertTrue(self._render(labels=["只有一個"]))
+
+    def test_labels_are_ignored_when_not_marking(self):
+        self.assertEqual(
+            self._render(mark=False),
+            self._render(mark=False, labels=["廟口夜市", "西定路", "大武崙"]),
+        )
