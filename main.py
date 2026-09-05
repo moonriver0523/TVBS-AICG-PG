@@ -109,21 +109,22 @@ GEMINI_DIGEST_MIN_TOKENS = 6000
 # 上限是天花板不是用量，只有真的寫出來的 token 才計費，因此寧可寬裕。
 # 3000 實測仍會截斷（同案例），拉到 6000 比照 GEMINI_DIGEST_MIN_TOKENS 的量級。
 #
-# 2026-09-05 修正上面這段判斷。那些「截斷」多半不是額度不夠，是模型脫軌
-# （見 docs/error-cases/2026-09-05-消化模型頻道洩漏-賭博垃圾與空白填充.md）：
-# 崩掉之後改吐純空白，而空白在 JSON 文法裡永遠合法，於是一路填到天花板才停。
-# 實測正常完成的輸出只用 469-2324 token，14 天日誌裡所有 finish=stop 的最大值
-# 是 1536。預算在這裡的真正作用是**脫軌的成本上限**：6000 讓每次脫軌燒掉約 60 秒，
-# 5 次重試剛好撞破 Cloud Run 的 300 秒上限、把使用者的等待變成 502。收到 3000
-# 之後同樣 5 次重試塞得進逾時，脫軌題材至少還有機會靠重試救回來。
+# 2026-09-05 二度修訂。當天稍早曾把地圖類收到 3000，理由是「那些截斷其實是
+# gpt-5.6-terra 脫軌後吐空白填到天花板，預算只是脫軌的成本上限」——脫軌那半段
+# 沒錯（見 docs/error-cases/2026-09-05-消化模型頻道洩漏-賭博垃圾與空白填充.md），
+# 但推論錯了，而且量測只在**記者**角色上做過。換 claude-sonnet-5 上線後，
+# 編輯＋地圖 5 次 attempt 全部 budget=3000 ratio=1.00 finish=length，其中兩次
+# raw content 整個空白——3000 在吐出第一個字之前就被思考 token 用光。
 #
-# 一般類的 1500 也要放寬。它是在 gpt-5.6-terra 上量出來的，而思考 token 算進
-# 同一個上限：2026-09-05 實測 claude-sonnet-5 走「資料圖表」用掉 1325（其中
-# 407 是思考），已經是上限的 88%、超過 DIGEST_USAGE_WARN_RATIO。換模型不該讓
-# 一般類站在截斷邊緣，拉到 2500 留出思考空間，仍低於地圖類。另外兩個呼叫端
-# 同日實測沒有壓力，維持原值：hybrid 493/1200、cover 186/600。
-DIGEST_MAX_TOKENS = 2500
-MAP_DIGEST_MAX_TOKENS = 3000
+# 用 8000 的寬鬆上限量出真實分布（記者／編輯 × 自動判斷／資料圖表，16 次全過）：
+#   實際寫出來的內容非常穩定，872-1259 token；
+#   會爆的是思考，560-3140，編輯＋自動判斷那一格最兇；
+#   total 因此落在 1591-4258。
+# 也就是說預算對**不會脫軌的模型**就是真的要夠，不能拿脫軌的成本上限來訂。
+# 這裡取 total 觀測最大值再留約四成餘裕。上限是天花板不是用量，只有真的寫出來
+# 的 token 才計費，寧可寬裕——省下的那點錢遠不值一次 5 連截斷的 502。
+DIGEST_MAX_TOKENS = 4000
+MAP_DIGEST_MAX_TOKENS = 6000
 
 # 「不消化」的輸出長度**由輸入長度決定**——模型要把整篇原文一字不差抄進 variable，
 # 再另外寫 style/structure。固定 1500 等於「原文超過某個長度就一定失敗」。
@@ -1478,7 +1479,11 @@ def hybrid_digest(req: HybridDigestRequest):
                 model=model,
                 system_prompt=HYBRID_SYSTEM_PROMPT,
                 news_text=req.news_text,
-                max_output_tokens=1200,
+                # 2026-09-05：思考 token 算進同一個上限，而它的變異遠大於
+                # 正文（同日量測 560-3140）。實測這條路徑只用 493（294 是
+                # 思考），但 1200 擋不住一次思考尖峰，留到 3000。
+                # 上限是天花板不是用量，只有真的寫出來的 token 才計費。
+                max_output_tokens=3000,
                 schema_name="hybrid_card_digest",
                 schema=HYBRID_DIGEST_SCHEMA,
                 site="hybrid",
@@ -2881,7 +2886,9 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
             model=model,
             system_prompt=editor_formats.COVER_VISUAL_DERIVE_SYSTEM,
             news_text=material,
-            max_output_tokens=600,
+            # 同上：600 對推理模型太窄，一次思考尖峰就整條截斷。
+            # 實測這條路徑只用 186（74 是思考），留到 2000 當緩衝。
+            max_output_tokens=2000,
             schema_name="cover_visuals",
             schema=editor_formats.COVER_VISUAL_SCHEMA,
             site="cover",

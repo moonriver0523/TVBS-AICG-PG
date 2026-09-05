@@ -63,18 +63,23 @@ class VerbatimScalesWithInputTests(unittest.TestCase):
         )
 
     def test_the_reproduced_failure_now_gets_room(self):
-        # 實測炸掉的那筆：1850 字，舊制給 1500
+        # 實測炸掉的那筆：1850 字，舊制給固定 1500
         news = "字" * 1850
         budget = digest_token_budget("資料圖表", "verbatim", news)
-        self.assertGreaterEqual(budget, len(news) * VERBATIM_TOKENS_PER_CHAR)
-        self.assertGreater(budget, DIGEST_MAX_TOKENS * 2)
-
-    def test_overhead_covers_style_structure_and_thinking(self):
-        news = "字" * 500
-        self.assertEqual(
-            digest_token_budget("資料圖表", "verbatim", news),
+        # 逐字抄完整篇所需，外加 style/structure 與思考的開銷
+        self.assertGreaterEqual(
+            budget,
             len(news) * VERBATIM_TOKENS_PER_CHAR + VERBATIM_DIGEST_OVERHEAD,
         )
+        # 當初炸掉的固定值是 1500，現在必須遠高於它
+        self.assertGreater(budget, 1500 * 2)
+
+    def test_overhead_covers_style_structure_and_thinking(self):
+        # 取一個公式值明確高過固定底線的長度，才量得到 OVERHEAD 真的加上去了
+        news = "字" * 1000
+        needed = len(news) * VERBATIM_TOKENS_PER_CHAR + VERBATIM_DIGEST_OVERHEAD
+        self.assertGreater(needed, DIGEST_MAX_TOKENS)
+        self.assertEqual(digest_token_budget("資料圖表", "verbatim", news), needed)
 
     def test_map_floor_still_applies_to_verbatim(self):
         # 地圖＋不消化的短文，不該比地圖的固定加碼還少

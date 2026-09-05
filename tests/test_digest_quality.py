@@ -169,23 +169,18 @@ class TokenBudgetTests(unittest.TestCase):
     def test_map_budget_is_larger_than_default(self):
         self.assertGreater(MAP_DIGEST_MAX_TOKENS, DIGEST_MAX_TOKENS)
 
-    def test_map_budget_stays_within_one_retry_round(self):
-        """預算是脫軌的成本上限，不是正常用量。
+    def test_budgets_cover_the_measured_worst_case(self):
+        """預算要容得下思考 token 的尖峰，不是只容得下正文。
 
-        2026-09-05 本機實測：正常完成的輸出 469-2324 token，14 天日誌裡所有
-        finish=stop 的最大值是 1536。6000 只是讓每次脫軌多燒四倍 token 與時間，
-        5 次重試剛好撞破 Cloud Run 的 300 秒上限、把使用者的等待變成 502。
+        2026-09-05 用 8000 的寬鬆上限量過記者／編輯 × 自動判斷／資料圖表
+        共 16 次（claude-sonnet-5）：正文很穩定，872-1259；思考變異極大，
+        560-3140；total 落在 1591-4258，最兇的是編輯＋自動判斷。
+        同日一度把地圖類收到 3000，上線後編輯＋地圖 5 次 attempt 全部
+        finish=length，其中兩次 raw content 整個空白——預算在吐出第一個字
+        之前就被思考用光。這兩個下限是那次回歸的防線，不要再往下調。
         """
-        self.assertLessEqual(MAP_DIGEST_MAX_TOKENS, 3000)
-        self.assertGreaterEqual(MAP_DIGEST_MAX_TOKENS, 2600)
-
-    def test_default_budget_leaves_room_for_thinking_tokens(self):
-        """一般類的上限要容得下思考 token。
-
-        推理模型的思考算進同一個上限。2026-09-05 實測 claude-sonnet-5 走
-        「資料圖表」用掉 1325（407 是思考），舊值 1500 只剩 12% 餘裕。
-        """
-        self.assertGreaterEqual(DIGEST_MAX_TOKENS, 2000)
+        self.assertGreaterEqual(MAP_DIGEST_MAX_TOKENS, 5000)
+        self.assertGreaterEqual(DIGEST_MAX_TOKENS, 3500)
         self.assertLess(DIGEST_MAX_TOKENS, MAP_DIGEST_MAX_TOKENS)
 
     def test_map_and_auto_types_get_the_larger_budget(self):
