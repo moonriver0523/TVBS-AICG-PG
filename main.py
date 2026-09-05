@@ -3344,6 +3344,13 @@ def _yt_cover_background(
     # 順序：肖像規則 → 附圖用途規則 → 最後壓上「無文字」override（前兩段都提到
     # 示意圖標籤要保持可見，不壓掉模型會自己畫一個「示意圖」字樣）。
     image_req = apply_portrait_to_image_request(image_req)
+    # 留證據：肖像這段靠 prompt 端列人名，會飄。沒這行分不出「附了維基照畫本人」
+    # 與「模型憑空捏一張臉掛真名」——後者是這個專案定義的最糟組合。
+    attached = len(image_req.portrait_reference_data_urls) + (1 if image_req.reference_image_data_url else 0)
+    print(
+        f"[yt-cover] portrait_subjects={subjects} en={english} 參考照={attached} 張",
+        flush=True,
+    )
     image_req = apply_user_references_to_image_request(image_req)
     image_req = image_req.model_copy(
         update={"prompt": f"{image_req.prompt.rstrip()}\n\n{editor_formats.YT_COVER_TEXT_FREE_OVERRIDE}"}
