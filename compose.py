@@ -23,7 +23,7 @@ import functools
 import io
 import pathlib
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 import safe_area_spec
 
@@ -374,4 +374,166 @@ def compose_ten_cover(
 
     buffer = io.BytesIO()
     canvas.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+# ============================================================
+# YT 直播封面（2026-09-05）
+#
+# 底圖（附圖或 AI 生的無文字圖）鋪滿 16:9，上面疊：左上 LIVE 章＋日期條、右上
+# 正版 Logo（＋可選副標）、底部兩行標題（白／黃、黑描邊）、AI 底圖時右側小字
+# 「AI示意圖」。所有幾何以畫布比例計，量自使用者範例（1376×768）。
+#
+# LIVE 章是從範例截下、放大兩倍、套圓角遮罩的 PNG（static/brand/live-badge.png）；
+# 官方去背檔到手時直接換檔即可，位置與尺寸不用動。日期每天不同，由程式畫在
+# 章下方的白色小條上，不裁範例。
+# ============================================================
+
+LIVE_BADGE = BRAND_DIR / "live-badge.png"
+
+YT_CANVAS = (1920, 1080)
+YT_MARGIN_RATIO = 0.021              # 左右邊距（範例 LIVE 章左緣 29/1376）
+YT_TOP_RATIO = 0.038                 # LIVE 章上緣（29/768）
+YT_BADGE_WIDTH_RATIO = 0.209         # LIVE 章寬（288/1376）
+YT_DATE_TAB_WIDTH_RATIO = 0.189      # 日期白條寬（260/1376）
+YT_DATE_TAB_HEIGHT_RATIO = 0.079     # 日期白條高（61/768）
+YT_DATE_FILL = (255, 255, 255)
+YT_DATE_TEXT = (190, 20, 30)
+YT_LOGO_WIDTH_RATIO = 0.207          # Logo 寬（285/1376）
+YT_LOGO_TOP_RATIO = 0.058
+YT_SUBTITLE_BASELINE_RATIO = 0.36    # 副標基線（範例字底 299/768 再留一點）
+YT_SUBTITLE_SIZE_RATIO = 0.076       # 副標字級（範例約 58/768）
+YT_LINE1_BASELINE_RATIO = 0.796      # 第一行字底（611/768）
+YT_LINE2_BASELINE_RATIO = 0.963      # 第二行字底（範例 748/768 貼邊，收一點）
+YT_TITLE_SIZE_RATIO = 0.165          # 標題起始字級（範例字高 126/768）
+YT_TITLE_MIN_SIZE_RATIO = 0.085
+YT_TITLE_LEFT_RATIO = 0.057          # 標題左緣（86/1376，「1」之類窄字會再內縮）
+YT_TITLE_STROKE_RATIO = 0.05         # 描邊佔字級比例
+YT_LINE1_FILL = (255, 255, 255)
+YT_LINE2_FILL = (250, 215, 0)        # 範例取樣 (240,208,0) 略提亮
+YT_TITLE_STROKE = (8, 8, 8)
+YT_AI_NOTE = "AI示意圖"
+YT_AI_NOTE_SIZE_RATIO = 0.032
+YT_AI_NOTE_TOP_RATIO = 0.40          # 副標之下、標題之上的右側空位
+YT_AI_NOTE_PLATE = (0, 0, 0, 120)
+
+
+def _paste_live_badge(canvas: Image.Image, box: tuple[int, int], width: int) -> int:
+    """貼 LIVE 章，回傳貼上後的高度（日期條要接在它正下方）。"""
+    if not LIVE_BADGE.exists():
+        raise ComposeError(f"找不到 LIVE 章素材：{LIVE_BADGE}")
+    with Image.open(LIVE_BADGE) as badge_file:
+        badge = badge_file.convert("RGBA")
+        height = round(badge.height * width / badge.width)
+        badge = badge.resize((width, height), Image.LANCZOS)
+        canvas.paste(badge, box, badge)
+    return height
+
+
+def compose_yt_cover(
+    background: bytes,
+    *,
+    line1: str,
+    line2: str,
+    date_text: str,
+    subtitle: str = "",
+    ai_note: bool = False,
+) -> bytes:
+    """合成 YT 直播封面。
+
+    background 是**無文字**底圖（使用者附圖或 AI 生成），任意尺寸，這裡等比例
+    裁滿 1920×1080。line1／line2 是已分好的兩行標題（分段邏輯在 editor_formats），
+    subtitle 是「原音重現」「AI即時翻譯」或空字串，ai_note=True 時右側加「AI示意圖」
+    （2026-09-05 使用者裁決：AI 生的底圖一律標，附圖不標）。
+    """
+    line1, line2 = (line1 or "").strip(), (line2 or "").strip()
+    if not line1 or not line2:
+        raise ComposeError("YT 直播封面需要兩行標題，缺一不可")
+    if not date_text.strip():
+        raise ComposeError("YT 直播封面需要日期")
+
+    canvas = _cover_panel(background, YT_CANVAS).convert("RGBA")
+    draw = ImageDraw.Draw(canvas)
+    width, height = YT_CANVAS
+    margin = round(width * YT_MARGIN_RATIO)
+    top = round(height * YT_TOP_RATIO)
+
+    # ---- 左上：LIVE 章＋日期條 ----
+    badge_w = round(width * YT_BADGE_WIDTH_RATIO)
+    badge_h = _paste_live_badge(canvas, (margin, top), badge_w)
+    tab_w = round(width * YT_DATE_TAB_WIDTH_RATIO)
+    tab_h = round(height * YT_DATE_TAB_HEIGHT_RATIO)
+    tab_x0 = margin + (badge_w - tab_w) // 2
+    tab_y0 = top + badge_h - 4          # 微微塞進章底，看起來像同一個物件
+    tab_box = (tab_x0, tab_y0, tab_x0 + tab_w, tab_y0 + tab_h)
+    # 軟陰影：讓白條在亮底圖上也分得出來
+    shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rounded_rectangle(
+        (tab_box[0] + 3, tab_box[1] + 5, tab_box[2] + 3, tab_box[3] + 5), radius=14, fill=(0, 0, 0, 110)
+    )
+    canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(6)))
+    draw = ImageDraw.Draw(canvas)
+    draw.rounded_rectangle(tab_box, radius=14, fill=YT_DATE_FILL)
+    date_font = _fit_font(date_text, tab_w - 28, round(tab_h * 0.72), round(tab_h * 0.4))
+    _draw_text(
+        draw, ((tab_box[0] + tab_box[2]) // 2, (tab_box[1] + tab_box[3]) // 2 + 2),
+        date_text, date_font, fill=YT_DATE_TEXT, stroke_width=0, anchor="mm",
+    )
+
+    # ---- 右上：Logo（＋副標） ----
+    logo_w = round(width * YT_LOGO_WIDTH_RATIO)
+    _paste_logo(canvas, (width - margin - logo_w, round(height * YT_LOGO_TOP_RATIO)), logo_w)
+    draw = ImageDraw.Draw(canvas)
+    subtitle = (subtitle or "").strip()
+    if subtitle:
+        sub_font = _font(round(height * YT_SUBTITLE_SIZE_RATIO))
+        _draw_text(
+            draw, (width - margin - 12, round(height * YT_SUBTITLE_BASELINE_RATIO)),
+            subtitle, sub_font, stroke=YT_TITLE_STROKE, stroke_width=6, anchor="rs",
+        )
+
+    # ---- 右側：AI 示意圖小標（只有 AI 底圖才有）----
+    if ai_note:
+        note_font = _font(round(height * YT_AI_NOTE_SIZE_RATIO))
+        note_w = note_font.getbbox(YT_AI_NOTE)[2]
+        note_h = round(height * YT_AI_NOTE_SIZE_RATIO * 1.5)
+        x1 = width - margin - 12
+        y0 = round(height * YT_AI_NOTE_TOP_RATIO)
+        plate = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        ImageDraw.Draw(plate).rounded_rectangle(
+            (x1 - note_w - 24, y0, x1, y0 + note_h), radius=8, fill=YT_AI_NOTE_PLATE
+        )
+        canvas.alpha_composite(plate)
+        draw = ImageDraw.Draw(canvas)
+        _draw_text(draw, (x1 - 12, y0 + note_h // 2), YT_AI_NOTE, note_font, stroke_width=0, anchor="rm")
+
+    # ---- 底部：兩行標題（白／黃、黑描邊）----
+    left = round(width * YT_TITLE_LEFT_RATIO)
+    max_w = width - left - margin
+    start = round(height * YT_TITLE_SIZE_RATIO)
+    smallest = round(height * YT_TITLE_MIN_SIZE_RATIO)
+    for text, fill, baseline_ratio in (
+        (line1, YT_LINE1_FILL, YT_LINE1_BASELINE_RATIO),
+        (line2, YT_LINE2_FILL, YT_LINE2_BASELINE_RATIO),
+    ):
+        font = _fit_font(text, max_w, start, smallest)
+        stroke = max(4, round(font.size * YT_TITLE_STROKE_RATIO))
+        _draw_text(
+            draw, (left, round(height * baseline_ratio)), text, font,
+            fill=fill, stroke=YT_TITLE_STROKE, stroke_width=stroke, anchor="ls",
+        )
+
+    buffer = io.BytesIO()
+    canvas.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def crop_background_16x9(image_bytes: bytes) -> bytes:
+    """把使用者附的原圖（任意比例）裁成 16:9 的無文字底圖，回 PNG。
+
+    給「有 asis 附圖就不打生圖模型」那條路用：附圖本身就是底圖，只需要裁滿版面。
+    """
+    panel = _cover_panel(image_bytes, YT_CANVAS)
+    buffer = io.BytesIO()
+    panel.save(buffer, format="PNG")
     return buffer.getvalue()

@@ -348,6 +348,9 @@ let state = {
     // refineStack 供「退回上一版」
     refineSource: null,
     refineDisplay: null,
+    // YT 直播封面：上一次的無文字底圖是不是 AI 生的（重疊文字時決定要不要標 AI示意圖）。
+    // 底圖本身走 refineSource（語意相同：給改圖用的原圖）。
+    ytCoverBackgroundIsAi: false,
     refineStack: []
 };
 
@@ -414,6 +417,16 @@ const EDITOR_FORMATS = {
         hint: 'AI 只生左右兩張無文字底圖，所有文字由程式繪製：零錯字，但沒有美術字設計感。',
         inputs: 'cover',
         coverMode: 'composite',
+        locks: {},
+        hides: { digestControls: true, safeFrame: true, stamp: true },
+        hole: null,
+    },
+    // YT 直播封面：底圖來自附圖（原圖放置）或 AI，LIVE 章／日期／Logo／兩行標題全由程式疊。
+    // 沿用主流程的附圖上傳區（用途：原圖放置＝直接當底圖；其他＝生圖參考）。
+    yt_live_cover: {
+        label: 'YT直播封面',
+        hint: '標題用半形空格分兩段（分不出來時由 AI 判斷）。有「原圖放置」附圖就直接當底圖，否則 AI 生底圖並標示 AI示意圖。文字與 Logo 全由程式疊，零錯字。',
+        inputs: 'yt_cover',
         locks: {},
         hides: { digestControls: true, safeFrame: true, stamp: true },
         hole: null,
@@ -747,20 +760,31 @@ function _hide(el, hidden) {
 }
 
 // 換裝輸入區：同一頁、同一個位置，只有上半部欄位跟著版型換
+function todayText() {
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    return `${now.getFullYear()}/${pad(now.getMonth() + 1)}/${pad(now.getDate())}`;
+}
+
 function applyEditorFormatInputs() {
-    const wantsCover = editorFormat().inputs === 'cover';
+    const inputs = editorFormat().inputs;
+    const wantsCover = inputs === 'cover';
+    const wantsYt = inputs === 'yt_cover';
     const news = document.getElementById('newsInputs');
     const cover = document.getElementById('coverInputs');
+    const yt = document.getElementById('ytCoverInputs');
+    const refBox = document.getElementById('refUploadBox');
     const digestRow = document.getElementById('digestTypeRow');
-    if (news) news.classList.toggle('hidden', wantsCover);
+    if (news) news.classList.toggle('hidden', wantsCover || wantsYt);
     if (cover) cover.classList.toggle('hidden', !wantsCover);
+    if (yt) yt.classList.toggle('hidden', !wantsYt);
+    // 附圖上傳區：主流程與 YT 直播封面都用；十點不一樣的端點不收附圖，收起來
+    if (refBox) refBox.classList.toggle('hidden', wantsCover);
     // 封面模式完全沒有消化這一段，版面形式用不到，整組收起來
-    if (digestRow) digestRow.classList.toggle('hidden', wantsCover);
-    const dateField = document.getElementById('coverDate');
-    if (wantsCover && dateField && !dateField.value) {
-        const now = new Date();
-        const pad = n => String(n).padStart(2, '0');
-        dateField.value = `${now.getFullYear()}/${pad(now.getMonth() + 1)}/${pad(now.getDate())}`;
+    if (digestRow) digestRow.classList.toggle('hidden', wantsCover || wantsYt);
+    for (const id of ['coverDate', 'ytCoverDate']) {
+        const dateField = document.getElementById(id);
+        if ((wantsCover || wantsYt) && dateField && !dateField.value) dateField.value = todayText();
     }
 }
 
@@ -819,6 +843,10 @@ function updateAIBtnRoleHint() {
     if (!buttonText) return;
     if (editorFormat().inputs === 'cover') {
         buttonText.innerText = '生成十點不一樣封面';
+        return;
+    }
+    if (editorFormat().inputs === 'yt_cover') {
+        buttonText.innerText = '生成 YT 直播封面';
         return;
     }
     const densityLabel = DENSITY_LABELS[state.digestDensity] || state.digestDensity;
@@ -1539,8 +1567,106 @@ async function handleTenCoverGenerate() {
     }
 }
 
+const YT_COVER_BACKEND_URL = `${API_BASE}/api/editor/yt-cover`;
+
+function ytCoverFields() {
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    return {
+        title: val('ytCoverTitle'),
+        subtitle: val('ytCoverSubtitle'),
+        date_text: val('ytCoverDate'),
+    };
+}
+
+// 用既有底圖重疊文字（追加修改後、或只改標題／副標／日期）。
+// background 從 refineSource 來——那格語意就是「給改圖用的原圖」，這條線上它是無文字底圖。
+async function recomposeYtCover(refined) {
+    const source = refineSourceFromResponse(refined);
+    const res = await fetch(YT_COVER_BACKEND_URL, {
+        method: 'POST',
+        headers: _apiHeaders(),
+        body: JSON.stringify({
+            ...ytCoverFields(),
+            provider: effectiveImageProvider(),
+            background_image_base64: source.base64,
+            background_mime_type: source.mimeType,
+            background_is_ai: state.ytCoverBackgroundIsAi,
+        }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(_apiError(data, res.status));
+    return data;
+}
+
+function showYtCoverResult(data, fields) {
+    const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
+    document.getElementById('oneClickImage').src = imageUrl;
+    const download = document.getElementById('oneClickDownload');
+    download.href = imageUrl;
+    download.download = 'tvbs-yt-live-cover.png';
+    download.innerText = '下載 PNG';
+    state.ytCoverBackgroundIsAi = !!data.background_is_ai;
+    // 追加修改：以無文字底圖為源，改完由 handleRefine 再疊一次文字
+    resetRefineState(refineSourceFromResponse(data), data);
+    const recompose = document.getElementById('ytCoverRecomposeBtn');
+    if (recompose) recompose.disabled = false;
+    document.getElementById('oneClickLabel').innerText = editorFormat().label;
+    document.getElementById('oneClickMeta').innerText =
+        `${data.line1}｜${data.line2}${fields.subtitle ? '｜' + fields.subtitle : ''}`;
+    document.getElementById('oneClickEmpty').classList.add('hidden');
+    document.getElementById('oneClickResult').classList.remove('hidden');
+}
+
+// YT 直播封面。recomposeOnly=true：底圖不重生，只用目前欄位重疊文字。
+async function handleYtCoverGenerate(recomposeOnly = false) {
+    const fields = ytCoverFields();
+    if (!fields.title) return showToast('請輸入直播標題');
+    if (recomposeOnly && !state.refineSource) return showToast('還沒有底圖，請先生成一次');
+
+    const btn = document.getElementById('aiBtn');
+    const loading = document.getElementById('aiLoading');
+    btn.disabled = true;
+    loading.classList.remove('hidden');
+    let completed = false;
+    try {
+        let data;
+        if (recomposeOnly) {
+            showToast('用現有底圖重疊文字…');
+            data = await recomposeYtCover(state.refineDisplay || {
+                image_data_base64: state.refineSource.base64, mime_type: state.refineSource.mimeType,
+            });
+        } else {
+            const asis = state.userRefImages.some(ref => ref.purpose === 'asis');
+            showToast(asis ? '用附圖當底圖，合成中…' : 'AI 生底圖後合成，約 30–120 秒…');
+            beginGenerationProgress('image', asis ? 0.3 : 1.3);
+            const res = await fetch(YT_COVER_BACKEND_URL, {
+                method: 'POST',
+                headers: _apiHeaders(),
+                body: JSON.stringify({
+                    ...fields,
+                    provider: effectiveImageProvider(),
+                    image_size: state.imageSize,
+                    reference_images: userRefImagesPayload(),
+                }),
+            });
+            data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(_apiError(data, res.status));
+        }
+        showYtCoverResult(data, fields);
+        completed = true;
+    } catch (err) {
+        console.error(err);
+        showToast(err.message || '封面生成失敗，請稍後再試');
+    } finally {
+        btn.disabled = false;
+        loading.classList.add('hidden');
+        endGenerationProgress(completed);
+    }
+}
+
 async function handleOneClickGenerate() {
     if (editorFormat().inputs === 'cover') return handleTenCoverGenerate();
+    if (editorFormat().inputs === 'yt_cover') return handleYtCoverGenerate();
     const input = document.getElementById("aiInput").value.trim();
     if (!input) return showToast("請輸入欲生成的新聞內容");
 
@@ -2052,6 +2178,8 @@ async function handleRefine() {
     btnText.innerText = '修改中…';
     loading.classList.remove('hidden');
 
+    // YT 直播封面：改的是無文字底圖（text_free），不置框、不挖洞、固定 16:9
+    const isYtCover = editorFormat().inputs === 'yt_cover';
     try {
         const response = await fetch(REFINE_BACKEND_URL, {
             method: 'POST',
@@ -2061,17 +2189,22 @@ async function handleRefine() {
                 source_mime_type: state.refineSource.mimeType,
                 instruction,
                 provider: effectiveImageProvider(),
-                aspect_ratio: currentAspectRatio(),
+                aspect_ratio: isYtCover ? '16:9' : currentAspectRatio(),
                 image_size: state.imageSize,
-                safe_frame: state.safeFrame,
+                safe_frame: isYtCover ? false : state.safeFrame,
                 safe_frame_profile: state.currentRole,
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
-                broadcast_hole: editorFormat().hole || '',
+                broadcast_hole: isYtCover ? '' : (editorFormat().hole || ''),
+                text_free: isYtCover,
             }),
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(_apiError(data, response.status));
+
+        // YT 直播封面：refine 只改了無文字底圖，要再疊一次文字才是成品。
+        // 回來的 data 帶著 source_image_base64＝新底圖，refineSource 因此自動接上。
+        const shown = isYtCover ? await recomposeYtCover(data) : data;
 
         // 退回上一版用：存目前這一版的置框前原圖與顯示中成品（都在 state，不碰 DOM）
         state.refineStack.push({
@@ -2079,9 +2212,11 @@ async function handleRefine() {
             display: state.refineDisplay,
         });
         // 下一輪修改要用**新的**置框前原圖，不是成品
-        state.refineSource = refineSourceFromResponse(data);
-        state.refineDisplay = data;
-        showRefinedImage(data);
+        state.refineSource = refineSourceFromResponse(shown);
+        state.refineDisplay = shown;
+        showRefinedImage(shown);
+        // 封面的成品標籤維持版型名，不顯示內部的 recomposite 模型字串
+        if (isYtCover) document.getElementById('oneClickLabel').innerText = editorFormat().label;
         input.value = '';
         showToast('修改完成');
     } catch (err) {

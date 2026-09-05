@@ -328,9 +328,12 @@
                            placeholder="給 AI 的指令（選填），如：用手繪風／標題放左邊／逐字保留"
                            oninput="updateInstructionOverrideHint()" />
                     <p id="instructionOverrideHint" class="hidden text-[10px] text-amber-400/90 italic mt-1"></p>
+                    </div>
 
-                    <!-- ② 上傳參考圖：地圖底稿／實景參考（肖像照仍由後端自動查） -->
-                    <div class="mt-2">
+                    <!-- ② 上傳參考圖：地圖底稿／實景參考／肖像照片／原圖放置。
+                         放在 newsInputs 外面：主流程與 YT 直播封面共用同一組附圖，
+                         十點不一樣不收附圖時由 applyEditorFormatInputs 收起來 -->
+                    <div id="refUploadBox" class="mt-2">
                         <div class="flex items-center gap-2">
                             <button type="button" onclick="document.getElementById('refFileInput').click()"
                                     class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">＋ 附參考圖（選填）</button>
@@ -339,7 +342,6 @@
                         <input id="refFileInput" type="file" accept="image/*" multiple class="hidden"
                                onchange="handleRefFilesSelected(this)" />
                         <div id="refUploadList" class="mt-1.5 flex flex-col gap-1.5"></div>
-                    </div>
                     </div>
 
                     <div id="editorFormatRow" class="hidden mt-3">
@@ -385,6 +387,30 @@
                             </select>
                         </div>
                         <p class="text-[9px] text-slate-600 leading-relaxed">畫面描述<span class="text-amber-500/90">選填</span>：留空時由 AI 讀標題自動補，生成後會填回欄位讓你微調重生。Logo 一律由程式貼正版檔。</p>
+                    </div>
+
+                    <!-- YT 直播封面：一句標題（半形空格分段）＋副標＋日期；附圖走上面共用的上傳區 -->
+                    <div id="ytCoverInputs" class="hidden mt-3 mb-2 flex flex-col gap-2">
+                        <div>
+                            <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">直播標題（半形空格分兩段）</label>
+                            <input id="ytCoverTitle" type="text" maxlength="60"
+                                   class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
+                                   placeholder="挪威國王哈拉德辭世 開放公眾瞻仰遺容" />
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <select id="ytCoverSubtitle" class="bg-slate-950/80 border border-slate-800 rounded-lg px-2 py-1.5 text-[11px] font-black text-slate-100">
+                                <option value="">無副標</option>
+                                <option value="原音重現">原音重現</option>
+                                <option value="AI即時翻譯">AI即時翻譯</option>
+                            </select>
+                            <input id="ytCoverDate" type="text" maxlength="20"
+                                   class="flex-1 bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-100 input-focus-ring"
+                                   placeholder="2026/09/05" />
+                            <button id="ytCoverRecomposeBtn" type="button" onclick="handleYtCoverGenerate(true)" disabled
+                                    title="底圖不重生，只用新的標題／副標／日期重疊文字"
+                                    class="px-2.5 py-1.5 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all disabled:opacity-40">只改文字</button>
+                        </div>
+                        <p class="text-[9px] text-slate-600 leading-relaxed">附圖選「<span class="text-amber-500/90">原圖放置</span>」就直接當底圖不生圖；其他用途當生圖參考。沒附圖由 AI 依標題生底圖並標「AI示意圖」。LIVE 章、日期、Logo、兩行標題全由程式疊，零錯字。</p>
                     </div>
 
                     <div id="digestControlsRow" class="grid grid-cols-2 gap-2 mb-2">

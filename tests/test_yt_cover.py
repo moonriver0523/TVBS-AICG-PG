@@ -1,0 +1,287 @@
+"""YT 直播封面（2026-09-05）：分段規則、合成幾何、三條底圖路徑、端點。
+
+守的紅線：
+1. **標題一個字都不能改。** AI 分段回來的兩行去空白後必須等於原標題，改字就退路。
+2. **能不打 API 就不打。** 標題已分好＋有 asis 附圖（或帶了現成底圖）時零 API 呼叫。
+3. **附圖不標 AI示意圖、AI 底圖一律標。**（使用者裁決 2026-09-05）
+4. **追加修改走無文字 refine 規則**，不能沿用帶文字 CG 的那套。
+"""
+
+import base64
+import io
+import os
+import re
+import unittest
+from unittest.mock import patch
+
+from PIL import Image
+
+os.environ.setdefault("OPENAI_API_KEY", "test-key")
+os.environ["NEWS_IMAGE_API_KEY"] = "yt-test-key"
+
+import compose  # noqa: E402
+import editor_formats  # noqa: E402
+import main  # noqa: E402
+import news_prompt  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+client = TestClient(main.app)
+HEADERS = {"X-API-Key": "yt-test-key"}
+
+
+def _png_bytes(size=(640, 480), colour=(30, 60, 90)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, colour).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _data_url(raw: bytes) -> str:
+    return "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+
+
+class TitleSplitTests(unittest.TestCase):
+    def test_exactly_one_space_splits_there(self):
+        self.assertEqual(
+            editor_formats.split_live_title("挪威國王哈拉德辭世 開放公眾瞻仰遺容"),
+            ("挪威國王哈拉德辭世", "開放公眾瞻仰遺容"),
+        )
+
+    def test_multiple_spaces_collapse_to_one_boundary(self):
+        self.assertEqual(
+            editor_formats.split_live_title("前段   後段"), ("前段", "後段")
+        )
+
+    def test_zero_or_two_plus_boundaries_defer_to_ai(self):
+        # 範例 C 肝那張第二行本身就含空格，「遇到空格就切」不成立
+        self.assertIsNone(editor_formats.split_live_title("新北診所爆C肝群聚 11人確診 疾管署說明"))
+        self.assertIsNone(editor_formats.split_live_title("沒有空格的標題"))
+
+    def test_faithful_split_keeps_every_character(self):
+        title = "新北診所爆C肝群聚 11人確診 疾管署說明"
+        self.assertTrue(
+            editor_formats.title_split_is_faithful(title, "新北診所爆C肝群聚", "11人確診 疾管署說明")
+        )
+        self.assertFalse(
+            editor_formats.title_split_is_faithful(title, "新北診所爆C肝群聚", "十一人確診 疾管署說明")
+        )
+        self.assertFalse(editor_formats.title_split_is_faithful(title, "", title))
+
+    def test_fallback_uses_first_space_then_midpoint(self):
+        self.assertEqual(
+            editor_formats.fallback_split_title("新北診所爆C肝群聚 11人確診 疾管署說明"),
+            ("新北診所爆C肝群聚", "11人確診 疾管署說明"),
+        )
+        self.assertEqual(editor_formats.fallback_split_title("一二三四五六"), ("一二三", "四五六"))
+
+
+class ComposeTests(unittest.TestCase):
+    def test_output_is_full_hd_png(self):
+        cover = compose.compose_yt_cover(
+            _png_bytes(), line1="第一行標題", line2="第二行標題",
+            date_text="2026/09/05", subtitle="原音重現", ai_note=True,
+        )
+        with Image.open(io.BytesIO(cover)) as image:
+            self.assertEqual(image.size, compose.YT_CANVAS)
+            self.assertEqual(image.format, "PNG")
+
+    def test_ai_note_only_when_asked(self):
+        # 標籤所在的右側區域：有標籤時會多出半透明黑底＋白字，像素分布不同
+        def region(ai_note):
+            cover = compose.compose_yt_cover(
+                _png_bytes(colour=(200, 200, 200)), line1="一", line2="二",
+                date_text="2026/09/05", ai_note=ai_note,
+            )
+            with Image.open(io.BytesIO(cover)) as image:
+                y0 = round(compose.YT_CANVAS[1] * compose.YT_AI_NOTE_TOP_RATIO)
+                return image.crop((1500, y0, 1900, y0 + 60)).tobytes()
+
+        self.assertNotEqual(region(True), region(False))
+
+    def test_rejects_missing_line_or_date(self):
+        with self.assertRaises(compose.ComposeError):
+            compose.compose_yt_cover(_png_bytes(), line1="只有一行", line2="", date_text="2026/09/05")
+        with self.assertRaises(compose.ComposeError):
+            compose.compose_yt_cover(_png_bytes(), line1="一", line2="二", date_text="")
+
+    def test_live_badge_asset_exists(self):
+        self.assertTrue(compose.LIVE_BADGE.exists(), compose.LIVE_BADGE)
+
+    def test_crop_background_is_16x9(self):
+        raw = compose.crop_background_16x9(_png_bytes(size=(1000, 1000)))
+        with Image.open(io.BytesIO(raw)) as image:
+            self.assertEqual(image.size, compose.YT_CANVAS)
+
+
+class PlanTests(unittest.TestCase):
+    def req(self, title, refs=(), background=""):
+        return main.YtCoverRequest(
+            title=title,
+            reference_images=[main.UserReferenceImage(data_url=_data_url(_png_bytes()), purpose=p) for p in refs],
+            background_image_base64=background,
+        )
+
+    def test_no_api_call_when_split_and_background_are_settled(self):
+        with patch.object(main, "derive_yt_cover_plan", side_effect=AssertionError("不該打 API")):
+            lines, visual, subjects, english = main.resolve_yt_cover_plan(
+                self.req("前段 後段", refs=("asis",))
+            )
+        self.assertEqual(lines, ("前段", "後段"))
+        self.assertEqual((visual, subjects, english), ("", [], []))
+
+    def test_ai_split_is_used_only_when_faithful(self):
+        title = "新北診所爆C肝群聚 11人確診 疾管署說明"
+        faithful = {"line1": "新北診所爆C肝群聚", "line2": "11人確診 疾管署說明", "visual": "", "portrait_subjects": [], "portrait_subjects_en": []}
+        with patch.object(main, "derive_yt_cover_plan", return_value=faithful):
+            lines, *_ = main.resolve_yt_cover_plan(self.req(title, refs=("asis",)))
+        self.assertEqual(lines, ("新北診所爆C肝群聚", "11人確診 疾管署說明"))
+
+        # AI 常把第二行的空格吃掉：字沒改就採用分段點，但字元從原標題切、空格保留
+        squeezed = dict(faithful, line2="11人確診疾管署說明")
+        with patch.object(main, "derive_yt_cover_plan", return_value=squeezed):
+            lines, *_ = main.resolve_yt_cover_plan(self.req(title, refs=("asis",)))
+        self.assertEqual(lines, ("新北診所爆C肝群聚", "11人確診 疾管署說明"))
+
+        rewritten = dict(faithful, line2="十一人確診 疾管署說明")
+        with patch.object(main, "derive_yt_cover_plan", return_value=rewritten):
+            lines, *_ = main.resolve_yt_cover_plan(self.req(title, refs=("asis",)))
+        self.assertEqual(lines, editor_formats.fallback_split_title(title))
+
+    def test_visual_and_portraits_come_from_ai_when_generating(self):
+        data = {
+            "line1": "挪威國王哈拉德辭世", "line2": "開放公眾瞻仰遺容",
+            "visual": "燭光中的鑲框肖像照，黑色緞帶斜掛框角",
+            "portrait_subjects": ["哈拉德"], "portrait_subjects_en": ["Harald V"],
+        }
+        with patch.object(main, "derive_yt_cover_plan", return_value=data):
+            lines, visual, subjects, english = main.resolve_yt_cover_plan(
+                self.req("挪威國王哈拉德辭世 開放公眾瞻仰遺容")
+            )
+        self.assertEqual(lines, ("挪威國王哈拉德辭世", "開放公眾瞻仰遺容"))
+        self.assertEqual(visual, data["visual"])
+        self.assertEqual(subjects, ["哈拉德"])
+        self.assertEqual(english, ["Harald V"])
+
+    def test_derive_failure_still_yields_a_cover_plan(self):
+        with patch.object(main, "derive_yt_cover_plan", return_value={}):
+            lines, visual, *_ = main.resolve_yt_cover_plan(self.req("沒有空格的標題"))
+        self.assertEqual(lines, ("沒有空", "格的標題"))
+        self.assertEqual(visual, "沒有空格的標題")
+
+
+class BackgroundPathTests(unittest.TestCase):
+    def test_asis_reference_is_cropped_not_generated(self):
+        req = main.YtCoverRequest(
+            title="前段 後段",
+            reference_images=[main.UserReferenceImage(data_url=_data_url(_png_bytes((800, 800))), purpose="asis")],
+        )
+        with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")):
+            raw, mime, is_ai, model = main._yt_cover_background(req, "", [], [])
+        self.assertFalse(is_ai)
+        self.assertEqual(model, "yt-cover:asis")
+        with Image.open(io.BytesIO(raw)) as image:
+            self.assertEqual(image.size, compose.YT_CANVAS)
+
+    def test_existing_background_is_reused_verbatim(self):
+        raw = _png_bytes()
+        req = main.YtCoverRequest(
+            title="前段 後段",
+            background_image_base64=base64.b64encode(raw).decode("ascii"),
+            background_is_ai=True,
+        )
+        with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")):
+            out, mime, is_ai, model = main._yt_cover_background(req, "", [], [])
+        self.assertEqual(out, raw)
+        self.assertTrue(is_ai)
+
+    def test_generated_background_prompt_is_text_free_and_marked_ai(self):
+        captured = {}
+
+        def fake_generate(image_req):
+            captured["req"] = image_req
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(_png_bytes()).decode("ascii"),
+                mime_type="image/png", model="fake-image",
+            )
+
+        req = main.YtCoverRequest(title="前段 後段")
+        with patch.object(main, "generate_image_raw", side_effect=fake_generate), \
+             patch.object(main, "apply_portrait_to_image_request", side_effect=lambda r: r):
+            _, _, is_ai, model = main._yt_cover_background(req, "燭光中的肖像", [], [])
+        self.assertTrue(is_ai)
+        self.assertEqual(model, "fake-image")
+        prompt = captured["req"].prompt
+        self.assertIn("燭光中的肖像", prompt)
+        self.assertTrue(prompt.rstrip().endswith(editor_formats.YT_COVER_TEXT_FREE_OVERRIDE.rstrip()))
+        self.assertEqual(captured["req"].aspect_ratio, "16:9")
+        self.assertFalse(captured["req"].safe_frame)
+
+
+class EndpointTests(unittest.TestCase):
+    def test_asis_cover_end_to_end_without_any_model(self):
+        payload = {
+            "title": "新北診所爆C肝群聚 11人確診疾管署說明",
+            "subtitle": "AI即時翻譯",
+            "date_text": "2026/09/05",
+            "reference_images": [{"data_url": _data_url(_png_bytes((1200, 700))), "purpose": "asis"}],
+        }
+        with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")), \
+             patch.object(main, "derive_yt_cover_plan", side_effect=AssertionError("不該打文字模型")):
+            res = client.post("/api/editor/yt-cover", json=payload, headers=HEADERS)
+        self.assertEqual(res.status_code, 200, res.text)
+        data = res.json()
+        self.assertEqual((data["line1"], data["line2"]), ("新北診所爆C肝群聚", "11人確診疾管署說明"))
+        self.assertFalse(data["background_is_ai"])
+        self.assertTrue(data["source_image_base64"], "追加修改需要無文字底圖")
+        with Image.open(io.BytesIO(base64.b64decode(data["image_data_base64"]))) as image:
+            self.assertEqual(image.size, compose.YT_CANVAS)
+
+    def test_unknown_subtitle_is_rejected(self):
+        res = client.post(
+            "/api/editor/yt-cover",
+            json={"title": "前段 後段", "subtitle": "隨便寫"},
+            headers=HEADERS,
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_requires_api_key(self):
+        res = client.post("/api/editor/yt-cover", json={"title": "前段 後段"})
+        self.assertEqual(res.status_code, 401)
+
+
+class RefinePromptTests(unittest.TestCase):
+    def test_text_free_refine_uses_its_own_rules(self):
+        prompt = news_prompt.build_refine_prompt("把背景換成夜景", text_free=True)
+        self.assertIn(news_prompt.TEXT_FREE_REFINE_RULES, prompt)
+        self.assertNotIn(news_prompt.IMAGE_REFINE_RULES, prompt)
+        self.assertIn("把背景換成夜景", prompt)
+
+    def test_default_refine_is_unchanged(self):
+        prompt = news_prompt.build_refine_prompt("把標題改紅色")
+        self.assertIn(news_prompt.IMAGE_REFINE_RULES, prompt)
+        self.assertNotIn(news_prompt.TEXT_FREE_REFINE_RULES, prompt)
+
+
+class FrontendParityTests(unittest.TestCase):
+    APP_JS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app.js")
+    INDEX = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "index.html")
+
+    def test_format_registered_on_both_sides(self):
+        self.assertEqual(editor_formats.get("yt_live_cover")["pipeline"], editor_formats.PIPELINE_YT_COVER)
+        with open(self.APP_JS, encoding="utf-8") as fh:
+            js = fh.read()
+        entry = re.search(r"yt_live_cover:\s*\{(.*?)\n\s{4}\},", js, re.S).group(1)
+        self.assertIn("inputs: 'yt_cover'", entry)
+        for field in ("digestControls", "safeFrame", "stamp"):
+            self.assertIn(field, re.search(r"hides:\s*\{([^}]*)\}", entry).group(1))
+        self.assertIn("text_free: isYtCover", js, "追加修改必須走無文字 refine")
+
+    def test_subtitle_options_match_backend(self):
+        with open(self.INDEX, encoding="utf-8") as fh:
+            html = fh.read()
+        block = re.search(r'id="ytCoverSubtitle".*?</select>', html, re.S).group(0)
+        options = re.findall(r'<option value="([^"]*)"', block)
+        self.assertEqual(tuple(options), editor_formats.YT_COVER_SUBTITLES)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -368,8 +368,33 @@ IMAGE REFINE RULES (CRITICAL)
 - Never add new facts, figures, sources, logos or captions that the request did not supply."""
 
 
-def build_refine_prompt(instruction: str) -> str:
-    """組追加修改（refine）的生圖 prompt。附圖＝上次置框前原圖，經 input_references 送出。"""
+# 無文字底圖的追加修改（YT 直播封面）：附圖是一張純照片底圖，文字全由程式疊。
+# IMAGE_REFINE_RULES 是替「帶文字的 CG」寫的（保留標題、不動版面文字），照用會讓
+# 模型以為該有文字而自己補一段上去，程式疊的標題蓋不掉它。
+TEXT_FREE_REFINE_RULES = """==================================================
+TEXT-FREE BACKGROUND REFINE RULES (CRITICAL)
+==================================================
+- The attached image is a text-free photographic background. Software adds every headline, badge and logo afterwards.
+- Apply ONLY the change requested below. Keep everything else — subject, composition, framing, lighting, colour — as it is.
+- The result must remain completely free of text: no letters, no numbers, no captions, no logos, no watermarks, no signage, no readable writing of any kind. If the request asks to add words, leave the background unchanged in that respect — words are added by software, not by you.
+- Keep the lower third free of essential detail and keep the extreme corners clear, so the overlaid headline and badges do not cover anything important."""
+
+
+def build_refine_prompt(instruction: str, *, text_free: bool = False) -> str:
+    """組追加修改（refine）的生圖 prompt。附圖＝上次置框前原圖，經 input_references 送出。
+
+    text_free：附圖是無文字底圖（YT 直播封面那條線），改用 TEXT_FREE_REFINE_RULES。
+    """
+    if text_free:
+        return (
+            "Modify the attached text-free background photograph according to the change "
+            "request below. This is an edit of an existing image, not a new design.\n\n"
+            f"{TEXT_FREE_REFINE_RULES}\n\n"
+            "==================================================\n"
+            "USER CHANGE REQUEST\n"
+            "==================================================\n"
+            f"{instruction}"
+        )
     return (
         "Modify the attached news infographic image according to the change "
         "request below. This is an edit of an existing image, not a new design.\n\n"

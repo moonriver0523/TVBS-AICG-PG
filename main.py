@@ -2735,6 +2735,9 @@ class ImageRefineRequest(BaseModel):
     safe_frame_profile: str = "記者"
     # 追加修改要沿用同一個挖空側，否則改完圖那塊空位就不見了
     broadcast_hole: str = ""
+    # YT 直播封面：附圖是無文字底圖，改完仍須無文字（文字由程式疊）。
+    # 見 news_prompt.TEXT_FREE_REFINE_RULES。
+    text_free: bool = False
 
 
 @app.post(
@@ -2755,7 +2758,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             detail="目前的生圖後端無法附上參考圖，無法以圖改圖；請整張重新生成",
         )
     image_req = ImageGenerateRequest(
-        prompt=build_refine_prompt(req.instruction),
+        prompt=build_refine_prompt(req.instruction, text_free=req.text_free),
         provider=req.provider,
         aspect_ratio=req.aspect_ratio,
         image_size=req.image_size,
@@ -3198,6 +3201,206 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         model=f"ten-cover:{req.mode}",
         visual_left=visuals[0],
         visual_right=visuals[1],
+    )
+
+
+# ============================================================
+# 編輯專屬版型 C：YT 直播封面（2026-09-05）
+#
+# 「一句標題（半形空格分兩段）＋副標＋可選附圖 → 一張直播封面」。
+# 跟十點不一樣一樣不經消化；跟它不同的是**所有文字都由程式疊**（compose.compose_yt_cover），
+# 生圖模型只負責一張無文字底圖，甚至有附圖時連生圖都不打。
+#
+# 追加修改：回應的 source_image_base64 帶的是**無文字底圖**，前端拿它走
+# /api/images/refine（text_free=True）改底圖，改完再帶 background_image_base64
+# 回來這條重疊一次文字。改標題不重生底圖也是同一條路。
+# ============================================================
+
+
+class YtCoverRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=60)
+    subtitle: str = Field(default="", max_length=20)
+    date_text: str = Field(default="", max_length=20)
+    provider: Literal["gemini", "gpt"] = "gpt"
+    image_size: str = "1K"
+    # 與主流程共用同一組附圖欄位與用途：asis＝直接當底圖（不生圖）；
+    # scene／portrait／map＝生圖時當參考，用途規則由 apply_user_references_to_image_request 注入。
+    reference_images: list[UserReferenceImage] = Field(
+        default_factory=list, max_length=MAX_INPUT_REFERENCES
+    )
+    # 已有底圖時只重疊文字（追加修改後、或只改標題／副標／日期）。base64，不是 data URL。
+    background_image_base64: str = Field(default="", max_length=28_000_000)
+    background_mime_type: str = "image/png"
+    # 那張底圖是不是 AI 生的——決定要不要疊「AI示意圖」。前端原樣帶回上一次的回應值。
+    background_is_ai: bool = False
+
+
+class YtCoverResponse(ImageGenerateResponse):
+    # source_image_base64（繼承欄位）＝無文字底圖，供追加修改與只改文字重疊用。
+    line1: str = ""
+    line2: str = ""
+    visual: str = ""
+    background_is_ai: bool = False
+
+
+def derive_yt_cover_plan(title: str, preset_lines: tuple[str, str] | None) -> dict:
+    """請文字模型補畫面描述（＋分段、＋具名真人）。失敗回空 dict，呼叫端自己退路。"""
+    if preset_lines:
+        split_note = (
+            "The split is ALREADY DECIDED — copy these two lines back exactly:\n"
+            f"line1: {preset_lines[0]}\nline2: {preset_lines[1]}"
+        )
+    else:
+        split_note = "The split is NOT decided — split the headline into two lines yourself."
+    material = f"Headline: {title.strip()}\n\n{split_note}"
+    model = (
+        os.getenv("DIGEST_MODEL")
+        or os.getenv("OPENAI_DIGEST_MODEL")
+        or DEFAULT_DIGEST_MODEL
+    )
+    try:
+        response = digest_completion(
+            model=model,
+            system_prompt=editor_formats.YT_COVER_DERIVE_SYSTEM,
+            news_text=material,
+            max_output_tokens=2000,
+            schema_name="yt_cover_plan",
+            schema=editor_formats.YT_COVER_DERIVE_SCHEMA,
+            site="cover",
+        )
+        data = parse_digest_json(response.choices[0].message.content or "")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[yt-cover] 補畫面描述失敗，改用退路：{type(exc).__name__}: {exc}", flush=True)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def resolve_yt_cover_plan(
+    req: "YtCoverRequest",
+) -> tuple[tuple[str, str], str, list[str], list[str]]:
+    """決定 (兩行標題, 畫面描述, 具名真人, 英文名)。
+
+    只有真的需要才打文字模型：標題已用一個空格分好、且底圖不用生（有 asis 附圖
+    或前端帶了現成底圖）時，一次 API 都不打。
+    """
+    title = req.title.strip()
+    lines = editor_formats.split_live_title(title)
+    has_asis = any(ref.purpose == "asis" for ref in req.reference_images)
+    need_visual = not has_asis and not req.background_image_base64
+    if lines and not need_visual:
+        return lines, "", [], []
+
+    data = derive_yt_cover_plan(title, lines)
+    if not lines:
+        line1 = str(data.get("line1") or "").strip()
+        line2 = str(data.get("line2") or "").strip()
+        if editor_formats.title_split_is_faithful(title, line1, line2):
+            lines = editor_formats.realign_split_to_title(title, line1)
+        else:
+            if data:
+                print(f"[yt-cover] AI 分段改了字，不採用：{line1!r} / {line2!r}", flush=True)
+            lines = editor_formats.fallback_split_title(title)
+    if not need_visual:
+        return lines, "", [], []
+
+    visual = str(data.get("visual") or "").strip() or title
+    subjects = clean_portrait_subjects(data.get("portrait_subjects"))
+    english = align_english_names(
+        subjects,
+        [str(x) for x in (data.get("portrait_subjects_en") or [])],
+        [str(x) for x in (data.get("portrait_subjects") or [])],
+    )
+    return lines, visual, subjects, english
+
+
+def _yt_cover_background(
+    req: "YtCoverRequest", visual: str, subjects: list[str], english: list[str]
+) -> tuple[bytes, str, bool, str]:
+    """取得無文字底圖，回 (bytes, mime, 是否 AI 生的, 模型名)。"""
+    if req.background_image_base64:
+        return (
+            base64.b64decode(req.background_image_base64),
+            req.background_mime_type or "image/png",
+            req.background_is_ai,
+            "yt-cover:recomposite",
+        )
+    asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
+    if asis:
+        _, _, encoded = _split_data_url(asis[0].data_url)
+        if not encoded:
+            raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
+        return compose.crop_background_16x9(base64.b64decode(encoded)), "image/png", False, "yt-cover:asis"
+
+    image_req = ImageGenerateRequest(
+        prompt=editor_formats.YT_COVER_VISUAL_PROMPT_TEMPLATE.format(visual=visual.strip()),
+        provider=req.provider,
+        aspect_ratio="16:9",
+        image_size=req.image_size,
+        safe_frame=False,
+        reference_images=[ref for ref in req.reference_images if ref.purpose != "asis"],
+        portrait_subjects=subjects,
+        portrait_subjects_en=english,
+    )
+    # 順序：肖像規則 → 附圖用途規則 → 最後壓上「無文字」override（前兩段都提到
+    # 示意圖標籤要保持可見，不壓掉模型會自己畫一個「示意圖」字樣）。
+    image_req = apply_portrait_to_image_request(image_req)
+    image_req = apply_user_references_to_image_request(image_req)
+    image_req = image_req.model_copy(
+        update={"prompt": f"{image_req.prompt.rstrip()}\n\n{editor_formats.YT_COVER_TEXT_FREE_OVERRIDE}"}
+    )
+    result = generate_image_raw(image_req)
+    return base64.b64decode(result.image_data_base64), result.mime_type, True, result.model
+
+
+@app.post(
+    "/api/editor/yt-cover",
+    response_model=YtCoverResponse,
+    dependencies=[Depends(verify_internal_api_key)],
+)
+def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
+    subtitle = req.subtitle.strip()
+    if subtitle not in editor_formats.YT_COVER_SUBTITLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"未知的副標：{subtitle}（可用：{[s or '（無）' for s in editor_formats.YT_COVER_SUBTITLES]}）",
+        )
+    date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
+
+    lines, visual, subjects, english = resolve_yt_cover_plan(req)
+    background, bg_mime, is_ai, image_model = _yt_cover_background(req, visual, subjects, english)
+    try:
+        cover = compose.compose_yt_cover(
+            background,
+            line1=lines[0],
+            line2=lines[1],
+            date_text=date_text,
+            subtitle=subtitle,
+            ai_note=is_ai,
+        )
+    except compose.ComposeError as exc:
+        print(f"[compose] YT 直播封面失敗：{exc}", flush=True)
+        raise HTTPException(status_code=500, detail=f"封面生成失敗：{exc}") from exc
+
+    request_log.log_generation(
+        request_id=request_log.new_request_id(),
+        source="editor-yt-cover",
+        news_text=req.title,
+        variable=f"{lines[0]}\n{lines[1]}\n{subtitle}".rstrip(),
+        prompt=visual or "（附圖／既有底圖）",
+        role="編輯",
+        provider=req.provider,
+        image_model=image_model,
+    )
+    return YtCoverResponse(
+        image_data_base64=base64.b64encode(cover).decode("ascii"),
+        mime_type="image/png",
+        model=image_model,
+        source_image_base64=base64.b64encode(background).decode("ascii"),
+        source_mime_type=bg_mime,
+        line1=lines[0],
+        line2=lines[1],
+        visual=visual,
+        background_is_ai=is_ai,
     )
 
 
