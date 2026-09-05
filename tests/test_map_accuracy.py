@@ -264,5 +264,48 @@ class HeadlineHasNoChartTypeTests(unittest.TestCase):
         self.assertIn("headline", rules.lower())
 
 
+class PairingFactsWithPlacesTests(unittest.TestCase):
+    """原文沒有把事實配給某個地點時，消化端也不准自己配。
+
+    2026-09-05 第四輪實測（SOT2）。圖面端的規則已擋住生圖模型自行分派，
+    但消化端這次自己在 variable 裡配好了：
+        [內文小標]三民區建工路 積水影響通行
+        [內文小標]左營區博愛二路 多輛機車熄火
+        [內文小標]鳳山區中山西路 水利局搶救排水
+    原文只說三處先後積水、最深 40 公分、多輛機車熄火、水利局出動抽水機，
+    沒說哪一處機車熄火、哪一處在排水。生圖照著畫，畫面上就成了報導事實。
+    圖面端擋得住模型自己亂配，擋不住消化端已經配好的。
+    """
+
+    def test_the_digest_may_not_pair_a_fact_with_a_place(self):
+        rules = main.CONTENT_FIDELITY_RULES
+        self.assertIn("PAIRING A FACT WITH A PLACE IS ITSELF A CLAIM", rules)
+        self.assertIn("多輛機車熄火", rules)
+
+    def test_the_rule_reaches_every_chart_type(self):
+        for type_label in (*NON_MAP_TYPES, MAP_TYPE_LABEL, AUTO_TYPE_LABEL):
+            with self.subTest(type_label=type_label):
+                self.assertIn("PAIRING A FACT WITH A PLACE", digest(type_label))
+
+
+class CalloutBelongsToItsPinTests(unittest.TestCase):
+    """callout 要接到同一個地名的那支 pin，而且 pin 旁一定要有地名。
+
+    2026-09-05 第四輪實測：國道車禍圖三支 pin 都壓在正確橘點上，但 pin 本身
+    沒有地名標籤，leader line 又接錯——中壢交流道那支接到「楊梅北向68公里」，
+    楊梅那支接到「中壢南向62公里」。觀眾只看得到 callout，等於兩起事故互換。
+    位置畫對了，意思還是錯的。
+    """
+
+    def test_every_pin_must_carry_its_place_name(self):
+        rules = news_prompt.MAP_ACCURACY_IMAGE_RULES
+        self.assertIn("EVERY MARKER CARRIES ITS OWN PLACE NAME", rules)
+
+    def test_the_leader_line_must_match_the_place_name(self):
+        rules = news_prompt.MAP_ACCURACY_IMAGE_RULES
+        self.assertIn("leader line", rules)
+        self.assertIn("NAMES THE SAME PLACE", rules)
+
+
 if __name__ == "__main__":
     unittest.main()
