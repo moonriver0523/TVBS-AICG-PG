@@ -141,6 +141,44 @@ class ChannelLeakTests(unittest.TestCase):
         self.assertEqual(digest_quality_problem(ok, "stop"), "")
 
 
+class SimplifiedCharacterTests(unittest.TestCase):
+    """簡體與異體字不准進成品。
+
+    2026-09-05 第十輪實測：variable 出現「貨櫃車起火脱困」，用的是「脱」
+    （U+8131）不是臺灣標準的「脫」（U+812B），成品照樣印出來。消化端
+    只有一句「台灣繁體中文」夾在字數規定裡，擋不住這種單字級的異體形。
+    這是程式判得出來的事——今天已經證明加 prompt 規則會推高思考量、
+    程式檢查不會，所以擋在品質閘而不是再寫一條規則。
+    """
+
+    def test_the_observed_variant_form_is_rejected(self):
+        bad = with_field("variable", GOOD["variable"] + "\n[內文小標]駕駛脱困")
+        self.assertIn("variable", digest_quality_problem(bad, "stop"))
+
+    def test_common_simplified_characters_are_rejected(self):
+        for ch, word in (("这", "这裡"), ("说", "说明"), ("车", "车禍"), ("电", "电力")):
+            with self.subTest(ch=ch):
+                bad = with_field("variable", GOOD["variable"] + "\n[內文小標]" + word)
+                self.assertIn("variable", digest_quality_problem(bad, "stop"))
+
+    def test_the_message_names_the_offending_character(self):
+        bad = with_field("variable", GOOD["variable"] + "\n[內文小標]駕駛脱困")
+        self.assertIn("脱", digest_quality_problem(bad, "stop"))
+
+    def test_normal_traditional_text_still_passes(self):
+        ok = with_field(
+            "variable",
+            "[標題]貨櫃車起火 駕駛脫困\n[內文小標]臺鐵誤點 台積電停工\n<蓋章>電力調度吃緊",
+        )
+        self.assertEqual(digest_quality_problem(ok, "stop"), "")
+
+    def test_structure_and_style_are_not_checked(self):
+        # style/structure 是寫給生圖模型的英文指令，不是畫面文字，不適用
+        ok = dict(GOOD)
+        ok["structure"] = GOOD["structure"] + " Place the 车 icon top-left."
+        self.assertEqual(digest_quality_problem(ok, "stop"), "")
+
+
 class RawExcerptTests(unittest.TestCase):
     """解析失敗時記到日誌的摘要要看得到尾巴。
 

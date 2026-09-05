@@ -1057,6 +1057,21 @@ DIGEST_MAX_LATIN_RATIO = 0.55
 # DIGEST_MAX_STRAY_CHARS），其餘是 CJK 與 ASCII。於是它通過健檢、原樣寫進最終
 # prompt 被畫上成品。真正的指紋是標記本身，字元統計看不到。
 # 「assistant」單獨出現是正常英文字（AI assistant），只有帶 to= 的路由形式才算。
+# 簡體與異體字。2026-09-05 實測撞到「貨櫃車起火脱困」——「脱」（U+8131）不是
+# 臺灣標準的「脫」（U+812B），單字級的異體形，消化端那句「台灣繁體中文」擋不住，
+# 成品照樣印出來。這是程式判得出來的事，而同日已經證明「再加一條 prompt 規則」
+# 會推高思考 token、程式檢查不會，所以擋在品質閘而不是寫進 prompt。
+#
+# 這份清單刻意**不追求完整**：完整的簡繁對照要靠 OpenCC 那類詞庫，為了一個
+# 字元級健檢引進相依套件不划算。收錄範圍是「臺灣新聞文字裡出現就一定是錯」的
+# 高頻簡體字，加上實測撞過的異體形。漏網的下次撞到再補——擋掉多數勝過都不擋。
+# 「台」刻意不收：台灣／電視台／台積電都是正當用法，收進來只會製造假警報。
+DIGEST_NON_TW_CHARS = frozenset(
+    "脱说这个们时会对关电车长门问见现义应学实发医华国图书报广东头马鸟龙汉"
+    "丽临举乐习乡买乱争产亲从价众优伟传伤纪级红约细纸练组经给统绝继续维绿"
+    "网罗职联胜脑致舰艰苏药处备复够夺奋妇孙宁宝宪审层岁岛峡师带帮庆废弃张"
+    "强归录彻恋总恶闷闻阅阳阴际陆随难题风"
+)
 DIGEST_CHANNEL_LEAK = re.compile(
     r"assistant\s+to\s*=|to=(?:assistant|system|final)\b|numerusform",
     re.IGNORECASE,
@@ -1160,7 +1175,12 @@ def digest_quality_problem(data: dict, finish_reason: str) -> str:
             return f"{field} 含 {len(stray)} 個異常字元：{ascii(stray[:40])}"
         if leak := DIGEST_CHANNEL_LEAK.search(value):
             return f"{field} 含角色／頻道標記「{leak.group(0)}」，模型頻道洩漏"
-
+        # 只檢查 variable：style／structure 是寫給生圖模型的英文指令，不是畫面
+        # 文字，偶爾夾一個中文字不影響觀眾看到的東西，擋它只會製造無謂重試。
+        if field == "variable":
+            bad = sorted({ch for ch in value if ch in DIGEST_NON_TW_CHARS})
+            if bad:
+                return f"{field} 含簡體／異體字「{''.join(bad)}」，非臺灣標準字形"
     variable = data.get("variable") or ""
     latin = sum(1 for ch in variable if "a" <= ch.lower() <= "z")
     if variable and latin / len(variable) > DIGEST_MAX_LATIN_RATIO:
