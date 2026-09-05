@@ -450,5 +450,41 @@ class HeadlineKeepsTheHedgeTests(unittest.TestCase):
         self.assertIn("標題", rules)
 
 
+class StatedQuantityTests(unittest.TestCase):
+    """寫了數字的可數物件，畫面上的數量要對；數字大到畫不準就別畫實體。
+
+    2026-09-05 第九輪量測（SOT2，5 則帶明確數量的稿，逐項清點）：
+      variable 的數字 5/5 與原文一致——這一類純粹是生圖端的病。
+      4 車追撞畫 4 輛、3 名船員畫 3 人、4 家業者畫 4 條長條，全對；
+      12 箱走私菸畫成 20 箱以上、10 部機組畫成 11 部，全錯。
+    分界在「一眼數得出來」：約四個以內準，五個以上的群集就開始亂堆。
+    所以規則不是再喊一次「數量要對」，而是換一個做得到的標準——
+    大數量本來就該用「數字＋單一圖示」，那也是電視新聞 CG 的慣例。
+    """
+
+    def test_the_rule_sets_a_threshold_rather_than_just_demanding_accuracy(self):
+        rules = news_prompt.REAL_WORLD_RENDERING_RULES
+        self.assertIn("A STATED QUANTITY IS A NUMBER, NOT A HEADCOUNT TO DRAW", rules)
+        self.assertIn("12", rules)
+
+    def test_small_counts_must_still_match_exactly(self):
+        rules = news_prompt.REAL_WORLD_RENDERING_RULES
+        self.assertIn("must equal the stated figure exactly", rules)
+        self.assertIn("background and secondary items included", rules)
+
+
+class HedgeIsNotAddedEitherTests(unittest.TestCase):
+    """保留語不能拿掉，也不能無中生有加上去。
+
+    2026-09-05 第九輪：原文沒有「疑」，消化卻寫成「遊覽車疑煞車不及」，
+    方向與第八輪那次相反。加一個「疑」等於把已確認的事說成待查，
+    對當事人的影響不比拿掉「疑」小。
+    """
+
+    def test_the_rule_covers_both_directions(self):
+        self.assertIn("nor add a hedge the source did not use",
+                      main.CONTENT_FIDELITY_RULES)
+
+
 if __name__ == "__main__":
     unittest.main()
