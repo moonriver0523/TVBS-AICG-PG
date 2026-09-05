@@ -389,7 +389,8 @@
                         <p class="text-[9px] text-slate-600 leading-relaxed">畫面描述<span class="text-amber-500/90">選填</span>：留空時由 AI 讀標題自動補，生成後會填回欄位讓你微調重生。Logo 一律由程式貼正版檔。</p>
                     </div>
 
-                    <!-- YT 直播封面：一句標題（半形空格分段）＋副標＋日期；附圖走上面共用的上傳區 -->
+                    <!-- YT 直播封面（國內外新聞／整點兩版型共用）：一句標題（半形空格分段）＋副標或整點時間＋日期；
+                         附圖用共用上傳區，applyEditorFormatInputs 會把它搬到這組欄位下面 -->
                     <div id="ytCoverInputs" class="hidden mt-3 mb-2 flex flex-col gap-2">
                         <div>
                             <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">直播標題（半形空格分兩段）</label>
@@ -403,6 +404,10 @@
                                 <option value="原音重現">原音重現</option>
                                 <option value="AI即時翻譯">AI即時翻譯</option>
                             </select>
+                            <input id="ytCoverTime" type="text" maxlength="10"
+                                   class="hidden w-[88px] bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-100 input-focus-ring"
+                                   title="整點時間，選填；有填才出現在 LIVE 章下方"
+                                   placeholder="20:00" />
                             <input id="ytCoverDate" type="text" maxlength="20"
                                    class="flex-1 bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-100 input-focus-ring"
                                    placeholder="2026/09/05" />

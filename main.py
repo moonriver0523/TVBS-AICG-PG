@@ -3219,8 +3219,12 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
 
 class YtCoverRequest(BaseModel):
     title: str = Field(min_length=1, max_length=60)
+    # news＝國內外新聞直播；hourly＝整點直播（見 editor_formats.YT_COVER_LAYOUTS）
+    layout: Literal["news", "hourly"] = "news"
     subtitle: str = Field(default="", max_length=20)
     date_text: str = Field(default="", max_length=20)
+    # 整點直播專用：整點時間（如 20:00），選填，有填才掛在 LIVE 章下
+    time_text: str = Field(default="", max_length=10)
     provider: Literal["gemini", "gpt"] = "gpt"
     image_size: str = "1K"
     # 與主流程共用同一組附圖欄位與用途：asis＝直接當底圖（不生圖）；
@@ -3365,7 +3369,9 @@ def _yt_cover_background(
     dependencies=[Depends(verify_internal_api_key)],
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
-    subtitle = req.subtitle.strip()
+    hourly = req.layout == editor_formats.YT_COVER_LAYOUT_HOURLY
+    # 整點直播沒有副標（2026-09-06 使用者裁決），前端切版型時藏起下拉；後端直接忽略
+    subtitle = "" if hourly else req.subtitle.strip()
     if subtitle not in editor_formats.YT_COVER_SUBTITLES:
         raise HTTPException(
             status_code=400,
@@ -3376,23 +3382,33 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     lines, visual, subjects, english = resolve_yt_cover_plan(req)
     background, bg_mime, is_ai, image_model = _yt_cover_background(req, visual, subjects, english)
     try:
-        cover = compose.compose_yt_cover(
-            background,
-            line1=lines[0],
-            line2=lines[1],
-            date_text=date_text,
-            subtitle=subtitle,
-            ai_note=is_ai,
-        )
+        if hourly:
+            cover = compose.compose_yt_hourly_cover(
+                background,
+                line1=lines[0],
+                line2=lines[1],
+                date_text=date_text,
+                time_text=req.time_text.strip(),
+                ai_note=is_ai,
+            )
+        else:
+            cover = compose.compose_yt_cover(
+                background,
+                line1=lines[0],
+                line2=lines[1],
+                date_text=date_text,
+                subtitle=subtitle,
+                ai_note=is_ai,
+            )
     except compose.ComposeError as exc:
         print(f"[compose] YT 直播封面失敗：{exc}", flush=True)
         raise HTTPException(status_code=500, detail=f"封面生成失敗：{exc}") from exc
 
     request_log.log_generation(
         request_id=request_log.new_request_id(),
-        source="editor-yt-cover",
+        source=f"editor-yt-cover-{req.layout}",
         news_text=req.title,
-        variable=f"{lines[0]}\n{lines[1]}\n{subtitle}".rstrip(),
+        variable=f"{lines[0]}\n{lines[1]}\n{subtitle or req.time_text.strip()}".rstrip(),
         prompt=visual or "（附圖／既有底圖）",
         role="編輯",
         provider=req.provider,

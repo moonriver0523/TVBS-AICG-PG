@@ -424,9 +424,21 @@ const EDITOR_FORMATS = {
     // YT 直播封面：底圖來自附圖（原圖放置）或 AI，LIVE 章／日期／Logo／兩行標題全由程式疊。
     // 沿用主流程的附圖上傳區（用途：原圖放置＝直接當底圖；其他＝生圖參考）。
     yt_live_cover: {
-        label: 'YT直播封面',
+        label: 'YT國內外新聞直播',
         hint: '標題用半形空格分兩段（分不出來時由 AI 判斷）。有「原圖放置」附圖就直接當底圖，否則 AI 生底圖並標示 AI示意圖。文字與 Logo 全由程式疊，零錯字。',
         inputs: 'yt_cover',
+        ytLayout: 'news',
+        locks: {},
+        hides: { digestControls: true, safeFrame: true, stamp: true },
+        hole: null,
+    },
+    // YT 整點直播：同一條底圖流程，版面換成整點版（Logo 左上、LIVE 章右上＋選填整點時間、
+    // 紅底日期、沒有副標）。
+    yt_hourly_cover: {
+        label: 'YT整點直播',
+        hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。附圖與底圖規則同國內外新聞直播。',
+        inputs: 'yt_cover',
+        ytLayout: 'hourly',
         locks: {},
         hides: { digestControls: true, safeFrame: true, stamp: true },
         hole: null,
@@ -778,8 +790,19 @@ function applyEditorFormatInputs() {
     if (news) news.classList.toggle('hidden', wantsCover || wantsYt);
     if (cover) cover.classList.toggle('hidden', !wantsCover);
     if (yt) yt.classList.toggle('hidden', !wantsYt);
-    // 附圖上傳區：主流程與 YT 直播封面都用；十點不一樣的端點不收附圖，收起來
-    if (refBox) refBox.classList.toggle('hidden', wantsCover);
+    // 附圖上傳區：主流程與 YT 直播封面都用；十點不一樣的端點不收附圖，收起來。
+    // YT 版型時把它搬到 YT 欄位下面——留在原位會跑到角色鈕正下方，看起來像消失了。
+    if (refBox) {
+        refBox.classList.toggle('hidden', wantsCover);
+        const host = wantsYt ? yt : news;
+        if (host && refBox.previousElementSibling !== host) host.insertAdjacentElement('afterend', refBox);
+    }
+    // 整點直播：沒有副標、多一格整點時間
+    const hourly = wantsYt && editorFormat().ytLayout === 'hourly';
+    const subtitleSel = document.getElementById('ytCoverSubtitle');
+    const timeField = document.getElementById('ytCoverTime');
+    if (subtitleSel) subtitleSel.classList.toggle('hidden', hourly);
+    if (timeField) timeField.classList.toggle('hidden', !hourly);
     // 封面模式完全沒有消化這一段，版面形式用不到，整組收起來
     if (digestRow) digestRow.classList.toggle('hidden', wantsCover || wantsYt);
     for (const id of ['coverDate', 'ytCoverDate']) {
@@ -846,7 +869,7 @@ function updateAIBtnRoleHint() {
         return;
     }
     if (editorFormat().inputs === 'yt_cover') {
-        buttonText.innerText = '生成 YT 直播封面';
+        buttonText.innerText = `生成 ${editorFormat().label}`;
         return;
     }
     const densityLabel = DENSITY_LABELS[state.digestDensity] || state.digestDensity;
@@ -1571,10 +1594,13 @@ const YT_COVER_BACKEND_URL = `${API_BASE}/api/editor/yt-cover`;
 
 function ytCoverFields() {
     const val = id => (document.getElementById(id)?.value || '').trim();
+    const layout = editorFormat().ytLayout || 'news';
     return {
         title: val('ytCoverTitle'),
-        subtitle: val('ytCoverSubtitle'),
+        layout,
+        subtitle: layout === 'hourly' ? '' : val('ytCoverSubtitle'),
         date_text: val('ytCoverDate'),
+        time_text: layout === 'hourly' ? val('ytCoverTime') : '',
     };
 }
 
@@ -1603,7 +1629,7 @@ function showYtCoverResult(data, fields) {
     document.getElementById('oneClickImage').src = imageUrl;
     const download = document.getElementById('oneClickDownload');
     download.href = imageUrl;
-    download.download = 'tvbs-yt-live-cover.png';
+    download.download = fields.layout === 'hourly' ? 'tvbs-yt-hourly-cover.png' : 'tvbs-yt-live-cover.png';
     download.innerText = '下載 PNG';
     state.ytCoverBackgroundIsAi = !!data.background_is_ai;
     // 追加修改：以無文字底圖為源，改完由 handleRefine 再疊一次文字
@@ -1612,7 +1638,7 @@ function showYtCoverResult(data, fields) {
     if (recompose) recompose.disabled = false;
     document.getElementById('oneClickLabel').innerText = editorFormat().label;
     document.getElementById('oneClickMeta').innerText =
-        `${data.line1}｜${data.line2}${fields.subtitle ? '｜' + fields.subtitle : ''}`;
+        `${data.line1}｜${data.line2}${fields.subtitle ? '｜' + fields.subtitle : ''}${fields.time_text ? '｜' + fields.time_text : ''}`;
     document.getElementById('oneClickEmpty').classList.add('hidden');
     document.getElementById('oneClickResult').classList.remove('hidden');
 }

@@ -112,6 +112,37 @@ class ComposeTests(unittest.TestCase):
             self.assertEqual(image.size, compose.YT_CANVAS)
 
 
+class HourlyComposeTests(unittest.TestCase):
+    def test_output_is_full_hd_png(self):
+        cover = compose.compose_yt_hourly_cover(
+            _png_bytes(), line1="遭撞趴引擎蓋一路載走200公尺", line2="護理師滿身傷稱被尋仇自導自演",
+            date_text="2026/09/01", time_text="20:00", ai_note=True,
+        )
+        with Image.open(io.BytesIO(cover)) as image:
+            self.assertEqual(image.size, compose.YT_CANVAS)
+            self.assertEqual(image.format, "PNG")
+
+    def test_time_band_only_when_given(self):
+        # 時間帶掛在右上 LIVE 章正下方；沒填時間那塊只有底圖
+        def region(time_text):
+            cover = compose.compose_yt_hourly_cover(
+                _png_bytes(colour=(200, 200, 200)), line1="一", line2="二",
+                date_text="2026/09/01", time_text=time_text,
+            )
+            with Image.open(io.BytesIO(cover)) as image:
+                w, h = compose.YT_CANVAS
+                y0 = round(h * compose.YT_HOURLY_BADGE_TOP_RATIO) + 130
+                return image.crop((w - 400, y0, w - 40, y0 + 80)).tobytes()
+
+        self.assertNotEqual(region("20:00"), region(""))
+
+    def test_rejects_missing_line_or_date(self):
+        with self.assertRaises(compose.ComposeError):
+            compose.compose_yt_hourly_cover(_png_bytes(), line1="只有一行", line2="", date_text="2026/09/01")
+        with self.assertRaises(compose.ComposeError):
+            compose.compose_yt_hourly_cover(_png_bytes(), line1="一", line2="二", date_text="")
+
+
 class PlanTests(unittest.TestCase):
     def req(self, title, refs=(), background=""):
         return main.YtCoverRequest(
@@ -235,6 +266,27 @@ class EndpointTests(unittest.TestCase):
         with Image.open(io.BytesIO(base64.b64decode(data["image_data_base64"]))) as image:
             self.assertEqual(image.size, compose.YT_CANVAS)
 
+    def test_hourly_layout_ignores_subtitle_and_takes_time(self):
+        payload = {
+            "title": "遭撞趴引擎蓋一路載走200公尺 護理師滿身傷稱被尋仇自導自演",
+            "layout": "hourly",
+            "subtitle": "隨便寫",          # 整點版沒有副標，後端直接忽略而不是 400
+            "time_text": "20:00",
+            "reference_images": [{"data_url": _data_url(_png_bytes((1200, 700))), "purpose": "asis"}],
+        }
+        with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")), \
+             patch.object(main, "derive_yt_cover_plan", side_effect=AssertionError("不該打文字模型")), \
+             patch.object(compose, "compose_yt_hourly_cover", wraps=compose.compose_yt_hourly_cover) as hourly, \
+             patch.object(compose, "compose_yt_cover", side_effect=AssertionError("整點版不該走新聞版合成")):
+            res = client.post("/api/editor/yt-cover", json=payload, headers=HEADERS)
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(hourly.call_args.kwargs["time_text"], "20:00")
+        self.assertEqual(res.json()["line1"], "遭撞趴引擎蓋一路載走200公尺")
+
+    def test_unknown_layout_is_rejected(self):
+        res = client.post("/api/editor/yt-cover", json={"title": "前段 後段", "layout": "weekly"}, headers=HEADERS)
+        self.assertEqual(res.status_code, 422)
+
     def test_unknown_subtitle_is_rejected(self):
         res = client.post(
             "/api/editor/yt-cover",
@@ -274,6 +326,19 @@ class FrontendParityTests(unittest.TestCase):
         for field in ("digestControls", "safeFrame", "stamp"):
             self.assertIn(field, re.search(r"hides:\s*\{([^}]*)\}", entry).group(1))
         self.assertIn("text_free: isYtCover", js, "追加修改必須走無文字 refine")
+
+    def test_hourly_format_registered_on_both_sides(self):
+        self.assertEqual(editor_formats.get("yt_hourly_cover")["yt_layout"], editor_formats.YT_COVER_LAYOUT_HOURLY)
+        self.assertEqual(editor_formats.get("yt_live_cover")["yt_layout"], editor_formats.YT_COVER_LAYOUT_NEWS)
+        with open(self.APP_JS, encoding="utf-8") as fh:
+            js = fh.read()
+        for key, layout in (("yt_hourly_cover", "hourly"), ("yt_live_cover", "news")):
+            entry = re.search(key + r":\s*\{(.*?)\n\s{4}\},", js, re.S).group(1)
+            self.assertIn("inputs: 'yt_cover'", entry)
+            self.assertIn(f"ytLayout: '{layout}'", entry)
+        with open(self.INDEX, encoding="utf-8") as fh:
+            html = fh.read()
+        self.assertIn('id="ytCoverTime"', html)
 
     def test_subtitle_options_match_backend(self):
         with open(self.INDEX, encoding="utf-8") as fh:

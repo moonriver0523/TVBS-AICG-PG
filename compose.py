@@ -528,6 +528,123 @@ def compose_yt_cover(
     return buffer.getvalue()
 
 
+# ---- YT 整點直播（2026-09-06，範例：整點直播 YT 截圖 20:00）----
+# 跟國內外新聞直播同一套底圖流程，只有版面不同：Logo 在左上（小）、LIVE 章在右上、
+# 章下可掛整點時間（選填）、日期是紅底白字貼在第一行標題正上方、沒有副標。
+# 比例量自截圖去掉 YT 介面後的縮圖區（約 415×220）。
+YT_HOURLY_LOGO_WIDTH_RATIO = 0.118      # Logo 寬（48/415）
+YT_HOURLY_LOGO_TOP_RATIO = 0.064
+YT_HOURLY_BADGE_WIDTH_RATIO = 0.25      # LIVE 章寬（104/415）
+YT_HOURLY_BADGE_TOP_RATIO = 0.024
+YT_HOURLY_TIME_BAND_HEIGHT_RATIO = 0.095  # 章下時間帶高（21/220）
+YT_HOURLY_TIME_BAND_FILL = (168, 12, 22)
+YT_HOURLY_DATE_TAB_WIDTH_RATIO = 0.30   # 日期紅條寬（125/415）
+YT_HOURLY_DATE_TAB_HEIGHT_RATIO = 0.095
+YT_HOURLY_DATE_TOP_RATIO = 0.52         # 日期紅條上緣（114/220）
+YT_HOURLY_DATE_FILL = (214, 22, 32)
+YT_HOURLY_DATE_TEXT = (255, 255, 255)
+YT_HOURLY_LINE1_BASELINE_RATIO = 0.80
+YT_HOURLY_LINE2_BASELINE_RATIO = 0.965
+YT_HOURLY_TITLE_SIZE_RATIO = 0.15       # 字高 32/220
+YT_HOURLY_AI_NOTE_TOP_RATIO = 0.34      # LIVE 章（含時間帶）之下的右側空位
+
+
+def compose_yt_hourly_cover(
+    background: bytes,
+    *,
+    line1: str,
+    line2: str,
+    date_text: str,
+    time_text: str = "",
+    ai_note: bool = False,
+) -> bytes:
+    """合成 YT 整點直播封面。time_text（如 20:00）選填，有填才在 LIVE 章下掛時間帶。"""
+    line1, line2 = (line1 or "").strip(), (line2 or "").strip()
+    if not line1 or not line2:
+        raise ComposeError("YT 整點直播封面需要兩行標題，缺一不可")
+    if not date_text.strip():
+        raise ComposeError("YT 整點直播封面需要日期")
+    time_text = (time_text or "").strip()
+
+    canvas = _cover_panel(background, YT_CANVAS).convert("RGBA")
+    width, height = YT_CANVAS
+    margin = round(width * YT_MARGIN_RATIO)
+
+    # ---- 左上：小 Logo ----
+    _paste_logo(
+        canvas, (margin, round(height * YT_HOURLY_LOGO_TOP_RATIO)), round(width * YT_HOURLY_LOGO_WIDTH_RATIO)
+    )
+
+    # ---- 右上：LIVE 章（＋整點時間帶）----
+    badge_w = round(width * YT_HOURLY_BADGE_WIDTH_RATIO)
+    badge_x0 = width - margin - badge_w
+    badge_top = round(height * YT_HOURLY_BADGE_TOP_RATIO)
+    badge_h = _paste_live_badge(canvas, (badge_x0, badge_top), badge_w)
+    block_bottom = badge_top + badge_h
+    if time_text:
+        band_h = round(height * YT_HOURLY_TIME_BAND_HEIGHT_RATIO)
+        band_y0 = block_bottom - 6          # 塞進章底一點，像同一個物件
+        inset = round(badge_w * 0.04)       # 章本身有圓角留白，時間帶略窄才對得齊
+        band = (badge_x0 + inset, band_y0, badge_x0 + badge_w - inset, band_y0 + band_h)
+        layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        ImageDraw.Draw(layer).rounded_rectangle(band, radius=12, fill=YT_HOURLY_TIME_BAND_FILL)
+        canvas.alpha_composite(layer)
+        draw = ImageDraw.Draw(canvas)
+        time_font = _fit_font(time_text, band[2] - band[0] - 24, round(band_h * 0.8), round(band_h * 0.4))
+        _draw_text(
+            draw, ((band[0] + band[2]) // 2, (band[1] + band[3]) // 2 + 2),
+            time_text, time_font, fill=(255, 255, 255), stroke_width=0, anchor="mm",
+        )
+        block_bottom = band[3]
+
+    # ---- 右側：AI 示意圖小標（只有 AI 底圖才有）----
+    draw = ImageDraw.Draw(canvas)
+    if ai_note:
+        note_font = _font(round(height * YT_AI_NOTE_SIZE_RATIO))
+        note_w = note_font.getbbox(YT_AI_NOTE)[2]
+        note_h = round(height * YT_AI_NOTE_SIZE_RATIO * 1.5)
+        x1 = width - margin - 12
+        y0 = max(round(height * YT_HOURLY_AI_NOTE_TOP_RATIO), block_bottom + 16)
+        plate = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        ImageDraw.Draw(plate).rounded_rectangle(
+            (x1 - note_w - 24, y0, x1, y0 + note_h), radius=8, fill=YT_AI_NOTE_PLATE
+        )
+        canvas.alpha_composite(plate)
+        draw = ImageDraw.Draw(canvas)
+        _draw_text(draw, (x1 - 12, y0 + note_h // 2), YT_AI_NOTE, note_font, stroke_width=0, anchor="rm")
+
+    # ---- 左中：紅底白字日期，貼在第一行標題正上方 ----
+    tab_w = round(width * YT_HOURLY_DATE_TAB_WIDTH_RATIO)
+    tab_h = round(height * YT_HOURLY_DATE_TAB_HEIGHT_RATIO)
+    tab_y0 = round(height * YT_HOURLY_DATE_TOP_RATIO)
+    tab_box = (margin, tab_y0, margin + tab_w, tab_y0 + tab_h)
+    draw.rounded_rectangle(tab_box, radius=10, fill=YT_HOURLY_DATE_FILL)
+    date_font = _fit_font(date_text, tab_w - 28, round(tab_h * 0.78), round(tab_h * 0.4))
+    _draw_text(
+        draw, ((tab_box[0] + tab_box[2]) // 2, (tab_box[1] + tab_box[3]) // 2 + 2),
+        date_text, date_font, fill=YT_HOURLY_DATE_TEXT, stroke_width=0, anchor="mm",
+    )
+
+    # ---- 底部：兩行標題（白／黃、黑描邊），靠左貼邊 ----
+    max_w = width - margin * 2
+    start = round(height * YT_HOURLY_TITLE_SIZE_RATIO)
+    smallest = round(height * YT_TITLE_MIN_SIZE_RATIO)
+    for text, fill, baseline_ratio in (
+        (line1, YT_LINE1_FILL, YT_HOURLY_LINE1_BASELINE_RATIO),
+        (line2, YT_LINE2_FILL, YT_HOURLY_LINE2_BASELINE_RATIO),
+    ):
+        font = _fit_font(text, max_w, start, smallest)
+        stroke = max(4, round(font.size * YT_TITLE_STROKE_RATIO))
+        _draw_text(
+            draw, (margin, round(height * baseline_ratio)), text, font,
+            fill=fill, stroke=YT_TITLE_STROKE, stroke_width=stroke, anchor="ls",
+        )
+
+    buffer = io.BytesIO()
+    canvas.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def crop_background_16x9(image_bytes: bytes) -> bytes:
     """把使用者附的原圖（任意比例）裁成 16:9 的無文字底圖，回 PNG。
 

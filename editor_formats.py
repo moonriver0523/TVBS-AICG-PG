@@ -171,6 +171,12 @@ COVER_VISUAL_SCHEMA = {
 
 YT_COVER_SUBTITLES = ("", "原音重現", "AI即時翻譯")
 
+# 兩種 YT 直播版面，同一條 /api/editor/yt-cover：news＝國內外新聞直播（LIVE 章左上、副標）；
+# hourly＝整點直播（Logo 左上、LIVE 章右上＋選填整點時間、紅底日期、無副標）
+YT_COVER_LAYOUT_NEWS = "news"
+YT_COVER_LAYOUT_HOURLY = "hourly"
+YT_COVER_LAYOUTS = (YT_COVER_LAYOUT_NEWS, YT_COVER_LAYOUT_HOURLY)
+
 # 標題分段：使用者用**恰好一個**半形空格分兩段就直接切；零個或兩個以上空格
 # 交給文字模型判斷（範例 C 肝那張第二行本身就含空格「11人確診 疾管署說明」，
 # 所以「遇到空格就切」不成立）。AI 的切法必須用原字元重組回原標題，否則不採用。
@@ -324,8 +330,17 @@ EDITOR_FORMATS = {
     },
     # YT 直播封面：底圖來自附圖或 AI，所有文字與 Logo／LIVE 章由 compose.compose_yt_cover 疊
     "yt_live_cover": {
-        "label": "YT直播封面",
+        "label": "YT國內外新聞直播",
         "pipeline": PIPELINE_YT_COVER,
+        "yt_layout": YT_COVER_LAYOUT_NEWS,
+        "digest_rules": "",
+        "hole_side": None,
+    },
+    # YT 整點直播：同一條底圖流程，版面換成 compose.compose_yt_hourly_cover（整點時間選填）
+    "yt_hourly_cover": {
+        "label": "YT整點直播",
+        "pipeline": PIPELINE_YT_COVER,
+        "yt_layout": YT_COVER_LAYOUT_HOURLY,
         "digest_rules": "",
         "hole_side": None,
     },
