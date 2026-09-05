@@ -179,6 +179,15 @@ class TokenBudgetTests(unittest.TestCase):
         self.assertLessEqual(MAP_DIGEST_MAX_TOKENS, 3000)
         self.assertGreaterEqual(MAP_DIGEST_MAX_TOKENS, 2600)
 
+    def test_default_budget_leaves_room_for_thinking_tokens(self):
+        """一般類的上限要容得下思考 token。
+
+        推理模型的思考算進同一個上限。2026-09-05 實測 claude-sonnet-5 走
+        「資料圖表」用掉 1325（407 是思考），舊值 1500 只剩 12% 餘裕。
+        """
+        self.assertGreaterEqual(DIGEST_MAX_TOKENS, 2000)
+        self.assertLess(DIGEST_MAX_TOKENS, MAP_DIGEST_MAX_TOKENS)
+
     def test_map_and_auto_types_get_the_larger_budget(self):
         # 自動判斷也要給，因為 AI 可能選地圖
         for type_label in (MAP_TYPE_LABEL, AUTO_TYPE_LABEL):
