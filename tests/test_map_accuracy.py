@@ -436,5 +436,19 @@ class ChartTypeNameNotInSubheadsTests(unittest.TestCase):
         self.assertIn("nor at the end of a 內文小標", main.CONTENT_FIDELITY_RULES)
 
 
+class HeadlineKeepsTheHedgeTests(unittest.TestCase):
+    """保留語規則不能只寫在蓋章那一塊，標題也要守。
+
+    2026-09-05 第八輪實測：蓋章寫成「疑因濃霧路滑 回堵最長12公里」，「疑」
+    有保留住；同一張圖的標題第二行卻是「濃霧路滑回堵12公里」，把「疑」拿掉，
+    等於斷語從蓋章搬到標題。標題是全圖字最大的一行，斷定肇因的成本比蓋章更高。
+    """
+
+    def test_the_fidelity_rule_names_the_headline(self):
+        rules = main.CONTENT_FIDELITY_RULES
+        self.assertIn("疑因濃霧路滑", rules)
+        self.assertIn("標題", rules)
+
+
 if __name__ == "__main__":
     unittest.main()
