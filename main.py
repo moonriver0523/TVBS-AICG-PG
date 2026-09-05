@@ -108,8 +108,16 @@ GEMINI_DIGEST_MIN_TOKENS = 6000
 # 的 variable（語法上仍是合法 JSON，因此舊版直接收下送去生圖）。分開給預算是治本。
 # 上限是天花板不是用量，只有真的寫出來的 token 才計費，因此寧可寬裕。
 # 3000 實測仍會截斷（同案例），拉到 6000 比照 GEMINI_DIGEST_MIN_TOKENS 的量級。
+#
+# 2026-09-05 修正上面這段判斷。那些「截斷」多半不是額度不夠，是模型脫軌
+# （見 docs/error-cases/2026-09-05-消化模型頻道洩漏-賭博垃圾與空白填充.md）：
+# 崩掉之後改吐純空白，而空白在 JSON 文法裡永遠合法，於是一路填到天花板才停。
+# 實測正常完成的輸出只用 469-2324 token，14 天日誌裡所有 finish=stop 的最大值
+# 是 1536。預算在這裡的真正作用是**脫軌的成本上限**：6000 讓每次脫軌燒掉約 60 秒，
+# 5 次重試剛好撞破 Cloud Run 的 300 秒上限、把使用者的等待變成 502。收到 3000
+# 之後同樣 5 次重試塞得進逾時，脫軌題材至少還有機會靠重試救回來。
 DIGEST_MAX_TOKENS = 1500
-MAP_DIGEST_MAX_TOKENS = 6000
+MAP_DIGEST_MAX_TOKENS = 3000
 
 # 「不消化」的輸出長度**由輸入長度決定**——模型要把整篇原文一字不差抄進 variable，
 # 再另外寫 style/structure。固定 1500 等於「原文超過某個長度就一定失敗」。
@@ -920,14 +928,40 @@ def log_digest_usage(site: str, model: str, budget: int, response) -> None:
             flag = " TRUNCATED"
         elif ratio >= DIGEST_USAGE_WARN_RATIO:
             flag = " NEAR-LIMIT"
+        # provider 是 OpenRouter 在回應裡多帶的欄位（原生／Gemini 端點沒有）。
+        # 2026-09-05 追這件事時最想知道卻查不到的就是它：同一個模型名可能被路由到
+        # 不同 provider，脫軌到底是模型本身還是某一家的部署，沒有這欄分不出來。
+        provider = (getattr(response, "model_extra", None) or {}).get("provider") or "-"
         print(
-            f"[digest_usage] site={site} model={model} budget={budget} "
-            f"completion_tokens={completion} ratio={ratio:.2f} "
+            f"[digest_usage] site={site} model={model} provider={provider} "
+            f"budget={budget} completion_tokens={completion} ratio={ratio:.2f} "
             f"finish={finish}{flag}",
             flush=True,
         )
     except Exception as exc:  # 監控壞掉不可以拖垮消化
         print(f"[digest_usage] 記錄失敗（不影響本次消化）：{exc}", flush=True)
+
+
+def digest_excerpt(raw: str, head: int = 600, tail: int = 300) -> str:
+    """把原始輸出壓成一行可 grep 的摘要，保留頭也保留尾。
+
+    2026-09-05 的病因全在尾巴：模型脫軌後吐純空白直到撞天花板，而舊版只記
+    `raw_content[:800]`，日誌看到的永遠是正常的開頭，只好在本機重跑才看得到。
+    整段照印又不行——實測一筆 12,391 字元有 84% 是空白，塞進日誌只是洗版。
+    折衷是頭尾都留，中間換成統計，並把連續空白摺成一個記號。
+    """
+    if len(raw) <= head + tail:
+        return re.sub(r"\s{4,}", " ⋯空白⋯ ", raw)
+    ws = sum(1 for ch in raw if ch.isspace())
+    middle = (
+        f"\n…（中間省略 {len(raw) - head - tail} 字；全長 {len(raw)} 字、"
+        f"{raw.count(chr(10)) + 1} 行、空白佔 {ws / len(raw):.0%}）…\n"
+    )
+    return (
+        re.sub(r"\s{4,}", " ⋯空白⋯ ", raw[:head])
+        + middle
+        + re.sub(r"\s{4,}", " ⋯空白⋯ ", raw[-tail:])
+    )
 
 
 def digest_completion(
@@ -998,6 +1032,18 @@ DIGEST_MAX_STRAY_CHARS = 3
 # 36~46%，卡在舊門檻 0.35 造成 5 次重試全滅、拖到 502。先放寬到 0.55 止血，
 # 真正的自言自語（實測撞過 100%）仍會被擋下。
 DIGEST_MAX_LATIN_RATIO = 0.55
+# 角色／頻道標記洩漏。2026-09-05 實測 openai/gpt-5.6-terra（OpenRouter，
+# provider=OpenAI）：模型會把自己的頻道路由語法當成一般文字吐進內容，形如
+# 「<蓋章>提醒民眾避開低窪路段}} դժassistant to=system.summary  天天中彩票不json: {」，
+# 後面常接簡體賭博站語料與多語系碎片。
+# 字元集與拉丁字母比例都攔不到這一種：異常字元只有兩個（未達
+# DIGEST_MAX_STRAY_CHARS），其餘是 CJK 與 ASCII。於是它通過健檢、原樣寫進最終
+# prompt 被畫上成品。真正的指紋是標記本身，字元統計看不到。
+# 「assistant」單獨出現是正常英文字（AI assistant），只有帶 to= 的路由形式才算。
+DIGEST_CHANNEL_LEAK = re.compile(
+    r"assistant\s+to\s*=|to=(?:assistant|system|final)\b|numerusform",
+    re.IGNORECASE,
+)
 # 放寬 token 上限後出現的另一種失控：模型不再截斷，改成把原文每個詞都拆成一條
 # [內文小標] 灌到幾十行（實測撞到 90 行、同一詞重複出現）。長度本身不能當判準——
 # 逐字模式本來就會產生長 variable——但大量重複的行是失控獨有的訊號。
@@ -1095,6 +1141,8 @@ def digest_quality_problem(data: dict, finish_reason: str) -> str:
             # 用 ascii() 轉義：這些字元照原樣印會在 Windows cp950 主控台丟
             # UnicodeEncodeError，把診斷訊息本身變成當掉整條請求的新故障
             return f"{field} 含 {len(stray)} 個異常字元：{ascii(stray[:40])}"
+        if leak := DIGEST_CHANNEL_LEAK.search(value):
+            return f"{field} 含角色／頻道標記「{leak.group(0)}」，模型頻道洩漏"
 
     variable = data.get("variable") or ""
     latin = sum(1 for ch in variable if "a" <= ch.lower() <= "z")
@@ -1243,7 +1291,7 @@ def generate(req: GenerateRequest):
             print(
                 f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} parse failed "
                 f"(finish_reason={finish_reason}): {exc}\n"
-                f"[generate] raw content: {raw_content[:800]}",
+                f"[generate] raw content: {digest_excerpt(raw_content)}",
                 flush=True,
             )
             if req.density == "verbatim" and finish_reason == "length":
@@ -1471,7 +1519,7 @@ def hybrid_digest(req: HybridDigestRequest):
             print(
                 f"[hybrid] attempt {attempt + 1}/3 parse failed "
                 f"(finish_reason={finish_reason}): {exc}\n"
-                f"[hybrid] raw content: {raw_content[:800]}",
+                f"[hybrid] raw content: {digest_excerpt(raw_content)}",
                 flush=True,
             )
             time.sleep(1.5)

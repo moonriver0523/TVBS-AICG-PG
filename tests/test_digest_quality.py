@@ -108,9 +108,76 @@ class QualityCheckTests(unittest.TestCase):
         self.assertEqual(digest_quality_problem(ok, "stop"), "")
 
 
+class ChannelLeakTests(unittest.TestCase):
+    """2026-09-05：gpt-5.6-terra 把角色／頻道標記洩漏進內容。
+
+    最危險的不是整段亂碼被擋下，是只夾兩個異常字元的那種——未達
+    DIGEST_MAX_STRAY_CHARS，其餘是 CJK 與 ASCII 所以拉丁字母比例也過關，
+    於是原樣進入最終 prompt 送去生圖。真正的指紋是頻道標記本身。
+    """
+
+    def test_channel_marker_in_variable_is_rejected(self):
+        leaked = with_field(
+            "variable",
+            GOOD["variable"] + "}} դժ assistant to=system.summary  天天中彩票不json: {",
+        )
+        self.assertIn("variable", digest_quality_problem(leaked, "stop"))
+
+    def test_final_channel_marker_is_rejected(self):
+        leaked = with_field("variable", GOOD["variable"] + " assistant to=final")
+        self.assertIn("variable", digest_quality_problem(leaked, "stop"))
+
+    def test_channel_marker_in_structure_is_rejected(self):
+        leaked = with_field("structure", GOOD["structure"] + " assistant to=assistant.final")
+        self.assertIn("structure", digest_quality_problem(leaked, "stop"))
+
+    def test_numerusform_token_is_rejected(self):
+        leaked = with_field("variable", GOOD["variable"] + " numerusformassistant")
+        self.assertIn("variable", digest_quality_problem(leaked, "stop"))
+
+    def test_ordinary_text_mentioning_assistant_still_passes(self):
+        # 「assistant」單獨出現是正常英文字，不能一看到就擋
+        ok = with_field("variable", "[標題]AI assistant 進駐新聞編輯台")
+        self.assertEqual(digest_quality_problem(ok, "stop"), "")
+
+
+class RawExcerptTests(unittest.TestCase):
+    """解析失敗時記到日誌的摘要要看得到尾巴。
+
+    2026-09-05 的病因整個在尾巴（脫軌後吐純空白直到撞天花板），舊版只記前 800
+    字元，日誌永遠只看得到正常的開頭，只好在本機重跑才找得到病因。
+    """
+
+    def test_short_output_is_kept_whole(self):
+        raw = '{"style":"ok","variable":"[標題]測試"}'
+        self.assertIn("測試", main.digest_excerpt(raw))
+
+    def test_long_output_keeps_the_tail(self):
+        raw = '{"style":"' + "頭" * 2000 + '","variable":"' + "尾巴標記" + '"}'
+        excerpt = main.digest_excerpt(raw)
+        self.assertIn("尾巴標記", excerpt)
+        self.assertIn("中間省略", excerpt)
+
+    def test_whitespace_padding_is_reported_not_dumped(self):
+        raw = '{"style":"開頭"' + " \n" * 4000 + ',"variable":"x"}'
+        excerpt = main.digest_excerpt(raw)
+        self.assertLess(len(excerpt), 1200)
+        self.assertIn("空白佔", excerpt)
+
+
 class TokenBudgetTests(unittest.TestCase):
     def test_map_budget_is_larger_than_default(self):
         self.assertGreater(MAP_DIGEST_MAX_TOKENS, DIGEST_MAX_TOKENS)
+
+    def test_map_budget_stays_within_one_retry_round(self):
+        """預算是脫軌的成本上限，不是正常用量。
+
+        2026-09-05 本機實測：正常完成的輸出 469-2324 token，14 天日誌裡所有
+        finish=stop 的最大值是 1536。6000 只是讓每次脫軌多燒四倍 token 與時間，
+        5 次重試剛好撞破 Cloud Run 的 300 秒上限、把使用者的等待變成 502。
+        """
+        self.assertLessEqual(MAP_DIGEST_MAX_TOKENS, 3000)
+        self.assertGreaterEqual(MAP_DIGEST_MAX_TOKENS, 2600)
 
     def test_map_and_auto_types_get_the_larger_budget(self):
         # 自動判斷也要給，因為 AI 可能選地圖
