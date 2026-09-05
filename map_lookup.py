@@ -25,6 +25,7 @@ import json
 import math
 import os
 import pathlib
+import re
 import ssl
 import tempfile
 import time
@@ -64,11 +65,51 @@ def _get(url: str, *, timeout: int = _TIMEOUT) -> bytes:
         return resp.read()
 
 
+# 可以當「地點」用的 OSM 主分類。地理實體才收：行政區、聚落、道路、水域、
+# 地形、土地利用、園區、景點、機場、車站。刻意不收 amenity／shop／office／
+# building／healthcare 這些**單一營業場所**——它們是店家名稱撞名的主要來源。
+GEOGRAPHIC_CLASSES = frozenset({
+    "place", "boundary", "landuse", "highway", "waterway", "natural",
+    "leisure", "tourism", "aeroway", "railway", "military",
+})
+
+
+def _looks_like_the_place_asked_for(query: str, hit: dict) -> bool:
+    """這筆結果認得出是我們查的東西嗎。
+
+    2026-09-05 實查到的兩種錯配，各需要一道檢查：
+      1.「北海岸」比對到臺中市北屯區一家叫「北海岸」的餐廳（離基隆 130 公里）。
+         名稱完全吻合，擋不掉，但 class=amenity——它是店，不是地方。
+      2.「市區」比對到國立臺灣師範大學，importance 0.521 比任何正確結果都高。
+         class 是 amenity 也擋得掉，但更根本的是名稱對不上：查的字詞在結果裡
+         完全找不到。
+    importance 不能當門檻：正確的「廟口夜市牌樓」是 0.000。
+    """
+    if (hit.get("class") or "") not in GEOGRAPHIC_CLASSES:
+        return False
+    # 名稱對應。中文沒有詞界，整串比對會誤殺正確結果——查「基隆廟口」、
+    # Nominatim 回「廟口夜市（…基隆市…）」是對的，但「基隆廟口」四個字並不
+    # 連續出現在結果裡。改成看有沒有**長度 2 以上的連續片段**對得上：
+    # 上例的「基隆」與「廟口」都對得上，而「市區」對到師大時只剩單字重疊。
+    haystack = f"{hit.get('name') or ''}｜{hit.get('display_name') or ''}"
+    for token in (t for t in re.split(r"[\s,、]+", query) if t):
+        for size in range(len(token), 1, -1):
+            for start in range(len(token) - size + 1):
+                if token[start:start + size] in haystack:
+                    return True
+    return False
+
+
 def geocode(place: str, *, country: str = "tw", timeout: int = _TIMEOUT) -> tuple[float, float] | None:
-    """地名 → (lat, lon)；查不到回 None。
+    """地名 → (lat, lon)；查不到、或查到的東西不像那個地方，都回 None。
 
     刻意不做模糊比對或「最像的那個」：查不到就是查不到，讓呼叫端退回示意圖，
     比標一個錯的地點好——標錯地點在新聞畫面上就是播出事故。
+
+    2026-09-05 補上可信度檢查。在那之前這裡是 `limit=1` 直接收下 Nominatim 的
+    第一名，也就是實作在做的正是上面那句話說不做的事：Nominatim 一定會給你
+    「最像的那個」，模糊地名（北海岸／市區／低窪地區）於是被配到隨便一家同名
+    店家，而那個橘點會被燒進底圖、生圖模型又被要求不准移動標點。
     """
     global _last_geocode_at
     name = (place or "").strip()
@@ -79,7 +120,8 @@ def geocode(place: str, *, country: str = "tw", timeout: int = _TIMEOUT) -> tupl
         time.sleep(wait)
     _last_geocode_at = time.monotonic()
     query = urllib.parse.urlencode(
-        {"q": name, "format": "json", "limit": 1, "countrycodes": country}
+        # limit 從 1 拉到 5：第一名被判定不可信時，後面可能有真正的地理實體。
+        {"q": name, "format": "json", "limit": 5, "countrycodes": country}
     )
     try:
         payload = json.loads(_get(f"{NOMINATIM_URL}?{query}", timeout=timeout).decode("utf-8"))
@@ -88,10 +130,21 @@ def geocode(place: str, *, country: str = "tw", timeout: int = _TIMEOUT) -> tupl
         return None
     if not payload:
         return None
-    try:
-        return float(payload[0]["lat"]), float(payload[0]["lon"])
-    except (KeyError, TypeError, ValueError):
-        return None
+    for hit in payload:
+        if not isinstance(hit, dict) or not _looks_like_the_place_asked_for(name, hit):
+            continue
+        try:
+            return float(hit["lat"]), float(hit["lon"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    first = payload[0] if isinstance(payload[0], dict) else {}
+    print(
+        f"[map_lookup] geocode 不採信 {name}："
+        f"比對到 {first.get('name')}（{first.get('class')}/{first.get('type')}）"
+        f" @ {first.get('display_name')}",
+        flush=True,
+    )
+    return None
 
 
 def _lat_to_y(lat: float, zoom: int) -> float:

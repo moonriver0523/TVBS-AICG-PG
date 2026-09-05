@@ -132,12 +132,25 @@ class RenderTests(unittest.TestCase):
         )
 
 
+def _hit(lat, lon, *, name, cls, typ, display, importance=0.0) -> bytes:
+    """一筆 Nominatim 回應。欄位形狀取自 2026-09-05 的真實實查結果。"""
+    import json as _json
+
+    return _json.dumps([{
+        "lat": str(lat), "lon": str(lon), "name": name, "class": cls,
+        "type": typ, "display_name": display, "importance": importance,
+    }]).encode("utf-8")
+
+
 class GeocodeTests(unittest.TestCase):
     def _patch(self, payload):
         return mock.patch.object(map_lookup, "_get", return_value=payload)
 
     def test_returns_the_first_hit(self):
-        with self._patch(b'[{"lat": "25.129", "lon": "121.744"}]'):
+        payload = _hit(25.129, 121.744, name="廟口夜市", cls="landuse",
+                       typ="commercial", importance=0.254,
+                       display="廟口夜市, 玉田里, 仁愛區, 基隆市, 臺灣")
+        with self._patch(payload):
             self.assertEqual(map_lookup.geocode("基隆廟口"), (25.129, 121.744))
 
     def test_no_hit_returns_none_rather_than_a_guess(self):
@@ -157,6 +170,68 @@ class GeocodeTests(unittest.TestCase):
         with mock.patch.object(map_lookup, "_get") as get:
             self.assertIsNone(map_lookup.geocode("  "))
             get.assert_not_called()
+
+
+class GeocodePlausibilityTests(unittest.TestCase):
+    """Nominatim 的第一名可能是隨便撞名的店家，收下就是標錯地點。
+
+    2026-09-05 實查（SOT2 複驗發現，本 session 複查確認）：
+      「北海岸」→ 臺中市北屯區一家叫北海岸的**餐廳**，離基隆 130 公里；
+      「市區」  → 國立臺灣師範大學（importance 0.521，比正確結果還高）；
+      「低窪地區」→ 臺北市一家泰式餐廳。
+    這些橘點會被程式燒進底圖，而生圖模型被要求不准移動標點。
+    importance 無法判別——正確的「廟口夜市牌樓」是 0.000。真正的判準有兩個：
+    結果是不是地理實體（class），以及查的字詞認不認得出來（名稱對應）。
+    """
+
+    def _patch(self, payload):
+        return mock.patch.object(map_lookup, "_get", return_value=payload)
+
+    def test_restaurant_that_merely_shares_the_name_is_refused(self):
+        payload = _hit(24.1943, 120.6861, name="北海岸", cls="amenity",
+                       typ="restaurant", importance=0.0,
+                       display="北海岸, 長生一街, 仁美里, 北屯區, 臺中市, 臺灣")
+        with self._patch(payload):
+            self.assertIsNone(map_lookup.geocode("北海岸"))
+
+    def test_post_office_standing_in_for_a_street_is_refused(self):
+        payload = _hit(25.1084, 121.8439, name="瑞芳九份郵局", cls="amenity",
+                       typ="post_office", importance=0.0,
+                       display="瑞芳九份郵局, 基山街, 瑞芳區, 九份, 新北市, 臺灣")
+        with self._patch(payload):
+            self.assertIsNone(map_lookup.geocode("瑞芳九份老街"))
+
+    def test_unrelated_result_is_refused_even_with_high_importance(self):
+        # 「市區」比對到師大，importance 0.521 比任何正確結果都高
+        payload = _hit(25.0262, 121.5286, name="國立臺灣師範大學和平校區",
+                       cls="amenity", typ="school", importance=0.521,
+                       display="國立臺灣師範大學和平校區, 和平東路一段, 大安區, 臺北市, 臺灣")
+        with self._patch(payload):
+            self.assertIsNone(map_lookup.geocode("市區"))
+
+    def test_landmark_with_zero_importance_is_still_accepted(self):
+        # 正確結果的 importance 常常是 0，不能拿它當門檻
+        payload = _hit(25.1286, 121.7429, name="廟口夜市牌樓", cls="tourism",
+                       typ="attraction", importance=0.0,
+                       display="廟口夜市牌樓, 仁三路, 廟口夜市, 仁愛區, 基隆市, 臺灣")
+        with self._patch(payload):
+            self.assertEqual(
+                map_lookup.geocode("基隆市 基隆廟口夜市"), (25.1286, 121.7429)
+            )
+
+    def test_administrative_area_is_accepted(self):
+        payload = _hit(22.6863, 120.3080, name="左營區", cls="boundary",
+                       typ="administrative", importance=0.479,
+                       display="左營區, 高雄市, 813, 臺灣")
+        with self._patch(payload):
+            self.assertEqual(map_lookup.geocode("高雄市 左營區"), (22.6863, 120.308))
+
+    def test_street_is_accepted(self):
+        payload = _hit(25.1368, 121.7324, name="西定路", cls="highway",
+                       typ="tertiary", importance=0.053,
+                       display="西定路, 西定里, 中山區, 基隆市, 臺灣")
+        with self._patch(payload):
+            self.assertEqual(map_lookup.geocode("西定路"), (25.1368, 121.7324))
 
 
 class ModelCoordinateDriftTests(unittest.TestCase):

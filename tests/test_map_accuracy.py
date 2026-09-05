@@ -155,3 +155,30 @@ class ImageStageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LookupablePlacesOnlyTests(unittest.TestCase):
+    """map_places 只能放查得到的點，不能放模糊區域或里程位置。
+
+    2026-09-05 實查：「北海岸」被 Nominatim 配到臺中市北屯區一家同名餐廳
+    （離基隆 130 公里）、「低窪地區」配到臺北一家泰式餐廳。程式端已加可信度
+    檢查（map_lookup._looks_like_the_place_asked_for），但「南部」「東海岸」
+    這類本身就是地名的模糊區域擋不掉——那要靠消化端一開始就不要寫進來。
+    """
+
+    def _rules(self) -> str:
+        return main.MAP_ACCURACY_RULES
+
+    def test_vague_regions_are_named_as_forbidden(self):
+        for word in ("北海岸", "南部", "市區", "低窪地區"):
+            with self.subTest(word=word):
+                self.assertIn(word, self._rules())
+
+    def test_road_kilometre_positions_are_named_as_forbidden(self):
+        self.assertIn("楊梅路段北向68公里", self._rules())
+
+    def test_the_fallback_is_the_district(self):
+        self.assertIn("桃園市 楊梅區", self._rules())
+
+    def test_the_consequence_is_spelled_out(self):
+        self.assertIn("wrong lookup puts a marker on the wrong town", self._rules())
