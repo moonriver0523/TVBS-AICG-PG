@@ -360,5 +360,81 @@ class BasemapLabelsAreAuthoritativeTests(unittest.TestCase):
         self.assertIn("the one exception", rules.lower())
 
 
+class LeaderLineStaysOffTheBasemapTests(unittest.TestCase):
+    """引線的兩端都不能落在底圖上。
+
+    2026-09-05 第六輪實測：規則改成「任何形狀的標記都不准」之後，模型不再畫
+    三角形了，卻留下一條黃色虛線，從文字框連到卡車插圖、再往左延伸進底圖，
+    末端停在某條道路上——沒有標記形狀，位置照樣被指定了。
+    """
+
+    def test_no_end_of_a_leader_line_may_land_on_the_map(self):
+        rules = news_prompt.USER_REFERENCE_MAP_RULES
+        self.assertIn("NEITHER END OF A LEADER LINE", rules)
+
+
+class EachLineRendersOnceTests(unittest.TestCase):
+    """同一段文字只畫一次；蓋章句不准同時出現在內文列。
+
+    2026-09-05 第六輪實測，兩種重複同時出現：
+      規則 B 那則的「國道1號北向68公里處…」文字框在右上與右下各畫了一次；
+      高雄那則的蓋章句「水利局已出動抽水機 預計傍晚前退水」被多畫成一列
+      內文小標（variable 裡沒有這一行），蓋章條再出現一次同句。
+    這是圖面端自己複製的，消化端的規則管不到。
+    """
+
+    def test_every_variable_line_is_rendered_exactly_once(self):
+        self.assertIn("EXACTLY ONCE", news_prompt.TEXT_PLACEMENT_RULES)
+
+    def test_the_stamp_line_belongs_only_to_the_stamp_bar(self):
+        rules = news_prompt.TEXT_PLACEMENT_RULES
+        self.assertIn("蓋章", rules)
+        self.assertIn("never also as a body line", rules)
+
+    def test_the_block_reaches_both_roles(self):
+        for role in ("記者", "編輯"):
+            with self.subTest(role=role):
+                self.assertIn("EXACTLY ONCE", image_prompt("資料圖表", role))
+
+
+class StampKeepsTheHedgeTests(unittest.TestCase):
+    """原文有保留語時，蓋章不准改成斷定。
+
+    2026-09-05 第五、六輪連兩輪：原文「上午9點半才陸續排除」→蓋章
+    「9點半後 車流恢復順暢」；原文「疑與濃霧及路面濕滑有關」→蓋章
+    「濃霧路滑肇禍」。蓋章是全圖唯一被做成色塊強調的一句，斷語成本最高。
+    """
+
+    def test_the_stamp_rules_name_the_hedge_words(self):
+        rules = main.STAMP_ON_RULES
+        self.assertIn("疑", rules)
+        self.assertIn("陸續", rules)
+        self.assertIn("THE STAMP MAY NOT SHARPEN WHAT THE SOURCE HEDGED", rules)
+
+
+class NoInventedRelationshipTests(unittest.TestCase):
+    """幾件各自獨立的事，不准寫成互為因果或連鎖。
+
+    2026-09-05 第六輪實測：兩起機車自摔加一起貨車爆胎，彼此無關，
+    標題卻寫成「桃園今晨連環車禍」。「連環」是模型加的關聯。
+    """
+
+    def test_the_rule_names_the_relationship_words(self):
+        rules = main.CONTENT_FIDELITY_RULES
+        self.assertIn("連環", rules)
+        self.assertIn("SEPARATE EVENTS STAY SEPARATE", rules)
+
+
+class ChartTypeNameNotInSubheadsTests(unittest.TestCase):
+    """「示意圖」不只不能進標題，任何一行都不行。
+
+    2026-09-05 第六輪實測：規則寫「least of all trailing the 標題 line」，
+    模型就改塞到 [內文小標] 的結尾（「…駕駛獲救 示意圖」）。
+    """
+
+    def test_the_ban_names_the_subhead_case_too(self):
+        self.assertIn("nor at the end of a 內文小標", main.CONTENT_FIDELITY_RULES)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -147,6 +147,9 @@ class ConstantParityTests(unittest.TestCase):
     def test_directional_colour_rules(self):
         self.assert_same("TW_DIRECTIONAL_COLOR_RULES", news_prompt.TW_DIRECTIONAL_COLOR_RULES)
 
+    def test_text_placement_rules(self):
+        self.assert_same("TEXT_PLACEMENT_RULES", news_prompt.TEXT_PLACEMENT_RULES)
+
     def test_map_accuracy_image_rules(self):
         self.assert_same("MAP_ACCURACY_IMAGE_RULES", news_prompt.MAP_ACCURACY_IMAGE_RULES)
 

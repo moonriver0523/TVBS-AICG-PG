@@ -87,6 +87,13 @@ DIRECTIONAL COLOUR CONVENTION (TAIWAN)
 - Do not use red and green decoratively for unrelated purposes in a graphic that shows a rise or a fall.
 
 ==================================================
+TEXT PLACEMENT (CRITICAL)
+==================================================
+- EVERY LINE OF VARIABLE FIELDS IS RENDERED EXACTLY ONCE. One line, one place on the canvas. Do not repeat a headline, a subhead or a callout in a second card, a second column, a corner block or a summary strip, and do not restate it in different words elsewhere. An empty region is not a reason to duplicate: leave it to the background rather than fill it with a copy.
+- THE <蓋章> LINE BELONGS TO THE STAMP BAR AND NOWHERE ELSE — never also as a body line, a subhead row, a card or a callout. It is the closing conclusion, so seeing it twice on one graphic reads as two separate statements of the same fact.
+- Add no text of your own. Every word on the canvas comes from VARIABLE FIELDS; if a layout region has nothing assigned to it, it carries no text.
+
+==================================================
 FINAL OUTPUT RULE
 ==================================================
 - The final generated image must NOT contain any "[" "]" or "<" ">" characters.

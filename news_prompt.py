@@ -275,7 +275,7 @@ ATTACHED MAP REFERENCE (CRITICAL)
 - IF THE ATTACHED MAP CARRIES ROUND MARKER DOTS, those dots are already at the true real-world positions of the places this story is about. Keep every marker at its dot: do not move it, do not re-space the markers to balance the composition, do not add a marker where there is no dot, and do not drop one. Restyle the dot into the graphic's own pin design and attach the place name beside it — the dot's position is the one thing you may not change.
 - THE PIN AND THE DOT MUST RESOLVE TO ONE POINT. A teardrop pin points at a location with its TIP, so put the tip exactly on the dot's centre — do not centre the pin's round head on the dot, and do not float the pin above it. Never leave the original dot behind as a separate ring, ripple, halo or glow sitting under a pin that hovers somewhere else: that reads as two different positions for one place, and the lower one is the true one.
 - THE NAME PRINTED BESIDE A DOT IS THAT DOT'S IDENTITY. Each dot on the attached map carries its place name printed next to it by the program. That pairing is verified and it is not yours to rearrange: the pin you draw on a dot takes the name printed beside THAT dot, and any callout, icon or figure about that place attaches to that pin and no other. Never assign the names by reading them off the map in the order they appear in STRUCTURE or in VARIABLE FIELDS, and never swap two names because the composition reads better. This is the one exception to the rule above that text inside the attached map is never used: those printed dot names exist precisely to tell you which dot is which, and you match them against the place names in VARIABLE FIELDS (which supply the on-screen wording).
-- A PLACE WITH NO DOT FOR IT GETS NO MARKER OF ANY KIND. STRUCTURE may name a place the attached map carries no dot for. That means the program could not verify where it is — not that you should supply the position from memory. Where there is no dot for it, put nothing on the map for it: no pin, and no marker, icon, arrow, triangle, leader line, highlighted segment, ring or shaded patch either. Naming one shape does not make the others allowed — whatever shape you reach for, if it points at a spot on the basemap it is banned, because the position is what you are inventing, not the pin. Name that place instead in a text line or in a callout that touches no part of the map. A marker you placed yourself sits among verified ones and looks exactly as authoritative, so one guess discredits every marker on the graphic.
+- A PLACE WITH NO DOT FOR IT GETS NO MARKER OF ANY KIND. STRUCTURE may name a place the attached map carries no dot for. That means the program could not verify where it is — not that you should supply the position from memory. Where there is no dot for it, put nothing on the map for it: no pin, and no marker, icon, arrow, triangle, leader line, highlighted segment, ring or shaded patch either. Naming one shape does not make the others allowed — whatever shape you reach for, if it points at a spot on the basemap it is banned, because the position is what you are inventing, not the pin. NEITHER END OF A LEADER LINE MAY LAND ON THE MAP EITHER: a line running from a text box out onto the basemap picks a spot just as surely as a pin does, whether or not anything is drawn where it stops. Leader lines may connect a text box to an illustration, never to the basemap. Name that place instead in a text line or in a callout that touches no part of the map. A marker you placed yourself sits among verified ones and looks exactly as authoritative, so one guess discredits every marker on the graphic.
 - Any coordinates written in STRUCTURE are secondary to the attached map. Where the two disagree, the attached map wins; never nudge a marker to match a coordinate."""
 
 USER_REFERENCE_SCENE_RULES = """==================================================
@@ -379,6 +379,18 @@ def build_refine_prompt(instruction: str) -> str:
         f"{instruction}"
     )
 
+# 每一段文字只畫一次。2026-09-05 第六輪連抓到兩種重複：同一個文字框在右上與
+# 右下各畫一次；蓋章那句被多畫成一列內文小標，蓋章條再出現一次同句（variable
+# 裡根本沒有那一行）。兩種都是圖面端自己複製的，消化端的規則管不到，所以要有
+# 一塊給兩個角色、所有類型都注入的文字擺放規則。
+TEXT_PLACEMENT_RULES = """==================================================
+TEXT PLACEMENT (CRITICAL)
+==================================================
+- EVERY LINE OF VARIABLE FIELDS IS RENDERED EXACTLY ONCE. One line, one place on the canvas. Do not repeat a headline, a subhead or a callout in a second card, a second column, a corner block or a summary strip, and do not restate it in different words elsewhere. An empty region is not a reason to duplicate: leave it to the background rather than fill it with a copy.
+- THE <蓋章> LINE BELONGS TO THE STAMP BAR AND NOWHERE ELSE — never also as a body line, a subhead row, a card or a callout. It is the closing conclusion, so seeing it twice on one graphic reads as two separate statements of the same fact.
+- Add no text of your own. Every word on the canvas comes from VARIABLE FIELDS; if a layout region has nothing assigned to it, it carries no text."""
+
+
 MAP_ACCURACY_IMAGE_RULES = """==================================================
 MAP ACCURACY RULES (CRITICAL)
 ==================================================
@@ -427,7 +439,11 @@ def build_prompt(
 
     # 視覺忠實度區塊：地圖規則只在已解析的類型是地圖時注入
     # （這裡的 type_label 已是 digest 解析後的具體類型，非「自動判斷」sentinel）
-    extra_blocks = [REAL_WORLD_RENDERING_RULES, TW_DIRECTIONAL_COLOR_RULES]
+    extra_blocks = [
+        REAL_WORLD_RENDERING_RULES,
+        TW_DIRECTIONAL_COLOR_RULES,
+        TEXT_PLACEMENT_RULES,
+    ]
     if type_label == MAP_TYPE_LABEL:
         extra_blocks.append(MAP_ACCURACY_IMAGE_RULES)
     # 真人肖像區塊：未知的 portrait_mode 一律當成沒有區塊，讓預設的

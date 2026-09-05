@@ -1137,7 +1137,7 @@ function buildPrompt({ role, engine, typeLabel, style, structure, variable, safe
 
     // 視覺忠實度區塊：地圖規則只在已解析的類型是地圖時注入
     // （typeLabel 來自 activeType()，自動判斷模式下已是 AI 解析後的具體類型）
-    const extraBlocks = [REAL_WORLD_RENDERING_RULES, TW_DIRECTIONAL_COLOR_RULES];
+    const extraBlocks = [REAL_WORLD_RENDERING_RULES, TW_DIRECTIONAL_COLOR_RULES, TEXT_PLACEMENT_RULES];
     if (typeLabel === MAP_TYPE_LABEL) {
         extraBlocks.push(MAP_ACCURACY_IMAGE_RULES);
     }
@@ -1252,6 +1252,14 @@ REAL-WORLD ACCURACY (CRITICAL)
 - NO UNSOURCED BRANDS: every sign, storefront, banner, package, product body, vehicle livery, screen, badge and building facade must be blank or carry a generic non-readable mark. Do NOT draw any real company logo, wordmark, trademark, ticker symbol, exchange name or brand text — not even a small, faint, distant or background one. A brand name may appear only if that exact text is supplied in VARIABLE FIELDS, and then only as plain typeset text, never as a reproduced logotype.
 - NAMED REAL PEOPLE: how to depict a named real person is governed by the NAMED REAL PERSON block below whenever one is present — follow that block, not your own judgement. If no such block is present, do NOT draw a recognisable face for a named real person: use a back view or a plain silhouette and keep the 示意圖 label visible. Never show the person in a scene, action or context that STRUCTURE does not describe.
 - SELF-CHECK before finalizing: look at every surface in the image for text or marks you added yourself. If any sign, screen, package or vehicle carries readable branding, blank it.`;
+
+const TEXT_PLACEMENT_RULES =
+`==================================================
+TEXT PLACEMENT (CRITICAL)
+==================================================
+- EVERY LINE OF VARIABLE FIELDS IS RENDERED EXACTLY ONCE. One line, one place on the canvas. Do not repeat a headline, a subhead or a callout in a second card, a second column, a corner block or a summary strip, and do not restate it in different words elsewhere. An empty region is not a reason to duplicate: leave it to the background rather than fill it with a copy.
+- THE <蓋章> LINE BELONGS TO THE STAMP BAR AND NOWHERE ELSE — never also as a body line, a subhead row, a card or a callout. It is the closing conclusion, so seeing it twice on one graphic reads as two separate statements of the same fact.
+- Add no text of your own. Every word on the canvas comes from VARIABLE FIELDS; if a layout region has nothing assigned to it, it carries no text.`;
 
 const TW_DIRECTIONAL_COLOR_RULES =
 `==================================================
