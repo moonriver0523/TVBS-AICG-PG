@@ -202,3 +202,19 @@ class BackendGuardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MissingDotTests(unittest.TestCase):
+    """底圖上沒有點的地方，不准自己補一支 pin 在猜的位置。
+
+    2026-09-05 實測（SOT2 第三輪）：國道 1 號三起車禍那則，消化寫的
+    「國道1號中壢交流道」查無座標被略過，底圖只有楊梅與湖口兩個點，
+    但 STRUCTURE 仍要求標出中壢——生圖模型就自己補了一支，還把它畫在
+    湖口與楊梅中間。國 1 由北往南是中壢→楊梅→湖口，中壢應該在最北，
+    也就是那支自補的 pin 位置是錯的。
+    """
+
+    def test_a_place_without_a_dot_gets_no_pin(self):
+        rules = USER_REFERENCE_MAP_RULES
+        self.assertIn("no dot for it", rules)
+        self.assertIn("do not invent a position", rules.lower())

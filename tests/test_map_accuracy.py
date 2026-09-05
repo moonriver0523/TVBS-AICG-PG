@@ -182,3 +182,19 @@ class LookupablePlacesOnlyTests(unittest.TestCase):
 
     def test_the_consequence_is_spelled_out(self):
         self.assertIn("wrong lookup puts a marker on the wrong town", self._rules())
+
+
+class FacilityLookupNameTests(unittest.TestCase):
+    """交流道／車站這種有名字的設施，前面不要冠道路或路線名。
+
+    2026-09-05 實測：「國道1號中壢交流道」查無座標，但「中壢交流道」
+    查得到（highway/motorway_junction, 24.9599/121.2024），
+    「桃園市 中壢區 中壢交流道」也查得到。冠上道路名反而讓它查不到。
+    """
+
+    def test_the_road_prefix_is_called_out(self):
+        self.assertIn("國道1號中壢交流道", main.MAP_ACCURACY_RULES)
+        self.assertIn("中壢交流道", main.MAP_ACCURACY_RULES)
+
+    def test_the_district_qualified_form_is_offered(self):
+        self.assertIn("桃園市 中壢區 中壢交流道", main.MAP_ACCURACY_RULES)
