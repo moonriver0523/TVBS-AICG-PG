@@ -174,13 +174,13 @@ class TokenBudgetTests(unittest.TestCase):
 
         2026-09-05 用 8000 的寬鬆上限量過記者／編輯 × 自動判斷／資料圖表
         共 16 次（claude-sonnet-5）：正文很穩定，872-1259；思考變異極大，
-        560-3140；total 落在 1591-4258，最兇的是編輯＋自動判斷。
+        560-4873；total 落在 1459-6042，最兇的是編輯＋自動判斷。
         同日一度把地圖類收到 3000，上線後編輯＋地圖 5 次 attempt 全部
         finish=length，其中兩次 raw content 整個空白——預算在吐出第一個字
         之前就被思考用光。這兩個下限是那次回歸的防線，不要再往下調。
         """
-        self.assertGreaterEqual(MAP_DIGEST_MAX_TOKENS, 5000)
-        self.assertGreaterEqual(DIGEST_MAX_TOKENS, 3500)
+        self.assertGreaterEqual(MAP_DIGEST_MAX_TOKENS, 9000)
+        self.assertGreaterEqual(DIGEST_MAX_TOKENS, 5000)
         self.assertLess(DIGEST_MAX_TOKENS, MAP_DIGEST_MAX_TOKENS)
 
     def test_map_and_auto_types_get_the_larger_budget(self):

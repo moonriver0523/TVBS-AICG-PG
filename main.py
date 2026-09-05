@@ -123,8 +123,15 @@ GEMINI_DIGEST_MIN_TOKENS = 6000
 # 也就是說預算對**不會脫軌的模型**就是真的要夠，不能拿脫軌的成本上限來訂。
 # 這裡取 total 觀測最大值再留約四成餘裕。上限是天花板不是用量，只有真的寫出來
 # 的 token 才計費，寧可寬裕——省下的那點錢遠不值一次 5 連截斷的 502。
-DIGEST_MAX_TOKENS = 4000
-MAP_DIGEST_MAX_TOKENS = 6000
+#
+# 2026-09-05 傍晚第三次調整。當天累積的規則把 system prompt 從 23,795 字元推到
+# 28,105，**寫出來的內容完全沒變**（856-1361 token，與早上量的一樣），暴漲的
+# 全是思考：早上 560-3140，傍晚 603-4873。編輯＋自動判斷的 total 量到 6042，
+# 已經超過當時的 6000 預算，所以那類稿必然偶爾整個截斷（實測 raw content 空字串、
+# 重試後 269 秒才回應）。餘裕要抓在思考上而不是正文上：思考量會隨規則增加而漲，
+# 正文不會。這裡照 total 觀測最大值再留約六成。
+DIGEST_MAX_TOKENS = 6000
+MAP_DIGEST_MAX_TOKENS = 10000
 
 # 「不消化」的輸出長度**由輸入長度決定**——模型要把整篇原文一字不差抄進 variable，
 # 再另外寫 style/structure。固定 1500 等於「原文超過某個長度就一定失敗」。
@@ -646,7 +653,7 @@ CONTENT FIDELITY (NON-NEGOTIABLE — OVERRIDES ANY LAYOUT OR LENGTH PREFERENCE A
 5. Do not upgrade hedged wording into certainty (e.g. "約"/"可能"/"預估" must not become a flat assertion), and do not sharpen a rounded figure into a precise one.
 6. THE NAME OF THE LAYOUT IS NOT NEWS. 示意圖, 資料圖表, 地圖, 位置圖, 流程圖, 3D示意 and the like describe what kind of graphic you are designing; they are not part of the story. Never let one of them end up inside "variable" — least of all trailing the 標題 line, where the renderer sets it in headline type and the viewer reads 「台中火鍋店疑食物中毒 示意圖」 as if 示意圖 were part of the news — nor at the end of a 內文小標, which is the next place it tries to go once the headline is closed off. Where the graphic genuinely needs to be flagged as a reconstruction, say so in "structure" as a small caption; the headline states what happened and nothing else.
 7. PAIRING A FACT WITH A PLACE IS ITSELF A CLAIM — AND SO IS UNPAIRING ONE. Two halves, and you need both.
-   KEEP EVERY PAIRING THE SOURCE ALREADY MADE. Where the source says what happened at a named place, that pairing is reported fact and belongs in the graphic, tied to that place: 「楊梅路段砂石車追撞2人受傷」「中壢交流道4車連環1人輕傷」「湖口路段貨櫃車起火駕駛脫困」 must survive as three place-specific lines. On a location graphic「哪裡發生什麼」IS the story; stripping the places out to be safe empties the graphic of the only thing it exists to show.
+   KEEP EVERY PAIRING THE SOURCE ALREADY MADE. Where the source says what happened at a named place, that pairing is reported fact and belongs in the graphic, tied to that place: 「楊梅路段砂石車追撞2人受傷」「中壢交流道4車連環1人輕傷」「湖口路段貨櫃車起火駕駛脫困」 must survive as three place-specific lines, each keeping its place and its detail together on ONE line. Splitting them into a line of places and a line of details hands the pairing back to the renderer to guess, which is the very thing the next paragraph forbids. On a location graphic「哪裡發生什麼」IS the story; stripping the places out to be safe empties the graphic of the only thing it exists to show.
    INVENT NO PAIRING THE SOURCE DID NOT MAKE. Where the source lists several places and separately lists what happened, it has not told you which detail belongs to which — and you may not decide. 「三處路段積水，最深40公分，多輛機車熄火，水利局出動抽水機」 does not license 「左營區博愛二路 多輛機車熄火」: the source never said the scooters stalled there. Keep those places in one line and the unassigned details in their own.
    The test is simply whether the source itself put the two together. It usually did so in the same clause; when in doubt, quote its own sentence order rather than redistributing.
 8. SEPARATE EVENTS STAY SEPARATE. Several incidents in one story are not thereby one incident. Do not write 連環, 接連引發, 造成, 導致, 連鎖 or any other wording that makes them a chain or makes one the cause of another unless the source says so. 「兩起機車自摔，另有一起貨車爆胎」 is three unrelated events and a headline calling them 連環車禍 asserts a causal link the source never reported. Count them and say how many; leave the relationship alone.
@@ -2448,6 +2455,34 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
     )
 
 
+def verified_dots_block(points: list[MapPoint]) -> str:
+    """把「這張底圖上有哪幾個點」寫成一段由程式產生的事實陳述。
+
+    為什麼不繼續改 prompt 措辭：2026-09-05 第五到第七輪，同一條「沒有橘點的
+    地點不准畫標記」被繞過三次，每次換一種形狀——三角形警示圖示、末端停在
+    路面上的虛線、最後直接畫一支 pin。措辭再嚴，模型仍然要自己判斷「哪些
+    地點沒有點」，而它手上只有一張圖和一段文字，判斷本來就會出錯。
+
+    這裡改成不要它判斷：點的數量與名稱是程式已知的事實，直接列出來，並說明
+    清單之外的地點在這張圖上沒有位置。比照 safe_frame／compose 的原則——
+    能算出來的事情不要問模型。
+    """
+    names = "、".join(point.name for point in points)
+    return (
+        "==================================================\n"
+        "VERIFIED MAP POSITIONS (GENERATED — AUTHORITATIVE)\n"
+        "==================================================\n"
+        f"- The attached basemap carries EXACTLY {len(points)} verified dots, "
+        f"and they are these: {names}.\n"
+        "- Every other place mentioned anywhere in this prompt has NO verified position. "
+        "Do not give any of them a spot on the map: no pin, no marker of any other shape, "
+        "no icon, no highlighted segment, and no line that ends on the map. Mention them "
+        "only in text that touches no part of the map.\n"
+        f"- The finished graphic therefore carries {len(points)} map markers. "
+        "If you find yourself placing one more, the position for it is one you invented."
+    )
+
+
 def apply_map_reference_to_image_request(
     req: ImageGenerateRequest,
 ) -> ImageGenerateRequest:
@@ -2494,10 +2529,11 @@ def apply_map_reference_to_image_request(
     )
     return req.model_copy(
         update={
+            "prompt": f"{req.prompt.rstrip()}\n\n{verified_dots_block(req.map_points)}",
             "reference_images": [
                 *req.reference_images,
                 UserReferenceImage(data_url=data_url, purpose="map"),
-            ]
+            ],
         }
     )
 

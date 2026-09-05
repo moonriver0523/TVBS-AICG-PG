@@ -219,3 +219,47 @@ class MissingDotTests(unittest.TestCase):
         self.assertIn("no dot for it", rules)
         self.assertIn("put nothing on the map for it", rules)
         self.assertIn("the position is what you are inventing", rules)
+
+
+class VerifiedDotsBlockTests(unittest.TestCase):
+    """底圖上有幾個點、分別是誰，由程式寫進 prompt，不要模型自己判斷。
+
+    2026-09-05 第五～七輪：同一條「沒有橘點的地點不准畫標記」被繞過三次，
+    每次換一種形狀——三角形警示圖示、末端停在路面上的虛線、最後直接一支 pin。
+    措辭再嚴都要模型自己判斷「哪些地點沒有點」，而點數與名稱是程式已知的。
+    """
+
+    def test_the_block_states_the_exact_count_and_names(self):
+        block = main.verified_dots_block([
+            main.MapPoint(name="中壢區", lat=24.9654, lon=121.2249),
+            main.MapPoint(name="平鎮區", lat=24.9458, lon=121.2184),
+        ])
+        self.assertIn("EXACTLY 2 verified dots", block)
+        self.assertIn("中壢區、平鎮區", block)
+        self.assertIn("carries 2 map markers", block)
+
+    def test_the_block_bans_markers_of_every_shape(self):
+        block = main.verified_dots_block(
+            [main.MapPoint(name="甲", lat=1.0, lon=2.0)]
+        )
+        for wording in ("no pin", "no marker of any other shape",
+                        "no line that ends on the map"):
+            with self.subTest(wording=wording):
+                self.assertIn(wording, block)
+
+    def test_the_block_is_appended_when_a_basemap_is_attached(self):
+        req = _req(map_points=[
+            main.MapPoint(name="甲", lat=25.0, lon=121.5),
+            main.MapPoint(name="乙", lat=25.1, lon=121.6),
+        ])
+        with mock.patch.object(
+            main.map_lookup, "render_basemap", return_value=b"\x89PNG-fake"
+        ), mock.patch.object(main, "supports_multiple_reference_images", return_value=True):
+            out = main.apply_map_reference_to_image_request(req)
+        self.assertIn("VERIFIED MAP POSITIONS", out.prompt)
+        self.assertIn("EXACTLY 2 verified dots", out.prompt)
+
+    def test_no_block_when_there_is_no_basemap(self):
+        req = _req(map_points=[])
+        out = main.apply_map_reference_to_image_request(req)
+        self.assertNotIn("VERIFIED MAP POSITIONS", out.prompt)

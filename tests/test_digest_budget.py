@@ -75,8 +75,9 @@ class VerbatimScalesWithInputTests(unittest.TestCase):
         self.assertGreater(budget, 1500 * 2)
 
     def test_overhead_covers_style_structure_and_thinking(self):
-        # 取一個公式值明確高過固定底線的長度，才量得到 OVERHEAD 真的加上去了
-        news = "字" * 1000
+        # 長度由底線推算，不要寫死——底線至今調高過三次，寫死的長度每次都卡住。
+        # 要的是「公式值明確高過固定底線」，這樣才量得到 OVERHEAD 真的加上去了。
+        news = "字" * (DIGEST_MAX_TOKENS // VERBATIM_TOKENS_PER_CHAR + 500)
         needed = len(news) * VERBATIM_TOKENS_PER_CHAR + VERBATIM_DIGEST_OVERHEAD
         self.assertGreater(needed, DIGEST_MAX_TOKENS)
         self.assertEqual(digest_token_budget("資料圖表", "verbatim", news), needed)
