@@ -123,6 +123,22 @@ class ComposeTests(unittest.TestCase):
 
         self.assertNotEqual(region(True), region(False))
 
+    def test_draw_titles_false_leaves_bottom_untouched(self):
+        # AI 標題模式：底帶與標題都不畫，底部只剩底圖
+        def bottom(draw_titles):
+            cover = compose.compose_yt_cover(
+                _png_bytes(colour=(90, 90, 90)), line1="第一行", line2="第二行",
+                date_text="2026/09/05", draw_titles=draw_titles,
+            )
+            with Image.open(io.BytesIO(cover)) as image:
+                return image.crop((300, 800, 1600, 1060)).tobytes()
+
+        self.assertNotEqual(bottom(True), bottom(False))
+        with Image.open(io.BytesIO(compose.compose_yt_cover(
+            _png_bytes(colour=(90, 90, 90)), line1="一", line2="二", date_text="2026/09/05", draw_titles=False,
+        ))) as image:
+            self.assertEqual(image.getpixel((960, 1000)), (90, 90, 90))
+
     def test_rejects_missing_line_or_date(self):
         with self.assertRaises(compose.ComposeError):
             compose.compose_yt_cover(_png_bytes(), line1="只有一行", line2="", date_text="2026/09/05")
@@ -170,12 +186,21 @@ class HourlyComposeTests(unittest.TestCase):
 
 
 class PlanTests(unittest.TestCase):
-    def req(self, title, refs=(), background=""):
+    def req(self, title, refs=(), background="", title_mode="composite"):
+        # PlanTests 驗的是壓字路線的省 API 邏輯；AI 標題模式一律要畫面描述，另測
         return main.YtCoverRequest(
             title=title,
+            title_mode=title_mode,
             reference_images=[main.UserReferenceImage(data_url=_data_url(_png_bytes()), purpose=p) for p in refs],
             background_image_base64=background,
         )
+
+    def test_ai_title_mode_needs_visual_even_with_asis(self):
+        with patch.object(main, "derive_yt_cover_plan", return_value={"visual": "場景", "portrait_subjects": []}) as derive:
+            lines, visual, _, _ = main.resolve_yt_cover_plan(self.req("前段 後段", refs=("asis",), title_mode="ai"))
+        self.assertEqual(derive.call_count, 1)
+        self.assertEqual(visual, "場景")
+        self.assertEqual(lines, ("前段", "後段"))
 
     def test_no_api_call_when_split_and_background_are_settled(self):
         with patch.object(main, "derive_yt_cover_plan", side_effect=AssertionError("不該打 API")):
@@ -277,6 +302,7 @@ class EndpointTests(unittest.TestCase):
     def test_asis_cover_end_to_end_without_any_model(self):
         payload = {
             "title": "新北診所爆C肝群聚 11人確診疾管署說明",
+            "title_mode": "composite",
             "original_audio": True,
             "ai_translation": True,
             "date_text": "2026/09/05",
@@ -297,6 +323,7 @@ class EndpointTests(unittest.TestCase):
         payload = {
             "title": "遭撞趴引擎蓋一路載走200公尺 護理師滿身傷稱被尋仇自導自演",
             "layout": "hourly",
+            "title_mode": "composite",
             "original_audio": True,        # 整點版沒有這兩個標示，後端直接忽略
             "time_text": "20:00",
             "reference_images": [{"data_url": _data_url(_png_bytes((1200, 700))), "purpose": "asis"}],
@@ -310,13 +337,52 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(hourly.call_args.kwargs["time_text"], "20:00")
         self.assertEqual(res.json()["line1"], "遭撞趴引擎蓋一路載走200公尺")
 
+    def test_ai_title_mode_generates_whole_cover_with_text(self):
+        payload = {"title": "前段 後段", "title_mode": "ai", "original_audio": True, "date_text": "2026/09/06"}
+        fake = main.ImageGenerateResponse(
+            image_data_base64=base64.b64encode(_png_bytes((1536, 864), colour=(30, 30, 30))).decode("ascii"),
+            mime_type="image/png", model="fake-model",
+        )
+        with patch.object(main, "generate_image_raw", return_value=fake) as gen, \
+             patch.object(main, "derive_yt_cover_plan", return_value={"visual": "一個場景", "portrait_subjects": []}), \
+             patch.object(compose, "compose_yt_cover", wraps=compose.compose_yt_cover) as news:
+            res = client.post("/api/editor/yt-cover", json=payload, headers=HEADERS)
+        self.assertEqual(res.status_code, 200, res.text)
+        prompt = gen.call_args.args[0].prompt
+        self.assertIn("前段", prompt)
+        self.assertIn("後段", prompt)
+        self.assertNotIn("TEXT-FREE BACKGROUND", prompt)
+        self.assertFalse(news.call_args.kwargs["draw_titles"])
+        data = res.json()
+        self.assertEqual(data["title_mode"], "ai")
+        self.assertTrue(data["background_is_ai"])
+        # 追加修改的源圖＝模型原圖（還沒貼固定元素）
+        self.assertEqual(data["source_image_base64"], fake.image_data_base64)
+
+    def test_ai_title_mode_with_background_only_overlays(self):
+        payload = {
+            "title": "前段 後段", "title_mode": "ai", "layout": "hourly", "time_text": "20:00",
+            "background_image_base64": base64.b64encode(_png_bytes((1536, 864))).decode("ascii"),
+            "background_is_ai": True,
+        }
+        with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")), \
+             patch.object(main, "derive_yt_cover_plan", side_effect=AssertionError("不該打文字模型")), \
+             patch.object(compose, "compose_yt_hourly_cover", wraps=compose.compose_yt_hourly_cover) as hourly:
+            res = client.post("/api/editor/yt-cover", json=payload, headers=HEADERS)
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertFalse(hourly.call_args.kwargs["draw_titles"])
+        self.assertEqual(hourly.call_args.kwargs["time_text"], "20:00")
+
+    def test_default_title_mode_is_ai(self):
+        self.assertEqual(main.YtCoverRequest(title="前段 後段").title_mode, editor_formats.YT_COVER_TITLE_MODE_AI)
+
     def test_unknown_layout_is_rejected(self):
         res = client.post("/api/editor/yt-cover", json={"title": "前段 後段", "layout": "weekly"}, headers=HEADERS)
         self.assertEqual(res.status_code, 422)
 
     def test_news_layout_passes_flags_to_compose(self):
         payload = {
-            "title": "前段 後段", "original_audio": True, "ai_translation": False,
+            "title": "前段 後段", "title_mode": "composite", "original_audio": True, "ai_translation": False,
             "reference_images": [{"data_url": _data_url(_png_bytes((1200, 700))), "purpose": "asis"}],
         }
         with patch.object(compose, "compose_yt_cover", wraps=compose.compose_yt_cover) as news:
@@ -355,7 +421,11 @@ class FrontendParityTests(unittest.TestCase):
         self.assertIn("inputs: 'yt_cover'", entry)
         for field in ("digestControls", "safeFrame", "stamp"):
             self.assertIn(field, re.search(r"hides:\s*\{([^}]*)\}", entry).group(1))
-        self.assertIn("text_free: isYtCover", js, "追加修改必須走無文字 refine")
+        self.assertIn("text_free: ytTextFree", js, "追加修改：壓字模式走無文字 refine")
+        self.assertIn("state.ytCoverTitleMode !== 'ai'", js)
+        with open(self.INDEX, encoding="utf-8") as fh:
+            html = fh.read()
+        self.assertRegex(html, r'id="ytCoverAiTitle"[^>]*checked', "預設標題由 AI 生成（使用者裁決）")
 
     def test_hourly_format_registered_on_both_sides(self):
         self.assertEqual(editor_formats.get("yt_hourly_cover")["yt_layout"], editor_formats.YT_COVER_LAYOUT_HOURLY)

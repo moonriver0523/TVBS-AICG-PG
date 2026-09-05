@@ -246,6 +246,61 @@ Requirements:
 - COMPOSITION FOR OVERLAYS: two lines of large headline type will be placed across the lower part of the frame afterwards, and a badge will sit in each upper corner. Keep the main subject in the upper-middle of the frame, keep the lower third free of essential detail (a plain or darker area there is ideal), and keep the extreme corners free of faces and key objects.
 """
 
+# 標題由 AI 生成模式（2026-09-06 使用者試做後裁決：兩種並存、預設 AI 生成）。
+# 整張封面連標題字、底帶都交給生圖模型；程式只後貼 LIVE 章／日期／標示／Logo。
+# 左上、右上（整點版還有左中日期位）要留空，貼上去的固定元素才不會壓到模型畫的東西。
+YT_COVER_TITLE_MODE_AI = "ai"
+YT_COVER_TITLE_MODE_COMPOSITE = "composite"
+YT_COVER_TITLE_MODES = (YT_COVER_TITLE_MODE_AI, YT_COVER_TITLE_MODE_COMPOSITE)
+
+YT_COVER_FULL_PROMPT_NEWS = """Design a complete Taiwanese TV news LIVE-stream thumbnail (YouTube cover), 16:9.
+
+=== TEXT TO RENDER (Traditional Chinese, Taiwan) ===
+Render EXACTLY these strings, character for character, nothing else:
+- Headline line 1 (upper line): {line1}
+- Headline line 2 (lower line): {line2}
+
+=== LAYOUT ===
+- The lower 40% of the frame is a semi-transparent deep-navy band with a subtle circuit-board / tech-block texture, fading in at its top edge.
+- Both headline lines are CENTRED horizontally on that band, stacked, each on one line, huge and heavy Chinese display type filling almost the full width.
+- Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
+- Keep the UPPER-LEFT corner (a block about 24% wide and 40% tall) completely free of text or busy detail: a red LIVE badge and a date tab are pasted there afterwards.
+- Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a channel logo tab is pasted there afterwards.
+
+=== IMAGERY ===
+{visual}
+Photographic, dramatically lit, news-documentary quality, filling the frame behind the band.
+
+=== HARD CONSTRAINTS ===
+- Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
+- No other text anywhere: no captions, no dates, no LIVE word, no logos, no watermark, no tickers, no 示意圖 label.
+- Nothing may touch or be clipped by any edge.
+"""
+
+YT_COVER_FULL_PROMPT_HOURLY = """Design a complete Taiwanese TV news LIVE-stream thumbnail (YouTube cover) for an on-the-hour news bulletin, 16:9.
+
+=== TEXT TO RENDER (Traditional Chinese, Taiwan) ===
+Render EXACTLY these strings, character for character, nothing else:
+- Headline line 1 (upper line): {line1}
+- Headline line 2 (lower line): {line2}
+
+=== LAYOUT ===
+- Both headline lines sit in the lower third, LEFT-ALIGNED near the left edge, stacked, each on one line, huge and heavy Chinese display type spanning almost the full width. No band behind them: the type sits directly on the photograph.
+- Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
+- Keep the UPPER-LEFT corner (about 14% wide and 14% tall) free: a small channel logo is pasted there afterwards.
+- Keep the UPPER-RIGHT corner (about 27% wide and 32% tall) free: a red LIVE badge with the broadcast time is pasted there afterwards.
+- Keep a strip on the LEFT directly above headline line 1 (about 32% wide and 10% tall) free of detail: a red date tab is pasted there afterwards.
+
+=== IMAGERY ===
+{visual}
+Photographic, news-documentary quality, filling the frame.
+
+=== HARD CONSTRAINTS ===
+- Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
+- No other text anywhere: no captions, no dates, no times, no LIVE word, no logos, no watermark, no tickers, no 示意圖 label.
+- Nothing may touch or be clipped by any edge.
+"""
+
 # 生圖 prompt 最後一段。肖像規則（PORTRAIT_MODES）與附圖規則（USER_REFERENCE_MODES）
 # 都寫著「VARIABLE FIELDS 裡的示意圖標籤要保持可見」——這條線根本沒有 VARIABLE
 # FIELDS，模型看到那句會自己畫一個「示意圖」字樣上去。所以固定在**最後**加這段

@@ -351,6 +351,8 @@ let state = {
     // YT 直播封面：上一次的無文字底圖是不是 AI 生的（重疊文字時決定要不要標 AI示意圖）。
     // 底圖本身走 refineSource（語意相同：給改圖用的原圖）。
     ytCoverBackgroundIsAi: false,
+    // 目前成品是哪種標題模式（來自後端回應）：追加修改與重疊固定元素要跟成品一致，不看勾選框
+    ytCoverTitleMode: 'ai',
     refineStack: []
 };
 
@@ -1598,6 +1600,7 @@ function ytCoverFields() {
     return {
         title: val('ytCoverTitle'),
         layout,
+        title_mode: document.getElementById('ytCoverAiTitle')?.checked === false ? 'composite' : 'ai',
         original_audio: layout !== 'hourly' && !!document.getElementById('ytCoverOriginalAudio')?.checked,
         ai_translation: layout !== 'hourly' && !!document.getElementById('ytCoverAiTranslation')?.checked,
         date_text: val('ytCoverDate'),
@@ -1614,6 +1617,7 @@ async function recomposeYtCover(refined) {
         headers: _apiHeaders(),
         body: JSON.stringify({
             ...ytCoverFields(),
+            title_mode: state.ytCoverTitleMode,
             provider: effectiveImageProvider(),
             background_image_base64: source.base64,
             background_mime_type: source.mimeType,
@@ -1633,6 +1637,7 @@ function showYtCoverResult(data, fields) {
     download.download = fields.layout === 'hourly' ? 'tvbs-yt-hourly-cover.png' : 'tvbs-yt-live-cover.png';
     download.innerText = '下載 PNG';
     state.ytCoverBackgroundIsAi = !!data.background_is_ai;
+    state.ytCoverTitleMode = data.title_mode || 'ai';
     // 追加修改：以無文字底圖為源，改完由 handleRefine 再疊一次文字
     resetRefineState(refineSourceFromResponse(data), data);
     const recompose = document.getElementById('ytCoverRecomposeBtn');
@@ -1651,6 +1656,11 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
     const fields = ytCoverFields();
     if (!fields.title) return showToast('請輸入直播標題');
     if (recomposeOnly && !state.refineSource) return showToast('還沒有底圖，請先生成一次');
+    // AI 標題模式的成品沒有「只改文字」這回事——字是模型畫的，改字就是整張重生
+    if (recomposeOnly && state.ytCoverTitleMode === 'ai') {
+        showToast('標題由 AI 生成，改字要整張重生…');
+        recomposeOnly = false;
+    }
 
     const btn = document.getElementById('aiBtn');
     const loading = document.getElementById('aiLoading');
@@ -1666,8 +1676,10 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
             });
         } else {
             const asis = state.userRefImages.some(ref => ref.purpose === 'asis');
-            showToast(asis ? '用附圖當底圖，合成中…' : 'AI 生底圖後合成，約 30–120 秒…');
-            beginGenerationProgress('image', asis ? 0.3 : 1.3);
+            const aiTitle = fields.title_mode === 'ai';
+            showToast(aiTitle ? 'AI 整張生成（含標題），約 30–120 秒…'
+                : asis ? '用附圖當底圖，合成中…' : 'AI 生底圖後合成，約 30–120 秒…');
+            beginGenerationProgress('image', (asis && !aiTitle) ? 0.3 : 1.3);
             const res = await fetch(YT_COVER_BACKEND_URL, {
                 method: 'POST',
                 headers: _apiHeaders(),
@@ -2207,8 +2219,10 @@ async function handleRefine() {
     btnText.innerText = '修改中…';
     loading.classList.remove('hidden');
 
-    // YT 直播封面：改的是無文字底圖（text_free），不置框、不挖洞、固定 16:9
+    // YT 直播封面：不置框、不挖洞、固定 16:9。壓字模式改的是無文字底圖（text_free）；
+    // AI 標題模式改的是含標題的模型圖，走一般 refine 規則（字要保留）。
     const isYtCover = editorFormat().inputs === 'yt_cover';
+    const ytTextFree = isYtCover && state.ytCoverTitleMode !== 'ai';
     try {
         const response = await fetch(REFINE_BACKEND_URL, {
             method: 'POST',
@@ -2225,7 +2239,7 @@ async function handleRefine() {
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
                 broadcast_hole: isYtCover ? '' : (editorFormat().hole || ''),
-                text_free: isYtCover,
+                text_free: ytTextFree,
             }),
         });
         const data = await response.json().catch(() => ({}));

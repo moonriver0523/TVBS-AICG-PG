@@ -546,8 +546,12 @@ def compose_yt_cover(
     original_audio: bool = False,
     ai_translation: bool = False,
     ai_note: bool = False,
+    draw_titles: bool = True,
 ) -> bytes:
     """合成 YT 國內外新聞直播封面（2026-09-06 依頻道實際版面）。
+
+    draw_titles=False（標題由 AI 生成模式）：background 已經是模型畫好含標題與底帶的
+    整張圖，這裡只貼固定元素（LIVE 章／日期／原音呈現／AI即時翻譯／藍標籤／AI示意圖）。
 
     background 是**無文字**底圖（使用者附圖或 AI 生成），任意尺寸，這裡等比例
     裁滿 1920×1080。line1／line2 是已分好的兩行標題（分段邏輯在 editor_formats），
@@ -564,8 +568,9 @@ def compose_yt_cover(
     width, height = YT_CANVAS
     margin = round(width * YT_MARGIN_RATIO)
 
-    # ---- 底帶先鋪，章與標籤壓在上面 ----
-    _draw_title_band(canvas)
+    # ---- 底帶先鋪，章與標籤壓在上面（AI 標題模式：底帶與標題都是模型畫的）----
+    if draw_titles:
+        _draw_title_band(canvas)
     _draw_logo_tab(canvas)
     draw = ImageDraw.Draw(canvas)
 
@@ -616,7 +621,7 @@ def compose_yt_cover(
     for text, fill, baseline_ratio in (
         (line1, YT_LINE1_FILL, YT_LINE1_BASELINE_RATIO),
         (line2, YT_LINE2_FILL, YT_LINE2_BASELINE_RATIO),
-    ):
+    ) if draw_titles else ():
         font = _fit_font(text, max_w, start, smallest)
         stroke = max(4, round(font.size * YT_TITLE_STROKE_RATIO))
         _draw_text(
@@ -659,8 +664,12 @@ def compose_yt_hourly_cover(
     date_text: str,
     time_text: str = "",
     ai_note: bool = False,
+    draw_titles: bool = True,
 ) -> bytes:
-    """合成 YT 整點直播封面。time_text（如 20:00）選填，有填才在 LIVE 章下掛時間帶。"""
+    """合成 YT 整點直播封面。time_text（如 20:00）選填，有填才在 LIVE 章下掛時間帶。
+
+    draw_titles=False：標題已由模型畫在 background 上，這裡只貼固定元素。
+    """
     line1, line2 = (line1 or "").strip(), (line2 or "").strip()
     if not line1 or not line2:
         raise ComposeError("YT 整點直播封面需要兩行標題，缺一不可")
@@ -724,7 +733,7 @@ def compose_yt_hourly_cover(
     for text, fill, baseline_ratio in (
         (line1, YT_LINE1_FILL, YT_HOURLY_LINE1_BASELINE_RATIO),
         (line2, YT_LINE2_FILL, YT_HOURLY_LINE2_BASELINE_RATIO),
-    ):
+    ) if draw_titles else ():
         font = _fit_font(text, max_w, start, smallest)
         stroke = max(4, round(font.size * YT_TITLE_STROKE_RATIO))
         _draw_text(

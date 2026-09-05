@@ -21,7 +21,18 @@ layout=hourly）。兩者共用同一條端點、同一套底圖流程與前端�
 | 日期 | 預設當天 `YYYY/MM/DD`，前端可改 |
 | 附圖 | 沿用主流程上傳區與四種用途。**原圖放置（asis）＝直接當底圖，不打生圖模型**；scene／portrait／map＝生圖時當參考，用途規則照主流程注入 |
 
-## 底圖三條路
+## 標題兩種模式（2026-09-06 使用者試做後裁決：兩種並存、**預設 AI 生成**）
+
+| 模式 | `title_mode` | 做法 | 追加修改 | 只改文字 |
+|---|---|---|---|---|
+| 標題由 AI 生成（預設、勾選框打開） | `ai` | 整張連兩行標題、底帶交給生圖模型（`YT_COVER_FULL_PROMPT_NEWS`／`_HOURLY`，左上右上留空），程式只後貼 LIVE 章／日期／原音呈現／AI即時翻譯／藍標籤／AI示意圖。附圖全當參考（asis 照主流程原圖放置）。一律標 AI示意圖。 | 一般 refine 規則（字要保留），改完帶 `background_image_base64` 回來只補貼固定元素 | 沒有這回事，改字＝整張重生 |
+| 程式壓字（勾選框關閉） | `composite` | 下面「底圖三條路」；零錯字、有附圖時零 API | `text_free` refine 改底圖再重疊 | 8 秒重疊 |
+
+試做紀錄：挪威國王／C 肝／美伊油價（含追加修改改夜景）／整點版車禍，5 張全對字，
+每張 34 到 51 秒；樣張 `D:\Downloads\aicg_yt_cover_20260905\G_fullgen_*.png`、`H_*.png`。
+AI 模式的字級行距每張略有差異，錯字率要累積更多樣本才知道。
+
+## 底圖三條路（壓字模式）
 
 1. 有 asis 附圖 → `compose.crop_background_16x9` 裁滿 16:9。不標 AI示意圖。
 2. 有其他用途附圖 → `generate_image_raw` 帶附圖生無文字底圖。標 AI示意圖。
@@ -74,7 +85,7 @@ hourly 另收 `time_text`。前端 `EDITOR_FORMATS[*].ytLayout` 帶到 `ytCoverF
 
 - 無附圖（挪威國王，`gpt-image-2`）31 秒；asis 附圖 14 秒（含一次分段呼叫）。
 - 瀏覽器：切版型→生成→只改文字（8 秒）→追加修改「改成夜晚」（34 秒）→退回上一版可用。
-- 測試：`tests/test_yt_cover.py` 32 個；全套 701 綠（2026-09-06 頻道版面後）。
+- 測試：`tests/test_yt_cover.py` 37 個；全套 706 綠（2026-09-06 AI 標題模式後）。
 - 頻道版面樣張：`D:\Downloads\aicg_yt_cover_20260905\F_news_channel_layout.png`（兩個標示都勾）、`F_news_plain.png`。
 - 整點版本機合成樣張：`D:\Downloads\aicg_yt_cover_20260905\E_hourly_sample.png`。
 - 2026-09-06 修正：切到 YT 版型時附圖上傳區留在角色鈕正下方、看起來像消失，

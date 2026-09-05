@@ -3221,6 +3221,9 @@ class YtCoverRequest(BaseModel):
     title: str = Field(min_length=1, max_length=60)
     # news＝國內外新聞直播；hourly＝整點直播（見 editor_formats.YT_COVER_LAYOUTS）
     layout: Literal["news", "hourly"] = "news"
+    # ai＝整張連標題字交給生圖模型畫，程式只後貼固定元素（2026-09-06 使用者裁決預設）；
+    # composite＝模型只生無文字底圖，標題由程式壓字（零錯字）。
+    title_mode: Literal["ai", "composite"] = "ai"
     # 國內外新聞直播的兩個獨立標示（頻道實際版面可並存）；整點直播忽略
     original_audio: bool = False     # LIVE 章上方「原音呈現」
     ai_translation: bool = False     # 日期下方「AI即時翻譯」
@@ -3242,11 +3245,13 @@ class YtCoverRequest(BaseModel):
 
 
 class YtCoverResponse(ImageGenerateResponse):
-    # source_image_base64（繼承欄位）＝無文字底圖，供追加修改與只改文字重疊用。
+    # source_image_base64（繼承欄位）＝追加修改的源圖：composite 模式是無文字底圖，
+    # ai 模式是模型畫好含標題、但還沒貼固定元素的整張圖。
     line1: str = ""
     line2: str = ""
     visual: str = ""
     background_is_ai: bool = False
+    title_mode: str = "ai"
 
 
 def derive_yt_cover_plan(title: str, preset_lines: tuple[str, str] | None) -> dict:
@@ -3292,7 +3297,10 @@ def resolve_yt_cover_plan(
     title = req.title.strip()
     lines = editor_formats.split_live_title(title)
     has_asis = any(ref.purpose == "asis" for ref in req.reference_images)
-    need_visual = not has_asis and not req.background_image_base64
+    # AI 標題模式一定要生圖（附圖只是參考），所以只要沒帶現成圖就需要畫面描述
+    need_visual = not req.background_image_base64 and (
+        req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI or not has_asis
+    )
     if lines and not need_visual:
         return lines, "", [], []
 
@@ -3365,6 +3373,41 @@ def _yt_cover_background(
     return base64.b64decode(result.image_data_base64), result.mime_type, True, result.model
 
 
+def _yt_cover_full_image(
+    req: "YtCoverRequest",
+    lines: tuple[str, str],
+    visual: str,
+    subjects: list[str],
+    english: list[str],
+) -> tuple[bytes, str, str]:
+    """AI 標題模式：整張封面（含兩行標題與底帶）交給生圖模型，回 (bytes, mime, model)。
+
+    附圖全數當參考（asis 也照主流程規則原圖放置）；肖像走主流程查參考照。
+    不壓 TEXT_FREE override——這條線就是要模型畫字。
+    """
+    hourly = req.layout == editor_formats.YT_COVER_LAYOUT_HOURLY
+    template = editor_formats.YT_COVER_FULL_PROMPT_HOURLY if hourly else editor_formats.YT_COVER_FULL_PROMPT_NEWS
+    image_req = ImageGenerateRequest(
+        prompt=template.format(line1=lines[0], line2=lines[1], visual=visual.strip() or req.title.strip()),
+        provider=req.provider,
+        aspect_ratio="16:9",
+        image_size=req.image_size,
+        safe_frame=False,
+        reference_images=list(req.reference_images),
+        portrait_subjects=subjects,
+        portrait_subjects_en=english,
+    )
+    image_req = apply_portrait_to_image_request(image_req)
+    attached = len(image_req.portrait_reference_data_urls) + (1 if image_req.reference_image_data_url else 0)
+    print(
+        f"[yt-cover:ai-title] portrait_subjects={subjects} en={english} 參考照={attached} 張 附圖={len(req.reference_images)}",
+        flush=True,
+    )
+    image_req = apply_user_references_to_image_request(image_req)
+    result = generate_image_raw(image_req)
+    return base64.b64decode(result.image_data_base64), result.mime_type, result.model
+
+
 @app.post(
     "/api/editor/yt-cover",
     response_model=YtCoverResponse,
@@ -3378,7 +3421,16 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
 
     lines, visual, subjects, english = resolve_yt_cover_plan(req)
-    background, bg_mime, is_ai, image_model = _yt_cover_background(req, visual, subjects, english)
+    ai_title = req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI
+    if ai_title and req.background_image_base64:
+        # 追加修改後回來：模型圖已含標題，只補貼固定元素
+        background = base64.b64decode(req.background_image_base64)
+        bg_mime, is_ai, image_model = req.background_mime_type or "image/png", req.background_is_ai, "yt-cover:overlay"
+    elif ai_title:
+        background, bg_mime, image_model = _yt_cover_full_image(req, lines, visual, subjects, english)
+        is_ai = True
+    else:
+        background, bg_mime, is_ai, image_model = _yt_cover_background(req, visual, subjects, english)
     try:
         if hourly:
             cover = compose.compose_yt_hourly_cover(
@@ -3388,6 +3440,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 date_text=date_text,
                 time_text=req.time_text.strip(),
                 ai_note=is_ai,
+                draw_titles=not ai_title,
             )
         else:
             cover = compose.compose_yt_cover(
@@ -3398,6 +3451,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 original_audio=original_audio,
                 ai_translation=ai_translation,
                 ai_note=is_ai,
+                draw_titles=not ai_title,
             )
     except compose.ComposeError as exc:
         print(f"[compose] YT 直播封面失敗：{exc}", flush=True)
@@ -3405,7 +3459,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
 
     request_log.log_generation(
         request_id=request_log.new_request_id(),
-        source=f"editor-yt-cover-{req.layout}",
+        source=f"editor-yt-cover-{req.layout}-{req.title_mode}",
         news_text=req.title,
         variable="\n".join(filter(None, [
             lines[0], lines[1],
@@ -3428,6 +3482,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         line2=lines[1],
         visual=visual,
         background_is_ai=is_ai,
+        title_mode=req.title_mode,
     )
 
 
