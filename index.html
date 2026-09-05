@@ -399,11 +399,12 @@
                                    placeholder="挪威國王哈拉德辭世 開放公眾瞻仰遺容" />
                         </div>
                         <div class="flex items-center gap-2">
-                            <select id="ytCoverSubtitle" class="bg-slate-950/80 border border-slate-800 rounded-lg px-2 py-1.5 text-[11px] font-black text-slate-100">
-                                <option value="">無副標</option>
-                                <option value="原音重現">原音重現</option>
-                                <option value="AI即時翻譯">AI即時翻譯</option>
-                            </select>
+                            <div id="ytCoverFlags" class="flex items-center gap-2 text-[10px] font-black text-slate-300">
+                                <label class="flex items-center gap-1 cursor-pointer" title="LIVE 章上方「原音呈現」">
+                                    <input id="ytCoverOriginalAudio" type="checkbox" class="accent-red-600" />原音呈現</label>
+                                <label class="flex items-center gap-1 cursor-pointer" title="日期下方「AI即時翻譯」">
+                                    <input id="ytCoverAiTranslation" type="checkbox" class="accent-red-600" />AI即時翻譯</label>
+                            </div>
                             <input id="ytCoverTime" type="text" maxlength="10"
                                    class="hidden w-[88px] bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-100 input-focus-ring"
                                    title="整點時間，選填；有填才出現在 LIVE 章下方"
@@ -415,7 +416,7 @@
                                     title="底圖不重生，只用新的標題／副標／日期重疊文字"
                                     class="px-2.5 py-1.5 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all disabled:opacity-40">只改文字</button>
                         </div>
-                        <p class="text-[9px] text-slate-600 leading-relaxed">附圖選「<span class="text-amber-500/90">原圖放置</span>」就直接當底圖不生圖；其他用途當生圖參考。沒附圖由 AI 依標題生底圖並標「AI示意圖」。LIVE 章、日期、Logo、兩行標題全由程式疊，零錯字。</p>
+                        <p class="text-[9px] text-slate-600 leading-relaxed">附圖選「<span class="text-amber-500/90">原圖放置</span>」就直接當底圖不生圖；其他用途當生圖參考。沒附圖由 AI 依標題生底圖並標「AI示意圖」。LIVE 章、日期、Logo、兩行標題全由程式疊，零錯字；版面依 TVBS NEWS 頻道實際直播封面。</p>
                     </div>
 
                     <div id="digestControlsRow" class="grid grid-cols-2 gap-2 mb-2">

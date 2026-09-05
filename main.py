@@ -3221,7 +3221,9 @@ class YtCoverRequest(BaseModel):
     title: str = Field(min_length=1, max_length=60)
     # news＝國內外新聞直播；hourly＝整點直播（見 editor_formats.YT_COVER_LAYOUTS）
     layout: Literal["news", "hourly"] = "news"
-    subtitle: str = Field(default="", max_length=20)
+    # 國內外新聞直播的兩個獨立標示（頻道實際版面可並存）；整點直播忽略
+    original_audio: bool = False     # LIVE 章上方「原音呈現」
+    ai_translation: bool = False     # 日期下方「AI即時翻譯」
     date_text: str = Field(default="", max_length=20)
     # 整點直播專用：整點時間（如 20:00），選填，有填才掛在 LIVE 章下
     time_text: str = Field(default="", max_length=10)
@@ -3370,13 +3372,9 @@ def _yt_cover_background(
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     hourly = req.layout == editor_formats.YT_COVER_LAYOUT_HOURLY
-    # 整點直播沒有副標（2026-09-06 使用者裁決），前端切版型時藏起下拉；後端直接忽略
-    subtitle = "" if hourly else req.subtitle.strip()
-    if subtitle not in editor_formats.YT_COVER_SUBTITLES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"未知的副標：{subtitle}（可用：{[s or '（無）' for s in editor_formats.YT_COVER_SUBTITLES]}）",
-        )
+    # 整點直播沒有原音呈現／AI即時翻譯（2026-09-06 使用者裁決），後端直接忽略
+    original_audio = bool(req.original_audio) and not hourly
+    ai_translation = bool(req.ai_translation) and not hourly
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
 
     lines, visual, subjects, english = resolve_yt_cover_plan(req)
@@ -3397,7 +3395,8 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 line1=lines[0],
                 line2=lines[1],
                 date_text=date_text,
-                subtitle=subtitle,
+                original_audio=original_audio,
+                ai_translation=ai_translation,
                 ai_note=is_ai,
             )
     except compose.ComposeError as exc:
@@ -3408,7 +3407,12 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         request_id=request_log.new_request_id(),
         source=f"editor-yt-cover-{req.layout}",
         news_text=req.title,
-        variable=f"{lines[0]}\n{lines[1]}\n{subtitle or req.time_text.strip()}".rstrip(),
+        variable="\n".join(filter(None, [
+            lines[0], lines[1],
+            editor_formats.YT_COVER_ORIGINAL_AUDIO_LABEL if original_audio else "",
+            editor_formats.YT_COVER_AI_TRANSLATION_LABEL if ai_translation else "",
+            req.time_text.strip() if hourly else "",
+        ])),
         prompt=visual or "（附圖／既有底圖）",
         role="編輯",
         provider=req.provider,

@@ -384,37 +384,56 @@ def compose_ten_cover(
 # 正版 Logo（＋可選副標）、底部兩行標題（白／黃、黑描邊）、AI 底圖時右側小字
 # 「AI示意圖」。所有幾何以畫布比例計，量自使用者範例（1376×768）。
 #
-# LIVE 章是從範例截下、放大兩倍、套圓角遮罩的 PNG（static/brand/live-badge.png）；
-# 官方去背檔到手時直接換檔即可，位置與尺寸不用動。日期每天不同，由程式畫在
-# 章下方的白色小條上，不裁範例。
+# LIVE 章是生圖模型重製的高清去背 PNG（static/brand/live-badge.png）；官方檔到手時
+# 直接換檔即可，位置與尺寸不用動。日期每天不同，由程式畫在章下方的白色小條上。
 # ============================================================
 
 LIVE_BADGE = BRAND_DIR / "live-badge.png"
 
 YT_CANVAS = (1920, 1080)
-YT_MARGIN_RATIO = 0.021              # 左右邊距（範例 LIVE 章左緣 29/1376）
-YT_TOP_RATIO = 0.038                 # LIVE 章上緣（29/768）
-YT_BADGE_WIDTH_RATIO = 0.209         # LIVE 章寬（288/1376）
-YT_DATE_TAB_WIDTH_RATIO = 0.189      # 日期白條寬（260/1376）
-YT_DATE_TAB_HEIGHT_RATIO = 0.079     # 日期白條高（61/768）
+# 2026-09-06 改依 TVBS NEWS 頻道實際上線的直播封面量（maxresdefault 1280×720），
+# 不再依 docx 範例：標題置中壓深藍科技底帶、右上藍色 TVBS 小標籤、
+# 「原音呈現」白字紅邊在 LIVE 章上方、「AI即時翻譯」小白字在日期下方，兩者可並存。
+YT_MARGIN_RATIO = 0.026              # LIVE 章左緣（33/1280）
+YT_TOP_RATIO = 0.05                  # LIVE 章上緣（無原音呈現時）
+YT_TOP_WITH_LABEL_RATIO = 0.128      # 有原音呈現時章往下讓位
+YT_BADGE_WIDTH_RATIO = 0.227         # LIVE 章寬（290/1280）
+YT_DATE_TAB_WIDTH_RATIO = 0.219      # 日期白條寬（280/1280）
+YT_DATE_TAB_HEIGHT_RATIO = 0.111     # 日期白條高（80/720）
 YT_DATE_FILL = (255, 255, 255)
-YT_DATE_TEXT = (190, 20, 30)
-YT_LOGO_WIDTH_RATIO = 0.207          # Logo 寬（285/1376）
-YT_LOGO_TOP_RATIO = 0.058
-YT_SUBTITLE_BASELINE_RATIO = 0.36    # 副標基線（範例字底 299/768 再留一點）
-YT_SUBTITLE_SIZE_RATIO = 0.076       # 副標字級（範例約 58/768）
-YT_LINE1_BASELINE_RATIO = 0.796      # 第一行字底（611/768）
-YT_LINE2_BASELINE_RATIO = 0.963      # 第二行字底（範例 748/768 貼邊，收一點）
-YT_TITLE_SIZE_RATIO = 0.165          # 標題起始字級（範例字高 126/768）
+YT_DATE_TEXT = (200, 20, 30)
+YT_ORIGINAL_AUDIO_LABEL = "原音呈現"
+YT_ORIGINAL_AUDIO_SIZE_RATIO = 0.09  # 字高 64/720
+YT_ORIGINAL_AUDIO_BASELINE_RATIO = 0.118
+YT_ORIGINAL_AUDIO_FILL = (255, 255, 255)
+YT_ORIGINAL_AUDIO_STROKE = (215, 25, 35)
+YT_AI_TRANSLATION_LABEL = "AI即時翻譯"
+YT_AI_TRANSLATION_SIZE_RATIO = 0.05
+YT_AI_TRANSLATION_GAP_RATIO = 0.02   # 日期條底到小字頂的距離
+YT_LOGO_TAB_LEFT_RATIO = 0.802       # 右上藍標籤：左上角 x（貼右上角、延伸出畫面）
+YT_LOGO_TAB_SLANT_RATIO = 0.037      # 左邊斜切：底邊比頂邊內縮多少
+YT_LOGO_TAB_HEIGHT_RATIO = 0.153
+YT_LOGO_TAB_TOP = (70, 180, 255)
+YT_LOGO_TAB_BOTTOM = (15, 95, 210)
+YT_LOGO_WIDTH_RATIO = 0.14           # Logo 寬（180/1280）
+YT_LOGO_LEFT_RATIO = 0.844
+YT_LOGO_TOP_RATIO = 0.014
+YT_BAND_TOP_RATIO = 0.60             # 深藍科技底帶起點
+YT_BAND_FADE_RATIO = 0.06            # 頂端漸入高度
+YT_BAND_FILL = (8, 25, 70)
+YT_BAND_ALPHA = 205
+YT_BAND_BLOCK_FILL = (60, 130, 230)
+YT_LINE1_BASELINE_RATIO = 0.764      # 第一行字底
+YT_LINE2_BASELINE_RATIO = 0.958      # 第二行字底
+YT_TITLE_SIZE_RATIO = 0.145          # 標題起始字級（字高約 100/720）
 YT_TITLE_MIN_SIZE_RATIO = 0.085
-YT_TITLE_LEFT_RATIO = 0.057          # 標題左緣（86/1376，「1」之類窄字會再內縮）
 YT_TITLE_STROKE_RATIO = 0.05         # 描邊佔字級比例
 YT_LINE1_FILL = (255, 255, 255)
-YT_LINE2_FILL = (250, 215, 0)        # 範例取樣 (240,208,0) 略提亮
+YT_LINE2_FILL = (250, 215, 0)
 YT_TITLE_STROKE = (8, 8, 8)
 YT_AI_NOTE = "AI示意圖"
 YT_AI_NOTE_SIZE_RATIO = 0.032
-YT_AI_NOTE_TOP_RATIO = 0.40          # 副標之下、標題之上的右側空位
+YT_AI_NOTE_TOP_RATIO = 0.20          # 藍標籤之下的右側空位
 YT_AI_NOTE_PLATE = (0, 0, 0, 120)
 
 
@@ -430,21 +449,110 @@ def _paste_live_badge(canvas: Image.Image, box: tuple[int, int], width: int) -> 
     return height
 
 
+def _draw_ai_note(canvas: Image.Image, y0: int) -> None:
+    """右側「AI示意圖」小標（半透明黑底、白字），y0 為標籤頂。"""
+    width, height = YT_CANVAS
+    margin = round(width * YT_MARGIN_RATIO)
+    note_font = _font(round(height * YT_AI_NOTE_SIZE_RATIO))
+    note_w = note_font.getbbox(YT_AI_NOTE)[2]
+    note_h = round(height * YT_AI_NOTE_SIZE_RATIO * 1.5)
+    x1 = width - margin - 12
+    plate = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    ImageDraw.Draw(plate).rounded_rectangle(
+        (x1 - note_w - 24, y0, x1, y0 + note_h), radius=8, fill=YT_AI_NOTE_PLATE
+    )
+    canvas.alpha_composite(plate)
+    _draw_text(ImageDraw.Draw(canvas), (x1 - 12, y0 + note_h // 2), YT_AI_NOTE, note_font, stroke_width=0, anchor="rm")
+
+
+def _draw_logo_tab(canvas: Image.Image) -> None:
+    """右上角藍色漸層標籤（左邊斜切、左下圓角）＋白色 TVBS Logo，貼著畫面右上角。"""
+    width, height = YT_CANVAS
+    tab_h = round(height * YT_LOGO_TAB_HEIGHT_RATIO)
+    x_top = round(width * YT_LOGO_TAB_LEFT_RATIO)
+    x_bottom = x_top + round(width * YT_LOGO_TAB_SLANT_RATIO)
+    radius = round(width * 0.02)
+    # 4 倍超取樣畫遮罩，斜邊與圓角才不會鋸齒
+    scale = 4
+    mask = Image.new("L", (width * scale, (tab_h + radius) * scale), 0)
+    md = ImageDraw.Draw(mask)
+    pts = [
+        (x_top * scale, -radius * scale),
+        (width * scale + radius * scale, -radius * scale),
+        (width * scale + radius * scale, tab_h * scale),
+        ((x_bottom + radius) * scale, tab_h * scale),
+        (x_bottom * scale, (tab_h - radius) * scale),
+    ]
+    md.polygon(pts, fill=255)
+    md.pieslice(
+        ((x_bottom) * scale, (tab_h - 2 * radius) * scale, (x_bottom + 2 * radius) * scale, tab_h * scale),
+        90, 180, fill=255,
+    )
+    md.polygon(
+        [((x_bottom) * scale, (tab_h - radius) * scale), ((x_bottom + radius) * scale, (tab_h - radius) * scale),
+         ((x_bottom + radius) * scale, tab_h * scale), ((x_bottom) * scale, tab_h * scale)],
+        fill=0,
+    )
+    md.pieslice(
+        ((x_bottom) * scale, (tab_h - 2 * radius) * scale, (x_bottom + 2 * radius) * scale, tab_h * scale),
+        90, 180, fill=255,
+    )
+    mask = mask.resize((width, tab_h + radius), Image.LANCZOS).crop((0, 0, width, tab_h))
+    gradient = Image.new("RGBA", (width, tab_h))
+    gd = ImageDraw.Draw(gradient)
+    for y in range(tab_h):
+        t = y / max(1, tab_h - 1)
+        colour = tuple(round(YT_LOGO_TAB_TOP[i] * (1 - t) + YT_LOGO_TAB_BOTTOM[i] * t) for i in range(3))
+        gd.line(((0, y), (width, y)), fill=colour + (255,))
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    layer.paste(gradient, (0, 0), mask)
+    canvas.alpha_composite(layer)
+    _paste_logo(canvas, (round(width * YT_LOGO_LEFT_RATIO), round(height * YT_LOGO_TOP_RATIO)), round(width * YT_LOGO_WIDTH_RATIO))
+
+
+def _draw_title_band(canvas: Image.Image) -> None:
+    """底部深藍科技底帶：頂端漸入，帶上撒幾塊半透明淡藍方塊模擬頻道的電路紋。"""
+    width, height = YT_CANVAS
+    top = round(height * YT_BAND_TOP_RATIO)
+    fade = round(height * YT_BAND_FADE_RATIO)
+    band = Image.new("RGBA", (width, height - top), YT_BAND_FILL + (0,))
+    alpha = Image.new("L", band.size, YT_BAND_ALPHA)
+    ad = ImageDraw.Draw(alpha)
+    for y in range(fade):
+        ad.line(((0, y), (width, y)), fill=round(YT_BAND_ALPHA * y / fade))
+    band.putalpha(alpha)
+    blocks = Image.new("RGBA", band.size, (0, 0, 0, 0))
+    bd = ImageDraw.Draw(blocks)
+    # 固定序列，不用亂數：同一張輸入永遠得到同一張輸出
+    seq = [(0.02, 0.35, 0.09, 0.05), (0.13, 0.62, 0.05, 0.16), (0.21, 0.10, 0.12, 0.05),
+           (0.36, 0.72, 0.08, 0.10), (0.47, 0.20, 0.05, 0.20), (0.58, 0.58, 0.13, 0.05),
+           (0.70, 0.08, 0.06, 0.14), (0.79, 0.66, 0.10, 0.07), (0.90, 0.28, 0.07, 0.18)]
+    for fx, fy, fw, fh in seq:
+        x0, y0 = round(fx * width), round(fy * band.height)
+        bd.rectangle((x0, y0, x0 + round(fw * width), y0 + round(fh * band.height)), fill=YT_BAND_BLOCK_FILL + (55,))
+    blocks = blocks.filter(ImageFilter.GaussianBlur(3))
+    band.alpha_composite(blocks)
+    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    layer.paste(band, (0, top))
+    canvas.alpha_composite(layer)
+
+
 def compose_yt_cover(
     background: bytes,
     *,
     line1: str,
     line2: str,
     date_text: str,
-    subtitle: str = "",
+    original_audio: bool = False,
+    ai_translation: bool = False,
     ai_note: bool = False,
 ) -> bytes:
-    """合成 YT 直播封面。
+    """合成 YT 國內外新聞直播封面（2026-09-06 依頻道實際版面）。
 
     background 是**無文字**底圖（使用者附圖或 AI 生成），任意尺寸，這裡等比例
     裁滿 1920×1080。line1／line2 是已分好的兩行標題（分段邏輯在 editor_formats），
-    subtitle 是「原音重現」「AI即時翻譯」或空字串，ai_note=True 時右側加「AI示意圖」
-    （2026-09-05 使用者裁決：AI 生的底圖一律標，附圖不標）。
+    original_audio＝LIVE 章上方「原音呈現」、ai_translation＝日期下方「AI即時翻譯」，
+    兩者獨立可並存；ai_note=True 時右側加「AI示意圖」（AI 生的底圖一律標，附圖不標）。
     """
     line1, line2 = (line1 or "").strip(), (line2 or "").strip()
     if not line1 or not line2:
@@ -453,12 +561,23 @@ def compose_yt_cover(
         raise ComposeError("YT 直播封面需要日期")
 
     canvas = _cover_panel(background, YT_CANVAS).convert("RGBA")
-    draw = ImageDraw.Draw(canvas)
     width, height = YT_CANVAS
     margin = round(width * YT_MARGIN_RATIO)
-    top = round(height * YT_TOP_RATIO)
 
-    # ---- 左上：LIVE 章＋日期條 ----
+    # ---- 底帶先鋪，章與標籤壓在上面 ----
+    _draw_title_band(canvas)
+    _draw_logo_tab(canvas)
+    draw = ImageDraw.Draw(canvas)
+
+    # ---- 左上：（原音呈現）＋ LIVE 章 ＋ 日期條（＋AI即時翻譯）----
+    top = round(height * (YT_TOP_WITH_LABEL_RATIO if original_audio else YT_TOP_RATIO))
+    if original_audio:
+        label_font = _font(round(height * YT_ORIGINAL_AUDIO_SIZE_RATIO))
+        _draw_text(
+            draw, (margin + round(width * 0.008), round(height * YT_ORIGINAL_AUDIO_BASELINE_RATIO)),
+            YT_ORIGINAL_AUDIO_LABEL, label_font, fill=YT_ORIGINAL_AUDIO_FILL,
+            stroke=YT_ORIGINAL_AUDIO_STROKE, stroke_width=max(4, round(height * 0.009)), anchor="ls",
+        )
     badge_w = round(width * YT_BADGE_WIDTH_RATIO)
     badge_h = _paste_live_badge(canvas, (margin, top), badge_w)
     tab_w = round(width * YT_DATE_TAB_WIDTH_RATIO)
@@ -466,7 +585,6 @@ def compose_yt_cover(
     tab_x0 = margin + (badge_w - tab_w) // 2
     tab_y0 = top + badge_h - 4          # 微微塞進章底，看起來像同一個物件
     tab_box = (tab_x0, tab_y0, tab_x0 + tab_w, tab_y0 + tab_h)
-    # 軟陰影：讓白條在亮底圖上也分得出來
     shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     ImageDraw.Draw(shadow).rounded_rectangle(
         (tab_box[0] + 3, tab_box[1] + 5, tab_box[2] + 3, tab_box[3] + 5), radius=14, fill=(0, 0, 0, 110)
@@ -479,37 +597,20 @@ def compose_yt_cover(
         draw, ((tab_box[0] + tab_box[2]) // 2, (tab_box[1] + tab_box[3]) // 2 + 2),
         date_text, date_font, fill=YT_DATE_TEXT, stroke_width=0, anchor="mm",
     )
-
-    # ---- 右上：Logo（＋副標） ----
-    logo_w = round(width * YT_LOGO_WIDTH_RATIO)
-    _paste_logo(canvas, (width - margin - logo_w, round(height * YT_LOGO_TOP_RATIO)), logo_w)
-    draw = ImageDraw.Draw(canvas)
-    subtitle = (subtitle or "").strip()
-    if subtitle:
-        sub_font = _font(round(height * YT_SUBTITLE_SIZE_RATIO))
+    if ai_translation:
+        small = _font(round(height * YT_AI_TRANSLATION_SIZE_RATIO))
         _draw_text(
-            draw, (width - margin - 12, round(height * YT_SUBTITLE_BASELINE_RATIO)),
-            subtitle, sub_font, stroke=YT_TITLE_STROKE, stroke_width=6, anchor="rs",
+            draw, (tab_box[0] + 6, tab_box[3] + round(height * YT_AI_TRANSLATION_GAP_RATIO)),
+            YT_AI_TRANSLATION_LABEL, small, stroke=YT_TITLE_STROKE, stroke_width=4, anchor="la",
         )
 
     # ---- 右側：AI 示意圖小標（只有 AI 底圖才有）----
     if ai_note:
-        note_font = _font(round(height * YT_AI_NOTE_SIZE_RATIO))
-        note_w = note_font.getbbox(YT_AI_NOTE)[2]
-        note_h = round(height * YT_AI_NOTE_SIZE_RATIO * 1.5)
-        x1 = width - margin - 12
-        y0 = round(height * YT_AI_NOTE_TOP_RATIO)
-        plate = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-        ImageDraw.Draw(plate).rounded_rectangle(
-            (x1 - note_w - 24, y0, x1, y0 + note_h), radius=8, fill=YT_AI_NOTE_PLATE
-        )
-        canvas.alpha_composite(plate)
+        _draw_ai_note(canvas, round(height * YT_AI_NOTE_TOP_RATIO))
         draw = ImageDraw.Draw(canvas)
-        _draw_text(draw, (x1 - 12, y0 + note_h // 2), YT_AI_NOTE, note_font, stroke_width=0, anchor="rm")
 
-    # ---- 底部：兩行標題（白／黃、黑描邊）----
-    left = round(width * YT_TITLE_LEFT_RATIO)
-    max_w = width - left - margin
+    # ---- 底部：兩行標題置中（白／黃、黑描邊）----
+    max_w = width - margin * 2
     start = round(height * YT_TITLE_SIZE_RATIO)
     smallest = round(height * YT_TITLE_MIN_SIZE_RATIO)
     for text, fill, baseline_ratio in (
@@ -519,8 +620,8 @@ def compose_yt_cover(
         font = _fit_font(text, max_w, start, smallest)
         stroke = max(4, round(font.size * YT_TITLE_STROKE_RATIO))
         _draw_text(
-            draw, (left, round(height * baseline_ratio)), text, font,
-            fill=fill, stroke=YT_TITLE_STROKE, stroke_width=stroke, anchor="ls",
+            draw, (width // 2, round(height * baseline_ratio)), text, font,
+            fill=fill, stroke=YT_TITLE_STROKE, stroke_width=stroke, anchor="ms",
         )
 
     buffer = io.BytesIO()
@@ -537,7 +638,8 @@ YT_HOURLY_LOGO_TOP_RATIO = 0.064
 YT_HOURLY_BADGE_WIDTH_RATIO = 0.25      # LIVE 章寬（104/415）
 YT_HOURLY_BADGE_TOP_RATIO = 0.024
 YT_HOURLY_TIME_BAND_HEIGHT_RATIO = 0.095  # 章下時間帶高（21/220）
-YT_HOURLY_TIME_BAND_FILL = (168, 12, 22)
+YT_HOURLY_TIME_BAND_FILL = (255, 255, 255)   # 頻道實際：白底紅字
+YT_HOURLY_TIME_BAND_TEXT = (200, 20, 30)
 YT_HOURLY_DATE_TAB_WIDTH_RATIO = 0.30   # 日期紅條寬（125/415）
 YT_HOURLY_DATE_TAB_HEIGHT_RATIO = 0.095
 YT_HOURLY_DATE_TOP_RATIO = 0.52         # 日期紅條上緣（114/220）
@@ -593,25 +695,15 @@ def compose_yt_hourly_cover(
         time_font = _fit_font(time_text, band[2] - band[0] - 24, round(band_h * 0.8), round(band_h * 0.4))
         _draw_text(
             draw, ((band[0] + band[2]) // 2, (band[1] + band[3]) // 2 + 2),
-            time_text, time_font, fill=(255, 255, 255), stroke_width=0, anchor="mm",
+            time_text, time_font, fill=YT_HOURLY_TIME_BAND_TEXT, stroke_width=0, anchor="mm",
         )
         block_bottom = band[3]
 
     # ---- 右側：AI 示意圖小標（只有 AI 底圖才有）----
     draw = ImageDraw.Draw(canvas)
     if ai_note:
-        note_font = _font(round(height * YT_AI_NOTE_SIZE_RATIO))
-        note_w = note_font.getbbox(YT_AI_NOTE)[2]
-        note_h = round(height * YT_AI_NOTE_SIZE_RATIO * 1.5)
-        x1 = width - margin - 12
-        y0 = max(round(height * YT_HOURLY_AI_NOTE_TOP_RATIO), block_bottom + 16)
-        plate = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-        ImageDraw.Draw(plate).rounded_rectangle(
-            (x1 - note_w - 24, y0, x1, y0 + note_h), radius=8, fill=YT_AI_NOTE_PLATE
-        )
-        canvas.alpha_composite(plate)
+        _draw_ai_note(canvas, max(round(height * YT_HOURLY_AI_NOTE_TOP_RATIO), block_bottom + 16))
         draw = ImageDraw.Draw(canvas)
-        _draw_text(draw, (x1 - 12, y0 + note_h // 2), YT_AI_NOTE, note_font, stroke_width=0, anchor="rm")
 
     # ---- 左中：紅底白字日期，貼在第一行標題正上方 ----
     tab_w = round(width * YT_HOURLY_DATE_TAB_WIDTH_RATIO)

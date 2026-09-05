@@ -78,7 +78,7 @@ class ComposeTests(unittest.TestCase):
     def test_output_is_full_hd_png(self):
         cover = compose.compose_yt_cover(
             _png_bytes(), line1="第一行標題", line2="第二行標題",
-            date_text="2026/09/05", subtitle="原音重現", ai_note=True,
+            date_text="2026/09/05", original_audio=True, ai_translation=True, ai_note=True,
         )
         with Image.open(io.BytesIO(cover)) as image:
             self.assertEqual(image.size, compose.YT_CANVAS)
@@ -94,6 +94,32 @@ class ComposeTests(unittest.TestCase):
             with Image.open(io.BytesIO(cover)) as image:
                 y0 = round(compose.YT_CANVAS[1] * compose.YT_AI_NOTE_TOP_RATIO)
                 return image.crop((1500, y0, 1900, y0 + 60)).tobytes()
+
+        self.assertNotEqual(region(True), region(False))
+
+    def test_original_audio_label_sits_above_badge(self):
+        # 原音呈現：章往下讓位，章上方那塊多出白字紅邊；沒勾時那塊只有底圖
+        def region(flag):
+            cover = compose.compose_yt_cover(
+                _png_bytes(colour=(120, 120, 120)), line1="一", line2="二",
+                date_text="2026/09/05", original_audio=flag,
+            )
+            with Image.open(io.BytesIO(cover)) as image:
+                h = compose.YT_CANVAS[1]
+                return image.crop((40, round(h * 0.03), 600, round(h * 0.12))).tobytes()
+
+        self.assertNotEqual(region(True), region(False))
+
+    def test_ai_translation_label_sits_below_date(self):
+        def region(flag):
+            cover = compose.compose_yt_cover(
+                _png_bytes(colour=(120, 120, 120)), line1="一", line2="二",
+                date_text="2026/09/05", ai_translation=flag,
+            )
+            with Image.open(io.BytesIO(cover)) as image:
+                h = compose.YT_CANVAS[1]
+                y0 = round(h * (compose.YT_TOP_RATIO + 0.20))
+                return image.crop((40, y0, 600, y0 + round(h * 0.12))).tobytes()
 
         self.assertNotEqual(region(True), region(False))
 
@@ -251,7 +277,8 @@ class EndpointTests(unittest.TestCase):
     def test_asis_cover_end_to_end_without_any_model(self):
         payload = {
             "title": "新北診所爆C肝群聚 11人確診疾管署說明",
-            "subtitle": "AI即時翻譯",
+            "original_audio": True,
+            "ai_translation": True,
             "date_text": "2026/09/05",
             "reference_images": [{"data_url": _data_url(_png_bytes((1200, 700))), "purpose": "asis"}],
         }
@@ -270,7 +297,7 @@ class EndpointTests(unittest.TestCase):
         payload = {
             "title": "遭撞趴引擎蓋一路載走200公尺 護理師滿身傷稱被尋仇自導自演",
             "layout": "hourly",
-            "subtitle": "隨便寫",          # 整點版沒有副標，後端直接忽略而不是 400
+            "original_audio": True,        # 整點版沒有這兩個標示，後端直接忽略
             "time_text": "20:00",
             "reference_images": [{"data_url": _data_url(_png_bytes((1200, 700))), "purpose": "asis"}],
         }
@@ -287,13 +314,16 @@ class EndpointTests(unittest.TestCase):
         res = client.post("/api/editor/yt-cover", json={"title": "前段 後段", "layout": "weekly"}, headers=HEADERS)
         self.assertEqual(res.status_code, 422)
 
-    def test_unknown_subtitle_is_rejected(self):
-        res = client.post(
-            "/api/editor/yt-cover",
-            json={"title": "前段 後段", "subtitle": "隨便寫"},
-            headers=HEADERS,
-        )
-        self.assertEqual(res.status_code, 400)
+    def test_news_layout_passes_flags_to_compose(self):
+        payload = {
+            "title": "前段 後段", "original_audio": True, "ai_translation": False,
+            "reference_images": [{"data_url": _data_url(_png_bytes((1200, 700))), "purpose": "asis"}],
+        }
+        with patch.object(compose, "compose_yt_cover", wraps=compose.compose_yt_cover) as news:
+            res = client.post("/api/editor/yt-cover", json=payload, headers=HEADERS)
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertTrue(news.call_args.kwargs["original_audio"])
+        self.assertFalse(news.call_args.kwargs["ai_translation"])
 
     def test_requires_api_key(self):
         res = client.post("/api/editor/yt-cover", json={"title": "前段 後段"})
@@ -340,12 +370,17 @@ class FrontendParityTests(unittest.TestCase):
             html = fh.read()
         self.assertIn('id="ytCoverTime"', html)
 
-    def test_subtitle_options_match_backend(self):
+    def test_flag_labels_match_backend(self):
         with open(self.INDEX, encoding="utf-8") as fh:
             html = fh.read()
-        block = re.search(r'id="ytCoverSubtitle".*?</select>', html, re.S).group(0)
-        options = re.findall(r'<option value="([^"]*)"', block)
-        self.assertEqual(tuple(options), editor_formats.YT_COVER_SUBTITLES)
+        block = re.search(r'id="ytCoverFlags".*?</div>', html, re.S).group(0)
+        self.assertIn('id="ytCoverOriginalAudio"', block)
+        self.assertIn('id="ytCoverAiTranslation"', block)
+        self.assertIn(editor_formats.YT_COVER_ORIGINAL_AUDIO_LABEL, block)
+        self.assertIn(editor_formats.YT_COVER_AI_TRANSLATION_LABEL, block)
+        self.assertEqual(compose.YT_ORIGINAL_AUDIO_LABEL, editor_formats.YT_COVER_ORIGINAL_AUDIO_LABEL)
+        self.assertEqual(compose.YT_AI_TRANSLATION_LABEL, editor_formats.YT_COVER_AI_TRANSLATION_LABEL)
+        self.assertNotIn("原音重現", html, "頻道實際用字是「原音呈現」")
 
 
 if __name__ == "__main__":

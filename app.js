@@ -425,7 +425,7 @@ const EDITOR_FORMATS = {
     // 沿用主流程的附圖上傳區（用途：原圖放置＝直接當底圖；其他＝生圖參考）。
     yt_live_cover: {
         label: 'YT國內外新聞直播',
-        hint: '標題用半形空格分兩段（分不出來時由 AI 判斷）。有「原圖放置」附圖就直接當底圖，否則 AI 生底圖並標示 AI示意圖。文字與 Logo 全由程式疊，零錯字。',
+        hint: '標題用半形空格分兩段（分不出來時由 AI 判斷）。有「原圖放置」附圖就直接當底圖，否則 AI 生底圖並標示 AI示意圖。原音呈現／AI即時翻譯可勾可並存。文字與 Logo 全由程式疊，零錯字。',
         inputs: 'yt_cover',
         ytLayout: 'news',
         locks: {},
@@ -797,11 +797,11 @@ function applyEditorFormatInputs() {
         const host = wantsYt ? yt : news;
         if (host && refBox.previousElementSibling !== host) host.insertAdjacentElement('afterend', refBox);
     }
-    // 整點直播：沒有副標、多一格整點時間
+    // 整點直播：沒有原音呈現／AI即時翻譯、多一格整點時間
     const hourly = wantsYt && editorFormat().ytLayout === 'hourly';
-    const subtitleSel = document.getElementById('ytCoverSubtitle');
+    const flagRow = document.getElementById('ytCoverFlags');
     const timeField = document.getElementById('ytCoverTime');
-    if (subtitleSel) subtitleSel.classList.toggle('hidden', hourly);
+    if (flagRow) flagRow.classList.toggle('hidden', hourly);
     if (timeField) timeField.classList.toggle('hidden', !hourly);
     // 封面模式完全沒有消化這一段，版面形式用不到，整組收起來
     if (digestRow) digestRow.classList.toggle('hidden', wantsCover || wantsYt);
@@ -1598,7 +1598,8 @@ function ytCoverFields() {
     return {
         title: val('ytCoverTitle'),
         layout,
-        subtitle: layout === 'hourly' ? '' : val('ytCoverSubtitle'),
+        original_audio: layout !== 'hourly' && !!document.getElementById('ytCoverOriginalAudio')?.checked,
+        ai_translation: layout !== 'hourly' && !!document.getElementById('ytCoverAiTranslation')?.checked,
         date_text: val('ytCoverDate'),
         time_text: layout === 'hourly' ? val('ytCoverTime') : '',
     };
@@ -1638,7 +1639,9 @@ function showYtCoverResult(data, fields) {
     if (recompose) recompose.disabled = false;
     document.getElementById('oneClickLabel').innerText = editorFormat().label;
     document.getElementById('oneClickMeta').innerText =
-        `${data.line1}｜${data.line2}${fields.subtitle ? '｜' + fields.subtitle : ''}${fields.time_text ? '｜' + fields.time_text : ''}`;
+        [data.line1, data.line2,
+         fields.original_audio ? '原音呈現' : '', fields.ai_translation ? 'AI即時翻譯' : '',
+         fields.time_text].filter(Boolean).join('｜');
     document.getElementById('oneClickEmpty').classList.add('hidden');
     document.getElementById('oneClickResult').classList.remove('hidden');
 }

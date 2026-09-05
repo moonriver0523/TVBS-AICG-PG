@@ -169,7 +169,9 @@ COVER_VISUAL_SCHEMA = {
 # LIVE 左右互換、第三行警語、漸層字都不納入。
 # ============================================================
 
-YT_COVER_SUBTITLES = ("", "原音重現", "AI即時翻譯")
+# 兩個獨立開關（頻道實際版面：原音呈現在 LIVE 章上方、AI即時翻譯在日期下方，可並存）
+YT_COVER_ORIGINAL_AUDIO_LABEL = "原音呈現"
+YT_COVER_AI_TRANSLATION_LABEL = "AI即時翻譯"
 
 # 兩種 YT 直播版面，同一條 /api/editor/yt-cover：news＝國內外新聞直播（LIVE 章左上、副標）；
 # hourly＝整點直播（Logo 左上、LIVE 章右上＋選填整點時間、紅底日期、無副標）
