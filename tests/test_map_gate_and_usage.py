@@ -79,7 +79,7 @@ class NoDataNoFaithfulMapTests(unittest.TestCase):
 
     def test_rule_points_at_the_schematic_fallback(self):
         text = digest()
-        self.assertIn("rule 6 fallback", text)
+        self.assertIn("schematic fallback", text)
         self.assertIn("labelled coordinate grid", text)
 
     def test_rule_names_the_forbidden_adjectives(self):
@@ -90,11 +90,11 @@ class NoDataNoFaithfulMapTests(unittest.TestCase):
         # 每次都要確認它沒有在重新編號時被吃掉
         text = digest()
         self.assertIn("ONE SUBJECT PLACE IN THE HEADLINE", text)
-        self.assertIn("\n13. ONE SUBJECT PLACE", text)
+        self.assertIn("\n8. ONE SUBJECT PLACE", text)
 
     def test_cross_references_still_point_at_real_rules(self):
         text = digest()
-        self.assertIn("use two maps (rule 8)", text)
+        self.assertIn("use two maps (rule 6)", text)
 
 
 class GeographyBeatsSceneTests(unittest.TestCase):
