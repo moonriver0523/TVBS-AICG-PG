@@ -416,6 +416,22 @@ class EndpointTests(unittest.TestCase):
         with Image.open(io.BytesIO(base64.b64decode(data["image_data_base64"]))) as image:
             self.assertEqual(image.size, compose.YT_CANVAS)
 
+    def test_single_asis_forces_composite_even_when_ai_title_checked(self):
+        """單張原圖放置＋「標題由 AI 生成」仍勾選：後端要改程式壓字，不把照片丟給模型重畫。"""
+        payload = {
+            "title": "北北基宜大雨特報 台北12處道路封閉",
+            "title_mode": "ai",
+            "date_text": "2026/09/07",
+            "reference_images": [{"data_url": _data_url(_png_bytes((1200, 700))), "purpose": "asis"}],
+        }
+        with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")),              patch.object(main, "derive_yt_cover_plan", side_effect=AssertionError("不該打文字模型")):
+            res = client.post("/api/editor/yt-cover", json=payload, headers=HEADERS)
+        self.assertEqual(res.status_code, 200, res.text)
+        data = res.json()
+        self.assertEqual(data["title_mode"], "composite")
+        self.assertFalse(data["background_is_ai"])
+        self.assertEqual((data["line1"], data["line2"]), ("北北基宜大雨特報", "台北12處道路封閉"))
+
     def test_hourly_layout_ignores_subtitle_and_takes_time(self):
         payload = {
             "title": "遭撞趴引擎蓋一路載走200公尺 護理師滿身傷稱被尋仇自導自演",
@@ -580,17 +596,20 @@ class HotCoverTests(unittest.TestCase):
         r, g, b = img.getpixel((w - 40, round(h * 0.10)))
         self.assertGreater(r, g + 60)
 
-    def test_hot_tag_has_red_and_white_parts(self):
+    def test_hot_tag_template_is_pasted(self):
+        """標籤改貼模板（2026-09-07）：區域內同時要有紅底與白字像素。"""
         img = self._cover()
         w, h = img.size
         tag_h = round(h * compose.YT_HOT_TAG_HEIGHT_RATIO)
-        y = round(h * compose.YT_HOT_TAG_TOP_RATIO) + tag_h // 2
+        y0 = round(h * compose.YT_HOT_TAG_TOP_RATIO)
         x0 = round(w * compose.YT_HOT_TAG_LEFT_RATIO)
-        r, g, b = img.getpixel((x0 + 8, y))
-        self.assertGreater(r, g + 100, "今日 段應為紅底")
-        # 標籤右半白底：從標籤右側往左找到白色
-        whites = [x for x in range(x0 + 60, x0 + 700) if all(c > 240 for c in img.getpixel((x, y)))]
-        self.assertTrue(whites, "熱搜 段應有白底")
+        with Image.open(compose.HOT_SEARCH_TAG) as tpl:
+            tag_w = round(tpl.width * tag_h / tpl.height)
+        pixels = [img.getpixel((x, y)) for x in range(x0, x0 + tag_w, 4) for y in range(y0, y0 + tag_h, 4)]
+        reds = [p for p in pixels if p[0] > 150 and p[1] < 80 and p[2] < 80]
+        whites = [p for p in pixels if all(c > 230 for c in p)]
+        self.assertGreater(len(reds), len(pixels) * 0.2, "標籤應以紅底為主")
+        self.assertGreater(len(whites), len(pixels) * 0.05, "標籤應有白色文字")
 
     def test_band_is_crimson_not_navy(self):
         img = self._cover()

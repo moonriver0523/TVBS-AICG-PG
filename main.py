@@ -3559,9 +3559,11 @@ def yt_cover_asis_count(req: "YtCoverRequest") -> int:
     dependencies=[Depends(verify_internal_api_key)],
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
-    if yt_cover_asis_count(req) >= 2 and req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI:
-        # 多圖分切一律程式壓字：真實新聞照交給模型重畫會走樣，分切拼圖本身也是程式做的。
-        print(f"[yt-cover] 原圖放置附圖 {yt_cover_asis_count(req)} 張 → 分切底圖，標題改程式壓字", flush=True)
+    if yt_cover_asis_count(req) >= 1 and req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI:
+        # 有原圖放置一律程式壓字（2026-09-07 使用者裁決，與十點封面同一原則）：
+        # 原圖放置＝真實新聞照直接上版，交給模型重畫會走樣；原本只在 ≥2 張時強制，
+        # 單張仍走整張 AI 生成、把照片當參考圖，和前端提示「直接當底圖不生圖」不符。
+        print(f"[yt-cover] 原圖放置附圖 {yt_cover_asis_count(req)} 張 → 直接當底圖，標題改程式壓字", flush=True)
         req = req.model_copy(update={"title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE})
     hourly = req.layout == editor_formats.YT_COVER_LAYOUT_HOURLY
     hot = req.layout == editor_formats.YT_COVER_LAYOUT_HOT

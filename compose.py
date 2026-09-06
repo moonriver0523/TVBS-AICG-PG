@@ -29,6 +29,10 @@ import safe_area_spec
 
 BRAND_DIR = pathlib.Path(__file__).resolve().parent / "static" / "brand"
 TVBS_LOGO_WHITE = BRAND_DIR / "tvbs-logo-white.png"
+# 2026-09-07：節目／單元標籤改貼固定模板（gpt-image-2 依型錄原版重繪、透明底），
+# 程式畫的圓角矩形＋字型版本被使用者裁定不好看。模板只縮放不變形，缺檔直接報錯。
+TEN_SHOW_TAG = BRAND_DIR / "ten-show-tag.png"   # 「十點不一樣」藍色斜切標籤
+HOT_SEARCH_TAG = BRAND_DIR / "hot-search-tag.png"  # 「今日｜熱搜🔍」紅色三格標籤
 
 # 中文字型：Pillow 不吃系統字型後備，必須指名檔案。依序找，第一個存在的就用。
 #
@@ -145,6 +149,18 @@ def _paste_logo(canvas: Image.Image, box: tuple[int, int], width: int) -> None:
         height = round(logo.height * width / logo.width)
         logo = logo.resize((width, height), Image.LANCZOS)
         canvas.paste(logo, box, logo)
+
+
+def _paste_template(canvas: Image.Image, path: pathlib.Path, xy: tuple[int, int], height: int) -> int:
+    """把透明底模板等比縮到指定高度貼上，回傳貼上後的寬。"""
+    if not path.exists():
+        raise ComposeError(f"找不到模板：{path}")
+    with Image.open(path) as tpl:
+        tpl = tpl.convert("RGBA")
+        width = max(1, round(tpl.width * height / tpl.height))
+        tpl = tpl.resize((width, height), Image.LANCZOS)
+        canvas.alpha_composite(tpl, xy)
+    return width
 
 
 def _rounded(draw: ImageDraw.ImageDraw, box, radius, fill, outline=None, width=0) -> None:
@@ -265,7 +281,6 @@ COVER_HEADER_FILL = (7, 18, 56)
 COVER_HEADER_LINE = (40, 150, 245)  # 標頭帶底一條亮藍細線
 COVER_HEADER_LINE_RATIO = 0.004
 COVER_MARGIN = 26                    # 內容離左右畫框的距離
-COVER_SHOW_TAG_FILL = (22, 64, 150)  # 「十點不一樣」小標籤底色
 COVER_ONAIR_FILL = (206, 26, 32)
 COVER_TITLE_SIZE_RATIO = 0.085       # 標題起始字級（佔畫面高）
 COVER_TITLE_MIN_SIZE_RATIO = 0.045
@@ -385,14 +400,12 @@ def _draw_cover_header(draw: ImageDraw.ImageDraw, canvas: Image.Image, date_text
     logo_w = round(logo_h * ratio)
     _paste_logo(canvas, (COVER_MARGIN, (band_h - line_h - logo_h) // 2), logo_w)
 
-    # 「十點不一樣」小標籤
-    tag_font = _font(round(band_h * 0.42))
+    # 「十點不一樣」標籤：貼模板（藍色斜切，見 TEN_SHOW_TAG），高度佔帶高 80%
     tag_x0 = COVER_MARGIN + logo_w + round(width * 0.02)
-    tag_w = tag_font.getbbox(COVER_SHOW_NAME)[2] + round(band_h * 0.6)
-    tag_h = round(band_h * 0.62)
+    tag_h = round(band_h * 0.80)
     tag_y0 = (band_h - line_h - tag_h) // 2
-    _rounded(draw, (tag_x0, tag_y0, tag_x0 + tag_w, tag_y0 + tag_h), 8, COVER_SHOW_TAG_FILL)
-    _draw_text(draw, (tag_x0 + tag_w // 2, tag_y0 + tag_h // 2), COVER_SHOW_NAME, tag_font, stroke_width=0, anchor="mm")
+    _paste_template(canvas, TEN_SHOW_TAG, (tag_x0, tag_y0), tag_h)
+    draw = ImageDraw.Draw(canvas)
 
     # ON AIR／精華：靠右紅底白字
     badge_text, badge_colour = COVER_BADGES[badge]
@@ -946,25 +959,10 @@ YT_HOT_TOP_LINE_HEIGHT_RATIO = 0.03
 YT_HOT_RED = (214, 22, 32)
 YT_HOT_RED_DARK = (150, 10, 20)
 YT_HOT_TAG_LEFT_RATIO = 0.018
-YT_HOT_TAG_TOP_RATIO = 0.02
-YT_HOT_TAG_HEIGHT_RATIO = 0.115       # 標籤高（83/720）
-YT_HOT_TAG_TEXT_TODAY = "今日"
-YT_HOT_TAG_TEXT_HOT = "熱搜"
+YT_HOT_TAG_TOP_RATIO = 0.03
+YT_HOT_TAG_HEIGHT_RATIO = 0.22       # 標籤高：型錄原版約佔畫面高 22%、寬 56%（模板等比縮放）
 YT_HOT_BAND_FILL = (58, 8, 14)
 YT_HOT_BAND_BLOCK_FILL = (200, 40, 50)
-
-
-def _draw_hot_magnifier(canvas: Image.Image, cx: int, cy: int, r: int, colour: tuple[int, int, int]) -> None:
-    """放大鏡：圓圈＋右下斜柄，4 倍超取樣。"""
-    scale = 4
-    size = r * 3
-    layer = Image.new("RGBA", (size * scale, size * scale), (0, 0, 0, 0))
-    ld = ImageDraw.Draw(layer)
-    c = size * scale // 2 - r * scale // 3
-    ld.ellipse((c - r * scale, c - r * scale, c + r * scale, c + r * scale), outline=colour + (255,), width=max(2, r * scale // 4))
-    ld.line(((c + r * scale * 0.7, c + r * scale * 0.7), (c + r * scale * 1.55, c + r * scale * 1.55)), fill=colour + (255,), width=max(3, r * scale // 3))
-    layer = layer.resize((size, size), Image.LANCZOS)
-    canvas.alpha_composite(layer, (cx - size // 2 + r // 3, cy - size // 2 + r // 3))
 
 
 def _draw_hot_header(canvas: Image.Image) -> None:
@@ -981,30 +979,11 @@ def _draw_hot_header(canvas: Image.Image) -> None:
     canvas.alpha_composite(line, (0, 0))
     _draw_logo_tab(canvas, YT_HOT_RED, YT_HOT_RED_DARK)
 
-    draw = ImageDraw.Draw(canvas)
+    # 「今日｜熱搜🔍」標籤：貼模板（紅色三格，見 HOT_SEARCH_TAG）
     tag_h = round(height * YT_HOT_TAG_HEIGHT_RATIO)
     x0 = round(width * YT_HOT_TAG_LEFT_RATIO)
     y0 = round(height * YT_HOT_TAG_TOP_RATIO)
-    font = _font(round(tag_h * 0.66))
-    pad = round(tag_h * 0.28)
-    today_w = font.getbbox(YT_HOT_TAG_TEXT_TODAY)[2] + pad * 2
-    hot_w = font.getbbox(YT_HOT_TAG_TEXT_HOT)[2] + pad * 2
-    lens_r = round(tag_h * 0.22)
-    lens_w = lens_r * 3
-    total_w = today_w + hot_w + lens_w
-    # 影子
-    shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-    ImageDraw.Draw(shadow).rounded_rectangle((x0 + 4, y0 + 6, x0 + total_w + 4, y0 + tag_h + 6), radius=10, fill=(0, 0, 0, 120))
-    canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(5)))
-    draw = ImageDraw.Draw(canvas)
-    # 白底整條（右半含放大鏡）＋左邊紅底「今日」
-    draw.rounded_rectangle((x0, y0, x0 + total_w, y0 + tag_h), radius=10, fill=(255, 255, 255), outline=YT_HOT_RED, width=max(2, round(height * 0.004)))
-    draw.rounded_rectangle((x0, y0, x0 + today_w, y0 + tag_h), radius=10, fill=YT_HOT_RED)
-    draw.rectangle((x0 + today_w - 12, y0, x0 + today_w, y0 + tag_h), fill=YT_HOT_RED)
-    cy = y0 + tag_h // 2 + 2
-    _draw_text(draw, (x0 + today_w // 2, cy), YT_HOT_TAG_TEXT_TODAY, font, fill=(255, 255, 255), stroke_width=0, anchor="mm")
-    _draw_text(draw, (x0 + today_w + hot_w // 2, cy), YT_HOT_TAG_TEXT_HOT, font, fill=YT_HOT_RED, stroke_width=0, anchor="mm")
-    _draw_hot_magnifier(canvas, x0 + today_w + hot_w + lens_w // 2 - lens_r // 4, cy, lens_r, YT_HOT_RED)
+    _paste_template(canvas, HOT_SEARCH_TAG, (x0, y0), tag_h)
 
 
 def compose_yt_hot_cover(
