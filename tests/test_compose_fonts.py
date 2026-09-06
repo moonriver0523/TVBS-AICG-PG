@@ -19,6 +19,7 @@ class DiscoverFontTests(unittest.TestCase):
             windows_candidates=(pathlib.Path(__file__),),
             linux_roots=(),
             linux_globs=(),
+            bundled_candidates=(),
         )
         self.assertEqual(found, pathlib.Path(__file__))
 
@@ -28,6 +29,7 @@ class DiscoverFontTests(unittest.TestCase):
                 windows_candidates=(pathlib.Path("C:/nope/none.ttf"),),
                 linux_roots=(pathlib.Path("/nope-does-not-exist"),),
                 linux_globs=("**/NotoSansCJK*",),
+                bundled_candidates=(),
             )
         )
 
@@ -42,6 +44,7 @@ class DiscoverFontTests(unittest.TestCase):
                 windows_candidates=(),
                 linux_roots=(root,),
                 linux_globs=("**/NotoSansCJK*",),
+                bundled_candidates=(),
             ),
             target,
         )
@@ -59,6 +62,7 @@ class DiscoverFontTests(unittest.TestCase):
                 windows_candidates=(),
                 linux_roots=(root,),
                 linux_globs=("**/NotoSansCJK*Bold*", "**/NotoSansCJK*"),
+                bundled_candidates=(),
             ),
             bold,
         )
@@ -69,6 +73,30 @@ class DiscoverFontTests(unittest.TestCase):
         self._tmpdir = tempfile.TemporaryDirectory()
         self.tmp = self._tmpdir.name
         self.addCleanup(self._tmpdir.cleanup)
+
+
+class BundledFontTests(unittest.TestCase):
+    """2026-09-06：日期／時間數字改用 repo 自帶台北黑體 Bold，本機與 Cloud Run 才會一致。"""
+
+    def test_bundled_font_ships_in_repo(self):
+        for path in compose.FONT_CANDIDATES_BUNDLED:
+            self.assertTrue(path.is_file(), f"repo 缺字型檔：{path}")
+
+    def test_bundled_font_beats_windows_and_linux(self):
+        bundled = pathlib.Path(__file__)
+        self.assertEqual(
+            compose.discover_font(
+                windows_candidates=(pathlib.Path("C:/Windows/Fonts/msjhbd.ttc"),),
+                linux_roots=(),
+                linux_globs=(),
+                bundled_candidates=(bundled,),
+            ),
+            bundled,
+        )
+
+    def test_default_discovery_picks_taipei_sans(self):
+        compose.discover_font.cache_clear()
+        self.assertEqual(compose.discover_font().name, "TaipeiSansTCBeta-Bold.ttf")
 
 
 class FontActuallyLoadsTests(unittest.TestCase):

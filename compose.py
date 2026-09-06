@@ -31,11 +31,19 @@ BRAND_DIR = pathlib.Path(__file__).resolve().parent / "static" / "brand"
 TVBS_LOGO_WHITE = BRAND_DIR / "tvbs-logo-white.png"
 
 # 中文字型：Pillow 不吃系統字型後備，必須指名檔案。依序找，第一個存在的就用。
-# 開發機是 Windows，正式環境是 python:3.14-slim（Debian）——後者一個中文字型都沒有，
-# Dockerfile 因此裝 fonts-noto-cjk。Debian 各版的 Noto CJK 檔名／目錄不一致
-# （opentype/ vs truetype/、-Bold.ttc vs Black.otf），寫死路徑等於賭檔名，
-# 所以 Linux 這段改用萬用字元掃出來。兩邊都找不到就明確報錯——
+#
+# 2026-09-06 起第一順位是 repo 自帶的台北黑體 Bold（static/fonts/，SIL OFL）。
+# 理由：日期／整點時間這類程式壓上去的數字，用微軟正黑體（本機）或 Noto CJK（Cloud Run）
+# 都又寬又鬆、很醜，而且兩邊字型不同，本機看到的跟線上永遠對不起來。
+# 字型隨 repo 進容器，本機與 Cloud Run 畫出來一模一樣。
+#
+# 後備維持原樣：開發機是 Windows，正式環境是 python:3.14-slim（Debian）——後者一個
+# 中文字型都沒有，Dockerfile 因此裝 fonts-noto-cjk。Debian 各版的 Noto CJK 檔名／目錄
+# 不一致（opentype/ vs truetype/、-Bold.ttc vs Black.otf），寫死路徑等於賭檔名，
+# 所以 Linux 這段改用萬用字元掃出來。全部找不到就明確報錯——
 # 悄悄改用預設點陣字會畫出一整排豆腐，比直接失敗糟得多。
+FONT_DIR = pathlib.Path(__file__).resolve().parent / "static" / "fonts"
+FONT_CANDIDATES_BUNDLED = (FONT_DIR / "TaipeiSansTCBeta-Bold.ttf",)
 FONT_CANDIDATES_WINDOWS = (
     pathlib.Path("C:/Windows/Fonts/msjhbd.ttc"),
     pathlib.Path("C:/Windows/Fonts/NotoSansTC-VF.ttf"),
@@ -57,13 +65,14 @@ def discover_font(
     windows_candidates=FONT_CANDIDATES_WINDOWS,
     linux_roots=FONT_ROOTS_LINUX,
     linux_globs=FONT_GLOBS_LINUX,
+    bundled_candidates=FONT_CANDIDATES_BUNDLED,
 ):
-    """找出這台機器上可用的中文粗體字型，找不到回 None。
+    """找出可用的中文粗體字型，找不到回 None。
 
-    順序即優先序：先具名的 Windows 字型，再依 glob 由粗到細掃 Linux 字型目錄。
+    順序即優先序：repo 自帶字型 → 具名的 Windows 字型 → 依 glob 由粗到細掃 Linux 字型目錄。
     同一個 glob 命中多個檔案時取排序後第一個，讓結果在不同機器上可重現。
     """
-    for path in windows_candidates:
+    for path in (*bundled_candidates, *windows_candidates):
         if path.exists():
             return path
     for pattern in linux_globs:
@@ -85,7 +94,7 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
     if path is None:
         raise ComposeError(
             "找不到可用的中文粗體字型，合成會畫出豆腐。"
-            f"找過：{'、'.join(str(p) for p in FONT_CANDIDATES_WINDOWS)}"
+            f"找過：{'、'.join(str(p) for p in (*FONT_CANDIDATES_BUNDLED, *FONT_CANDIDATES_WINDOWS))}"
             f"，以及 {FONT_ROOTS_LINUX[0]} 底下的 Noto CJK"
         )
     return ImageFont.truetype(str(path), size)
