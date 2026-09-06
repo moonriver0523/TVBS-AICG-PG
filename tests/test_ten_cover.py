@@ -159,32 +159,24 @@ class EndpointTests(unittest.TestCase):
         self.assertFalse(_ai_note_region_is_plate(img, align_right=False))
         self.assertFalse(_ai_note_region_is_plate(img, align_right=True))
 
-    def test_single_asis_goes_left_and_right_is_generated(self):
-        generated = {"calls": 0}
-
-        def fake_generate(req):
-            generated["calls"] += 1
-            self.assertEqual(req.aspect_ratio, "1:1")
-            return main.ImageGenerateResponse(
-                image_data_base64=base64.b64encode(_png_bytes(colour=(30, 200, 30))).decode("ascii"),
-                mime_type="image/png", model="fake",
-            )
-
-        with patch.object(main, "generate_image_raw", side_effect=fake_generate), \
-             patch.object(main, "resolve_cover_visuals", return_value=("左", "右")):
+    def test_single_asis_is_full_bleed_without_any_api_call(self):
+        # 2026-09-06 使用者裁決：只上傳一張原圖就是整版鋪滿，不切左右格、不生另一格
+        with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")), \
+             patch.object(main, "digest_completion", side_effect=AssertionError("不該打文字模型")):
             res = client.post("/api/editor/cover", json=self._payload(1), headers=_headers())
         self.assertEqual(res.status_code, 200, res.text)
         data = res.json()
-        self.assertEqual(generated["calls"], 1)
+        self.assertEqual(data["model"], "ten-cover:composite-asis1")
         self.assertFalse(data["left_is_ai"])
-        self.assertTrue(data["right_is_ai"])
+        self.assertFalse(data["right_is_ai"])
         img = Image.open(io.BytesIO(base64.b64decode(data["image_data_base64"]))).convert("RGB")
         w, h = img.size
         y = round(h * 0.30)
-        self.assertEqual(img.getpixel((w // 4, y)), (200, 30, 30))
-        self.assertEqual(img.getpixel((3 * w // 4, y)), (30, 200, 30))
+        # 左、中、右都是同一張圖，中間沒有白色斜線
+        for x in (w // 4, w // 2, 3 * w // 4):
+            self.assertEqual(img.getpixel((x, y)), (200, 30, 30), x)
         self.assertFalse(_ai_note_region_is_plate(img, align_right=False))
-        self.assertTrue(_ai_note_region_is_plate(img, align_right=True))
+        self.assertFalse(_ai_note_region_is_plate(img, align_right=True))
 
     def test_no_asis_keeps_requested_ai_mode(self):
         def fake_generate(req):
@@ -219,6 +211,50 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(res.json()["mode"], "ai")
         self.assertEqual(len(seen["refs"]), 1)
         self.assertEqual(seen["refs"][0].purpose, "scene")
+
+
+class TitleDigestTests(unittest.TestCase):
+    """貼新聞內文 → 回填標題，不接生圖（2026-09-06 使用者裁決）。"""
+
+    @staticmethod
+    def _completion(payload: dict):
+        from types import SimpleNamespace
+        import json
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload, ensure_ascii=False)))])
+
+    def test_ten_cover_titles_fill_back_and_do_not_generate(self):
+        seen = {}
+
+        def fake_digest(**kw):
+            seen.update(kw)
+            return self._completion({"title_left": "尼泊爾災區 無人機空拍 滅村慘況", "title_right": "台南易淹水 成氣候衝擊區"})
+
+        with patch.object(main, "digest_completion", side_effect=fake_digest), \
+             patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")):
+            res = client.post("/api/editor/cover-titles", json={"news_text": "尼泊爾山區暴雨引發土石流，數個村落遭掩埋，臺南多處低窪地區也傳出淹水。", "target": "ten_cover"}, headers=_headers())
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(res.json()["title_left"], "尼泊爾災區 無人機空拍 滅村慘況")
+        self.assertEqual(res.json()["title_right"], "台南易淹水 成氣候衝擊區")
+        # 忠實度規則要跟著 system prompt 進去
+        self.assertIn("CONTENT FIDELITY", seen["system_prompt"])
+        self.assertIn("title_left", seen["schema"]["properties"])
+
+    def test_yt_cover_title_fills_back(self):
+        with patch.object(main, "digest_completion", return_value=self._completion({"title": "尼泊爾洪災罹難破千人 直擊現場救援情況"})):
+            res = client.post("/api/editor/cover-titles", json={"news_text": "尼泊爾洪災造成上千人罹難，救援人員持續在災區搜救。", "target": "yt_cover"}, headers=_headers())
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(res.json()["title"], "尼泊爾洪災罹難破千人 直擊現場救援情況")
+
+    def test_model_failure_is_a_502_not_a_500(self):
+        with patch.object(main, "digest_completion", side_effect=RuntimeError("boom")):
+            res = client.post("/api/editor/cover-titles", json={"news_text": "這是一段夠長的測試新聞內文，用來觸發失敗路徑。", "target": "ten_cover"}, headers=_headers())
+        self.assertEqual(res.status_code, 502)
+
+    def test_ten_titles_are_clipped_to_field_limits(self):
+        with patch.object(main, "digest_completion", return_value=self._completion({"title_left": "字" * 80, "title_right": "右 標題"})):
+            res = client.post("/api/editor/cover-titles", json={"news_text": "這是一段夠長的測試新聞內文，用來檢查裁切。", "target": "ten_cover"}, headers=_headers())
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(res.json()["title_left"]), 40)
 
 
 class PromptSyncTests(unittest.TestCase):

@@ -3051,8 +3051,8 @@ class TenCoverRequest(BaseModel):
     # ai＝整張交給生圖模型畫（預設，2026-09-03 使用者裁決要設計感）
     # composite＝AI 只出兩張無文字底圖、文字由 Pillow 畫（零錯字但沒設計感，留作備援）
     mode: Literal["ai", "composite"] = editor_formats.COVER_MODE_AI
-    # 2026-09-06：十點也收附圖。用途 asis（原圖放置）依順序＝左格、右格，
-    # 只有一張時放左格、右格照常由 AI 生；有任何 asis 就強制 composite（真照不進生圖模型）。
+    # 2026-09-06：十點也收附圖。用途 asis（原圖放置）1 張＝整版鋪滿（使用者裁決，不切格）、
+    # 2 張＝左格、右格；有任何 asis 就強制 composite（真照不進生圖模型），也不再生任何底圖。
     # 其他用途（實景／肖像／地圖）當兩格 AI 底圖的生圖參考。
     reference_images: list[UserReferenceImage] = Field(
         default_factory=list, max_length=MAX_INPUT_REFERENCES
@@ -3071,7 +3071,7 @@ class TenCoverResponse(ImageGenerateResponse):
 
 
 def ten_cover_asis_images(req: "TenCoverRequest") -> list[bytes]:
-    """依順序取出「原圖放置」附圖的原始 bytes（最多兩張：左、右）。"""
+    """依順序取出「原圖放置」附圖的原始 bytes（最多兩張）。1 張＝全版、2 張＝左格＋右格。"""
     raws: list[bytes] = []
     asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
     for ref in asis[:2]:
@@ -3182,6 +3182,14 @@ def _cover_composite(
     """
     asis = ten_cover_asis_images(req)
     references = [ref for ref in req.reference_images if ref.purpose != "asis"]
+    if len(asis) == 1:
+        # 單張原圖＝全版（不切左右格、不生另一格），兩個標題壓在同一張圖的左下與右下
+        cover = compose.compose_ten_cover(
+            asis[0], None,
+            title_left=req.title_left.strip(), title_right=req.title_right.strip(),
+            date_text=date_text, badge=req.badge, left_is_ai=False, right_is_ai=False,
+        )
+        return cover, (False, False)
     panels: list[bytes | None] = [asis[0] if len(asis) >= 1 else None, asis[1] if len(asis) >= 2 else None]
     todo = [i for i, panel in enumerate(panels) if panel is None]
     # 要生的圖平行生。序列跑會讓等待時間直接加倍——單張本來就要 30–90 秒。
@@ -3207,6 +3215,70 @@ def _cover_composite(
     return cover, (left_is_ai, right_is_ai)
 
 
+class CoverTitleDigestRequest(BaseModel):
+    news_text: str = Field(min_length=10, max_length=20_000)
+    target: Literal["ten_cover", "yt_cover"] = "ten_cover"
+
+
+class CoverTitleDigestResponse(BaseModel):
+    title_left: str = ""
+    title_right: str = ""
+    title: str = ""
+
+
+def _clip_title(text: str, limit: int) -> str:
+    text = " ".join(str(text or "").split())
+    return text[:limit]
+
+
+@app.post(
+    "/api/editor/cover-titles",
+    response_model=CoverTitleDigestResponse,
+    dependencies=[Depends(verify_internal_api_key)],
+)
+def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestResponse:
+    """貼新聞內文 → 文字模型消化出封面標題 → 回填前端欄位；不接生圖，編輯確認後自己按。
+
+    2026-09-06 使用者裁決：封面類版型也要能自動消化，但回填後停下來讓編輯看過。
+    """
+    ten = req.target == "ten_cover"
+    system_prompt = (
+        editor_formats.COVER_TITLE_DIGEST_SYSTEM_TEN if ten else editor_formats.COVER_TITLE_DIGEST_SYSTEM_YT
+    ) + CONTENT_FIDELITY_RULES
+    schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_TEN if ten else editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT
+    model = (
+        os.getenv("DIGEST_MODEL")
+        or os.getenv("OPENAI_DIGEST_MODEL")
+        or DEFAULT_DIGEST_MODEL
+    )
+    try:
+        response = digest_completion(
+            model=model,
+            system_prompt=system_prompt,
+            news_text=req.news_text.strip(),
+            max_output_tokens=2000,
+            schema_name="cover_titles",
+            schema=schema,
+            site="cover",
+        )
+        data = parse_digest_json(response.choices[0].message.content or "")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[cover-titles] 消化標題失敗：{type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=502, detail=f"消化標題失敗：{type(exc).__name__}") from exc
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="消化標題失敗：回傳格式不對")
+    if ten:
+        left = _clip_title(data.get("title_left"), 40)
+        right = _clip_title(data.get("title_right"), 40)
+        if not left or not right:
+            raise HTTPException(status_code=502, detail="消化標題失敗：模型沒給齊兩個標題")
+        return CoverTitleDigestResponse(title_left=left, title_right=right)
+    title = _clip_title(data.get("title"), 60)
+    if not title:
+        raise HTTPException(status_code=502, detail="消化標題失敗：模型沒給標題")
+    return CoverTitleDigestResponse(title=title)
+
+
 @app.post(
     "/api/editor/cover",
     response_model=TenCoverResponse,
@@ -3227,8 +3299,8 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         print(f"[cover] 原圖放置附圖 {asis_count} 張 → 改合成版（程式壓字）", flush=True)
         req = req.model_copy(update={"mode": editor_formats.COVER_MODE_COMPOSITE})
 
-    # 兩格都有原圖放置時不需要畫面描述，一次文字模型都不打
-    if asis_count >= 2:
+    # 有原圖放置（1 張全版或 2 張雙格）就不需要畫面描述，一次文字模型都不打
+    if asis_count >= 1:
         visuals = (req.visual_left.strip() or req.title_left.strip(), req.visual_right.strip() or req.title_right.strip())
     else:
         visuals = resolve_cover_visuals(req)

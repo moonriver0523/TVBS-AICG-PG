@@ -256,6 +256,43 @@ def split_cover_title(title: str) -> list[str]:
     return parts
 
 
+# ---- 封面標題自動消化（2026-09-06 使用者裁決：貼新聞內文 → AI 出標題 → 回填欄位，
+# 編輯看過再自己按生成，不直接接生圖）----
+#
+# 十點不一樣：兩個標題（左格、右格）各自是同一則新聞的兩個切面，每個標題用半形空格
+# 分成 2–3 段（每段就是封面上的一行）。YT 直播：一句標題用一個半形空格分兩段。
+# 忠實度規則由 main.CONTENT_FIDELITY_RULES 接在後面（同主流程），標題只能用原文有的事實。
+COVER_TITLE_DIGEST_SYSTEM_TEN = """You write the two headlines for a Taiwanese prime-time news programme cover (十點不一樣) from one news article.
+
+Return JSON with "title_left" and "title_right".
+- Each is a punchy Traditional Chinese (Taiwan) headline for one facet of the story; the two must cover DIFFERENT facets (e.g. what happened / the impact, the scene / the numbers, the cause / the response). Never repeat the same facts in both.
+- Each headline is 2 or 3 segments separated by ONE half-width space; each segment 3–7 characters; whole headline at most 18 characters excluding spaces. Each segment becomes one printed line.
+- No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
+- Traditional Chinese only (Taiwan usage). Never Simplified forms.
+"""
+
+COVER_TITLE_DIGEST_SYSTEM_YT = """You write the headline for a Taiwanese TV news live-stream thumbnail from one news article.
+
+Return JSON with "title".
+- One Traditional Chinese (Taiwan) headline made of exactly TWO segments separated by ONE half-width space; each segment 5–12 characters. The two segments are printed as two lines: the first states the event, the second the key detail or consequence.
+- No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
+- Traditional Chinese only (Taiwan usage). Never Simplified forms.
+"""
+
+COVER_TITLE_DIGEST_SCHEMA_TEN = {
+    "type": "object",
+    "properties": {"title_left": {"type": "string"}, "title_right": {"type": "string"}},
+    "required": ["title_left", "title_right"],
+    "additionalProperties": False,
+}
+COVER_TITLE_DIGEST_SCHEMA_YT = {
+    "type": "object",
+    "properties": {"title": {"type": "string"}},
+    "required": ["title"],
+    "additionalProperties": False,
+}
+
+
 YT_COVER_VISUAL_PROMPT_TEMPLATE = """Generate a text-free photographic background for a live-stream news thumbnail.
 
 Subject:

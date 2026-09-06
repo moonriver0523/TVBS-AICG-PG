@@ -470,7 +470,7 @@ def _draw_cover_title(canvas: Image.Image, lines: list[str], panel_x0: int, pane
 
 def compose_ten_cover(
     left_image: bytes,
-    right_image: bytes,
+    right_image: bytes | None,
     *,
     title_left: str,
     title_right: str,
@@ -484,20 +484,29 @@ def compose_ten_cover(
     兩張底圖（AI 生的或使用者原圖）斜切鋪滿，薄標頭帶、日期、標籤、兩邊多行標題
     全部由這裡畫。title_left／title_right 可用空白或換行自己分行（最多 3 行），
     沒分行且太長時由 split_cover_title 對切；哪一格是 AI 底圖才印「AI示意圖」。
+
+    right_image 為 None＝單張全版（2026-09-06 使用者裁決：只上傳一張原圖就是整版鋪滿，
+    不切左右格），兩個標題仍各自壓在左下與右下。
     """
     if badge not in COVER_BADGES:
         raise ComposeError(f"未知的標籤：{badge!r}（可用：{list(COVER_BADGES)}）")
     from editor_formats import split_cover_title
 
     width, height = COVER_CANVAS
-    canvas = split_canvas([left_image, right_image], COVER_CANVAS).convert("RGBA")
-    slant = round(width * YT_SPLIT_SLANT_RATIO)
     mid = width // 2
-    # 兩格的「安全內框」：避開斜線最寬處
-    left_box = (0, 0, mid - slant // 2, height)
-    right_box = (mid + slant // 2, 0, width, height)
-    for box in (left_box, right_box):
-        _shade_panel_bottom(canvas, box)
+    if right_image is None:
+        canvas = _cover_panel(left_image, COVER_CANVAS).convert("RGBA")
+        left_box = (0, 0, mid, height)
+        right_box = (mid, 0, width, height)
+        _shade_panel_bottom(canvas, (0, 0, width, height))
+    else:
+        canvas = split_canvas([left_image, right_image], COVER_CANVAS).convert("RGBA")
+        slant = round(width * YT_SPLIT_SLANT_RATIO)
+        # 兩格的「安全內框」：避開斜線最寬處
+        left_box = (0, 0, mid - slant // 2, height)
+        right_box = (mid + slant // 2, 0, width, height)
+        for box in (left_box, right_box):
+            _shade_panel_bottom(canvas, box)
 
     draw = ImageDraw.Draw(canvas)
     band_h = _draw_cover_header(draw, canvas, date_text, badge)

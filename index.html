@@ -383,6 +383,13 @@
                                    class="w-full mt-1 bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-300 input-focus-ring"
                                    placeholder="右半畫面描述（選填）——留空由 AI 依標題自動產生" />
                         </div>
+                        <div class="flex flex-col gap-1">
+                            <textarea id="coverNewsText" rows="3" maxlength="20000"
+                                      class="w-full bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-300 input-focus-ring resize-y"
+                                      placeholder="新聞內文（選填）——貼上後按「AI 消化標題」，標題會回填到上方欄位，看過再按生成"></textarea>
+                            <button type="button" onclick="handleCoverTitleDigest('ten_cover')"
+                                    class="self-start px-2.5 py-1 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all">AI 消化標題</button>
+                        </div>
                         <div class="flex items-center gap-2">
                             <input id="coverDate" type="text" maxlength="20"
                                    class="flex-1 bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-100 input-focus-ring"
@@ -397,7 +404,7 @@
                             <input id="coverAiTitle" type="checkbox" class="accent-red-600" checked />標題由 AI 生成
                             <span class="text-[9px] font-normal text-slate-500">（關閉＝程式壓字，零錯字）</span>
                         </label>
-                        <p class="text-[9px] text-slate-600 leading-relaxed">畫面描述<span class="text-amber-500/90">選填</span>：留空時由 AI 讀標題自動補，生成後會填回欄位讓你微調重生。標題用空白分行（最多 3 行，白／黃／紅逐行變色）。附圖選「<span class="text-amber-500/90">原圖放置</span>」：第 1 張＝左格、第 2 張＝右格，直接上版不生圖，並自動改程式壓字；其他用途當生圖參考。Logo 一律由程式貼正版檔。</p>
+                        <p class="text-[9px] text-slate-600 leading-relaxed">畫面描述<span class="text-amber-500/90">選填</span>：留空時由 AI 讀標題自動補，生成後會填回欄位讓你微調重生。標題用空白分行（最多 3 行，白／黃／紅逐行變色）。附圖選「<span class="text-amber-500/90">原圖放置</span>」：1 張＝整版鋪滿、2 張＝左格＋右格，直接上版不生圖，並自動改程式壓字；其他用途當生圖參考。Logo 一律由程式貼正版檔。</p>
                     </div>
 
                     <!-- YT 直播封面（國內外新聞／整點兩版型共用）：一句標題（半形空格分段）＋副標或整點時間＋日期；
@@ -408,6 +415,13 @@
                             <input id="ytCoverTitle" type="text" maxlength="60"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                    placeholder="挪威國王哈拉德辭世 開放公眾瞻仰遺容" />
+                        </div>
+                        <div class="flex flex-col gap-1">
+                            <textarea id="ytCoverNewsText" rows="3" maxlength="20000"
+                                      class="w-full bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-300 input-focus-ring resize-y"
+                                      placeholder="新聞內文（選填）——貼上後按「AI 消化標題」，標題會回填到上方欄位，看過再按生成"></textarea>
+                            <button type="button" onclick="handleCoverTitleDigest('yt_cover')"
+                                    class="self-start px-2.5 py-1 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all">AI 消化標題</button>
                         </div>
                         <div class="flex items-center gap-2">
                             <div id="ytCoverFlags" class="flex items-center gap-2 text-[10px] font-black text-slate-300">

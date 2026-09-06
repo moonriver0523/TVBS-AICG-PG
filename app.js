@@ -406,7 +406,7 @@ const EDITOR_FORMATS = {
     // 關＝AI 只生左右兩張無文字底圖，所有文字由程式壓字，零錯字。
     ten_cover: {
         label: '十點不一樣封面',
-        hint: '預設整張由生圖模型設計，美術字有設計感；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。附圖選「原圖放置」＝第 1 張左格、第 2 張右格，直接上版不生圖（自動改程式壓字）。正版 Logo 一律由程式貼上。',
+        hint: '預設整張由生圖模型設計，美術字有設計感；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。附圖選「原圖放置」＝1 張整版、2 張左右格，直接上版不生圖（自動改程式壓字）。正版 Logo 一律由程式貼上。',
         inputs: 'cover',
         coverMode: 'ai',
         // 封面沒有消化這道程序：/api/editor/cover 不收 density／stamp／safe_frame／tone，
@@ -1536,10 +1536,11 @@ async function handleTenCoverGenerate() {
         const composite = document.getElementById('coverAiTitle')?.checked === false || asisCount > 0;
         const deriving = !visualLeft || !visualRight;
         showToast(asisCount >= 2 ? '兩格都用附圖，合成中…'
+            : asisCount === 1 ? '單張附圖整版鋪滿，合成中…'
             : composite
-                ? (asisCount === 1 ? '左格用附圖，右格 AI 生底圖，約 30–90 秒…' : '生成左右底圖中，兩張平行跑，約 60–120 秒…')
+                ? '生成左右底圖中，兩張平行跑，約 60–120 秒…'
                 : (deriving ? 'AI 補畫面描述後開始設計封面，約 40–140 秒…' : '設計封面中，約 30–120 秒…'));
-        beginGenerationProgress('image', asisCount >= 2 ? 0.3 : (composite ? 1.6 : 1.3));
+        beginGenerationProgress('image', asisCount >= 1 ? 0.3 : (composite ? 1.6 : 1.3));
         const res = await fetch(COVER_BACKEND_URL, {
             method: 'POST',
             headers: _apiHeaders(),
@@ -1585,6 +1586,40 @@ async function handleTenCoverGenerate() {
         btn.disabled = false;
         loading.classList.add('hidden');
         endGenerationProgress(completed);
+    }
+}
+
+const COVER_TITLES_BACKEND_URL = `${API_BASE}/api/editor/cover-titles`;
+
+// 封面標題自動消化（2026-09-06）：貼新聞內文 → 文字模型出標題 → 回填欄位。
+// 刻意不接著生圖：使用者裁決要讓編輯看過標題再自己按「生成」。
+async function handleCoverTitleDigest(target) {
+    const ten = target === 'ten_cover';
+    const textarea = document.getElementById(ten ? 'coverNewsText' : 'ytCoverNewsText');
+    const newsText = (textarea?.value || '').trim();
+    if (newsText.length < 10) return showToast('先貼新聞內文（至少 10 個字）');
+    const btn = document.getElementById('aiBtn');
+    btn.disabled = true;
+    try {
+        showToast('AI 消化標題中，約 10–30 秒…');
+        const res = await fetch(COVER_TITLES_BACKEND_URL, {
+            method: 'POST',
+            headers: _apiHeaders(),
+            body: JSON.stringify({ news_text: newsText, target }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(_apiError(data, res.status));
+        if (ten) {
+            document.getElementById('coverTitleLeft').value = data.title_left || '';
+            document.getElementById('coverTitleRight').value = data.title_right || '';
+        } else {
+            document.getElementById('ytCoverTitle').value = data.title || '';
+        }
+        showToast('標題已回填，看過沒問題再按「生成」');
+    } catch (err) {
+        showToast(`消化標題失敗：${err.message}`);
+    } finally {
+        btn.disabled = false;
     }
 }
 
