@@ -401,24 +401,16 @@ const EDITOR_FORMATS = {
         locks: { chartType: true },
         hole: 'right',
     },
-    // 純 prompt 版：整張由生圖模型畫（含節目名、標題、日期、標籤），只有 Logo 後製貼上
+    // 十點不一樣封面：「標題由 AI 生成」勾選框切換 ai／composite（比照 YT 直播封面）。
+    // 開＝整張由生圖模型畫（含節目名、標題、日期、標籤），只有 Logo 後製貼上；
+    // 關＝AI 只生左右兩張無文字底圖，所有文字由程式壓字，零錯字。
     ten_cover: {
         label: '十點不一樣封面',
-        hint: '整張由生圖模型設計，美術字有設計感；只有正版 Logo 由程式貼上。',
+        hint: '預設整張由生圖模型設計，美術字有設計感；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。正版 Logo 一律由程式貼上。',
         inputs: 'cover',
         coverMode: 'ai',
         // 封面沒有消化這道程序：/api/editor/cover 不收 density／stamp／safe_frame／tone，
         // 留著只會是四顆按了沒反應的按鈕，所以收起來而不是鎖起來
-        locks: {},
-        hides: { digestControls: true, safeFrame: true, stamp: true },
-        hole: null,
-    },
-    // 合成版備援：零錯字但沒有設計感。保留供對照，不要順手刪掉。
-    ten_cover_composite: {
-        label: '十點不一樣封面（合成版・備份）',
-        hint: 'AI 只生左右兩張無文字底圖，所有文字由程式繪製：零錯字，但沒有美術字設計感。',
-        inputs: 'cover',
-        coverMode: 'composite',
         locks: {},
         hides: { digestControls: true, safeFrame: true, stamp: true },
         hole: null,
@@ -1539,7 +1531,7 @@ async function handleTenCoverGenerate() {
     loading.classList.remove('hidden');
     let completed = false;
     try {
-        const composite = editorFormat().coverMode === 'composite';
+        const composite = document.getElementById('coverAiTitle')?.checked === false;
         const deriving = !visualLeft || !visualRight;
         showToast(composite
             ? '生成左右底圖中，兩張平行跑，約 60–120 秒…'
@@ -1555,7 +1547,7 @@ async function handleTenCoverGenerate() {
                 visual_right: visualRight,
                 date_text: val('coverDate'),
                 badge: document.getElementById('coverBadge')?.value || 'on_air',
-                mode: editorFormat().coverMode || 'ai',
+                mode: composite ? 'composite' : 'ai',
                 provider: effectiveImageProvider(),
             }),
         });

@@ -247,15 +247,19 @@ class CoverPromptTests(unittest.TestCase):
         self.assertEqual(
             editor_formats.cover_mode("ten_cover"), editor_formats.COVER_MODE_AI
         )
-        self.assertEqual(
-            editor_formats.cover_mode("ten_cover_composite"),
-            editor_formats.COVER_MODE_COMPOSITE,
-        )
 
-    def test_composite_version_is_still_reachable(self):
-        # 使用者要求「現在的架構先另存」——這條紅了代表備援被順手刪掉了
-        self.assertIn("ten_cover_composite", editor_formats.EDITOR_FORMAT_KEYS)
+    def test_composite_is_a_checkbox_not_a_second_format(self):
+        # 2026-09-06 使用者裁決：比照 YT 直播封面，合成版改成「標題由 AI 生成」勾選框，
+        # 不再是下拉清單裡的第二個項目。後端 composite 路徑必須還在（勾選框關閉時走它）。
+        self.assertNotIn("ten_cover_composite", editor_formats.EDITOR_FORMAT_KEYS)
         self.assertTrue(hasattr(compose, "compose_ten_cover"))
+        index_html = (pathlib.Path(__file__).resolve().parent.parent / "index.html").read_text(encoding="utf-8")
+        m = re.search(r'<input id="coverAiTitle" type="checkbox"[^>]*>', index_html)
+        self.assertIsNotNone(m, "index.html 缺十點封面的「標題由 AI 生成」勾選框")
+        self.assertIn("checked", m.group(0), "預設要開（AI 生成）")
+        app_js = APP_JS.read_text(encoding="utf-8")
+        self.assertIn("document.getElementById('coverAiTitle')?.checked === false", app_js)
+        self.assertIn("mode: composite ? 'composite' : 'ai'", app_js)
 
 
 class CoverVisualFallbackTests(unittest.TestCase):
@@ -416,7 +420,7 @@ class LockScopeTests(FrontendParityTests):
     def test_cover_hides_the_controls_it_cannot_use(self):
         # /api/editor/cover 不收 density／stamp／safe_frame／tone，
         # 留一排點不動的灰按鈕只會被當成壞掉——收起來，不是鎖起來
-        for key in ("ten_cover", "ten_cover_composite"):
+        for key in ("ten_cover",):
             with self.subTest(key=key):
                 entry = self.js_entries()[key]
                 hides = re.search(r"hides:\s*\{([^}]*)\}", entry)
@@ -432,7 +436,7 @@ class LockScopeTests(FrontendParityTests):
 
     def test_cover_still_lets_the_user_pick_the_engine(self):
         # provider 是 TenCoverRequest 真的會用到的欄位，不可以一起收掉
-        for key in ("ten_cover", "ten_cover_composite"):
+        for key in ("ten_cover",):
             with self.subTest(key=key):
                 hides = re.search(r"hides:\s*\{([^}]*)\}", self.js_entries()[key]).group(1)
                 self.assertNotIn("engine", hides)

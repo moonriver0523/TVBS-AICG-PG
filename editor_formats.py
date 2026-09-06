@@ -368,20 +368,13 @@ EDITOR_FORMATS = {
         "digest_rules": _broadcast_rules("right"),
         "hole_side": "right",
     },
-    # 純 prompt 版：整張由生圖模型畫，只有 Logo 是後製貼上去的
+    # 十點不一樣封面：ai／composite 兩種模式並存，由前端「標題由 AI 生成」勾選框切換
+    # （2026-09-06 使用者裁決比照 YT 直播封面，不再拆成兩個下拉項目）。
+    # cover_mode 是預設值；實際模式由 TenCoverRequest.mode 決定。
     "ten_cover": {
         "label": "十點不一樣封面",
         "pipeline": PIPELINE_COVER,
         "cover_mode": COVER_MODE_AI,
-        "digest_rules": "",
-        "hole_side": None,
-    },
-    # 合成版：AI 只出左右兩張無文字底圖，所有文字由 Pillow 畫。零錯字但沒有設計感。
-    # 2026-09-03 被純 prompt 版取代成備援，刻意保留在清單裡供對照，不要順手刪掉。
-    "ten_cover_composite": {
-        "label": "十點不一樣封面（合成版・備份）",
-        "pipeline": PIPELINE_COVER,
-        "cover_mode": COVER_MODE_COMPOSITE,
         "digest_rules": "",
         "hole_side": None,
     },
