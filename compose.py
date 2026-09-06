@@ -437,7 +437,6 @@ def _draw_cover_title(canvas: Image.Image, lines: list[str], panel_x0: int, pane
         return
     panel_w = panel_x1 - panel_x0
     max_w = round(panel_w * COVER_TITLE_WIDTH_RATIO)
-    widest = max(lines, key=lambda ln: len(ln))
     size = round(height * COVER_TITLE_SIZE_RATIO)
     min_size = round(height * COVER_TITLE_MIN_SIZE_RATIO)
     font = None
@@ -449,7 +448,6 @@ def _draw_cover_title(canvas: Image.Image, lines: list[str], panel_x0: int, pane
     else:
         font = _font(min_size)
         size = min_size
-    del widest
     stroke = max(3, round(size * COVER_TITLE_STROKE_RATIO))
     step = round(size * COVER_TITLE_LINE_GAP)
     baseline = height - round(height * COVER_TITLE_BOTTOM_RATIO)

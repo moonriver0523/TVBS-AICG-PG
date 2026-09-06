@@ -201,6 +201,26 @@ class EndpointTests(unittest.TestCase):
         self.assertTrue(res.json()["left_is_ai"])
 
 
+    def test_ai_mode_passes_scene_reference_to_the_image_model(self):
+        seen = {}
+
+        def fake_generate(req):
+            seen["refs"] = list(req.reference_images)
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(_png_bytes(size=(1280, 720))).decode("ascii"),
+                mime_type="image/png", model="fake",
+            )
+
+        payload = self._payload(0)
+        payload["reference_images"] = [{"data_url": _data_url(_png_bytes()), "purpose": "scene"}]
+        with patch.object(main, "generate_image_raw", side_effect=fake_generate),              patch.object(main, "resolve_cover_visuals", return_value=("左", "右")):
+            res = client.post("/api/editor/cover", json=payload, headers=_headers())
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(res.json()["mode"], "ai")
+        self.assertEqual(len(seen["refs"]), 1)
+        self.assertEqual(seen["refs"][0].purpose, "scene")
+
+
 class PromptSyncTests(unittest.TestCase):
     """純 AI 版的 prompt 要跟合成版畫的同一個版面（斜切全幅、薄標頭帶、白黃紅逐行）。"""
 

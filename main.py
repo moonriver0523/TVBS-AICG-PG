@@ -3158,15 +3158,18 @@ def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) ->
         visual_left=visuals[0],
         visual_right=visuals[1],
     )
-    result = generate_image_raw(
-        ImageGenerateRequest(
-            prompt=prompt,
-            provider=req.provider,
-            aspect_ratio="16:9",
-            image_size="1K",
-            safe_frame=False,
-        )
+    image_req = ImageGenerateRequest(
+        prompt=prompt,
+        provider=req.provider,
+        aspect_ratio="16:9",
+        image_size="1K",
+        safe_frame=False,
+        # asis 走不到這裡（有 asis 端點就強制 composite）；其他用途依規則當生圖參考
+        reference_images=[ref for ref in req.reference_images if ref.purpose != "asis"],
     )
+    if image_req.reference_images:
+        image_req = apply_user_references_to_image_request(image_req)
+    result = generate_image_raw(image_req)
     return compose.paste_cover_logo(base64.b64decode(result.image_data_base64))
 
 
