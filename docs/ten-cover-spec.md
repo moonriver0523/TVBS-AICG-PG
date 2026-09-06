@@ -24,11 +24,11 @@
 
 ## 原圖放置（TenCoverRequest.reference_images）
 
-- 用途 `asis` 依上傳順序：第 1 張＝左格、第 2 張＝右格；只有 1 張時右格照常 AI 生；
-  超過 2 張只取前 2 張並記 log。
+- 用途 `asis` 依上傳順序：**1 張＝整版鋪滿**（不切格、不生另一格，兩標題壓左下／右下）、
+  2 張＝左格＋右格；超過 2 張只取前 2 張並記 log。
 - 有任何 asis 一律強制合成版（`mode` 改 `composite`），真照不進生圖模型；回應 `mode`
   會反映實際採用的模式，`left_is_ai`／`right_is_ai` 說明哪格是 AI 底圖。
-- 兩格都 asis 時不打文字模型補畫面描述，一次 API 都不打。
+- 有 asis（1 張或 2 張）都不打文字模型補畫面描述，一次 API 都不打。
 - 其他用途（實景／肖像／地圖）當要生的那格的生圖參考（`apply_user_references_to_image_request`）。
 
 ## 純 AI 版（COVER_AI_PROMPT_TEMPLATE）
@@ -40,3 +40,10 @@ prompt 的版面描述已同步成斜切全幅＋薄標頭帶＋白／黃／紅�
 
 `tests/test_ten_cover.py`：分行規則、斜切像素、標頭與波紋、AI示意圖只印 AI 格、
 三色標題、端點（雙 asis 零 API、單 asis 左格、無 asis 維持 ai 模式）、prompt 同步。
+
+## AI 消化標題（/api/editor/cover-titles）
+
+十點與 YT 封面欄位各有「新聞內文」textarea＋「AI 消化標題」鈕。貼內文 → 文字模型
+（system prompt 接 `CONTENT_FIDELITY_RULES`）出十點兩標題（各 2–3 段，空格分行）或 YT 單標題
+（兩段）→ 回填標題欄位，**不接生圖**，編輯看過再自己按「生成」（2026-09-06 使用者裁決）。
+裁切到欄位上限（40／60 字）；模型失敗回 502。每次多一次文字模型呼叫。
