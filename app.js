@@ -406,7 +406,7 @@ const EDITOR_FORMATS = {
     // 關＝AI 只生左右兩張無文字底圖，所有文字由程式壓字，零錯字。
     ten_cover: {
         label: '十點不一樣封面',
-        hint: '預設整張由生圖模型設計，美術字有設計感；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。正版 Logo 一律由程式貼上。',
+        hint: '預設整張由生圖模型設計，美術字有設計感；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。附圖選「原圖放置」＝第 1 張左格、第 2 張右格，直接上版不生圖（自動改程式壓字）。正版 Logo 一律由程式貼上。',
         inputs: 'cover',
         coverMode: 'ai',
         // 封面沒有消化這道程序：/api/editor/cover 不收 density／stamp／safe_frame／tone，
@@ -784,11 +784,11 @@ function applyEditorFormatInputs() {
     if (news) news.classList.toggle('hidden', wantsCover || wantsYt);
     if (cover) cover.classList.toggle('hidden', !wantsCover);
     if (yt) yt.classList.toggle('hidden', !wantsYt);
-    // 附圖上傳區：主流程與 YT 直播封面都用；十點不一樣的端點不收附圖，收起來。
-    // YT 版型時把它搬到 YT 欄位下面——留在原位會跑到角色鈕正下方，看起來像消失了。
+    // 附圖上傳區：主流程、YT 直播封面、十點不一樣（2026-09-06 起收原圖放置）都用。
+    // 封面版型時把它搬到該組欄位下面——留在原位會跑到角色鈕正下方，看起來像消失了。
     if (refBox) {
-        refBox.classList.toggle('hidden', wantsCover);
-        const host = wantsYt ? yt : news;
+        refBox.classList.remove('hidden');
+        const host = wantsYt ? yt : (wantsCover ? cover : news);
         if (host && refBox.previousElementSibling !== host) host.insertAdjacentElement('afterend', refBox);
     }
     // 整點直播：沒有原音呈現／AI即時翻譯、多一格整點時間
@@ -1531,12 +1531,15 @@ async function handleTenCoverGenerate() {
     loading.classList.remove('hidden');
     let completed = false;
     try {
-        const composite = document.getElementById('coverAiTitle')?.checked === false;
+        const asisCount = uploadedAsisCount();
+        // 有原圖放置一律程式壓字（後端也會強制），這裡只是把提示講對
+        const composite = document.getElementById('coverAiTitle')?.checked === false || asisCount > 0;
         const deriving = !visualLeft || !visualRight;
-        showToast(composite
-            ? '生成左右底圖中，兩張平行跑，約 60–120 秒…'
-            : (deriving ? 'AI 補畫面描述後開始設計封面，約 40–140 秒…' : '設計封面中，約 30–120 秒…'));
-        beginGenerationProgress('image', composite ? 1.6 : 1.3);
+        showToast(asisCount >= 2 ? '兩格都用附圖，合成中…'
+            : composite
+                ? (asisCount === 1 ? '左格用附圖，右格 AI 生底圖，約 30–90 秒…' : '生成左右底圖中，兩張平行跑，約 60–120 秒…')
+                : (deriving ? 'AI 補畫面描述後開始設計封面，約 40–140 秒…' : '設計封面中，約 30–120 秒…'));
+        beginGenerationProgress('image', asisCount >= 2 ? 0.3 : (composite ? 1.6 : 1.3));
         const res = await fetch(COVER_BACKEND_URL, {
             method: 'POST',
             headers: _apiHeaders(),
@@ -1549,6 +1552,7 @@ async function handleTenCoverGenerate() {
                 badge: document.getElementById('coverBadge')?.value || 'on_air',
                 mode: composite ? 'composite' : 'ai',
                 provider: effectiveImageProvider(),
+                reference_images: userRefImagesPayload(),
             }),
         });
         const data = await res.json().catch(() => ({}));

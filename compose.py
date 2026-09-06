@@ -256,11 +256,33 @@ COVER_CANVAS = (1920, 1080)
 COVER_BG = (10, 24, 58)
 COVER_BORDER = (24, 48, 104)
 
-COVER_TOP_BAND = 208            # 標頭列高度
-COVER_GUTTER = 18               # 左右兩張圖之間的溝
-COVER_MARGIN = 26
-COVER_IMAGE_HEIGHT = 656
-COVER_TITLE_BAND = 216          # 208 + 656 + 216 = 1080，底部不留空帶
+# 2026-09-06 改依 TVBS NEWS 頻道實際上線的十點不一樣封面重畫（型錄 catalog/15.png）：
+# 兩張圖斜切鋪滿整個 16:9，上方只留一條很薄的深藍標頭帶（Logo、「十點不一樣」小標、
+# 日期、ON AIR），標題壓在各自那格的下緣（白／黃／紅逐行變色），底部一道藍色波紋飾條。
+# 舊版「標頭帶 208px＋兩圖並排＋圖下標題帶」已退場。
+COVER_HEADER_RATIO = 0.105          # 標頭帶高（佔畫面高）
+COVER_HEADER_FILL = (7, 18, 56)
+COVER_HEADER_LINE = (40, 150, 245)  # 標頭帶底一條亮藍細線
+COVER_HEADER_LINE_RATIO = 0.004
+COVER_MARGIN = 26                    # 內容離左右畫框的距離
+COVER_SHOW_TAG_FILL = (22, 64, 150)  # 「十點不一樣」小標籤底色
+COVER_ONAIR_FILL = (206, 26, 32)
+COVER_TITLE_SIZE_RATIO = 0.085       # 標題起始字級（佔畫面高）
+COVER_TITLE_MIN_SIZE_RATIO = 0.045
+COVER_TITLE_WIDTH_RATIO = 0.84       # 標題最寬佔該格寬的比例
+COVER_TITLE_LINE_GAP = 1.06          # 行距（字級倍數）
+COVER_TITLE_BOTTOM_RATIO = 0.085     # 最後一行字底離畫面底的距離
+COVER_TITLE_STROKE_RATIO = 0.055
+# 逐行配色：第 1 行白、第 2 行黃、第 3 行紅（紅字用白描邊，其餘深色描邊）。
+# 這張表同時是 editor_formats.COVER_AI_PROMPT_TEMPLATE 對模型描述的配色規則，改要一起改。
+COVER_TITLE_LINE_COLOURS = ((255, 255, 255), (250, 215, 0), (228, 28, 40))
+COVER_TITLE_STROKE_DARK = (8, 8, 8)
+COVER_TITLE_STROKE_LIGHT = (255, 255, 255)
+COVER_SHADE_TOP_RATIO = 0.42         # 每格下半部壓暗漸層起點
+COVER_SHADE_ALPHA = 190
+COVER_WAVE_HEIGHT_RATIO = 0.05       # 底部波紋飾條高
+COVER_WAVE_FILL = (12, 70, 170)
+COVER_WAVE_LINE = (120, 200, 255)
 
 COVER_SHOW_NAME = "十點不一樣"
 COVER_AI_NOTE = "AI示意圖"
@@ -269,6 +291,7 @@ COVER_BADGES = {
     "highlight": ("精華", (206, 26, 32)),
 }
 COVER_DEFAULT_BADGE = "on_air"
+COVER_MAX_TITLE_LINES = 3
 
 
 # 純 prompt 版唯一的後製：把正版白色 Logo 貼在模型刻意留空的左上角。
@@ -315,6 +338,138 @@ def _cover_panel(image_bytes: bytes, size: tuple[int, int]) -> Image.Image:
     return resized.crop((left, top, left + target_w, top + target_h))
 
 
+def _shade_panel_bottom(canvas: Image.Image, box: tuple[int, int, int, int]) -> None:
+    """把一格的下半部往下漸暗，標題才壓得住亮照片。box=(x0,y0,x1,y1)。"""
+    x0, y0, x1, y1 = box
+    h = y1 - y0
+    top = round(h * COVER_SHADE_TOP_RATIO)
+    shade = Image.new("RGBA", (x1 - x0, h), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shade)
+    for y in range(top, h):
+        a = round(COVER_SHADE_ALPHA * ((y - top) / max(1, h - top)) ** 1.2)
+        sd.line(((0, y), (x1 - x0, y)), fill=(0, 0, 0, a))
+    canvas.alpha_composite(shade, (x0, y0))
+
+
+def _draw_cover_wave(canvas: Image.Image) -> None:
+    """底部一道藍色飾條，上緣兩條淺藍波紋線（頻道版底部的裝飾）。"""
+    import math
+    width, height = COVER_CANVAS
+    wave_h = round(height * COVER_WAVE_HEIGHT_RATIO)
+    scale = 3
+    layer = Image.new("RGBA", (width * scale, wave_h * scale), (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+    amp = wave_h * scale * 0.28
+    base = wave_h * scale * 0.55
+    pts = [(x, base + amp * math.sin(x / (width * scale) * math.pi * 6)) for x in range(0, width * scale + 1, 6)]
+    ld.polygon(pts + [(width * scale, wave_h * scale), (0, wave_h * scale)], fill=COVER_WAVE_FILL + (235,))
+    ld.line(pts, fill=COVER_WAVE_LINE + (255,), width=3 * scale)
+    pts2 = [(x, base - amp * 0.9 * math.sin(x / (width * scale) * math.pi * 6 + 1.1) - amp * 0.6) for x in range(0, width * scale + 1, 6)]
+    ld.line(pts2, fill=COVER_WAVE_LINE + (170,), width=2 * scale)
+    layer = layer.resize((width, wave_h), Image.LANCZOS)
+    canvas.alpha_composite(layer, (0, height - wave_h))
+
+
+def _draw_cover_header(draw: ImageDraw.ImageDraw, canvas: Image.Image, date_text: str, badge: str) -> int:
+    """薄標頭帶：Logo、「十點不一樣」小標、日期、ON AIR。回傳帶高。"""
+    width, height = COVER_CANVAS
+    band_h = round(height * COVER_HEADER_RATIO)
+    draw.rectangle((0, 0, width, band_h), fill=COVER_HEADER_FILL)
+    line_h = max(2, round(height * COVER_HEADER_LINE_RATIO))
+    draw.rectangle((0, band_h - line_h, width, band_h), fill=COVER_HEADER_LINE)
+
+    # Logo：帶高的 70%
+    logo_h = round(band_h * 0.70)
+    with Image.open(TVBS_LOGO_WHITE) as logo_file:
+        ratio = logo_file.width / logo_file.height
+    logo_w = round(logo_h * ratio)
+    _paste_logo(canvas, (COVER_MARGIN, (band_h - line_h - logo_h) // 2), logo_w)
+
+    # 「十點不一樣」小標籤
+    tag_font = _font(round(band_h * 0.42))
+    tag_x0 = COVER_MARGIN + logo_w + round(width * 0.02)
+    tag_w = tag_font.getbbox(COVER_SHOW_NAME)[2] + round(band_h * 0.6)
+    tag_h = round(band_h * 0.62)
+    tag_y0 = (band_h - line_h - tag_h) // 2
+    _rounded(draw, (tag_x0, tag_y0, tag_x0 + tag_w, tag_y0 + tag_h), 8, COVER_SHOW_TAG_FILL)
+    _draw_text(draw, (tag_x0 + tag_w // 2, tag_y0 + tag_h // 2), COVER_SHOW_NAME, tag_font, stroke_width=0, anchor="mm")
+
+    # ON AIR／精華：靠右紅底白字
+    badge_text, badge_colour = COVER_BADGES[badge]
+    badge_font = _font(round(band_h * 0.42))
+    badge_w = badge_font.getbbox(badge_text)[2] + round(band_h * 0.9)
+    badge_x1 = width - COVER_MARGIN
+    _rounded(draw, (badge_x1 - badge_w, tag_y0, badge_x1, tag_y0 + tag_h), 8, badge_colour)
+    dot_r = round(tag_h * 0.14)
+    dot_cx = badge_x1 - badge_w + round(band_h * 0.32)
+    draw.ellipse((dot_cx - dot_r, band_h // 2 - dot_r - line_h // 2, dot_cx + dot_r, band_h // 2 + dot_r - line_h // 2), fill=(255, 255, 255))
+    _draw_text(draw, (badge_x1 - round(band_h * 0.28), tag_y0 + tag_h // 2), badge_text, badge_font, stroke_width=0, anchor="rm")
+
+    # 日期：ON AIR 左側
+    if date_text:
+        date_font = _font(round(band_h * 0.40))
+        _draw_text(draw, (badge_x1 - badge_w - round(width * 0.02), tag_y0 + tag_h // 2), date_text, date_font, stroke_width=0, anchor="rm")
+    return band_h
+
+
+def _draw_cover_ai_note(canvas: Image.Image, x_anchor: int, y0: int, align_right: bool) -> None:
+    """格內「AI示意圖」小標（半透明黑底白字）。"""
+    height = COVER_CANVAS[1]
+    font = _font(round(height * 0.03))
+    text_w = font.getbbox(COVER_AI_NOTE)[2]
+    pad = round(height * 0.012)
+    note_h = round(height * 0.03 * 1.6)
+    if align_right:
+        x0, x1 = x_anchor - text_w - pad * 2, x_anchor
+    else:
+        x0, x1 = x_anchor, x_anchor + text_w + pad * 2
+    plate = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    ImageDraw.Draw(plate).rounded_rectangle((x0, y0, x1, y0 + note_h), radius=6, fill=(0, 0, 0, 130))
+    canvas.alpha_composite(plate)
+    _draw_text(ImageDraw.Draw(canvas), ((x0 + x1) // 2, y0 + note_h // 2), COVER_AI_NOTE, font, stroke_width=0, anchor="mm")
+
+
+def _draw_cover_title(canvas: Image.Image, lines: list[str], panel_x0: int, panel_x1: int, align_right: bool) -> None:
+    """一格的標題：2–3 行由下往上堆，全部同一字級（以最寬那行決定），逐行白／黃／紅。"""
+    width, height = COVER_CANVAS
+    lines = [ln for ln in lines if ln.strip()][:COVER_MAX_TITLE_LINES]
+    if not lines:
+        return
+    panel_w = panel_x1 - panel_x0
+    max_w = round(panel_w * COVER_TITLE_WIDTH_RATIO)
+    widest = max(lines, key=lambda ln: len(ln))
+    size = round(height * COVER_TITLE_SIZE_RATIO)
+    min_size = round(height * COVER_TITLE_MIN_SIZE_RATIO)
+    font = None
+    while size > min_size:
+        font = _font(size)
+        if max(font.getbbox(ln)[2] for ln in lines) <= max_w:
+            break
+        size -= 2
+    else:
+        font = _font(min_size)
+        size = min_size
+    del widest
+    stroke = max(3, round(size * COVER_TITLE_STROKE_RATIO))
+    step = round(size * COVER_TITLE_LINE_GAP)
+    baseline = height - round(height * COVER_TITLE_BOTTOM_RATIO)
+    x = panel_x1 - round(panel_w * (1 - COVER_TITLE_WIDTH_RATIO) / 2) if align_right else panel_x0 + round(panel_w * (1 - COVER_TITLE_WIDTH_RATIO) / 2)
+    anchor = "rs" if align_right else "ls"
+    draw = ImageDraw.Draw(canvas)
+    # 由最後一行往上畫，配色照行序（第 1 行白…）
+    for idx in range(len(lines) - 1, -1, -1):
+        colour = COVER_TITLE_LINE_COLOURS[min(idx, len(COVER_TITLE_LINE_COLOURS) - 1)]
+        is_red = colour == COVER_TITLE_LINE_COLOURS[2]
+        # 陰影一層再正字，字壓在照片上才立得住
+        _draw_text(draw, (x + 4, baseline + 4), lines[idx], font, fill=(0, 0, 0), stroke=(0, 0, 0), stroke_width=stroke, anchor=anchor)
+        _draw_text(
+            draw, (x, baseline), lines[idx], font, fill=colour,
+            stroke=COVER_TITLE_STROKE_LIGHT if is_red else COVER_TITLE_STROKE_DARK,
+            stroke_width=stroke, anchor=anchor,
+        )
+        baseline -= step
+
+
 def compose_ten_cover(
     left_image: bytes,
     right_image: bytes,
@@ -323,66 +478,44 @@ def compose_ten_cover(
     title_right: str,
     date_text: str,
     badge: str = COVER_DEFAULT_BADGE,
+    left_is_ai: bool = True,
+    right_is_ai: bool = True,
 ) -> bytes:
-    """合成「十點不一樣」封面圖。
+    """合成「十點不一樣」封面圖（2026-09-06 斜切全幅版）。
 
-    AI 只提供左右兩張**無文字**底圖；節目名、Logo、日期、標籤、兩邊標題與
-    AI 示意圖標註全部由這裡畫，所以不可能出現錯字或變形的 Logo。
+    兩張底圖（AI 生的或使用者原圖）斜切鋪滿，薄標頭帶、日期、標籤、兩邊多行標題
+    全部由這裡畫。title_left／title_right 可用空白或換行自己分行（最多 3 行），
+    沒分行且太長時由 split_cover_title 對切；哪一格是 AI 底圖才印「AI示意圖」。
     """
     if badge not in COVER_BADGES:
         raise ComposeError(f"未知的標籤：{badge!r}（可用：{list(COVER_BADGES)}）")
+    from editor_formats import split_cover_title
 
-    canvas = Image.new("RGB", COVER_CANVAS, COVER_BG)
-    draw = ImageDraw.Draw(canvas)
     width, height = COVER_CANVAS
+    canvas = split_canvas([left_image, right_image], COVER_CANVAS).convert("RGBA")
+    slant = round(width * YT_SPLIT_SLANT_RATIO)
+    mid = width // 2
+    # 兩格的「安全內框」：避開斜線最寬處
+    left_box = (0, 0, mid - slant // 2, height)
+    right_box = (mid + slant // 2, 0, width, height)
+    for box in (left_box, right_box):
+        _shade_panel_bottom(canvas, box)
 
-    panel_w = (width - COVER_MARGIN * 2 - COVER_GUTTER) // 2
-    panel_y = COVER_TOP_BAND
-    for index, raw in enumerate((left_image, right_image)):
-        panel = _cover_panel(raw, (panel_w, COVER_IMAGE_HEIGHT))
-        x = COVER_MARGIN + index * (panel_w + COVER_GUTTER)
-        canvas.paste(panel, (x, panel_y))
+    draw = ImageDraw.Draw(canvas)
+    band_h = _draw_cover_header(draw, canvas, date_text, badge)
 
-    # ---- 標頭列 ----
-    _paste_logo(canvas, (COVER_MARGIN + 24, 48), 236)
+    note_y = band_h + round(height * 0.025)
+    if left_is_ai:
+        _draw_cover_ai_note(canvas, COVER_MARGIN, note_y, align_right=False)
+    if right_is_ai:
+        _draw_cover_ai_note(canvas, width - COVER_MARGIN, note_y, align_right=True)
 
-    show_font = _fit_font(COVER_SHOW_NAME, 700, 104, 60)
-    _draw_text(
-        draw, (width // 2, COVER_TOP_BAND // 2), COVER_SHOW_NAME, show_font,
-        stroke_width=6, anchor="mm",
-    )
-
-    badge_text, badge_colour = COVER_BADGES[badge]
-    badge_font = _font(38)
-    badge_w = badge_font.getbbox(badge_text)[2] + 44
-    badge_x1 = width - COVER_MARGIN - 24
-    _rounded(draw, (badge_x1 - badge_w, 44, badge_x1, 44 + 58), 10, badge_colour)
-    _draw_text(draw, (badge_x1 - badge_w // 2, 44 + 29), badge_text, badge_font, stroke_width=0, anchor="mm")
-    _draw_text(draw, (badge_x1, 122), date_text, _font(40), stroke_width=3, anchor="ra")
-
-    # ---- 兩邊標題 ----
-    title_y = panel_y + COVER_IMAGE_HEIGHT + COVER_TITLE_BAND // 2
-    for index, title in enumerate((title_left, title_right)):
-        text = (title or "").strip()
-        if not text:
-            continue
-        font = _fit_font(text, panel_w - 72, 82, 34)
-        centre_x = COVER_MARGIN + index * (panel_w + COVER_GUTTER) + panel_w // 2
-        _draw_text(draw, (centre_x, title_y), text, font, stroke_width=8, anchor="mm")
-
-    # ---- AI 示意圖標註（每張底圖右下角）----
-    note_font = _font(28)
-    for index in range(2):
-        x = COVER_MARGIN + index * (panel_w + COVER_GUTTER) + panel_w - 16
-        _draw_text(
-            draw, (x, panel_y + COVER_IMAGE_HEIGHT - 14), COVER_AI_NOTE, note_font,
-            stroke_width=4, anchor="rs",
-        )
-
-    draw.rectangle((0, 0, width - 1, height - 1), outline=COVER_BORDER, width=COVER_MARGIN)
+    _draw_cover_wave(canvas)
+    _draw_cover_title(canvas, split_cover_title(title_left), left_box[0] + COVER_MARGIN, left_box[2], align_right=False)
+    _draw_cover_title(canvas, split_cover_title(title_right), right_box[0], right_box[2] - COVER_MARGIN, align_right=True)
 
     buffer = io.BytesIO()
-    canvas.save(buffer, format="PNG")
+    canvas.convert("RGB").save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -799,7 +932,18 @@ def split_backgrounds(images: list[bytes]) -> bytes:
         raise ComposeError("分切底圖至少要一張附圖")
     if len(images) == 1:
         return crop_background_16x9(images[0])
-    width, height = YT_CANVAS
+    canvas = split_canvas(images, YT_CANVAS)
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def split_canvas(images: list[bytes], size: tuple[int, int]) -> Image.Image:
+    """斜切拼圖的核心：n 張圖依序左→右鋪滿 size，格間白色斜線，回 RGB Image。
+
+    YT 直播封面與十點不一樣封面共用（兩者畫布都是 1920×1080）。
+    """
+    width, height = size
     n = len(images)
     slant = round(width * YT_SPLIT_SLANT_RATIO)
     line_w = max(2, round(height * YT_SPLIT_LINE_RATIO))
@@ -844,9 +988,7 @@ def split_backgrounds(images: list[bytes]) -> bytes:
         )
     lines = lines.resize((width, height), Image.LANCZOS)
     canvas.paste(Image.new("RGB", (width, height), YT_SPLIT_LINE_FILL), (0, 0), lines)
-    buffer = io.BytesIO()
-    canvas.save(buffer, format="PNG")
-    return buffer.getvalue()
+    return canvas
 
 
 def crop_background_16x9(image_bytes: bytes) -> bytes:

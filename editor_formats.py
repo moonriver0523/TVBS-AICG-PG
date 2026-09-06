@@ -91,33 +91,33 @@ Requirements:
 COVER_AI_PROMPT_TEMPLATE = """Design a complete, broadcast-quality Chinese-language news programme cover image (YouTube thumbnail style) for a Taiwanese prime-time news show.
 
 === CANVAS ===
-16:9 horizontal. The frame is split down the middle into a LEFT half and a RIGHT half, each carrying its own photograph, divided by a thin bright seam. Across the very top sits a narrow deep-navy header band with an angled right edge.
+16:9 horizontal. Two photographs fill the ENTIRE frame edge to edge, split by ONE thin white DIAGONAL seam (slightly leaning: its top end sits a little right of centre, its bottom end a little left of centre) into a LEFT panel and a RIGHT panel. No borders, no gutters, no letterboxing. Across the very top runs a THIN deep-navy header band (about one tenth of the frame height) with a bright blue hairline along its bottom edge; along the very bottom runs a slim blue decorative wave strip. Everything else is photograph.
 
 === TEXT TO RENDER (Traditional Chinese, Taiwan) ===
 Render EXACTLY these strings, character for character. Do not translate them, do not rewrite them, do not shorten them, and do not add any other words, letters or numbers anywhere in the image.
-- Programme name, in the top header band, to the right of the empty logo area: 十點不一樣
-- Small tag, upper right: {badge_text}
-- Date, directly under that tag: {date_text}
-- Headline of the LEFT half, in its lower-left area, over the photograph: {title_left}
-- Headline of the RIGHT half, in its lower-right area, over the photograph: {title_right}
-- A small unobtrusive label near the upper corner of each half: AI示意圖
+- Programme name, as a SMALL blue rounded tag inside the header band, to the right of the empty logo area: 十點不一樣
+- Small red rounded tag at the RIGHT end of the header band: {badge_text}
+- Date, in the header band immediately to the left of that tag: {date_text}
+- Headline of the LEFT panel, LEFT-aligned in its lower-left area, over the photograph: {title_left}
+- Headline of the RIGHT panel, RIGHT-aligned in its lower-right area, over the photograph: {title_right}
+- A small unobtrusive label just below the header band, at the outer top corner of each panel: AI示意圖
 
 === TYPOGRAPHY (this is the point of the image) ===
-- Programme name 十點不一樣: FLAT, SOLID WHITE, heavy bold sans-serif with a thin dark outline and a soft drop shadow. Absolutely NO metallic, chrome, silver, gold, gradient, glossy, bevelled, embossed or 3-D extruded treatment — it is plain white type on the navy band, clean and confident.
-- The two headlines are the loudest thing in the frame: very heavy condensed Chinese display type, BROKEN INTO TWO OR THREE STACKED LINES each (split each headline at a natural phrase boundary yourself), tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography.
-- COLOUR EACH LINE DIFFERENTLY within a headline — that variation is required, not optional. Use a bold palette: solid white for the setup line, vivid red with a white outline for the line carrying the impact, and bright golden yellow for a figure or a key noun. Choose which line gets which colour yourself so the most important words are the most saturated. Never render a whole headline in one flat colour.
-- The small tag sits on a red brush-stroke / torn-paper style label in bold white characters, slightly tilted, hand-cut edges rather than a neat rectangle.
-- The date is a clean, light, small white sans-serif, no effects.
+- Programme name 十點不一樣: FLAT, SOLID WHITE, bold sans-serif, small, sitting on a small blue rounded tag inside the header band. Absolutely NO metallic, chrome, silver, gold, gradient, glossy, bevelled, embossed or 3-D extruded treatment — it is plain white type on a blue tag, clean and quiet; it is NOT a large title.
+- The two headlines are the loudest thing in the frame: very heavy condensed Chinese display type, BROKEN INTO TWO OR THREE STACKED LINES each (split each headline at a natural phrase boundary yourself), tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of each photograph darkens gently so the headline stays readable.
+- COLOUR EACH LINE DIFFERENTLY within a headline — that variation is required, not optional. Follow this order: the FIRST line solid white, the SECOND line bright golden yellow, the THIRD line (if any) vivid red with a white outline. Never render a whole headline in one flat colour.
+- The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
+- The date is a clean, light, small white sans-serif, no effects, inside the header band.
 - The AI示意圖 label is small, plain white, deliberately understated, on a faint dark plate so it stays readable.
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
 
 === IMAGERY ===
 - LEFT half photograph: {visual_left}
 - RIGHT half photograph: {visual_right}
-- Both are photographic, dramatically lit, news-documentary quality, filling their half edge to edge behind the headline.
+- Both are photographic, dramatically lit, news-documentary quality, filling their panel edge to edge behind the headline, meeting at the diagonal seam.
 
 === HARD CONSTRAINTS ===
-- NO television channel logo, NO station identity mark, NO broadcaster wordmark, NO dot-pattern emblem, NO watermark of any kind. The upper-LEFT corner of the header band must be left as clean empty navy background — a real logo is placed there afterwards, so keep that corner free of text, graphics and busy detail.
+- NO television channel logo, NO station identity mark, NO broadcaster wordmark, NO dot-pattern emblem, NO watermark of any kind. The upper-LEFT corner of the header band (the left-most fifth of the band) must be left as clean empty navy background — a real logo is placed there afterwards, so keep that corner free of text, graphics and busy detail.
 - No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles.
 - Keep every piece of text well inside the frame with clear breathing space; nothing may touch or be clipped by any edge.
 """
@@ -232,6 +232,28 @@ def fallback_split_title(title: str) -> tuple[str, str]:
             return head.strip(), tail.strip()
     mid = max(1, len(text) // 2)
     return text[:mid], text[mid:]
+
+
+# 十點不一樣封面（合成版）的標題分行：使用者用空白（半形／全形）或換行自己分，
+# 最多 3 行；沒分且超過 COVER_TITLE_AUTO_SPLIT_LEN 個字就對切成兩行。
+# 紅線同 YT：只切、不改字——去掉分隔符後必須等於原標題。
+COVER_TITLE_AUTO_SPLIT_LEN = 7
+COVER_TITLE_MAX_LINES = 3
+_COVER_TITLE_SPLIT_RE = re.compile(r"[ \u3000\n\r｜|/]+")
+
+
+def split_cover_title(title: str) -> list[str]:
+    text = (title or "").strip()
+    if not text:
+        return []
+    parts = [p for p in _COVER_TITLE_SPLIT_RE.split(text) if p]
+    if len(parts) > COVER_TITLE_MAX_LINES:
+        parts = parts[: COVER_TITLE_MAX_LINES - 1] + ["".join(parts[COVER_TITLE_MAX_LINES - 1 :])]
+    if len(parts) == 1 and len(parts[0]) > COVER_TITLE_AUTO_SPLIT_LEN:
+        whole = parts[0]
+        mid = (len(whole) + 1) // 2
+        parts = [whole[:mid], whole[mid:]]
+    return parts
 
 
 YT_COVER_VISUAL_PROMPT_TEMPLATE = """Generate a text-free photographic background for a live-stream news thumbnail.

@@ -3051,6 +3051,12 @@ class TenCoverRequest(BaseModel):
     # ai＝整張交給生圖模型畫（預設，2026-09-03 使用者裁決要設計感）
     # composite＝AI 只出兩張無文字底圖、文字由 Pillow 畫（零錯字但沒設計感，留作備援）
     mode: Literal["ai", "composite"] = editor_formats.COVER_MODE_AI
+    # 2026-09-06：十點也收附圖。用途 asis（原圖放置）依順序＝左格、右格，
+    # 只有一張時放左格、右格照常由 AI 生；有任何 asis 就強制 composite（真照不進生圖模型）。
+    # 其他用途（實景／肖像／地圖）當兩格 AI 底圖的生圖參考。
+    reference_images: list[UserReferenceImage] = Field(
+        default_factory=list, max_length=MAX_INPUT_REFERENCES
+    )
 
 
 class TenCoverResponse(ImageGenerateResponse):
@@ -3058,6 +3064,24 @@ class TenCoverResponse(ImageGenerateResponse):
     # 不回報的話使用者永遠不知道 AI 幫他決定了什麼，也沒辦法微調後重生。
     visual_left: str = ""
     visual_right: str = ""
+    # 哪一格是 AI 底圖（決定「AI示意圖」印在哪格）；實際採用的模式（asis 會強制 composite）
+    left_is_ai: bool = True
+    right_is_ai: bool = True
+    mode: str = editor_formats.COVER_MODE_AI
+
+
+def ten_cover_asis_images(req: "TenCoverRequest") -> list[bytes]:
+    """依順序取出「原圖放置」附圖的原始 bytes（最多兩張：左、右）。"""
+    raws: list[bytes] = []
+    asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
+    for ref in asis[:2]:
+        _, _, encoded = _split_data_url(ref.data_url)
+        if not encoded:
+            raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
+        raws.append(base64.b64decode(encoded))
+    if len(asis) > 2:
+        print(f"[cover] 原圖放置附圖 {len(asis)} 張，十點封面只有兩格，只取前 2 張", flush=True)
+    return raws
 
 
 def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
@@ -3105,17 +3129,21 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
     )
 
 
-def _cover_panel_image(visual: str, provider: str) -> bytes:
-    """生一張 1:1 的無文字底圖。"""
-    result = generate_image_raw(
-        ImageGenerateRequest(
-            prompt=editor_formats.COVER_VISUAL_PROMPT_TEMPLATE.format(visual=visual.strip()),
-            provider=provider,
-            aspect_ratio="1:1",
-            image_size="1K",
-            safe_frame=False,
-        )
+def _cover_panel_image(
+    visual: str, provider: str, references: list[UserReferenceImage] | None = None
+) -> bytes:
+    """生一張 1:1 的無文字底圖。references＝非 asis 的附圖，依用途規則當生圖參考。"""
+    image_req = ImageGenerateRequest(
+        prompt=editor_formats.COVER_VISUAL_PROMPT_TEMPLATE.format(visual=visual.strip()),
+        provider=provider,
+        aspect_ratio="1:1",
+        image_size="1K",
+        safe_frame=False,
+        reference_images=[ref for ref in (references or []) if ref.purpose != "asis"],
     )
+    if image_req.reference_images:
+        image_req = apply_user_references_to_image_request(image_req)
+    result = generate_image_raw(image_req)
     return base64.b64decode(result.image_data_base64)
 
 
@@ -3144,23 +3172,36 @@ def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) ->
 
 def _cover_composite(
     req: TenCoverRequest, date_text: str, visuals: tuple[str, str]
-) -> bytes:
-    """合成版（備援）：AI 只出兩張無文字底圖，文字全部由 Pillow 畫。"""
-    # 兩張圖平行生。序列跑會讓等待時間直接加倍——單張本來就要 30–90 秒。
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        futures = [
-            pool.submit(_cover_panel_image, visual, req.provider)
-            for visual in visuals
-        ]
-        left_image, right_image = (future.result() for future in futures)
-    return compose.compose_ten_cover(
-        left_image,
-        right_image,
+) -> tuple[bytes, tuple[bool, bool]]:
+    """合成版：AI 只出無文字底圖（或直接用原圖放置的附圖），文字全部由 Pillow 畫。
+
+    回 (PNG, (左格是否 AI, 右格是否 AI))。
+    """
+    asis = ten_cover_asis_images(req)
+    references = [ref for ref in req.reference_images if ref.purpose != "asis"]
+    panels: list[bytes | None] = [asis[0] if len(asis) >= 1 else None, asis[1] if len(asis) >= 2 else None]
+    todo = [i for i, panel in enumerate(panels) if panel is None]
+    # 要生的圖平行生。序列跑會讓等待時間直接加倍——單張本來就要 30–90 秒。
+    if todo:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {
+                i: pool.submit(_cover_panel_image, visuals[i], req.provider, references)
+                for i in todo
+            }
+            for i, future in futures.items():
+                panels[i] = future.result()
+    left_is_ai, right_is_ai = len(asis) < 1, len(asis) < 2
+    cover = compose.compose_ten_cover(
+        panels[0],
+        panels[1],
         title_left=req.title_left.strip(),
         title_right=req.title_right.strip(),
         date_text=date_text,
         badge=req.badge,
+        left_is_ai=left_is_ai,
+        right_is_ai=right_is_ai,
     )
+    return cover, (left_is_ai, right_is_ai)
 
 
 @app.post(
@@ -3176,12 +3217,24 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         )
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
 
-    visuals = resolve_cover_visuals(req)
+    asis_count = sum(1 for ref in req.reference_images if ref.purpose == "asis")
+    if asis_count and req.mode == editor_formats.COVER_MODE_AI:
+        # 原圖放置＝真實新聞照直接上版，不交給生圖模型重畫；整張 AI 版做不到「原圖」，
+        # 所以有 asis 一律走合成版（與 YT 直播封面多圖分切同一原則）。
+        print(f"[cover] 原圖放置附圖 {asis_count} 張 → 改合成版（程式壓字）", flush=True)
+        req = req.model_copy(update={"mode": editor_formats.COVER_MODE_COMPOSITE})
+
+    # 兩格都有原圖放置時不需要畫面描述，一次文字模型都不打
+    if asis_count >= 2:
+        visuals = (req.visual_left.strip() or req.title_left.strip(), req.visual_right.strip() or req.title_right.strip())
+    else:
+        visuals = resolve_cover_visuals(req)
+    panel_is_ai = (True, True)
     try:
         if req.mode == editor_formats.COVER_MODE_AI:
             cover = _cover_ai(req, date_text, visuals)
         else:
-            cover = _cover_composite(req, date_text, visuals)
+            cover, panel_is_ai = _cover_composite(req, date_text, visuals)
     except compose.ComposeError as exc:
         print(f"[compose] 封面失敗：{exc}", flush=True)
         raise HTTPException(status_code=500, detail=f"封面生成失敗：{exc}") from exc
@@ -3198,9 +3251,12 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     return TenCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
-        model=f"ten-cover:{req.mode}",
+        model=f"ten-cover:{req.mode}" + (f"-asis{min(asis_count, 2)}" if asis_count else ""),
         visual_left=visuals[0],
         visual_right=visuals[1],
+        left_is_ai=panel_is_ai[0],
+        right_is_ai=panel_is_ai[1],
+        mode=req.mode,
     )
 
 
