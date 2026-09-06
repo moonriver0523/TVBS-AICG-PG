@@ -1,0 +1,209 @@
+<title>TVBS AICG 入門手冊</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+  :root {
+    --bg: #f5f6f9;
+    --panel: #ffffff;
+    --panel-2: #eceff5;
+    --ink: #1a1e28;
+    --ink-2: #566074;
+    --line: #d9dde7;
+    --red: #d6161f;
+    --red-soft: #fbe9ea;
+    --yellow: #f2c400;
+    --navy: #1b2c5c;
+    --key-bg: #1e2433;
+    --key-ink: #f4f6fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #13161d; --panel: #1b1f29; --panel-2: #232837; --ink: #eceef4; --ink-2: #9aa3b5;
+      --line: #313849; --red: #ef3b43; --red-soft: #3a1c1f; --navy: #8fa8e8; --key-bg: #f0f2f7; --key-ink: #1a1e28;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #13161d; --panel: #1b1f29; --panel-2: #232837; --ink: #eceef4; --ink-2: #9aa3b5;
+    --line: #313849; --red: #ef3b43; --red-soft: #3a1c1f; --navy: #8fa8e8; --key-bg: #f0f2f7; --key-ink: #1a1e28;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+    font-size: 16px; line-height: 1.8;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 40px 24px 96px; display: grid; grid-template-columns: 200px 1fr; gap: 48px; }
+  @media (max-width: 800px) { .wrap { grid-template-columns: 1fr; gap: 24px; } nav.toc { position: static; } }
+  nav.toc { position: sticky; top: 24px; align-self: start; font-size: 14px; }
+  nav.toc .brand { font-weight: 900; font-size: 20px; letter-spacing: .02em; margin-bottom: 4px; }
+  nav.toc .brand b { color: var(--red); }
+  nav.toc .ver { color: var(--ink-2); font-size: 12px; margin-bottom: 20px; }
+  nav.toc a { display: block; color: var(--ink-2); text-decoration: none; padding: 5px 0 5px 12px; border-left: 2px solid var(--line); }
+  nav.toc a:hover, nav.toc a:focus-visible { color: var(--ink); border-left-color: var(--red); outline: none; }
+  main { max-width: 760px; }
+  h1 { font-size: 34px; font-weight: 900; line-height: 1.25; margin: 0 0 8px; text-wrap: balance; }
+  .lead { color: var(--ink-2); font-size: 17px; margin: 0 0 40px; }
+  h2 { font-size: 22px; font-weight: 900; margin: 56px 0 14px; padding-top: 20px; border-top: 1px solid var(--line); text-wrap: balance; }
+  h2:first-of-type { border-top: 0; padding-top: 0; margin-top: 0; }
+  h3 { font-size: 17px; font-weight: 700; margin: 28px 0 8px; }
+  p { margin: 0 0 14px; }
+  ul, ol { margin: 0 0 16px; padding-left: 22px; }
+  li { margin: 4px 0; }
+  li::marker { color: var(--red); font-weight: 700; }
+  .key {
+    display: inline-block; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; font-weight: 500;
+    background: var(--key-bg); color: var(--key-ink); padding: 1px 8px; border-radius: 4px; vertical-align: 1px; white-space: nowrap;
+  }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 20px 0 8px; }
+  @media (max-width: 640px) { .steps { grid-template-columns: 1fr; } }
+  .step { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; }
+  .step .n { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--red); font-weight: 500; letter-spacing: .1em; }
+  .step .t { font-weight: 900; font-size: 18px; margin: 4px 0 6px; }
+  .step .d { color: var(--ink-2); font-size: 14px; line-height: 1.6; }
+  .screen {
+    background: var(--navy); color: #eef2ff; border-radius: 10px; padding: 18px 20px; margin: 18px 0 22px;
+    font-size: 13px; display: grid; grid-template-columns: 1.1fr .9fr; gap: 14px;
+  }
+  @media (max-width: 640px) { .screen { grid-template-columns: 1fr; } }
+  .screen .col { display: flex; flex-direction: column; gap: 8px; }
+  .screen .box { background: rgba(255,255,255,.08); border: 1px dashed rgba(255,255,255,.35); border-radius: 6px; padding: 8px 10px; }
+  .screen .box.red { background: rgba(214,22,31,.85); border-style: solid; border-color: transparent; font-weight: 900; text-align: center; }
+  .screen .box.tall { min-height: 110px; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,.7); }
+  .screen .tabs { grid-column: 1 / -1; display: flex; gap: 8px; font-weight: 700; }
+  .screen .tabs span { padding: 3px 10px; border-radius: 4px; background: rgba(255,255,255,.12); }
+  .screen .tabs span.on { background: #fff; color: var(--navy); }
+  .screen .tabs span.off { opacity: .45; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 14.5px; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  th { font-weight: 700; color: var(--ink-2); font-size: 13px; letter-spacing: .04em; background: var(--panel-2); }
+  td:first-child { font-weight: 700; white-space: nowrap; }
+  .table-wrap { overflow-x: auto; }
+  .note { background: var(--red-soft); border-left: 3px solid var(--red); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 14px 0 18px; font-size: 14.5px; }
+  .note b { color: var(--red); }
+  .role { display: inline-block; font-weight: 900; font-size: 12px; padding: 0 8px; border-radius: 4px; border: 1.5px solid var(--red); color: var(--red); vertical-align: 2px; margin-right: 4px; }
+  .faq dt { font-weight: 700; margin-top: 14px; }
+  .faq dd { margin: 4px 0 0; color: var(--ink-2); }
+  footer { margin-top: 64px; color: var(--ink-2); font-size: 13px; border-top: 1px solid var(--line); padding-top: 16px; }
+</style>
+
+<div class="wrap">
+  <nav class="toc" aria-label="目錄">
+    <div class="brand">TVBS <b>AICG</b></div>
+    <div class="ver">入門手冊・第一頁「一鍵出圖」</div>
+    <a href="#start">三步驟出第一張圖</a>
+    <a href="#screen">畫面在哪裡</a>
+    <a href="#common">記者、編輯都會用到的設定</a>
+    <a href="#reporter">記者模式</a>
+    <a href="#editor">編輯模式與六種版型</a>
+    <a href="#result">拿到圖之後</a>
+    <a href="#faq">常見問題</a>
+  </nav>
+
+  <main>
+    <h1>貼一段新聞，拿到一張可以上鏡的 CG</h1>
+    <p class="lead">這本手冊只講第一頁「一鍵出圖」。你不需要懂任何 AI 名詞，照著三個步驟做，第一張圖大約一到兩分鐘後就會出現。第二頁「進階微調」與第三頁「混合版型」還在建置中，先不用理它們。</p>
+
+    <h2 id="start">三步驟出第一張圖</h2>
+    <div class="steps">
+      <div class="step"><div class="n">STEP 1</div><div class="t">選身分</div><div class="d">畫面左上角先按 <span class="key">記者</span> 或 <span class="key">編輯</span>。這決定底下會出現哪些選項，一定要先選。</div></div>
+      <div class="step"><div class="n">STEP 2</div><div class="t">貼新聞</div><div class="d">把新聞原文貼進大框。想交代的話（例如「標題放左邊」）寫在下面那一行「給 AI 的指令」。</div></div>
+      <div class="step"><div class="n">STEP 3</div><div class="t">按一鍵生成</div><div class="d">按紅色大按鈕，等進度條跑完。圖會出現在右邊，按 <span class="key">下載圖片</span> 存檔。</div></div>
+    </div>
+    <p>其他所有選項都已經有預設值，第一次用可以全部不動。</p>
+
+    <h2 id="screen">畫面在哪裡</h2>
+    <p>第一頁分成左右兩欄：左邊是你要填的東西，右邊是做出來的圖。上方三個分頁只用最左邊的「一鍵出圖」。</p>
+    <div class="screen" aria-hidden="true">
+      <div class="tabs"><span class="on">一鍵出圖</span><span class="off">進階微調（建置中）</span><span class="off">混合版型（建置中）</span></div>
+      <div class="col">
+        <div class="box">記者 ｜ 編輯</div>
+        <div class="box tall">新聞原文（貼這裡）</div>
+        <div class="box">給 AI 的指令（選填）</div>
+        <div class="box">＋ 附參考圖（選填）</div>
+        <div class="box">編輯格式（只有編輯看得到）</div>
+        <div class="box">版面形式 ｜ 色調 ｜ 字少字多 ｜ GPT/Gemini ｜ 安全框 ｜ 蓋章</div>
+        <div class="box red">一鍵生成</div>
+      </div>
+      <div class="col">
+        <div class="box tall">生成結果會出現在這裡</div>
+        <div class="box">下載圖片</div>
+        <div class="box">追加修改 ｜ 退回上一版</div>
+      </div>
+    </div>
+    <p>右上角的 <span class="key">重設</span> 會把整頁清空回到初始狀態，換一則新聞時可以用。</p>
+
+    <h2 id="common">記者、編輯都會用到的設定</h2>
+    <p>這幾個選項在兩種身分都會出現。全部都有預設值，看得懂再改。</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>選項</th><th>做什麼</th><th>什麼時候改</th></tr>
+      <tr><td>新聞原文</td><td>要做成圖的新聞內容。AI 只會用這裡面有的事實，不會自己補資料。</td><td>每次必填。</td></tr>
+      <tr><td>給 AI 的指令</td><td>額外要求，例如「用手繪風」「標題放左邊」「逐字保留」。</td><td>有特別想法時。</td></tr>
+      <tr><td>附參考圖</td><td>最多 3 張、每張 1.5MB 以內。上傳後每張要選用途：<b>地圖底稿</b>、<b>實景參考</b>、<b>肖像照片</b>（要畫本人時）、<b>原圖放置</b>（照片直接放進版面、不重畫）。</td><td>有現場照或要畫特定人物時。</td></tr>
+      <tr><td>版面形式</td><td>預設「AI 自動判斷」，AI 讀完新聞自己從四類選：資料圖表、情境示意圖、地圖／位置、3D示意／流程。</td><td>你已經確定要哪一類時直接指定。</td></tr>
+      <tr><td>色調亮／暗</td><td>亮：淺底深字，日常題材。暗：深底亮字，災害、突發題材（預設）。</td><td>依題材。</td></tr>
+      <tr><td>不消化／字少／字多</td><td>不消化＝你貼的字一字不改只排版；字少＝濃縮成一到三個重點（預設）；字多＝完整條列。</td><td>想控制畫面字量時。</td></tr>
+      <tr><td>GPT／Gemini</td><td>兩個生圖引擎，預設 GPT。結果不滿意可以換另一個再生一次。</td><td>換口味時。</td></tr>
+      <tr><td>蓋章</td><td>開啟時最後一行會加一條結論。</td><td>不想要結論條就關掉。</td></tr>
+    </table>
+    </div>
+
+    <h2 id="reporter"><span class="role">記者</span>記者模式</h2>
+    <p>記者模式做的是一般新聞 CG：資料圖表、事件示意、地圖、流程。沒有額外的版型選單，重點只有一個開關。</p>
+    <h3>安全框</h3>
+    <p>預設開啟。開啟時系統會把整張圖精準放進 TVBS 標準安全框，四周補背景，輸出 1920×1080，剪接台直接可用。關閉就是不套框、不後製，只在你明確不需要時關。</p>
+    <div class="note"><b>小提醒</b>　記者模式看不到「編輯格式」下拉，那是編輯才有的。切回記者時，先前選的編輯版型會自動重設。</div>
+
+    <h2 id="editor"><span class="role">編輯</span>編輯模式與六種版型</h2>
+    <p>按 <span class="key">編輯</span> 之後，附參考圖下面會多出「編輯格式」下拉。預設是「預設（現行）」，跟記者一樣做一般 CG；其他五種是編輯專屬版型，選了之後左邊的欄位會自動換成那個版型需要的。</p>
+
+    <h3>安全框在編輯模式的意思不一樣</h3>
+    <p>編輯版兩檔都會後製，開關只決定方式。<b>ON</b>：四周壓一圈薄框、圖等比例置中，輸出完整 1920×1080。<b>OFF</b>：把圖拉伸填滿對位框。不確定就維持預設。</p>
+
+    <h3>播出鏡面（左側挖空／右側挖空）</h3>
+    <p>畫面一半留一塊 16:9 空位給後製合成影片，內容自動靠另一邊排。其餘操作跟一般 CG 完全一樣。</p>
+
+    <h3>十點不一樣封面</h3>
+    <p>新聞原文框會收起來，改成填兩個標題。</p>
+    <ul>
+      <li><b>左半標題、右半標題</b>：各一個切面。用半形空格自己分行，最多 3 行，畫面上會是白、黃、紅逐行變色。</li>
+      <li><b>畫面描述（選填）</b>：留空由 AI 讀標題自動補，生成後會填回欄位讓你微調再生一次。</li>
+      <li><b>新聞內文＋AI 消化標題</b>：不想自己想標題，把新聞貼進去按 <span class="key">AI 消化標題</span>，兩個標題會自動填回上面的欄位，看過沒問題再按生成。</li>
+      <li><b>日期、ON AIR／精華</b>：日期預設今天。</li>
+      <li><b>標題由 AI 生成</b>（預設勾選）：整張含美術字交給 AI 畫，有設計感但可能出錯字。取消勾選則所有文字由程式壓字，零錯字。</li>
+      <li><b>原圖放置</b>：附圖選這個用途，1 張就整版鋪滿、2 張就左右各一格，照片直接上版不重畫，文字自動改程式壓字。</li>
+    </ul>
+
+    <h3>YT 直播封面三種：國內外新聞直播、整點直播、今日熱搜</h3>
+    <p>三種共用同一組欄位，差別只在版面。</p>
+    <ul>
+      <li><b>直播標題</b>：一句話，用一個半形空格分成上下兩行，例如「挪威國王哈拉德辭世 開放公眾瞻仰遺容」。沒分的話 AI 會幫你分，但不會改字。</li>
+      <li><b>新聞內文＋AI 消化標題</b>：同十點封面，貼內文按鈕，標題回填後再按生成。</li>
+      <li><b>國內外新聞直播</b>：可勾「原音呈現」「AI即時翻譯」，兩者可並存；日期預設今天。</li>
+      <li><b>整點直播</b>：多一格整點時間（如 20:00），選填、有填才出現。</li>
+      <li><b>今日熱搜</b>：紅色系標籤，沒有日期、沒有 LIVE，什麼都不用多填。</li>
+      <li><b>原圖放置</b>：附圖選這個用途就直接當底圖不生圖。1 張單圖、2 張左右雙切、3 張三切。沒附圖時 AI 會生底圖並在角落標「AI示意圖」。</li>
+      <li><b>只改文字</b>：生成過一次後，改標題或日期按這顆，底圖不重生、幾秒就好。</li>
+    </ul>
+    <div class="note"><b>零錯字的做法</b>　封面類版型只要取消「標題由 AI 生成」，或有附「原圖放置」的照片，所有文字與 Logo 都由程式壓上去，不會出現錯字或變形的 Logo。</div>
+
+    <h2 id="result">拿到圖之後</h2>
+    <ul>
+      <li><b>下載圖片</b>：右欄圖片上方的連結，存成 JPG 或 PNG。</li>
+      <li><b>追加修改</b>：圖片下方輸入一句話，例如「把標題改成紅色」「左邊那張圖換成長條圖」，按 <span class="key">修改</span>。只改你講的部分，其餘不動。每按一次算一次生圖。</li>
+      <li><b>退回上一版</b>：改壞了按這顆回到修改前。</li>
+      <li><b>換引擎重生</b>：不滿意可以切 GPT／Gemini 再按一次一鍵生成。</li>
+    </ul>
+
+    <h2 id="faq">常見問題</h2>
+    <dl class="faq">
+      <dt>要等多久？</dt><dd>一般 CG 約一到兩分鐘。封面類有附「原圖放置」照片時幾秒就好，AI 生底圖則約半分鐘到兩分鐘。</dd>
+      <dt>圖上出現「AI示意圖」小字是什麼？</dt><dd>代表這張底圖是 AI 畫的，不是真實照片，播出時保留這個標示。用真照片（原圖放置）就不會有。</dd>
+      <dt>畫面上有錯字怎麼辦？</dt><dd>封面類取消「標題由 AI 生成」重生一次，改由程式壓字。一般 CG 可用「追加修改」指出要改的字。</dd>
+      <dt>AI 會不會自己編數字？</dt><dd>不會。系統規定只能用你貼的原文裡有的事實與數字，原文沒寫的它會留白而不是猜。</dd>
+      <dt>要畫特定人物？</dt><dd>附上那個人的照片並把用途選「肖像照片」，最多 3 人。</dd>
+      <dt>按了沒反應？</dt><dd>先看新聞原文是不是空的，封面類則看兩個標題有沒有填齊。畫面下方會有紅色提示告訴你缺什麼。</dd>
+    </dl>
+
+    <footer>第二頁「進階微調」與第三頁「混合版型」建置中，本手冊暫不涵蓋。手冊版本 2026-09-06。</footer>
+  </main>
+</div>

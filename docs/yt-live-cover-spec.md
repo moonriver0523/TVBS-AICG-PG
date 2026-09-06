@@ -110,3 +110,14 @@ hourly 另收 `time_text`。前端 `EDITOR_FORMATS[*].ytLayout` 帶到 `ytCoverF
   斜量 5% 畫面寬）＋白色細線（6/1080）。分切一律由程式拼、標題一律程式壓字：
   AI 標題模式遇到 ≥2 張原圖放置會自動改 composite，回應的 title_mode 也是 composite。
   兩版型（news／hourly）共用。
+
+## 2026-09-06 補充：今日熱搜版型（型錄 H 類）
+
+`compose.compose_yt_hot_cover`，layout `hot`，版型鍵 `yt_hot_cover`（YT今日熱搜）。議題型版面，
+**沒有日期、沒有 LIVE、沒有原音呈現／AI即時翻譯**（後端直接忽略、前端隱藏）。
+- 頂端一條紅色細條（上深下淺，3% 高）。
+- 左上「今日｜熱搜🔍」標籤：今日＝紅底白字、熱搜＝白底紅字、放大鏡由程式畫（`_draw_hot_magnifier`）。
+- 右上紅色 TVBS 斜標（`_draw_logo_tab` 加顏色參數，藍→紅）。
+- 底部深紅底帶（`_draw_title_band` 加顏色參數）＋兩行置中標題白／黃，幾何同新聞版。
+- AI 標題模式用 `YT_COVER_FULL_PROMPT_HOT`；底圖／附圖／分切規則與新聞版完全相同。
+對照圖：`D:\Downloads\aicg_font_20260906\catalog_hot\hot_01~08.png`，樣張 `yt_hot.png`。
