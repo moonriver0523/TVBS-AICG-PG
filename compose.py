@@ -635,8 +635,15 @@ def _draw_top_line(canvas: Image.Image) -> None:
     canvas.alpha_composite(line, (0, 0))
 
 
-def _draw_logo_tab(canvas: Image.Image) -> None:
-    """右上角藍色漸層標籤（左邊斜切、左下圓角）＋白色 TVBS Logo，貼著畫面右上角。"""
+def _draw_logo_tab(
+    canvas: Image.Image,
+    top_colour: tuple[int, int, int] = YT_LOGO_TAB_TOP,
+    bottom_colour: tuple[int, int, int] = YT_LOGO_TAB_BOTTOM,
+) -> None:
+    """右上角漸層標籤（左邊斜切、左下圓角）＋白色 TVBS Logo，貼著畫面右上角。
+
+    預設藍色（新聞直播）；今日熱搜傳紅色。
+    """
     width, height = YT_CANVAS
     tab_h = round(height * YT_LOGO_TAB_HEIGHT_RATIO)
     x_top = round(width * YT_LOGO_TAB_LEFT_RATIO)
@@ -672,7 +679,7 @@ def _draw_logo_tab(canvas: Image.Image) -> None:
     gd = ImageDraw.Draw(gradient)
     for y in range(tab_h):
         t = y / max(1, tab_h - 1)
-        colour = tuple(round(YT_LOGO_TAB_TOP[i] * (1 - t) + YT_LOGO_TAB_BOTTOM[i] * t) for i in range(3))
+        colour = tuple(round(top_colour[i] * (1 - t) + bottom_colour[i] * t) for i in range(3))
         gd.line(((0, y), (width, y)), fill=colour + (255,))
     layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     layer.paste(gradient, (0, 0), mask)
@@ -680,12 +687,19 @@ def _draw_logo_tab(canvas: Image.Image) -> None:
     _paste_logo(canvas, (round(width * YT_LOGO_LEFT_RATIO), round(height * YT_LOGO_TOP_RATIO)), round(width * YT_LOGO_WIDTH_RATIO))
 
 
-def _draw_title_band(canvas: Image.Image) -> None:
-    """底部深藍科技底帶：頂端漸入，帶上撒幾塊半透明淡藍方塊模擬頻道的電路紋。"""
+def _draw_title_band(
+    canvas: Image.Image,
+    fill: tuple[int, int, int] = YT_BAND_FILL,
+    block_fill: tuple[int, int, int] = YT_BAND_BLOCK_FILL,
+) -> None:
+    """底部科技底帶：頂端漸入，帶上撒幾塊半透明方塊模擬頻道的電路紋。
+
+    預設深藍（新聞直播）；今日熱搜傳深紅。
+    """
     width, height = YT_CANVAS
     top = round(height * YT_BAND_TOP_RATIO)
     fade = round(height * YT_BAND_FADE_RATIO)
-    band = Image.new("RGBA", (width, height - top), YT_BAND_FILL + (0,))
+    band = Image.new("RGBA", (width, height - top), fill + (0,))
     alpha = Image.new("L", band.size, YT_BAND_ALPHA)
     ad = ImageDraw.Draw(alpha)
     for y in range(fade):
@@ -699,7 +713,7 @@ def _draw_title_band(canvas: Image.Image) -> None:
            (0.70, 0.08, 0.06, 0.14), (0.79, 0.66, 0.10, 0.07), (0.90, 0.28, 0.07, 0.18)]
     for fx, fy, fw, fh in seq:
         x0, y0 = round(fx * width), round(fy * band.height)
-        bd.rectangle((x0, y0, x0 + round(fw * width), y0 + round(fh * band.height)), fill=YT_BAND_BLOCK_FILL + (55,))
+        bd.rectangle((x0, y0, x0 + round(fw * width), y0 + round(fh * band.height)), fill=block_fill + (55,))
     blocks = blocks.filter(ImageFilter.GaussianBlur(3))
     band.alpha_composite(blocks)
     layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
@@ -915,6 +929,121 @@ def compose_yt_hourly_cover(
             fill=fill, stroke=YT_TITLE_STROKE, stroke_width=stroke, anchor="ls",
         )
 
+    buffer = io.BytesIO()
+    canvas.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+# ============================================================
+# YT 今日熱搜（2026-09-06 依型錄 H 類「《今日熱搜》獨立版型」）
+#
+# 底圖鋪滿；頂端一條紅色細條；左上「今日｜熱搜🔍」紅白標籤（今日＝紅底白字、
+# 熱搜＝白底紅字、放大鏡）；右上紅色 TVBS 斜標；底部深紅底帶＋兩行置中標題（白／黃）。
+# 沒有 LIVE 章、沒有日期、沒有時間——這是議題型版面，不掛播出資訊。
+# ============================================================
+
+YT_HOT_TOP_LINE_HEIGHT_RATIO = 0.03
+YT_HOT_RED = (214, 22, 32)
+YT_HOT_RED_DARK = (150, 10, 20)
+YT_HOT_TAG_LEFT_RATIO = 0.018
+YT_HOT_TAG_TOP_RATIO = 0.02
+YT_HOT_TAG_HEIGHT_RATIO = 0.115       # 標籤高（83/720）
+YT_HOT_TAG_TEXT_TODAY = "今日"
+YT_HOT_TAG_TEXT_HOT = "熱搜"
+YT_HOT_BAND_FILL = (58, 8, 14)
+YT_HOT_BAND_BLOCK_FILL = (200, 40, 50)
+
+
+def _draw_hot_magnifier(canvas: Image.Image, cx: int, cy: int, r: int, colour: tuple[int, int, int]) -> None:
+    """放大鏡：圓圈＋右下斜柄，4 倍超取樣。"""
+    scale = 4
+    size = r * 3
+    layer = Image.new("RGBA", (size * scale, size * scale), (0, 0, 0, 0))
+    ld = ImageDraw.Draw(layer)
+    c = size * scale // 2 - r * scale // 3
+    ld.ellipse((c - r * scale, c - r * scale, c + r * scale, c + r * scale), outline=colour + (255,), width=max(2, r * scale // 4))
+    ld.line(((c + r * scale * 0.7, c + r * scale * 0.7), (c + r * scale * 1.55, c + r * scale * 1.55)), fill=colour + (255,), width=max(3, r * scale // 3))
+    layer = layer.resize((size, size), Image.LANCZOS)
+    canvas.alpha_composite(layer, (cx - size // 2 + r // 3, cy - size // 2 + r // 3))
+
+
+def _draw_hot_header(canvas: Image.Image) -> None:
+    """頂端紅細條＋左上「今日｜熱搜🔍」標籤＋右上紅色 Logo 斜標。"""
+    width, height = YT_CANVAS
+    # 頂端紅細條（上深下淺）
+    line_h = max(2, round(height * YT_HOT_TOP_LINE_HEIGHT_RATIO))
+    line = Image.new("RGBA", (width, line_h))
+    ld = ImageDraw.Draw(line)
+    for y in range(line_h):
+        t = y / max(1, line_h - 1)
+        col = tuple(round(YT_HOT_RED_DARK[i] * (1 - t) + YT_HOT_RED[i] * t) for i in range(3))
+        ld.line(((0, y), (width, y)), fill=col + (255,))
+    canvas.alpha_composite(line, (0, 0))
+    _draw_logo_tab(canvas, YT_HOT_RED, YT_HOT_RED_DARK)
+
+    draw = ImageDraw.Draw(canvas)
+    tag_h = round(height * YT_HOT_TAG_HEIGHT_RATIO)
+    x0 = round(width * YT_HOT_TAG_LEFT_RATIO)
+    y0 = round(height * YT_HOT_TAG_TOP_RATIO)
+    font = _font(round(tag_h * 0.66))
+    pad = round(tag_h * 0.28)
+    today_w = font.getbbox(YT_HOT_TAG_TEXT_TODAY)[2] + pad * 2
+    hot_w = font.getbbox(YT_HOT_TAG_TEXT_HOT)[2] + pad * 2
+    lens_r = round(tag_h * 0.22)
+    lens_w = lens_r * 3
+    total_w = today_w + hot_w + lens_w
+    # 影子
+    shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rounded_rectangle((x0 + 4, y0 + 6, x0 + total_w + 4, y0 + tag_h + 6), radius=10, fill=(0, 0, 0, 120))
+    canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(5)))
+    draw = ImageDraw.Draw(canvas)
+    # 白底整條（右半含放大鏡）＋左邊紅底「今日」
+    draw.rounded_rectangle((x0, y0, x0 + total_w, y0 + tag_h), radius=10, fill=(255, 255, 255), outline=YT_HOT_RED, width=max(2, round(height * 0.004)))
+    draw.rounded_rectangle((x0, y0, x0 + today_w, y0 + tag_h), radius=10, fill=YT_HOT_RED)
+    draw.rectangle((x0 + today_w - 12, y0, x0 + today_w, y0 + tag_h), fill=YT_HOT_RED)
+    cy = y0 + tag_h // 2 + 2
+    _draw_text(draw, (x0 + today_w // 2, cy), YT_HOT_TAG_TEXT_TODAY, font, fill=(255, 255, 255), stroke_width=0, anchor="mm")
+    _draw_text(draw, (x0 + today_w + hot_w // 2, cy), YT_HOT_TAG_TEXT_HOT, font, fill=YT_HOT_RED, stroke_width=0, anchor="mm")
+    _draw_hot_magnifier(canvas, x0 + today_w + hot_w + lens_w // 2 - lens_r // 4, cy, lens_r, YT_HOT_RED)
+
+
+def compose_yt_hot_cover(
+    background: bytes,
+    *,
+    line1: str,
+    line2: str,
+    ai_note: bool = False,
+    draw_titles: bool = True,
+) -> bytes:
+    """合成 YT「今日熱搜」封面：紅色系標頭、無日期無 LIVE，底部深紅帶兩行標題。
+
+    draw_titles=False（標題由 AI 生成）：background 已含標題與底帶，只貼固定元素。
+    """
+    line1, line2 = (line1 or "").strip(), (line2 or "").strip()
+    if not line1 or not line2:
+        raise ComposeError("今日熱搜封面需要兩行標題，缺一不可")
+    canvas = _cover_panel(background, YT_CANVAS).convert("RGBA")
+    width, height = YT_CANVAS
+    margin = round(width * YT_MARGIN_RATIO)
+    if draw_titles:
+        _draw_title_band(canvas, YT_HOT_BAND_FILL, YT_HOT_BAND_BLOCK_FILL)
+    _draw_hot_header(canvas)
+    if ai_note:
+        _draw_ai_note(canvas, round(height * YT_AI_NOTE_TOP_RATIO))
+    draw = ImageDraw.Draw(canvas)
+    max_w = width - margin * 2
+    start = round(height * YT_TITLE_SIZE_RATIO)
+    smallest = round(height * YT_TITLE_MIN_SIZE_RATIO)
+    for text, fill, baseline_ratio in (
+        (line1, YT_LINE1_FILL, YT_LINE1_BASELINE_RATIO),
+        (line2, YT_LINE2_FILL, YT_LINE2_BASELINE_RATIO),
+    ) if draw_titles else ():
+        font = _fit_font(text, max_w, start, smallest)
+        stroke = max(4, round(font.size * YT_TITLE_STROKE_RATIO))
+        _draw_text(
+            draw, (width // 2, round(height * baseline_ratio)), text, font,
+            fill=fill, stroke=YT_TITLE_STROKE, stroke_width=stroke, anchor="ms",
+        )
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")
     return buffer.getvalue()

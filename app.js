@@ -437,6 +437,17 @@ const EDITOR_FORMATS = {
         hides: { digestControls: true, safeFrame: true, stamp: true },
         hole: null,
     },
+    // YT 今日熱搜（2026-09-06 型錄 H 類）：紅色系「今日熱搜」標籤＋紅色 Logo 斜標，
+    // 議題型版面，沒有日期、沒有 LIVE。底圖與標題規則同國內外新聞直播。
+    yt_hot_cover: {
+        label: 'YT今日熱搜',
+        hint: '今日熱搜封面：標題半形空格分兩段，沒有日期與 LIVE。附圖與底圖規則同國內外新聞直播。',
+        inputs: 'yt_cover',
+        ytLayout: 'hot',
+        locks: {},
+        hides: { digestControls: true, safeFrame: true, stamp: true },
+        hole: null,
+    },
 };
 const EDITOR_FORMAT_DEFAULT = 'default';
 
@@ -791,12 +802,16 @@ function applyEditorFormatInputs() {
         const host = wantsYt ? yt : (wantsCover ? cover : news);
         if (host && refBox.previousElementSibling !== host) host.insertAdjacentElement('afterend', refBox);
     }
-    // 整點直播：沒有原音呈現／AI即時翻譯、多一格整點時間
-    const hourly = wantsYt && editorFormat().ytLayout === 'hourly';
+    // 整點直播：沒有原音呈現／AI即時翻譯、多一格整點時間；今日熱搜：連日期都沒有
+    const ytLayout = wantsYt ? editorFormat().ytLayout : '';
+    const hourly = ytLayout === 'hourly';
+    const hot = ytLayout === 'hot';
     const flagRow = document.getElementById('ytCoverFlags');
     const timeField = document.getElementById('ytCoverTime');
-    if (flagRow) flagRow.classList.toggle('hidden', hourly);
+    const ytDateField = document.getElementById('ytCoverDate');
+    if (flagRow) flagRow.classList.toggle('hidden', hourly || hot);
     if (timeField) timeField.classList.toggle('hidden', !hourly);
+    if (ytDateField) ytDateField.classList.toggle('hidden', hot);
     // 封面模式完全沒有消化這一段，版面形式用不到，整組收起來
     if (digestRow) digestRow.classList.toggle('hidden', wantsCover || wantsYt);
     for (const id of ['coverDate', 'ytCoverDate']) {
@@ -1632,8 +1647,8 @@ function ytCoverFields() {
         title: val('ytCoverTitle'),
         layout,
         title_mode: document.getElementById('ytCoverAiTitle')?.checked === false ? 'composite' : 'ai',
-        original_audio: layout !== 'hourly' && !!document.getElementById('ytCoverOriginalAudio')?.checked,
-        ai_translation: layout !== 'hourly' && !!document.getElementById('ytCoverAiTranslation')?.checked,
+        original_audio: layout === 'news' && !!document.getElementById('ytCoverOriginalAudio')?.checked,
+        ai_translation: layout === 'news' && !!document.getElementById('ytCoverAiTranslation')?.checked,
         date_text: val('ytCoverDate'),
         time_text: layout === 'hourly' ? val('ytCoverTime') : '',
     };
@@ -1665,7 +1680,7 @@ function showYtCoverResult(data, fields) {
     document.getElementById('oneClickImage').src = imageUrl;
     const download = document.getElementById('oneClickDownload');
     download.href = imageUrl;
-    download.download = fields.layout === 'hourly' ? 'tvbs-yt-hourly-cover.png' : 'tvbs-yt-live-cover.png';
+    download.download = { hourly: 'tvbs-yt-hourly-cover.png', hot: 'tvbs-yt-hot-cover.png' }[fields.layout] || 'tvbs-yt-live-cover.png';
     download.innerText = '下載 PNG';
     state.ytCoverBackgroundIsAi = !!data.background_is_ai;
     state.ytCoverTitleMode = data.title_mode || 'ai';

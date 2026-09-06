@@ -177,7 +177,8 @@ YT_COVER_AI_TRANSLATION_LABEL = "AI即時翻譯"
 # hourly＝整點直播（Logo 左上、LIVE 章右上＋選填整點時間、紅底日期、無副標）
 YT_COVER_LAYOUT_NEWS = "news"
 YT_COVER_LAYOUT_HOURLY = "hourly"
-YT_COVER_LAYOUTS = (YT_COVER_LAYOUT_NEWS, YT_COVER_LAYOUT_HOURLY)
+YT_COVER_LAYOUT_HOT = "hot"          # 今日熱搜（2026-09-06 型錄 H 類）：紅色系、無日期無 LIVE
+YT_COVER_LAYOUTS = (YT_COVER_LAYOUT_NEWS, YT_COVER_LAYOUT_HOURLY, YT_COVER_LAYOUT_HOT)
 
 # 標題分段：使用者用**恰好一個**半形空格分兩段就直接切；零個或兩個以上空格
 # 交給文字模型判斷（範例 C 肝那張第二行本身就含空格「11人確診 疾管署說明」，
@@ -360,6 +361,31 @@ Photographic, news-documentary quality, filling the frame.
 - Nothing may touch or be clipped by any edge.
 """
 
+YT_COVER_FULL_PROMPT_HOT = """Design a complete Taiwanese TV news "trending topics" thumbnail (YouTube cover), 16:9. It is NOT a live stream: no date, no time, no LIVE word.
+
+=== TEXT TO RENDER (Traditional Chinese, Taiwan) ===
+Render EXACTLY these strings, character for character, nothing else:
+- Headline line 1 (upper line): {line1}
+- Headline line 2 (lower line): {line2}
+
+=== LAYOUT ===
+- The lower 40% of the frame is a semi-transparent DEEP CRIMSON / near-black band with a subtle red circuit-board / tech-block texture, fading in at its top edge.
+- Both headline lines are CENTRED horizontally on that band, stacked, each on one line, huge and heavy Chinese display type filling almost the full width.
+- Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
+- Keep the UPPER-LEFT corner (a block about 30% wide and 16% tall) completely free of text or busy detail: a red-and-white "trending" tag is pasted there afterwards.
+- Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a red channel logo tab is pasted there afterwards.
+- Keep the very top edge free: a thin red strip is pasted along it afterwards.
+
+=== IMAGERY ===
+{visual}
+Photographic, news-documentary quality, filling the frame behind the band.
+
+=== HARD CONSTRAINTS ===
+- Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
+- No other text anywhere: no captions, no dates, no times, no LIVE word, no logos, no watermark, no tickers, no 示意圖 label.
+- Nothing may touch or be clipped by any edge.
+"""
+
 # 生圖 prompt 最後一段。肖像規則（PORTRAIT_MODES）與附圖規則（USER_REFERENCE_MODES）
 # 都寫著「VARIABLE FIELDS 裡的示意圖標籤要保持可見」——這條線根本沒有 VARIABLE
 # FIELDS，模型看到那句會自己畫一個「示意圖」字樣上去。所以固定在**最後**加這段
@@ -450,6 +476,14 @@ EDITOR_FORMATS = {
         "label": "YT整點直播",
         "pipeline": PIPELINE_YT_COVER,
         "yt_layout": YT_COVER_LAYOUT_HOURLY,
+        "digest_rules": "",
+        "hole_side": None,
+    },
+    # YT 今日熱搜：同一條底圖流程，版面換成 compose.compose_yt_hot_cover（無日期無 LIVE）
+    "yt_hot_cover": {
+        "label": "YT今日熱搜",
+        "pipeline": PIPELINE_YT_COVER,
+        "yt_layout": YT_COVER_LAYOUT_HOT,
         "digest_rules": "",
         "hole_side": None,
     },

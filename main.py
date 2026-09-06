@@ -3350,8 +3350,8 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
 
 class YtCoverRequest(BaseModel):
     title: str = Field(min_length=1, max_length=60)
-    # news＝國內外新聞直播；hourly＝整點直播（見 editor_formats.YT_COVER_LAYOUTS）
-    layout: Literal["news", "hourly"] = "news"
+    # news＝國內外新聞直播；hourly＝整點直播；hot＝今日熱搜（見 editor_formats.YT_COVER_LAYOUTS）
+    layout: Literal["news", "hourly", "hot"] = "news"
     # ai＝整張連標題字交給生圖模型畫，程式只後貼固定元素（2026-09-06 使用者裁決預設）；
     # composite＝模型只生無文字底圖，標題由程式壓字（零錯字）。
     title_mode: Literal["ai", "composite"] = "ai"
@@ -3524,8 +3524,10 @@ def _yt_cover_full_image(
     附圖全數當參考（asis 也照主流程規則原圖放置）；肖像走主流程查參考照。
     不壓 TEXT_FREE override——這條線就是要模型畫字。
     """
-    hourly = req.layout == editor_formats.YT_COVER_LAYOUT_HOURLY
-    template = editor_formats.YT_COVER_FULL_PROMPT_HOURLY if hourly else editor_formats.YT_COVER_FULL_PROMPT_NEWS
+    template = {
+        editor_formats.YT_COVER_LAYOUT_HOURLY: editor_formats.YT_COVER_FULL_PROMPT_HOURLY,
+        editor_formats.YT_COVER_LAYOUT_HOT: editor_formats.YT_COVER_FULL_PROMPT_HOT,
+    }.get(req.layout, editor_formats.YT_COVER_FULL_PROMPT_NEWS)
     image_req = ImageGenerateRequest(
         prompt=template.format(line1=lines[0], line2=lines[1], visual=visual.strip() or req.title.strip()),
         provider=req.provider,
@@ -3562,9 +3564,10 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         print(f"[yt-cover] 原圖放置附圖 {yt_cover_asis_count(req)} 張 → 分切底圖，標題改程式壓字", flush=True)
         req = req.model_copy(update={"title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE})
     hourly = req.layout == editor_formats.YT_COVER_LAYOUT_HOURLY
-    # 整點直播沒有原音呈現／AI即時翻譯（2026-09-06 使用者裁決），後端直接忽略
-    original_audio = bool(req.original_audio) and not hourly
-    ai_translation = bool(req.ai_translation) and not hourly
+    hot = req.layout == editor_formats.YT_COVER_LAYOUT_HOT
+    # 整點直播與今日熱搜沒有原音呈現／AI即時翻譯（2026-09-06 使用者裁決），後端直接忽略
+    original_audio = bool(req.original_audio) and not (hourly or hot)
+    ai_translation = bool(req.ai_translation) and not (hourly or hot)
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
 
     lines, visual, subjects, english = resolve_yt_cover_plan(req)
@@ -3579,7 +3582,15 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     else:
         background, bg_mime, is_ai, image_model = _yt_cover_background(req, visual, subjects, english)
     try:
-        if hourly:
+        if hot:
+            cover = compose.compose_yt_hot_cover(
+                background,
+                line1=lines[0],
+                line2=lines[1],
+                ai_note=is_ai,
+                draw_titles=not ai_title,
+            )
+        elif hourly:
             cover = compose.compose_yt_hourly_cover(
                 background,
                 line1=lines[0],

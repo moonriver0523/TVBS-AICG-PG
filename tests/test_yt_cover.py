@@ -524,6 +524,16 @@ class FrontendParityTests(unittest.TestCase):
             html = fh.read()
         self.assertRegex(html, r'id="ytCoverAiTitle"[^>]*checked', "預設標題由 AI 生成（使用者裁決）")
 
+    def test_hot_format_registered_on_both_sides(self):
+        # 2026-09-06 型錄 H 類「今日熱搜」
+        self.assertEqual(editor_formats.get("yt_hot_cover")["yt_layout"], editor_formats.YT_COVER_LAYOUT_HOT)
+        self.assertIn(editor_formats.YT_COVER_LAYOUT_HOT, editor_formats.YT_COVER_LAYOUTS)
+        with open(self.APP_JS, encoding="utf-8") as fh:
+            js = fh.read()
+        entry = re.search(r"yt_hot_cover:\s*\{(.*?)\n\s{4}\},", js, re.S).group(1)
+        self.assertIn("inputs: 'yt_cover'", entry)
+        self.assertIn("ytLayout: 'hot'", entry)
+
     def test_hourly_format_registered_on_both_sides(self):
         self.assertEqual(editor_formats.get("yt_hourly_cover")["yt_layout"], editor_formats.YT_COVER_LAYOUT_HOURLY)
         self.assertEqual(editor_formats.get("yt_live_cover")["yt_layout"], editor_formats.YT_COVER_LAYOUT_NEWS)
@@ -552,3 +562,77 @@ class FrontendParityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HotCoverTests(unittest.TestCase):
+    """今日熱搜（2026-09-06）：紅色標頭、無日期無 LIVE、底部深紅帶兩行標題。"""
+
+    def _cover(self, **kw):
+        out = compose.compose_yt_hot_cover(_png_bytes((800, 450), (20, 120, 20)), line1="大象來了", line2="10萬人塞爆士林", **kw)
+        return Image.open(io.BytesIO(out)).convert("RGB")
+
+    def test_red_top_strip_and_red_logo_tab(self):
+        img = self._cover()
+        w, h = img.size
+        r, g, b = img.getpixel((w // 2, 2))
+        self.assertGreater(r, 120); self.assertLess(g, 60); self.assertLess(b, 60)
+        # 右上斜標是紅的，不是新聞版的藍
+        r, g, b = img.getpixel((w - 40, round(h * 0.10)))
+        self.assertGreater(r, g + 60)
+
+    def test_hot_tag_has_red_and_white_parts(self):
+        img = self._cover()
+        w, h = img.size
+        tag_h = round(h * compose.YT_HOT_TAG_HEIGHT_RATIO)
+        y = round(h * compose.YT_HOT_TAG_TOP_RATIO) + tag_h // 2
+        x0 = round(w * compose.YT_HOT_TAG_LEFT_RATIO)
+        r, g, b = img.getpixel((x0 + 8, y))
+        self.assertGreater(r, g + 100, "今日 段應為紅底")
+        # 標籤右半白底：從標籤右側往左找到白色
+        whites = [x for x in range(x0 + 60, x0 + 700) if all(c > 240 for c in img.getpixel((x, y)))]
+        self.assertTrue(whites, "熱搜 段應有白底")
+
+    def test_band_is_crimson_not_navy(self):
+        img = self._cover()
+        w, h = img.size
+        r, g, b = img.getpixel((w // 2, round(h * 0.995)))
+        self.assertGreater(r, b, "底帶應偏紅")
+
+    def test_requires_two_lines(self):
+        with self.assertRaises(compose.ComposeError):
+            compose.compose_yt_hot_cover(_png_bytes(), line1="只有一行", line2="")
+
+    def test_endpoint_hot_layout_with_asis_needs_no_date_and_no_api(self):
+        payload = {
+            "title": "大象來了 10萬人塞爆士林",
+            "layout": "hot",
+            "title_mode": "composite",
+            "original_audio": True,
+            "reference_images": [{"data_url": _data_url(_png_bytes((800, 450), (20, 120, 20))), "purpose": "asis"}],
+        }
+        with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")), \
+             patch.object(main, "derive_yt_cover_plan", side_effect=AssertionError("不該打文字模型")):
+            res = client.post("/api/editor/yt-cover", json=payload, headers=HEADERS)
+        self.assertEqual(res.status_code, 200, res.text)
+        data = res.json()
+        self.assertEqual(data["line1"], "大象來了")
+        self.assertFalse(data["background_is_ai"])
+        img = Image.open(io.BytesIO(base64.b64decode(data["image_data_base64"]))).convert("RGB")
+        r, g, b = img.getpixel((img.width // 2, 2))
+        self.assertGreater(r, 120)
+
+    def test_ai_title_mode_uses_hot_prompt(self):
+        seen = {}
+
+        def fake_generate(req):
+            seen["prompt"] = req.prompt
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(_png_bytes((1280, 720))).decode("ascii"), mime_type="image/png", model="fake",
+            )
+
+        with patch.object(main, "generate_image_raw", side_effect=fake_generate), \
+             patch.object(main, "derive_yt_cover_plan", return_value={"visual": "夜間廣場人潮", "portrait_subjects": [], "portrait_subjects_en": []}):
+            res = client.post("/api/editor/yt-cover", json={"title": "大象來了 10萬人塞爆士林", "layout": "hot", "title_mode": "ai"}, headers=HEADERS)
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertIn("trending", seen["prompt"])
+        self.assertIn("no LIVE word", seen["prompt"])
