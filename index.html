@@ -271,6 +271,12 @@
         textarea::-webkit-scrollbar { width: 4px; }
         textarea::-webkit-scrollbar-track { background: transparent; }
         textarea::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
+        /* 第三頁混合版型的 SVG 壓字用 repo 自帶台北黑體 Bold（與 hybrid.html、後端 compose.py 同一檔） */
+        @font-face {
+            font-family: "Taipei Sans TC Beta";
+            src: url("/static/fonts/TaipeiSansTCBeta-Bold.ttf") format("truetype");
+            font-weight: 700; font-style: normal; font-display: block;
+        }
     </style>
 </head>
 <body class="px-3 py-2 md:px-4 md:py-3">

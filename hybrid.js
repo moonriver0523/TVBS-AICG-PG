@@ -84,6 +84,35 @@ function readContent() {
   };
 }
 
+/* ---- 壓字字型 ----
+   與後端 compose.py 同一個檔案（static/fonts/TaipeiSansTCBeta-Bold.ttf）。
+   預覽靠 hybrid.html 的 @font-face；匯出 PNG 走 SVG→<img>→canvas，
+   <img> 裡的 SVG 不會去抓外部字型，所以匯出前要把字型 base64 內嵌進 SVG <style>。 */
+const COMPOSE_FONT_URL = '/static/fonts/TaipeiSansTCBeta-Bold.ttf';
+const COMPOSE_FONT_FAMILY = '"Taipei Sans TC Beta", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif';
+let composeFontDataUri = null;   // 只抓一次，之後匯出直接用
+
+async function loadComposeFontDataUri() {
+  if (composeFontDataUri) return composeFontDataUri;
+  const res = await fetch(COMPOSE_FONT_URL);
+  if (!res.ok) throw new Error('字型下載失敗 ' + res.status);
+  const buf = await res.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  composeFontDataUri = 'data:font/ttf;base64,' + btoa(bin);
+  return composeFontDataUri;
+}
+
+function fontFaceStyleEl(dataUri) {
+  const style = el('style', {});
+  style.textContent = `@font-face{font-family:"Taipei Sans TC Beta";src:url(${dataUri}) format("truetype");font-weight:700;font-style:normal;}`;
+  return style;
+}
+
 /* ---- SVG 渲染 ---- */
 
 function el(name, attrs, children) {
@@ -95,9 +124,9 @@ function el(name, attrs, children) {
 
 function textEl(str, attrs) {
   const t = el('text', Object.assign({
-    // PingFang TC 是 macOS 內建，缺了它在 Mac 上匯出的 PNG 會掉到系統預設字型，
-    // 與 Windows 的輸出長得不一樣——這是跨機器示範時實際會踩到的差異
-    'font-family': '"Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif'
+    // 2026-09-06 起壓字統一用 repo 自帶台北黑體 Bold（hybrid.html @font-face 載入），
+    // 後備仍留系統字型：字型檔還沒載完時預覽不至於空白
+    'font-family': COMPOSE_FONT_FAMILY
   }, attrs));
   t.textContent = str;
   return t;
@@ -345,6 +374,14 @@ async function exportPNG() {
   const svg = document.getElementById('compose-svg').cloneNode(true);
   const guides = svg.querySelector('#layer-guides');
   if (guides) guides.remove();
+
+  // 內嵌字型：沒有這段，<img> 載入的 SVG 會退回系統字型，匯出跟預覽長得不一樣
+  status.textContent = '載入字型…';
+  try {
+    svg.insertBefore(fontFaceStyleEl(await loadComposeFontDataUri()), svg.firstChild);
+  } catch (e) {
+    status.textContent = '字型載入失敗，改用系統字型匯出：' + e.message;
+  }
 
   const svgText = new XMLSerializer().serializeToString(svg);
   const svgUri = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgText);
