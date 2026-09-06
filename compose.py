@@ -427,6 +427,11 @@ YT_LOGO_TAB_HEIGHT_RATIO = 0.153
 YT_LOGO_TAB_TOP = (70, 180, 255)
 YT_LOGO_TAB_BOTTOM = (15, 95, 210)
 YT_LOGO_WIDTH_RATIO = 0.14           # Logo 寬（180/1280）
+# 畫面最頂端一道很窄的藍色漸層線，橫貫全寬、與右上標籤同色系（頻道實際版每張都有，
+# 2026-09-06 使用者對照型錄指出漏畫）。實測 1280×720 縮圖約 4–10px，取中間值。
+YT_TOP_LINE_HEIGHT_RATIO = 0.022
+YT_TOP_LINE_TOP = (27, 122, 222)
+YT_TOP_LINE_BOTTOM = (32, 165, 218)
 YT_LOGO_LEFT_RATIO = 0.844
 YT_LOGO_TOP_RATIO = 0.014
 YT_BAND_TOP_RATIO = 0.60             # 深藍科技底帶起點
@@ -474,6 +479,20 @@ def _draw_ai_note(canvas: Image.Image, y0: int) -> None:
     )
     canvas.alpha_composite(plate)
     _draw_text(ImageDraw.Draw(canvas), (x1 - 12, y0 + note_h // 2), YT_AI_NOTE, note_font, stroke_width=0, anchor="rm")
+
+
+def _draw_top_line(canvas: Image.Image) -> None:
+    """畫面最頂端橫貫全寬的窄藍色漸層線（上深下淺）。要在標籤之前畫，標籤壓在它上面。"""
+    width, height = YT_CANVAS
+    line_h = max(2, round(height * YT_TOP_LINE_HEIGHT_RATIO))
+    line = Image.new("RGBA", (width, line_h))
+    px = line.load()
+    for y in range(line_h):
+        t = y / max(1, line_h - 1)
+        c = tuple(round(a + (b - a) * t) for a, b in zip(YT_TOP_LINE_TOP, YT_TOP_LINE_BOTTOM)) + (255,)
+        for x in range(width):
+            px[x, y] = c
+    canvas.alpha_composite(line, (0, 0))
 
 
 def _draw_logo_tab(canvas: Image.Image) -> None:
@@ -582,6 +601,7 @@ def compose_yt_cover(
     # ---- 底帶先鋪，章與標籤壓在上面（AI 標題模式：底帶與標題都是模型畫的）----
     if draw_titles:
         _draw_title_band(canvas)
+    _draw_top_line(canvas)
     _draw_logo_tab(canvas)
     draw = ImageDraw.Draw(canvas)
 

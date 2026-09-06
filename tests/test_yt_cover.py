@@ -154,6 +154,24 @@ class ComposeTests(unittest.TestCase):
             self.assertEqual(image.size, compose.YT_CANVAS)
 
 
+class TopLineTests(unittest.TestCase):
+    """頻道實際版每張新聞直播封面最頂端都有一道窄藍線（2026-09-06 對照型錄補上）。"""
+
+    def test_top_edge_is_blue_across_full_width(self):
+        out = compose.compose_yt_cover(
+            _png_bytes(colour=(120, 40, 40)), line1="標題一", line2="標題二", date_text="2026/09/06"
+        )
+        img = Image.open(io.BytesIO(out)).convert("RGB")
+        w, h = img.size
+        for x in (0, w // 4, w // 2, (3 * w) // 4 - 40):
+            r, g, b = img.getpixel((x, 1))
+            self.assertGreater(b, 180, f"x={x} 頂端不是藍色：{(r, g, b)}")
+            self.assertLess(r, 80)
+        # 線很窄：往下一點就回到底圖（紅棕色）
+        r, g, b = img.getpixel((w // 4, round(h * 0.06)))
+        self.assertGreater(r, b)
+
+
 class HourlyComposeTests(unittest.TestCase):
     def test_output_is_full_hd_png(self):
         cover = compose.compose_yt_hourly_cover(
