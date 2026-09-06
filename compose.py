@@ -411,6 +411,8 @@ YT_DATE_TAB_WIDTH_RATIO = 0.219      # 日期白條寬（280/1280）
 YT_DATE_TAB_HEIGHT_RATIO = 0.111     # 日期白條高（80/720）
 YT_DATE_FILL = (255, 255, 255)
 YT_DATE_TEXT = (200, 20, 30)
+YT_DATE_BORDER = (214, 22, 32)          # 頻道實際版：白框外圈一道紅邊，與 LIVE 章同色
+YT_DATE_BORDER_RATIO = 0.0037           # 邊寬 4/1080
 YT_ORIGINAL_AUDIO_LABEL = "原音呈現"
 YT_ORIGINAL_AUDIO_SIZE_RATIO = 0.09  # 字高 64/720
 YT_ORIGINAL_AUDIO_BASELINE_RATIO = 0.118
@@ -605,7 +607,10 @@ def compose_yt_cover(
     )
     canvas.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(6)))
     draw = ImageDraw.Draw(canvas)
-    draw.rounded_rectangle(tab_box, radius=14, fill=YT_DATE_FILL)
+    draw.rounded_rectangle(
+        tab_box, radius=14, fill=YT_DATE_FILL,
+        outline=YT_DATE_BORDER, width=max(2, round(height * YT_DATE_BORDER_RATIO)),
+    )
     date_font = _fit_font(date_text, tab_w - 28, round(tab_h * 0.72), round(tab_h * 0.4))
     _draw_text(
         draw, ((tab_box[0] + tab_box[2]) // 2, (tab_box[1] + tab_box[3]) // 2 + 2),
