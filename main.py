@@ -3340,10 +3340,18 @@ def _yt_cover_background(
         )
     asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
     if asis:
-        _, _, encoded = _split_data_url(asis[0].data_url)
-        if not encoded:
-            raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
-        return compose.crop_background_16x9(base64.b64decode(encoded)), "image/png", False, "yt-cover:asis"
+        raws = []
+        for ref in asis[: compose.YT_SPLIT_MAX_PANELS]:
+            _, _, encoded = _split_data_url(ref.data_url)
+            if not encoded:
+                raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
+            raws.append(base64.b64decode(encoded))
+        if len(asis) > compose.YT_SPLIT_MAX_PANELS:
+            print(f"[yt-cover] 原圖放置附圖 {len(asis)} 張，只取前 {compose.YT_SPLIT_MAX_PANELS} 張分切", flush=True)
+        if len(raws) == 1:
+            return compose.crop_background_16x9(raws[0]), "image/png", False, "yt-cover:asis"
+        # 防呆：2 張＝左右雙切、3 張＝三切（2026-09-06 使用者裁決），不打生圖模型
+        return compose.split_backgrounds(raws), "image/png", False, f"yt-cover:asis-split{len(raws)}"
 
     image_req = ImageGenerateRequest(
         prompt=editor_formats.YT_COVER_VISUAL_PROMPT_TEMPLATE.format(visual=visual.strip()),
@@ -3408,12 +3416,20 @@ def _yt_cover_full_image(
     return base64.b64decode(result.image_data_base64), result.mime_type, result.model
 
 
+def yt_cover_asis_count(req: "YtCoverRequest") -> int:
+    return sum(1 for ref in req.reference_images if ref.purpose == "asis")
+
+
 @app.post(
     "/api/editor/yt-cover",
     response_model=YtCoverResponse,
     dependencies=[Depends(verify_internal_api_key)],
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
+    if yt_cover_asis_count(req) >= 2 and req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI:
+        # 多圖分切一律程式壓字：真實新聞照交給模型重畫會走樣，分切拼圖本身也是程式做的。
+        print(f"[yt-cover] 原圖放置附圖 {yt_cover_asis_count(req)} 張 → 分切底圖，標題改程式壓字", flush=True)
+        req = req.model_copy(update={"title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE})
     hourly = req.layout == editor_formats.YT_COVER_LAYOUT_HOURLY
     # 整點直播沒有原音呈現／AI即時翻譯（2026-09-06 使用者裁決），後端直接忽略
     original_audio = bool(req.original_audio) and not hourly

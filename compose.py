@@ -780,6 +780,75 @@ def compose_yt_hourly_cover(
     return buffer.getvalue()
 
 
+# 多圖分切底圖（2026-09-06 使用者裁決：「原圖放置」附圖 2 張＝左右雙切、3 張＝三切，
+# 分隔線用斜切＋白色細線，比照頻道「閃兵案第四波」與十點不一樣的畫法）。
+YT_SPLIT_MAX_PANELS = 3
+YT_SPLIT_SLANT_RATIO = 0.05          # 斜切：分隔線頂端比底端偏右多少（佔畫面寬）
+YT_SPLIT_LINE_RATIO = 0.0055         # 白色分隔線寬（6/1080）
+YT_SPLIT_LINE_FILL = (255, 255, 255)
+
+
+def split_backgrounds(images: list[bytes]) -> bytes:
+    """把 2–3 張附圖斜切拼成一張 16:9 無文字底圖，回 PNG。
+
+    每格各自 COVER 裁切（不變形、置中），格與格之間一道斜的白色細線。
+    只給一張就等同 crop_background_16x9；超過上限只取前幾張，呼叫端自己提示。
+    """
+    images = list(images)[:YT_SPLIT_MAX_PANELS]
+    if not images:
+        raise ComposeError("分切底圖至少要一張附圖")
+    if len(images) == 1:
+        return crop_background_16x9(images[0])
+    width, height = YT_CANVAS
+    n = len(images)
+    slant = round(width * YT_SPLIT_SLANT_RATIO)
+    line_w = max(2, round(height * YT_SPLIT_LINE_RATIO))
+    scale = 4
+    canvas = Image.new("RGB", (width, height), (0, 0, 0))
+
+    def divider_x(i: int, y: int) -> float:
+        """第 i 條分隔線（i=0 是左畫框、i=n 是右畫框）在高度 y 的 x 座標。"""
+        if i == 0:
+            return -slant
+        if i == n:
+            return width + slant
+        centre = width * i / n
+        return centre + slant / 2 - slant * (y / height)
+
+    for k, raw in enumerate(images):
+        x_left = min(divider_x(k, 0), divider_x(k, height))
+        x_right = max(divider_x(k + 1, 0), divider_x(k + 1, height))
+        panel_w = int(round(x_right - x_left))
+        panel = _cover_panel(raw, (panel_w, height))
+        mask = Image.new("L", (width * scale, height * scale), 0)
+        ImageDraw.Draw(mask).polygon(
+            [
+                (divider_x(k, 0) * scale, 0),
+                (divider_x(k + 1, 0) * scale, 0),
+                (divider_x(k + 1, height) * scale, height * scale),
+                (divider_x(k, height) * scale, height * scale),
+            ],
+            fill=255,
+        )
+        mask = mask.resize((width, height), Image.LANCZOS)
+        layer = Image.new("RGB", (width, height), (0, 0, 0))
+        layer.paste(panel, (int(round(x_left)), 0))
+        canvas.paste(layer, (0, 0), mask)
+
+    lines = Image.new("L", (width * scale, height * scale), 0)
+    ld = ImageDraw.Draw(lines)
+    for i in range(1, n):
+        ld.line(
+            [(divider_x(i, 0) * scale, 0), (divider_x(i, height) * scale, height * scale)],
+            fill=255, width=line_w * scale,
+        )
+    lines = lines.resize((width, height), Image.LANCZOS)
+    canvas.paste(Image.new("RGB", (width, height), YT_SPLIT_LINE_FILL), (0, 0), lines)
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def crop_background_16x9(image_bytes: bytes) -> bytes:
     """把使用者附的原圖（任意比例）裁成 16:9 的無文字底圖，回 PNG。
 

@@ -316,6 +316,85 @@ class BackgroundPathTests(unittest.TestCase):
         self.assertFalse(captured["req"].safe_frame)
 
 
+class SplitBackgroundTests(unittest.TestCase):
+    """2026-09-06：原圖放置附圖 2 張＝雙切、3 張＝三切，斜切＋白色細分隔線。"""
+
+    def _split(self, colours):
+        out = compose.split_backgrounds([_png_bytes((900, 900), c) for c in colours])
+        return Image.open(io.BytesIO(out)).convert("RGB")
+
+    def test_two_images_fill_left_and_right(self):
+        img = self._split([(200, 30, 30), (30, 30, 200)])
+        w, h = img.size
+        self.assertEqual(img.size, compose.YT_CANVAS)
+        self.assertEqual(img.getpixel((w // 4, h // 2)), (200, 30, 30))
+        self.assertEqual(img.getpixel((3 * w // 4, h // 2)), (30, 30, 200))
+
+    def test_three_images_fill_three_panels(self):
+        img = self._split([(200, 30, 30), (30, 200, 30), (30, 30, 200)])
+        w, h = img.size
+        self.assertEqual(img.getpixel((w // 6, h // 2)), (200, 30, 30))
+        self.assertEqual(img.getpixel((w // 2, h // 2)), (30, 200, 30))
+        self.assertEqual(img.getpixel((5 * w // 6, h // 2)), (30, 30, 200))
+
+    def test_divider_is_slanted_white_line(self):
+        img = self._split([(200, 30, 30), (30, 30, 200)])
+        w, h = img.size
+        slant = round(w * compose.YT_SPLIT_SLANT_RATIO)
+        # 頂端分隔線偏右、底端偏左、正中央（高度一半）都是白線（反鋸齒邊緣允許略低於 255）
+        for x, y in ((w // 2 + slant // 2, 2), (w // 2 - slant // 2, h - 3), (w // 2, h // 2)):
+            self.assertTrue(all(c >= 240 for c in img.getpixel((x, y))), (x, y, img.getpixel((x, y))))
+        # 分隔線是斜的：頂端偏左那點、底端偏右那點都還是原圖顏色
+        self.assertEqual(img.getpixel((w // 2 - slant, 2)), (200, 30, 30))
+        self.assertEqual(img.getpixel((w // 2 + slant, h - 3)), (30, 30, 200))
+
+    def test_single_image_degrades_to_plain_crop(self):
+        out = compose.split_backgrounds([_png_bytes((900, 900), (10, 20, 30))])
+        self.assertEqual(out, compose.crop_background_16x9(_png_bytes((900, 900), (10, 20, 30))))
+
+    def test_more_than_three_only_takes_the_first_three(self):
+        img = self._split([(200, 30, 30), (30, 200, 30), (30, 30, 200), (250, 250, 30)])
+        w, h = img.size
+        self.assertEqual(img.getpixel((5 * w // 6, h // 2)), (30, 30, 200))
+
+    def test_two_asis_references_split_without_generating(self):
+        req = main.YtCoverRequest(
+            title="前段 後段",
+            reference_images=[
+                main.UserReferenceImage(data_url=_data_url(_png_bytes((800, 800), (200, 30, 30))), purpose="asis"),
+                main.UserReferenceImage(data_url=_data_url(_png_bytes((800, 800), (30, 30, 200))), purpose="asis"),
+            ],
+        )
+        with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")):
+            raw, mime, is_ai, model = main._yt_cover_background(req, "", [], [])
+        self.assertFalse(is_ai)
+        self.assertEqual(model, "yt-cover:asis-split2")
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        w, h = img.size
+        self.assertEqual(img.getpixel((w // 4, h // 2)), (200, 30, 30))
+        self.assertEqual(img.getpixel((3 * w // 4, h // 2)), (30, 30, 200))
+
+    def test_endpoint_forces_composite_title_when_splitting(self):
+        payload = {
+            "title": "閃兵案第四波 14人自首遭起訴",
+            "title_mode": "ai",
+            "reference_images": [
+                {"data_url": _data_url(_png_bytes((800, 800), (200, 30, 30))), "purpose": "asis"},
+                {"data_url": _data_url(_png_bytes((800, 800), (30, 30, 200))), "purpose": "asis"},
+                {"data_url": _data_url(_png_bytes((800, 800), (30, 200, 30))), "purpose": "asis"},
+            ],
+        }
+        with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")), \
+             patch.object(main, "derive_yt_cover_plan", side_effect=AssertionError("不該打文字模型")):
+            res = client.post("/api/editor/yt-cover", json=payload, headers=HEADERS)
+        self.assertEqual(res.status_code, 200, res.text)
+        data = res.json()
+        self.assertEqual(data["title_mode"], "composite")
+        self.assertFalse(data["background_is_ai"])
+        with Image.open(io.BytesIO(base64.b64decode(data["image_data_base64"]))) as image:
+            self.assertEqual(image.size, compose.YT_CANVAS)
+
+
 class EndpointTests(unittest.TestCase):
     def test_asis_cover_end_to_end_without_any_model(self):
         payload = {
