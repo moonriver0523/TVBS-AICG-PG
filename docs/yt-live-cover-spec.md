@@ -116,7 +116,7 @@ hourly 另收 `time_text`。前端 `EDITOR_FORMATS[*].ytLayout` 帶到 `ytCoverF
 `compose.compose_yt_hot_cover`，layout `hot`，版型鍵 `yt_hot_cover`（YT今日熱搜）。議題型版面，
 **沒有日期、沒有 LIVE、沒有原音呈現／AI即時翻譯**（後端直接忽略、前端隱藏）。
 - 頂端一條紅色細條（上深下淺，3% 高）。
-- 左上「今日｜熱搜🔍」（2026-09-07 起貼模板 `static/brand/hot-search-tag.png`，gpt-image-2 依型錄原版重繪、透明底，高 22% 畫面等比縮放；不再用程式畫方框與放大鏡）標籤：今日＝紅底白字、熱搜＝白底紅字、放大鏡由程式畫（`_draw_hot_magnifier`）。
+- 左上「今日｜熱搜🔍」（2026-09-07 起貼模板 `static/brand/hot-search-tag.png`，gpt-image-2 依型錄原版重繪、透明底，高 13% 畫面等比縮放（依 YouTube 實際縮圖量測，型錄截圖偏大）；不再用程式畫方框與放大鏡）標籤：今日＝紅底白字、熱搜＝白底紅字、放大鏡由程式畫（`_draw_hot_magnifier`）。
 - 右上紅色 TVBS 斜標（`_draw_logo_tab` 加顏色參數，藍→紅）。
 - 底部深紅底帶（`_draw_title_band` 加顏色參數）＋兩行置中標題白／黃，幾何同新聞版。
 - AI 標題模式用 `YT_COVER_FULL_PROMPT_HOT`；底圖／附圖／分切規則與新聞版完全相同。

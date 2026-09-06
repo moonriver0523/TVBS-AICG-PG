@@ -958,9 +958,9 @@ def compose_yt_hourly_cover(
 YT_HOT_TOP_LINE_HEIGHT_RATIO = 0.03
 YT_HOT_RED = (214, 22, 32)
 YT_HOT_RED_DARK = (150, 10, 20)
-YT_HOT_TAG_LEFT_RATIO = 0.018
-YT_HOT_TAG_TOP_RATIO = 0.03
-YT_HOT_TAG_HEIGHT_RATIO = 0.22       # 標籤高：型錄原版約佔畫面高 22%、寬 56%（模板等比縮放）
+YT_HOT_TAG_LEFT_RATIO = 0.027      # 2026-09-07 依 YouTube 實際縮圖量測（W0rMa3a15MA）：標籤 x 35→525、y 35→130 ＠1280×720
+YT_HOT_TAG_TOP_RATIO = 0.045
+YT_HOT_TAG_HEIGHT_RATIO = 0.13       # 型錄截圖被放大誤導過（曾設 0.27）；實際約佔畫面高 13%、寬 38%
 YT_HOT_BAND_FILL = (58, 8, 14)
 YT_HOT_BAND_BLOCK_FILL = (200, 40, 50)
 
