@@ -15,7 +15,8 @@
 - **標題**：各格下緣，左格靠左、右格靠右，最多 3 行由下往上堆，全格同一字級（以最寬行決定）。
   逐行配色：第 1 行白、第 2 行黃、第 3 行紅（紅字白描邊，其餘深色描邊），外加陰影。
   這張配色表 `COVER_TITLE_LINE_COLOURS` 同時是純 AI 版 prompt 描述的配色規則。
-- **底部波紋**：5% 高的藍色飾條，兩條淺藍波紋線。
+- **底部飾帶**：貼模板 `static/brand/ten-bottom-line.png`（深藍帶＋一道發光藍色直線，寬撐滿、約 4% 高）。
+  2026-09-07 起取代波紋：查 YouTube 18 張原版，波紋只出現 1 張；不帶警語的底部是 0901／0902 的直線光。
 
 ## 標題分行（editor_formats.split_cover_title）
 
@@ -39,7 +40,7 @@ prompt 的版面描述已同步成斜切全幅＋薄標頭帶＋白／黃／紅�
 
 ## 測試
 
-`tests/test_ten_cover.py`：分行規則、斜切像素、標頭與波紋、AI示意圖只印 AI 格、
+`tests/test_ten_cover.py`：分行規則、斜切像素、標頭與底部飾帶、AI示意圖只印 AI 格、
 三色標題、端點（雙 asis 零 API、單 asis 左格、無 asis 維持 ai 模式）、prompt 同步。
 
 ## AI 消化標題（/api/editor/cover-titles）

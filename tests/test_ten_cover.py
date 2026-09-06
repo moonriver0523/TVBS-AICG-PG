@@ -98,11 +98,11 @@ class ComposeTests(unittest.TestCase):
         x_line = round(w / 2 + slant / 2 - slant * (y / h))
         self.assertTrue(all(c >= 240 for c in img.getpixel((x_line, y))))
 
-    def test_header_band_and_wave_are_drawn(self):
+    def test_header_band_and_bottom_line_are_drawn(self):
         img = self._cover()
         w, h = img.size
         self.assertEqual(img.getpixel((w // 2, 6)), compose.COVER_HEADER_FILL)
-        # 底部波紋飾條：最底一列是藍色系（不是底圖的紅／藍純色）
+        # 底部飾帶模板：最底一列是深藍（不是底圖的紅／藍純色）
         r, g, b = img.getpixel((w // 4, h - 3))
         self.assertGreater(b, r)
         self.assertNotEqual((r, g, b), (200, 30, 30))
@@ -264,7 +264,7 @@ class PromptSyncTests(unittest.TestCase):
         prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE
         self.assertIn("DIAGONAL seam", prompt)
         self.assertIn("THIN deep-navy header band", prompt)
-        self.assertIn("decorative wave strip", prompt)
+        self.assertIn("glowing straight blue light line", prompt)
 
     def test_prompt_colour_order_matches_composite_table(self):
         prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE

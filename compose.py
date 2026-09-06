@@ -33,6 +33,7 @@ TVBS_LOGO_WHITE = BRAND_DIR / "tvbs-logo-white.png"
 # 程式畫的圓角矩形＋字型版本被使用者裁定不好看。模板只縮放不變形，缺檔直接報錯。
 TEN_SHOW_TAG = BRAND_DIR / "ten-show-tag.png"   # 「十點不一樣」藍色斜切標籤
 HOT_SEARCH_TAG = BRAND_DIR / "hot-search-tag.png"  # 「今日｜熱搜🔍」紅色三格標籤
+TEN_BOTTOM_LINE = BRAND_DIR / "ten-bottom-line.png"  # 十點封面底部：深藍帶＋發光直線（依 0901／0902 原版）
 
 # 中文字型：Pillow 不吃系統字型後備，必須指名檔案。依序找，第一個存在的就用。
 #
@@ -295,9 +296,6 @@ COVER_TITLE_STROKE_DARK = (8, 8, 8)
 COVER_TITLE_STROKE_LIGHT = (255, 255, 255)
 COVER_SHADE_TOP_RATIO = 0.42         # 每格下半部壓暗漸層起點
 COVER_SHADE_ALPHA = 190
-COVER_WAVE_HEIGHT_RATIO = 0.05       # 底部波紋飾條高
-COVER_WAVE_FILL = (12, 70, 170)
-COVER_WAVE_LINE = (120, 200, 255)
 
 COVER_SHOW_NAME = "十點不一樣"
 COVER_AI_NOTE = "AI示意圖"
@@ -366,23 +364,20 @@ def _shade_panel_bottom(canvas: Image.Image, box: tuple[int, int, int, int]) -> 
     canvas.alpha_composite(shade, (x0, y0))
 
 
-def _draw_cover_wave(canvas: Image.Image) -> None:
-    """底部一道藍色飾條，上緣兩條淺藍波紋線（頻道版底部的裝飾）。"""
-    import math
+def _draw_cover_bottom_line(canvas: Image.Image) -> None:
+    """底部深藍飾帶＋一道發光直線：貼模板（TEN_BOTTOM_LINE），寬度撐滿畫面、等比縮放。
+
+    2026-09-07 使用者裁決：波紋只在型錄 1 張出現，不是通用；查 YouTube 18 張原版，
+    不帶警語的底部是「深藍帶＋直線光」（0901、0902），改依此用 gpt-image-2 生模板。
+    """
     width, height = COVER_CANVAS
-    wave_h = round(height * COVER_WAVE_HEIGHT_RATIO)
-    scale = 3
-    layer = Image.new("RGBA", (width * scale, wave_h * scale), (0, 0, 0, 0))
-    ld = ImageDraw.Draw(layer)
-    amp = wave_h * scale * 0.28
-    base = wave_h * scale * 0.55
-    pts = [(x, base + amp * math.sin(x / (width * scale) * math.pi * 6)) for x in range(0, width * scale + 1, 6)]
-    ld.polygon(pts + [(width * scale, wave_h * scale), (0, wave_h * scale)], fill=COVER_WAVE_FILL + (235,))
-    ld.line(pts, fill=COVER_WAVE_LINE + (255,), width=3 * scale)
-    pts2 = [(x, base - amp * 0.9 * math.sin(x / (width * scale) * math.pi * 6 + 1.1) - amp * 0.6) for x in range(0, width * scale + 1, 6)]
-    ld.line(pts2, fill=COVER_WAVE_LINE + (170,), width=2 * scale)
-    layer = layer.resize((width, wave_h), Image.LANCZOS)
-    canvas.alpha_composite(layer, (0, height - wave_h))
+    if not TEN_BOTTOM_LINE.exists():
+        raise ComposeError(f"找不到模板：{TEN_BOTTOM_LINE}")
+    with Image.open(TEN_BOTTOM_LINE) as tpl:
+        tpl = tpl.convert("RGBA")
+        strip_h = max(1, round(tpl.height * width / tpl.width))
+        tpl = tpl.resize((width, strip_h), Image.LANCZOS)
+        canvas.alpha_composite(tpl, (0, height - strip_h))
 
 
 def _draw_cover_header(draw: ImageDraw.ImageDraw, canvas: Image.Image, date_text: str, badge: str) -> int:
@@ -530,7 +525,7 @@ def compose_ten_cover(
     if right_is_ai:
         _draw_cover_ai_note(canvas, width - COVER_MARGIN, note_y, align_right=True)
 
-    _draw_cover_wave(canvas)
+    _draw_cover_bottom_line(canvas)
     _draw_cover_title(canvas, split_cover_title(title_left), left_box[0] + COVER_MARGIN, left_box[2], align_right=False)
     _draw_cover_title(canvas, split_cover_title(title_right), right_box[0], right_box[2] - COVER_MARGIN, align_right=True)
 

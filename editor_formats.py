@@ -91,7 +91,7 @@ Requirements:
 COVER_AI_PROMPT_TEMPLATE = """Design a complete, broadcast-quality Chinese-language news programme cover image (YouTube thumbnail style) for a Taiwanese prime-time news show.
 
 === CANVAS ===
-16:9 horizontal. Two photographs fill the ENTIRE frame edge to edge, split by ONE thin white DIAGONAL seam (slightly leaning: its top end sits a little right of centre, its bottom end a little left of centre) into a LEFT panel and a RIGHT panel. No borders, no gutters, no letterboxing. Across the very top runs a THIN deep-navy header band (about one tenth of the frame height) with a bright blue hairline along its bottom edge; along the very bottom runs a slim blue decorative wave strip. Everything else is photograph.
+16:9 horizontal. Two photographs fill the ENTIRE frame edge to edge, split by ONE thin white DIAGONAL seam (slightly leaning: its top end sits a little right of centre, its bottom end a little left of centre) into a LEFT panel and a RIGHT panel. No borders, no gutters, no letterboxing. Across the very top runs a THIN deep-navy header band (about one tenth of the frame height) with a bright blue hairline along its bottom edge; along the very bottom runs a slim deep-navy strip with one thin glowing straight blue light line (no waves, no text). Everything else is photograph.
 
 === TEXT TO RENDER (Traditional Chinese, Taiwan) ===
 Render EXACTLY these strings, character for character. Do not translate them, do not rewrite them, do not shorten them, and do not add any other words, letters or numbers anywhere in the image.
