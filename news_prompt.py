@@ -180,6 +180,7 @@ REAL-WORLD ACCURACY (CRITICAL)
 - Do not fabricate identifying detail you do not know and present it as real. If the rendering is a generic stand-in or a reconstruction rather than the real thing, the 示意圖 label supplied in VARIABLE FIELDS must be clearly visible — never drop or hide it.
 - NO UNSOURCED BRANDS: every sign, storefront, banner, package, product body, vehicle livery, screen, badge and building facade must be blank or carry a generic non-readable mark. Do NOT draw any real company logo, wordmark, trademark, ticker symbol, exchange name or brand text — not even a small, faint, distant or background one. A brand name may appear only if that exact text is supplied in VARIABLE FIELDS, and then only as plain typeset text, never as a reproduced logotype.
 - NAMED REAL PEOPLE: how to depict a named real person is governed by the NAMED REAL PERSON block below whenever one is present — follow that block, not your own judgement. If no such block is present, do NOT draw a recognisable face for a named real person: use a back view or a plain silhouette and keep the 示意圖 label visible. Never show the person in a scene, action or context that STRUCTURE does not describe.
+- A STATED QUANTITY IS A NUMBER, NOT A HEADCOUNT TO DRAW. Where you do draw the individual items, the count on the canvas must equal the stated figure exactly, background and secondary items included — a graphic saying 4車追撞 with five vehicles in it is wrong. Only draw them individually while the figure is small enough to take in at a glance, up to about four. Beyond that do not attempt the instances at all: 12箱走私菸 is one representative crate with the figure 12 set beside it, never a heap the viewer would count as twenty, and 10部機組 is a figure rather than a row you would miscount.
 - SELF-CHECK before finalizing: look at every surface in the image for text or marks you added yourself. If any sign, screen, package or vehicle carries readable branding, blank it."""
 
 TW_DIRECTIONAL_COLOR_RULES = """==================================================
@@ -271,7 +272,12 @@ ATTACHED MAP REFERENCE (CRITICAL)
 - One of the attached images is a map supplied by the user. Treat it as the geographic ground truth for this graphic.
 - The relative positions, coastlines, routes and boundaries shown in that attached map override your own geographic memory. Do not move, rotate, mirror, compress or "improve" any of them.
 - Re-draw the geography in the graphic's own visual style; do not paste or photographically reproduce the attached map itself.
-- Labels and callout text still come ONLY from VARIABLE FIELDS, never from text visible inside the attached map."""
+- Labels and callout text still come ONLY from VARIABLE FIELDS, never from text visible inside the attached map.
+- IF THE ATTACHED MAP CARRIES ROUND MARKER DOTS, those dots are already at the true real-world positions of the places this story is about. Keep every marker at its dot: do not move it, do not re-space the markers to balance the composition, do not add a marker where there is no dot, and do not drop one. Restyle the dot into the graphic's own pin design and attach the place name beside it — the dot's position is the one thing you may not change.
+- THE PIN AND THE DOT MUST RESOLVE TO ONE POINT. A teardrop pin points at a location with its TIP, so put the tip exactly on the dot's centre — do not centre the pin's round head on the dot, and do not float the pin above it. Never leave the original dot behind as a separate ring, ripple, halo or glow sitting under a pin that hovers somewhere else: that reads as two different positions for one place, and the lower one is the true one.
+- THE NAME PRINTED BESIDE A DOT IS THAT DOT'S IDENTITY. Each dot on the attached map carries its place name printed next to it by the program. That pairing is verified and it is not yours to rearrange: the pin you draw on a dot takes the name printed beside THAT dot, and any callout, icon or figure about that place attaches to that pin and no other. Never assign the names by reading them off the map in the order they appear in STRUCTURE or in VARIABLE FIELDS, and never swap two names because the composition reads better. This is the one exception to the rule above that text inside the attached map is never used: those printed dot names exist precisely to tell you which dot is which, and you match them against the place names in VARIABLE FIELDS (which supply the on-screen wording).
+- A PLACE WITH NO DOT FOR IT GETS NO MARKER OF ANY KIND. STRUCTURE may name a place the attached map carries no dot for. That means the program could not verify where it is — not that you should supply the position from memory. Where there is no dot for it, put nothing on the map for it: no pin, and no marker, icon, arrow, triangle, leader line, highlighted segment, ring or shaded patch either. Naming one shape does not make the others allowed — whatever shape you reach for, if it points at a spot on the basemap it is banned, because the position is what you are inventing, not the pin. NEITHER END OF A LEADER LINE MAY LAND ON THE MAP EITHER: a line running from a text box out onto the basemap picks a spot just as surely as a pin does, whether or not anything is drawn where it stops. Leader lines may connect a text box to an illustration, never to the basemap. Name that place instead in a text line or in a callout that touches no part of the map. A marker you placed yourself sits among verified ones and looks exactly as authoritative, so one guess discredits every marker on the graphic.
+- Any coordinates written in STRUCTURE are secondary to the attached map. Where the two disagree, the attached map wins; never nudge a marker to match a coordinate."""
 
 USER_REFERENCE_SCENE_RULES = """==================================================
 ATTACHED SCENE REFERENCE (CRITICAL)
@@ -362,8 +368,33 @@ IMAGE REFINE RULES (CRITICAL)
 - Never add new facts, figures, sources, logos or captions that the request did not supply."""
 
 
-def build_refine_prompt(instruction: str) -> str:
-    """組追加修改（refine）的生圖 prompt。附圖＝上次置框前原圖，經 input_references 送出。"""
+# 無文字底圖的追加修改（YT 直播封面）：附圖是一張純照片底圖，文字全由程式疊。
+# IMAGE_REFINE_RULES 是替「帶文字的 CG」寫的（保留標題、不動版面文字），照用會讓
+# 模型以為該有文字而自己補一段上去，程式疊的標題蓋不掉它。
+TEXT_FREE_REFINE_RULES = """==================================================
+TEXT-FREE BACKGROUND REFINE RULES (CRITICAL)
+==================================================
+- The attached image is a text-free photographic background. Software adds every headline, badge and logo afterwards.
+- Apply ONLY the change requested below. Keep everything else — subject, composition, framing, lighting, colour — as it is.
+- The result must remain completely free of text: no letters, no numbers, no captions, no logos, no watermarks, no signage, no readable writing of any kind. If the request asks to add words, leave the background unchanged in that respect — words are added by software, not by you.
+- Keep the lower third free of essential detail and keep the extreme corners clear, so the overlaid headline and badges do not cover anything important."""
+
+
+def build_refine_prompt(instruction: str, *, text_free: bool = False) -> str:
+    """組追加修改（refine）的生圖 prompt。附圖＝上次置框前原圖，經 input_references 送出。
+
+    text_free：附圖是無文字底圖（YT 直播封面那條線），改用 TEXT_FREE_REFINE_RULES。
+    """
+    if text_free:
+        return (
+            "Modify the attached text-free background photograph according to the change "
+            "request below. This is an edit of an existing image, not a new design.\n\n"
+            f"{TEXT_FREE_REFINE_RULES}\n\n"
+            "==================================================\n"
+            "USER CHANGE REQUEST\n"
+            "==================================================\n"
+            f"{instruction}"
+        )
     return (
         "Modify the attached news infographic image according to the change "
         "request below. This is an edit of an existing image, not a new design.\n\n"
@@ -374,6 +405,18 @@ def build_refine_prompt(instruction: str) -> str:
         f"{instruction}"
     )
 
+# 每一段文字只畫一次。2026-09-05 第六輪連抓到兩種重複：同一個文字框在右上與
+# 右下各畫一次；蓋章那句被多畫成一列內文小標，蓋章條再出現一次同句（variable
+# 裡根本沒有那一行）。兩種都是圖面端自己複製的，消化端的規則管不到，所以要有
+# 一塊給兩個角色、所有類型都注入的文字擺放規則。
+TEXT_PLACEMENT_RULES = """==================================================
+TEXT PLACEMENT (CRITICAL)
+==================================================
+- EVERY LINE OF VARIABLE FIELDS IS RENDERED EXACTLY ONCE. One line, one place on the canvas. Do not repeat a headline, a subhead or a callout in a second card, a second column, a corner block or a summary strip, and do not restate it in different words elsewhere. An empty region is not a reason to duplicate: leave it to the background rather than fill it with a copy.
+- THE <蓋章> LINE BELONGS TO THE STAMP BAR AND NOWHERE ELSE — never also as a body line, a subhead row, a card or a callout. It is the closing conclusion, so seeing it twice on one graphic reads as two separate statements of the same fact.
+- Add no text of your own. Every word on the canvas comes from VARIABLE FIELDS; if a layout region has nothing assigned to it, it carries no text."""
+
+
 MAP_ACCURACY_IMAGE_RULES = """==================================================
 MAP ACCURACY RULES (CRITICAL)
 ==================================================
@@ -383,6 +426,8 @@ MAP ACCURACY RULES (CRITICAL)
 - Distances stated in STRUCTURE must be drawn proportionally to the map scale and along the stated bearing.
 - Simplify coastline styling only. Never simplify or alter geographic positions, distances, bearings or relative scale.
 - Do not invent islands, coastlines, landmasses or maritime boundaries. If an accurate coastline cannot be maintained, draw a clean ocean coordinate grid with accurate point markers rather than fabricated geography.
+- EVERY MARKER CARRIES ITS OWN PLACE NAME, AND EVERY CALLOUT GOES TO THE MARKER THAT NAMES THE SAME PLACE. Set the place name beside its own marker, close enough that no reader has to guess which marker it belongs to. When a callout box names a place, its leader line must end at the marker for that place and no other; never let two leader lines cross each other on their way to markers whose names they do not match. A marker drawn in exactly the right spot still misreports the story if the box wired to it describes what happened somewhere else, and with no name on the marker itself the viewer has no way to catch it.
+- A FACT THAT NAMES NO PLACE BELONGS TO NONE OF THEM. Only wording that itself names a place may go into that place's marker label or callout. When a VARIABLE line does not itself name a place — 「最深積水40公分 多輛機車熄火」 sitting on its own line — do not attach it to one marker and do not spread it across several: deciding which of the marked places is the deepest, or which had the stalled scooters, is a claim the source never made, and on a map it reads as reported fact. Put such a line where it belongs to the whole graphic: a shared strip, a summary block, or a caption that points at nothing.
 - Claimed or disputed zones must read as schematic and carry only the label supplied in VARIABLE FIELDS, never as a settled international border."""
 
 
@@ -420,7 +465,11 @@ def build_prompt(
 
     # 視覺忠實度區塊：地圖規則只在已解析的類型是地圖時注入
     # （這裡的 type_label 已是 digest 解析後的具體類型，非「自動判斷」sentinel）
-    extra_blocks = [REAL_WORLD_RENDERING_RULES, TW_DIRECTIONAL_COLOR_RULES]
+    extra_blocks = [
+        REAL_WORLD_RENDERING_RULES,
+        TW_DIRECTIONAL_COLOR_RULES,
+        TEXT_PLACEMENT_RULES,
+    ]
     if type_label == MAP_TYPE_LABEL:
         extra_blocks.append(MAP_ACCURACY_IMAGE_RULES)
     # 真人肖像區塊：未知的 portrait_mode 一律當成沒有區塊，讓預設的
