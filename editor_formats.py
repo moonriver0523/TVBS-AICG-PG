@@ -126,14 +126,12 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 - Date, in the header band immediately to the left of that tag: {date_text}
 - Headline of the LEFT panel, LEFT-aligned in its lower-left area, over the photograph: {title_left}
 - Headline of the RIGHT panel, RIGHT-aligned in its lower-right area, over the photograph: {title_right}
-- A small unobtrusive label just below the header band, at the outer top corner of each panel: AI示意圖
 
 === TYPOGRAPHY (this is the point of the image) ===
 - The two headlines are the loudest thing in the frame: very heavy condensed Chinese display type, BROKEN INTO TWO OR THREE STACKED LINES each (split each headline at a natural phrase boundary yourself), tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of each photograph darkens gently so the headline stays readable.
 - COLOUR EACH LINE DIFFERENTLY within a headline — that variation is required, not optional. Follow this order: the FIRST line solid white, the SECOND line bright golden yellow, the THIRD line (if any) vivid red with a white outline. Never render a whole headline in one flat colour.
 - The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
 - The date is a clean, light, small white sans-serif, no effects, inside the header band.
-- The AI示意圖 label is small, plain white, deliberately understated, on a faint dark plate so it stays readable.
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
 
 === IMAGERY ===
@@ -143,6 +141,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 
 === HARD CONSTRAINTS ===
 - NO television channel logo, NO station identity mark, NO broadcaster wordmark, NO dot-pattern emblem, NO watermark of any kind, and do NOT write the programme name (十點不一樣) anywhere. The upper-LEFT corner of the header band — its entire LEFT HALF — must be left as clean empty navy background: the real channel logo and the official programme-name tag are pasted there afterwards, so keep that whole area free of text, graphics and busy detail. Only the date and the small red tag sit in the header band, at its right end.
+- Do NOT draw any 示意圖 label, AI示意圖 label or similar disclaimer anywhere in the image. Software adds that label afterwards, at the outer top corner below the header band — keep that small area free of text and busy detail.
 - No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles.
 - Keep every piece of text well inside the frame with clear breathing space; nothing may touch or be clipped by any edge.
 """
@@ -158,14 +157,12 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 - Small red rounded tag at the RIGHT end of the header band: {badge_text}
 - Date, in the header band immediately to the left of that tag: {date_text}
 - The headline, LEFT-aligned in the lower-left area of the frame, over the photograph: {title_left}
-- A small unobtrusive label just below the header band, at the top-left corner: AI示意圖
 
 === TYPOGRAPHY (this is the point of the image) ===
 - The headline is the loudest thing in the frame: very heavy condensed Chinese display type, BROKEN INTO TWO OR THREE STACKED LINES (split it at a natural phrase boundary yourself), occupying roughly the left half of the frame, tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of the photograph darkens gently so the headline stays readable.
 - COLOUR EACH LINE DIFFERENTLY within the headline — that variation is required, not optional. Follow this order: the FIRST line solid white, the SECOND line bright golden yellow, the THIRD line (if any) vivid red with a white outline. Never render a whole headline in one flat colour.
 - The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
 - The date is a clean, light, small white sans-serif, no effects, inside the header band.
-- The AI示意圖 label is small, plain white, deliberately understated, on a faint dark plate so it stays readable.
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
 
 === IMAGERY ===
@@ -174,6 +171,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 
 === HARD CONSTRAINTS ===
 - NO television channel logo, NO station identity mark, NO broadcaster wordmark, NO dot-pattern emblem, NO watermark of any kind, and do NOT write the programme name (十點不一樣) anywhere. The upper-LEFT corner of the header band — its entire LEFT HALF — must be left as clean empty navy background: the real channel logo and the official programme-name tag are pasted there afterwards, so keep that whole area free of text, graphics and busy detail. Only the date and the small red tag sit in the header band, at its right end.
+- Do NOT draw any 示意圖 label, AI示意圖 label or similar disclaimer anywhere in the image. Software adds that label afterwards, at the outer top corner below the header band — keep that small area free of text and busy detail.
 - No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles.
 - Keep every piece of text well inside the frame with clear breathing space; nothing may touch or be clipped by any edge.
 """

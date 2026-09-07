@@ -3385,7 +3385,12 @@ def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) ->
     image_req = _cover_apply_portraits(image_req, "ai")
     result = generate_image_raw(image_req)
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
-    return compose.paste_cover_logo(base64.b64decode(result.image_data_base64)), result.model
+    cover = compose.paste_cover_logo(base64.b64decode(result.image_data_base64))
+    # 「AI示意圖」小標改由程式壓（2026-09-07）：模板要模型自己畫時，只要使用者附了
+    # 實景參考圖，apply_user_references_to_image_request 的「Do NOT render any 示意圖
+    # label」就會把它壓掉。整張都是 AI 生的，這個標籤不能取決於模型聽不聽話。
+    cover = compose.paste_cover_ai_note(cover, split=req.layout != "full")
+    return cover, result.model
 
 
 def _cover_full_image(

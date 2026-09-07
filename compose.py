@@ -351,6 +351,33 @@ def paste_cover_logo(image_bytes: bytes) -> bytes:
     return buffer.getvalue()
 
 
+def paste_cover_ai_note(image_bytes: bytes, *, split: bool) -> bytes:
+    """在純 AI 版封面壓上「AI示意圖」小標（2026-09-07）。
+
+    為什麼改由程式壓：模板本來要模型自己畫這個小標，但只要使用者附了實景參考圖，
+    `apply_user_references_to_image_request` 就會追加「Do NOT render any 示意圖 label」，
+    位置在後、又是明文 OVERRIDE，模型會照做——標籤整個消失。合成版的標籤本來就是
+    程式畫的，這裡改成同一套，標籤在不在就不再取決於模型聽不聽話。做法比照 YT
+    ai-title：文字類固定元素一律後貼。
+
+    split=True（雙切）左右格外側各一枚；False（滿版）只有左上一枚。位置與合成版
+    `compose_ten_cover` 一致：標頭帶下方 2.5% 畫面高處。
+    """
+    with Image.open(io.BytesIO(image_bytes)) as opened:
+        canvas = opened.convert("RGBA")
+    width, height = canvas.size
+    # AI 版的標頭帶高由 prompt 決定（about one tenth），與合成版的 COVER_HEADER_RATIO 不同
+    note_y = round(height * COVER_AI_HEADER_RATIO) + round(height * 0.025)
+    margin = round(width * COVER_MARGIN / COVER_CANVAS[0])
+    _draw_cover_ai_note(canvas, margin, note_y, align_right=False)
+    if split:
+        _draw_cover_ai_note(canvas, width - margin, note_y, align_right=True)
+
+    buffer = io.BytesIO()
+    canvas.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def _cover_panel(image_bytes: bytes, size: tuple[int, int]) -> Image.Image:
     """把一張 AI 底圖等比例填滿指定版位（COVER 裁切，不變形）。"""
     with Image.open(io.BytesIO(image_bytes)) as opened:
@@ -445,8 +472,12 @@ def _draw_cover_header(draw: ImageDraw.ImageDraw, canvas: Image.Image, date_text
 
 
 def _draw_cover_ai_note(canvas: Image.Image, x_anchor: int, y0: int, align_right: bool) -> None:
-    """格內「AI示意圖」小標（半透明黑底白字）。"""
-    height = COVER_CANVAS[1]
+    """格內「AI示意圖」小標（半透明黑底白字）。
+
+    幾何一律以**傳進來的畫布**的高為準，不是 COVER_CANVAS：純 AI 版直接畫在模型
+    回來的原圖上，那張的解析度是模型決定的（2026-09-07 起 paste_cover_ai_note 共用這支）。
+    """
+    height = canvas.size[1]
     font = _font(round(height * 0.03))
     text_w = font.getbbox(COVER_AI_NOTE)[2]
     pad = round(height * 0.012)

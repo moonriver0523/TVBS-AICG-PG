@@ -85,6 +85,15 @@
 prompt 的版面描述已同步成斜切全幅＋薄標頭帶＋白／黃／紅逐行；「十點不一樣」是帶內小標籤
 而非大標題。Logo 仍由程式後貼（`paste_cover_logo`）。
 
+**「AI示意圖」小標也改由程式壓（2026-09-07 裁決）**：兩個 AI 模板不再要模型畫這個標籤，
+改成明文「不要畫任何示意圖標籤、把外側角落留乾淨，之後由程式加」。根因是只要使用者附了
+實景參考圖，`apply_user_references_to_image_request` 就會追加「Do NOT render any 示意圖
+label」——位置在後、又是明文 OVERRIDE，模型照做，標籤整個消失。做法比照 YT ai-title：
+文字類固定元素一律後貼，標籤在不在不再取決於模型聽不聽話。
+`compose.paste_cover_ai_note(image_bytes, split=...)` 在 `paste_cover_logo` 之後壓：
+雙切左右格外側各一枚、滿版只有左上一枚，位置同合成版（標頭帶下方 2.5% 畫面高）。
+幾何一律以**模型回來那張圖的解析度**為準——AI 版不是固定 1920×1080。
+
 ## 測試
 
 `tests/test_ten_cover.py`：分行規則、斜切像素、標頭與底部飾帶、AI示意圖只印 AI 格、
