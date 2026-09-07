@@ -51,6 +51,12 @@
   `editor_formats.YT_COVER_TEXT_FREE_OVERRIDE`——與 YT 直播封面 `_yt_cover_background` 同一段，
   不另開一套措辭。AI 整張版（`_cover_ai`）就是要模型畫字，**不加**。
 
+### 被剔除者禁畫（2026-09-08 審查必修）
+`keep_subjects_with_photos` 回第 4 個元素＝查不到參考照而被剔除的人；`CoverVisuals.excluded`／`YtCoverPlan.excluded`
+帶到生圖端，`_cover_apply_portraits`（十點）與 YT 兩條生圖在肖像規則之後接 `excluded_people_block`
+（「這些人沒有可用參考照，不得畫出可辨識的臉；畫面描述提到就背影／剪影或不入鏡」）。否則剩一人時走的
+單人肖像規則沒有「其他人不畫臉」條款，被剔除的那位會被模型憑空捏臉。
+
 ## 兩個獨立版型：滿版／雙切（2026-09-07 使用者裁決）
 
 - `ten_cover`＝**十點不一樣（雙切）**：左右兩格各一個標題、各一個附圖位（下節）。`layout="split"`。

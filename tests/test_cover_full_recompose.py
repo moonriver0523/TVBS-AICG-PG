@@ -56,7 +56,7 @@ class FullCompositeReturnsBackgroundTests(unittest.TestCase):
     """紅線 1：滿版合成版把壓字前底圖帶回來，AI 底圖與附圖底圖的 background_is_ai 要分得開。"""
 
     def _post(self, body):
-        def fake_full(visual, provider, references=None, *args):
+        def fake_full(visual, provider, references=None, *args, **kwargs):
             return _png_bytes(size=(1600, 900), colour=GREEN), "fake-image-model"
 
         with patch.object(main, "_cover_full_image", side_effect=fake_full), \

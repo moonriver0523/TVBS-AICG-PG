@@ -45,7 +45,7 @@ class SlotTests(unittest.TestCase):
     def _post(self, body, panel_colour=GREEN, visuals=("左景", "右景")):
         calls = []
 
-        def fake_panel(visual, provider, references=None, *args):
+        def fake_panel(visual, provider, references=None, *args, **kwargs):
             calls.append(visual)
             # 2026-09-07 起這幾支回 (bytes, 生圖模型名)，落檔要記 image_model
             return _png_bytes(colour=panel_colour), "fake-image-model"

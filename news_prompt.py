@@ -223,7 +223,7 @@ NAMED REAL PERSON — PORTRAIT TREATMENT (CRITICAL)
 - Render the portrait as a hand-painted editorial portrait illustration rather than a photograph, while preserving the recognisable likeness of the reference photograph: the same facial structure, hairstyle, glasses and build, so that viewers identify the same individual.
 - The illustration must be readable as an illustration. Do not aim for a photographic reproduction of the reference image.
 - Take only the person's likeness from the reference photograph. Pose, attire, framing and surroundings follow STRUCTURE, not the photograph's own background or occasion.
-- The 示意圖 label supplied in VARIABLE FIELDS sits beside the portrait and must stay clearly visible: this is an illustrated depiction, not a photograph of the person.
+- The 示意圖 label supplied in VARIABLE FIELDS sits beside the portrait and must stay clearly visible: this is an illustrated depiction, not a photograph of the person. If VARIABLE FIELDS supplies no such label, do not add one yourself.
 - Never place the person in a scene, action or context that STRUCTURE does not describe."""
 
 PORTRAIT_NO_REFERENCE_RULES = """==================================================
@@ -232,7 +232,7 @@ NAMED REAL PEOPLE — NO REFERENCE AVAILABLE (CRITICAL)
 - No reference photograph is available, so you MUST NOT draw the face of ANY named real person in this graphic. This applies to every such figure, including when the layout calls for two or more portraits side by side.
 - Depict each figure as a back view or a plain silhouette wearing the attire STRUCTURE describes. Never invent, guess or approximate anyone's facial features, and never substitute a generic face in their place — a fabricated face sitting under a real person's name label is the single most serious failure this rule exists to prevent.
 - Name labels may stay, but each must sit beside a faceless figure, never beside an invented face.
-- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible.
+- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible. If VARIABLE FIELDS supplies no such label, do not add one yourself.
 - Never place a person in a scene, action or context that STRUCTURE does not describe."""
 
 # 2-3 位具名真人、且**每一位都查到參考照**時用這段（2026-08-18 使用者裁定放寬）。
@@ -255,7 +255,7 @@ NAMED REAL PEOPLE — MULTIPLE PORTRAITS (CRITICAL)
 - Take only each person's likeness from the photographs. Pose, attire, framing and surroundings follow STRUCTURE, not the photographs' own backgrounds or occasions.
 - An attached photograph may happen to show more than one person. Use only the person the name label refers to; never carry a bystander from a photograph into the graphic.
 - Other real people may be named in the text of this graphic without a photograph. That is intended: render their names as text only, never as a face, and never place such a name beside a depicted figure.
-- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible: these are illustrated depictions, not photographs of the people.
+- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible: these are illustrated depictions, not photographs of the people. If VARIABLE FIELDS supplies no such label, do not add one yourself.
 - Never place a person in a scene, action or context that STRUCTURE does not describe."""
 
 PORTRAIT_MODES = {
@@ -398,7 +398,7 @@ TEXT-FREE BACKGROUND REFINE RULES (CRITICAL)
 # 讓它在店面招牌上補真實品牌，或替一張本來是背影的具名真人補一張憑空捏的臉。後者
 # 正是這個專案定義最糟的組合（真名＋假臉）。
 #
-# 禁品牌逐字沿用 NO_UNSOURCED_BRANDS_RULE，不另寫一套。具名真人這條刻意寫成精簡版：
+# 品牌條款逐字沿用 SOURCE_BRANDS_RULE，不另寫一套。具名真人這條刻意寫成精簡版：
 # 主流程那幾段（PORTRAIT_*_RULES）都以 STRUCTURE／VARIABLE FIELDS 為前提，refine 沒有
 # 那兩個區塊，照搬會叫模型去對照不存在的欄位。
 REFINE_REAL_WORLD_RULES = (

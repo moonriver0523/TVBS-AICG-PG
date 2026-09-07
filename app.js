@@ -790,6 +790,9 @@ function applyEditorFormatLocks() {
     if (presets.density && state.digestDensity !== presets.density) switchDigestDensity(presets.density);
 
     _hide(document.getElementById('digestControlsRow'), !!hides.digestControls);
+    // 封面版型（十點／YT）的端點不收指令欄，欄位擺著只會讓人以為填了有用；
+    // 畫面描述欄就是給 AI 的全部指示（2026-09-08 使用者裁決：不合併、直接隱藏）。
+    _hide(document.getElementById('aiInstruction'), format.inputs === 'cover' || format.inputs === 'yt_cover');
     _hide(document.getElementById('p1-btnSafeFrame'), !!hides.safeFrame);
     _hide(document.getElementById('p1-btnStamp'), !!hides.stamp);
     // 壓框開關只對有挖空側的版型有意義
@@ -1574,6 +1577,14 @@ function noteChartTypeOverride(data) {
 
 function applyDigestToForm(data) {
     state.mapPoints = Array.isArray(data.map_points) ? data.map_points : [];
+    // 地圖類：查不到座標的地名要講出來（2026-09-08）。不足 2 點時後端不做真實底圖，
+    // 以前畫面完全沒提示，使用者重打六次都拿到一樣的結果。
+    if (Array.isArray(data.map_missing) && data.map_missing.length) {
+        const found = state.mapPoints.length;
+        showToast(found >= 2
+            ? `地圖：${data.map_missing.join('、')} 查不到座標，底圖只標 ${found} 點`
+            : `地圖：${data.map_missing.join('、')} 查不到座標，只剩 ${found} 點，這次不會附真實底圖（改寫成行政區名再消化一次）`);
+    }
     const s = curSelected();
     s.style = {};
     s.structure = {};

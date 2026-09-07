@@ -299,6 +299,9 @@ class GenerateResponse(BaseModel):
     # 查不到的不會出現在這裡——標錯地點在新聞畫面上就是播出事故，寧可少標。
     # 前端把它原樣帶進生圖請求，後端據此產生真實底圖（見 build_map_reference）。
     map_points: list[MapPoint] = Field(default_factory=list)
+    # 地圖類：消化端列了但實查不到座標（或被查點白名單擋掉）的地名。前端據此提示使用者，
+    # 否則「只查到 1 點不做底圖」對使用者是完全安靜的失敗（2026-09-08）。
+    map_missing: list[str] = Field(default_factory=list)
 
 
 # input_references 的上限。模型端 gpt-image-2 收 0–16、Gemini 0–14（PLAN.md 查證），
@@ -905,6 +908,15 @@ No usable reference photograph exists for the people listed below, so the graphi
 """
 
 
+# 最近一次 resolve_map_points 查不到／被擋掉的地名（2026-09-08 使用者回報：路竹車站六次查無，
+# 畫面上沒有任何訊息）。純函式回傳型別不動（呼叫端與測試都只收 list），用 ContextVar 帶出去。
+_map_missing_places: contextvars.ContextVar[list[str]] = contextvars.ContextVar("map_missing_places", default=[])
+
+
+def map_missing_places() -> list[str]:
+    return list(_map_missing_places.get())
+
+
 def resolve_map_points(chart_type: str, places: list[str] | None) -> list[MapPoint]:
     """把消化端列出的地名查成真實座標。查不到就少一個，全程不丟例外。
 
@@ -918,6 +930,7 @@ def resolve_map_points(chart_type: str, places: list[str] | None) -> list[MapPoi
     if chart_type != MAP_TYPE_LABEL or not places:
         return []
     points: list[MapPoint] = []
+    missing: list[str] = []
     for place in places[:MAX_MAP_PLACES]:
         name = (place or "").strip()
         if not name:
@@ -929,14 +942,20 @@ def resolve_map_points(chart_type: str, places: list[str] | None) -> list[MapPoi
             continue
         if found is None:
             print(f"[map] 查無座標，略過：{name}", flush=True)
+            missing.append(name)
             continue
         # 標在圖上的是最後一段（「基隆市 西定路」→「西定路」）：查詢字串要夠明確
         # 才找得到，但畫面上不該出現「基隆市 西定路」這種查詢用的寫法。
         label = name.split()[-1] if " " in name else name
         points.append(MapPoint(name=label[:40], lat=found[0], lon=found[1]))
+    _map_missing_places.set(missing)
     if len(points) < MIN_MAP_POINTS:
         if points:
-            print(f"[map] 只查到 {len(points)} 個點，不足以構成相對位置，不做底圖", flush=True)
+            print(
+                f"[map] 只查到 {len(points)} 個點（{'、'.join(p.name for p in points)}），"
+                f"查不到：{'、'.join(missing) or '—'}，不足以構成相對位置，不做底圖",
+                flush=True,
+            )
         return []
     print(f"[map] 已定位 {len(points)} 個地點：{'、'.join(p.name for p in points)}", flush=True)
     return points
@@ -1529,6 +1548,7 @@ def generate(req: GenerateRequest):
             # 只有地圖類會真的去查（resolve_map_points 自己擋掉其他類型）。
             # 查不到就是空陣列，後續一切照舊，不會有人拿到錯誤。
             map_points=resolve_map_points(chart_type, data.get("map_places")),
+            map_missing=map_missing_places(),
             portrait_subjects=clean_portrait_subjects(data.get("portrait_subjects")),
             portrait_subjects_en=align_english_names(
                 clean_portrait_subjects(data.get("portrait_subjects")),
@@ -3168,6 +3188,7 @@ class CoverVisuals(tuple):
 
     subjects: tuple[list[str], list[str]] = ([], [])
     english: tuple[list[str], list[str]] = ([], [])
+    excluded: tuple[list[str], list[str]] = ([], [])
     # 這次查到的參考照（{人名: ReferencePhoto}，每格一份）。留著是為了落檔記出處
     # （portrait_photo_source），不是為了傳給生圖端——見 keep_subjects_with_photos。
     photos: tuple[dict, dict] = ({}, {})
@@ -3187,10 +3208,32 @@ def cover_portraits(visuals, side: int) -> tuple[list[str], list[str]]:
     return list(subjects[side]), list(english[side])
 
 
+def cover_excluded(visuals, side: int) -> list[str]:
+    """某一格被剔除（查不到參考照）的人；純 tuple 或沒有就空清單。"""
+    excluded = getattr(visuals, "excluded", None) or ([], [])
+    return list(excluded[side]) if side < len(excluded) else []
+
+
 def cover_portrait_photos(visuals, side: int) -> dict:
     """某一格查到的參考照；純 tuple（mock）就是沒有。"""
     photos = getattr(visuals, "photos", ({}, {}))
     return dict(photos[side])
+
+
+COVER_EXCLUDED_PEOPLE_BLOCK = """
+
+PEOPLE WHO MUST NOT BE DRAWN (OVERRIDES EVERYTHING ABOVE ABOUT THEM):
+No usable reference photograph exists for: {names}.
+- Do not draw any of them with a recognisable face. If the scene description mentions them, show them only as a back view or a plain silhouette, or leave them out of the frame entirely.
+- Never invent, guess or approximate their facial features, and never place any of their names beside a drawn face."""
+
+
+def excluded_people_block(names: list[str]) -> str:
+    """被剔除（查不到參考照）的人：接在生圖 prompt 後的禁畫條款；沒有人就回空字串。"""
+    names = [n for n in names if n]
+    if not names:
+        return ""
+    return COVER_EXCLUDED_PEOPLE_BLOCK.format(names="、".join(names))
 
 
 def keep_subjects_with_photos(
@@ -3199,8 +3242,12 @@ def keep_subjects_with_photos(
     *,
     uploaded_portraits: int = 0,
     tag: str,
-) -> tuple[list[str], list[str], dict]:
-    """把查不到參考照的人從名單移除，回 (剩下的人, 對應英文名, 查到的照片)。
+) -> tuple[list[str], list[str], dict, list[str]]:
+    """把查不到參考照的人從名單移除，回 (剩下的人, 對應英文名, 查到的照片, 被移除的人)。
+
+    被移除的人**必須**由呼叫端接進 `excluded_people_block` 寫進生圖 prompt（2026-09-08 審查
+    必修）：畫面描述仍寫著「兩人同框」，剩一人時走的單人肖像規則沒有「其他人不畫臉」條款，
+    被剔除的那位會被模型憑空捏臉。
 
     封面與 YT 封面的 `apply_photo_availability` 等價物（2026-09-07）。主流程在**消化階段**
     就把查不到照片的人排出版面；封面這兩條線沒有消化階段，名單是補畫面描述時一併產生的，
@@ -3218,12 +3265,12 @@ def keep_subjects_with_photos(
     `ImageGenerateRequest` 上開一個只有封面用得到的欄位。查圖有快取層，重查很便宜。
     """
     if not subjects:
-        return [], [], {}
+        return [], [], {}, []
     photos, missing = lookup_portrait_photos(subjects, english)
     if uploaded_portraits:
         missing = missing[uploaded_portraits:]
     if not missing:
-        return list(subjects), list(english), photos
+        return list(subjects), list(english), photos, []
     kept = [(name, en) for name, en in zip(subjects, english) if name not in missing]
     if not kept:
         # 全部都查不到時**不清空名單**（刻意與 apply_photo_availability 不同）：
@@ -3237,13 +3284,13 @@ def keep_subjects_with_photos(
             "保留名單走「不生成臉孔」規則",
             flush=True,
         )
-        return list(subjects), list(english), photos
+        return list(subjects), list(english), photos, []
     print(
         f"[{tag}] 查不到參考照（{'、'.join(missing)}），把他們從肖像名單移除，"
         "剩下的人照樣畫臉",
         flush=True,
     )
-    return [name for name, _ in kept], [en for _, en in kept], photos
+    return [name for name, _ in kept], [en for _, en in kept], photos, missing
 
 
 def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
@@ -3289,7 +3336,7 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
     derived_right = (data.get("visual_right") or "").strip()
     # 上傳的肖像照兩格共用（附圖清單不分左右），所以每格都以同一個張數計。
     uploaded = sum(1 for ref in req.reference_images if ref.purpose == "portrait")
-    subjects, english, photos = [], [], []
+    subjects, english, photos, excluded = [], [], [], []
     for index, side in enumerate(("left", "right")):
         names = clean_portrait_subjects(data.get(f"portrait_subjects_{side}"))
         aligned = align_english_names(
@@ -3299,24 +3346,27 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
         )
         # 查不到參考照的人先移除，不然 resolve_portraits 的「全有或全無」會讓
         # 查得到的那位也一起變背影（見 keep_subjects_with_photos）
-        kept, kept_en, found = keep_subjects_with_photos(
+        kept, kept_en, found, dropped = keep_subjects_with_photos(
             names, aligned, uploaded_portraits=uploaded, tag=f"cover:{side}"
         )
         subjects.append(kept)
         english.append(kept_en)
         photos.append(found)
+        excluded.append(dropped)
     # 使用者填的永遠優先，AI 只補空的那一欄；肖像名單一律採 AI 的
-    return CoverVisuals(
+    visuals = CoverVisuals(
         left or derived_left or req.title_left.strip(),
         right or derived_right or req.title_right.strip(),
         subjects, english, photos,
     )
+    visuals.excluded = tuple(excluded)
+    return visuals
 
 
 def _cover_apply_portraits(
-    image_req: ImageGenerateRequest, tag: str, *, text_free: bool = False
+    image_req: ImageGenerateRequest, tag: str, *, text_free: bool = False, excluded: list[str] | None = None
 ) -> ImageGenerateRequest:
-    """十點封面共用：肖像規則＋參考照 → 附圖用途規則 →（合成版）無文字覆寫。順序同 YT 封面。
+    """十點封面共用：肖像規則＋參考照 → 被剔除者禁畫 → 附圖用途規則 →（合成版）無文字覆寫。順序同 YT 封面。
 
     text_free=True（合成版的無文字底圖）時，最後壓上與 YT 封面同一段 override：
     前面兩段規則都提到「示意圖標籤要保持可見」，不壓掉模型會自己在底圖上畫一個
@@ -3330,6 +3380,9 @@ def _cover_apply_portraits(
             f"[ten-cover:{tag}] portrait_subjects={image_req.portrait_subjects} en={image_req.portrait_subjects_en} 參考照={attached} 張",
             flush=True,
         )
+    block = excluded_people_block(list(excluded or []))
+    if block:
+        image_req = image_req.model_copy(update={"prompt": f"{image_req.prompt.rstrip()}{block}"})
     if image_req.reference_images:
         image_req = apply_user_references_to_image_request(image_req)
     if text_free:
@@ -3342,6 +3395,7 @@ def _cover_apply_portraits(
 def _cover_panel_image(
     visual: str, provider: str, references: list[UserReferenceImage] | None = None,
     subjects: list[str] | None = None, english: list[str] | None = None,
+    excluded: list[str] | None = None,
 ) -> bytes:
     """生一張 1:1 的無文字底圖。references＝非 asis 的附圖，依用途規則當生圖參考；
     subjects／english＝這格的具名真人（查得到參考照才畫臉）。回 (PNG bytes, 生圖模型名)。"""
@@ -3355,7 +3409,7 @@ def _cover_panel_image(
         portrait_subjects=list(subjects or []),
         portrait_subjects_en=list(english or []),
     )
-    image_req = _cover_apply_portraits(image_req, "panel", text_free=True)
+    image_req = _cover_apply_portraits(image_req, "panel", text_free=True, excluded=excluded)
     result = generate_image_raw(image_req)
     # 比例驗證：這條線直呼 generate_image_raw，繞過 finalize_image_result，
     # 悄悄降級的方圖進 split_canvas 會被裁掉一半（見 verify_output_aspect_ratio）。
@@ -3424,6 +3478,11 @@ def _cover_ai(
         for name, en in zip(*cover_portraits(visuals, side)):
             if name not in subjects:
                 subjects.append(name); english.append(en)
+    ai_excluded: list[str] = []
+    for side in (0, 1) if req.layout != "full" else (0,):
+        for name in cover_excluded(visuals, side):
+            if name not in ai_excluded and name not in subjects:
+                ai_excluded.append(name)
     image_req = ImageGenerateRequest(
         prompt=prompt,
         provider=req.provider,
@@ -3435,7 +3494,7 @@ def _cover_ai(
         portrait_subjects=subjects,
         portrait_subjects_en=english,
     )
-    image_req = _cover_apply_portraits(image_req, "ai")
+    image_req = _cover_apply_portraits(image_req, "ai", excluded=ai_excluded)
     result = generate_image_raw(image_req)
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
     raw = base64.b64decode(result.image_data_base64)
@@ -3445,6 +3504,7 @@ def _cover_ai(
 def _cover_full_image(
     visual: str, provider: str, references: list[UserReferenceImage] | None = None,
     subjects: list[str] | None = None, english: list[str] | None = None,
+    excluded: list[str] | None = None,
 ) -> bytes:
     """滿版：生一張 16:9 的無文字底圖。回 (PNG bytes, 生圖模型名)。"""
     image_req = ImageGenerateRequest(
@@ -3457,7 +3517,7 @@ def _cover_full_image(
         portrait_subjects=list(subjects or []),
         portrait_subjects_en=list(english or []),
     )
-    image_req = _cover_apply_portraits(image_req, "full", text_free=True)
+    image_req = _cover_apply_portraits(image_req, "full", text_free=True, excluded=excluded)
     result = generate_image_raw(image_req)
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
     return base64.b64decode(result.image_data_base64), result.model
@@ -3501,7 +3561,10 @@ def _cover_full_composite(
     if is_ai:
         references = [ref for ref in req.reference_images if ref.purpose != "asis"]
         subjects, english = cover_portraits(visual, 0)
-        slot, image_model = _cover_full_image(visual[0] if isinstance(visual, CoverVisuals) else visual, req.provider, references, subjects, english)
+        slot, image_model = _cover_full_image(
+            visual[0] if isinstance(visual, CoverVisuals) else visual, req.provider, references, subjects, english,
+            excluded=cover_excluded(visual, 0),
+        )
         slot_mime = "image/png"
     cover = compose.compose_ten_cover(
         slot, None,
@@ -3541,7 +3604,10 @@ def _cover_composite(
     if todo:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             futures = {
-                i: pool.submit(_cover_panel_image, visuals[i], req.provider, references, *cover_portraits(visuals, i))
+                i: pool.submit(
+                    _cover_panel_image, visuals[i], req.provider, references,
+                    *cover_portraits(visuals, i), excluded=cover_excluded(visuals, i),
+                )
                 for i in todo
             }
             for i, future in futures.items():
@@ -3675,6 +3741,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
             (cover_portraits(resolved, 0)[0], []), (cover_portraits(resolved, 0)[1], []),
             (cover_portrait_photos(resolved, 0), {}),
         )
+        visual.excluded = (cover_excluded(resolved, 0), [])
     is_ai = True
     source_raw, source_mime = b"", ""
     background_raw, background_mime = b"", ""
@@ -3930,10 +3997,12 @@ class YtCoverPlan(tuple):
     """
 
     photos: dict = {}
+    excluded: list[str] = []
 
-    def __new__(cls, lines, visual, subjects, english, photos=None):
+    def __new__(cls, lines, visual, subjects, english, photos=None, excluded=None):
         self = super().__new__(cls, (lines, visual, subjects, english))
         self.photos = dict(photos or {})
+        self.excluded = list(excluded or [])
         return self
 
 
@@ -3943,7 +4012,7 @@ def yt_cover_plan_photos(plan) -> dict:
 
 def resolve_yt_cover_plan(
     req: "YtCoverRequest",
-) -> tuple[tuple[str, str], str, list[str], list[str]]:
+) -> "YtCoverPlan":
     """決定 (兩行標題, 畫面描述, 具名真人, 英文名)。
 
     只有真的需要才打文字模型：標題已用一個空格分好、且底圖不用生（有 asis 附圖
@@ -3981,14 +4050,14 @@ def resolve_yt_cover_plan(
     )
     # 查不到參考照的人先移除，剩下的人照樣畫臉（見 keep_subjects_with_photos）
     uploaded = sum(1 for ref in req.reference_images if ref.purpose == "portrait")
-    subjects, english, photos = keep_subjects_with_photos(
+    subjects, english, photos, dropped = keep_subjects_with_photos(
         subjects, english, uploaded_portraits=uploaded, tag="yt-cover"
     )
-    return YtCoverPlan(lines, visual, subjects, english, photos)
+    return YtCoverPlan(lines, visual, subjects, english, photos, dropped)
 
 
 def _yt_cover_background(
-    req: "YtCoverRequest", visual: str, subjects: list[str], english: list[str]
+    req: "YtCoverRequest", visual: str, subjects: list[str], english: list[str], *, excluded: list[str] | None = None
 ) -> tuple[bytes, str, bool, str]:
     """取得無文字底圖，回 (bytes, mime, 是否 AI 生的, 模型名)。"""
     if req.background_image_base64:
@@ -4026,6 +4095,9 @@ def _yt_cover_background(
     # 順序：肖像規則 → 附圖用途規則 → 最後壓上「無文字」override（前兩段都提到
     # 示意圖標籤要保持可見，不壓掉模型會自己畫一個「示意圖」字樣）。
     image_req = apply_portrait_to_image_request(image_req)
+    block = excluded_people_block(list(excluded or []))
+    if block:
+        image_req = image_req.model_copy(update={"prompt": f"{image_req.prompt.rstrip()}{block}"})
     # 留證據：肖像這段靠 prompt 端列人名，會飄。沒這行分不出「附了維基照畫本人」
     # 與「模型憑空捏一張臉掛真名」——後者是這個專案定義的最糟組合。
     attached = len(image_req.portrait_reference_data_urls) + (1 if image_req.reference_image_data_url else 0)
@@ -4048,6 +4120,7 @@ def _yt_cover_full_image(
     visual: str,
     subjects: list[str],
     english: list[str],
+    *, excluded: list[str] | None = None,
 ) -> tuple[bytes, str, str]:
     """AI 標題模式：整張封面（含兩行標題與底帶）交給生圖模型，回 (bytes, mime, model)。
 
@@ -4069,6 +4142,9 @@ def _yt_cover_full_image(
         portrait_subjects_en=english,
     )
     image_req = apply_portrait_to_image_request(image_req)
+    block = excluded_people_block(list(excluded or []))
+    if block:
+        image_req = image_req.model_copy(update={"prompt": f"{image_req.prompt.rstrip()}{block}"})
     attached = len(image_req.portrait_reference_data_urls) + (1 if image_req.reference_image_data_url else 0)
     print(
         f"[yt-cover:ai-title] portrait_subjects={subjects} en={english} 參考照={attached} 張 附圖={len(req.reference_images)}",
@@ -4125,10 +4201,14 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             background = base64.b64decode(req.background_image_base64)
             bg_mime, is_ai, image_model = req.background_mime_type or "image/png", req.background_is_ai, "yt-cover:overlay"
         elif ai_title:
-            background, bg_mime, image_model = _yt_cover_full_image(req, lines, visual, subjects, english)
+            background, bg_mime, image_model = _yt_cover_full_image(
+                req, lines, visual, subjects, english, excluded=getattr(plan, "excluded", [])
+            )
             is_ai = True
         else:
-            background, bg_mime, is_ai, image_model = _yt_cover_background(req, visual, subjects, english)
+            background, bg_mime, is_ai, image_model = _yt_cover_background(
+                req, visual, subjects, english, excluded=getattr(plan, "excluded", [])
+            )
     except Exception as exc:
         _log_failure(exc)
         raise
