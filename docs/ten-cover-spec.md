@@ -171,3 +171,18 @@ label」——位置在後、又是明文 OVERRIDE，模型照做，標籤整個
 與 `_draw_cover_title` 同一支）。兩個 AI 模板改收 `{title_left_lines}`／
 `{title_right_lines}`（每行一條 `Line N: …`），並明文「照給定的行印、不得重拆或重排」，
 比照 YT ai-title 的 line1／line2。
+
+## 純 AI 版的追加修改（2026-09-07）
+
+比照 YT 直播封面 ai-title 那條路，完全同一套欄位與流程：
+
+- 回應帶 `source_image_base64`／`source_mime_type`＝**後貼 Logo 前的模型原圖**。
+  把貼過 Logo 的成品餵回生圖模型，模型會把 Logo 與節目標籤一起重畫，那是播出事故
+  （與主流程「refine 送置框前原圖」同一個道理）。合成版兩個欄位留空——成品是程式用
+  Pillow 拼的，沒有可以餵回模型的原圖，前端在合成版也不開放追加修改。
+- `TenCoverRequest.background_image_base64`／`background_mime_type`：改完的模型圖送回
+  `/api/editor/cover`，`mode=ai` 時跳過生圖與補描述（一次 API 都不打），只重跑
+  `paste_cover_logo` ＋ `paste_cover_ai_note`，`model` 記 `ten-cover:overlay`。
+- 前端：`handleTenCoverGenerate` 只在 `data.mode === 'ai'` 時設 refine 源；refine 送出
+  時十點封面比照 YT（16:9、不置框、不挖洞、`text_free:false`），回來再走
+  `recomposeTenCover`。欄位取現況，所以順便改標題也會生效。

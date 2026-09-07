@@ -3097,6 +3097,12 @@ class TenCoverRequest(BaseModel):
     # 兩欄都空時才退回上面 reference_images 的 asis 順序規則（舊呼叫端相容）。
     asis_left: str = Field(default="", max_length=2_800_000)
     asis_right: str = Field(default="", max_length=2_800_000)
+    # 追加修改後回來重貼固定元素（2026-09-07，比照 YT 封面的同名欄位）：純 AI 版的
+    # 成品是「模型畫的整張圖＋程式後貼的 Logo／節目標籤／AI示意圖」，refine 改的是
+    # 貼之前的模型原圖，改完要再走一次後貼才是成品。base64，不是 data URL。
+    # 只有 mode=ai 吃這個欄位；合成版的成品是程式拼的，沒有可以餵回生圖模型的原圖。
+    background_image_base64: str = Field(default="", max_length=28_000_000)
+    background_mime_type: str = "image/png"
 
 
 class TenCoverResponse(ImageGenerateResponse):
@@ -3346,14 +3352,34 @@ def _cover_panel_image(
     return base64.b64decode(result.image_data_base64), result.model
 
 
-def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) -> bytes:
-    """純 prompt 版：整張封面由生圖模型畫，之後只補貼正版 Logo＋節目標籤。
+def _cover_ai(
+    req: TenCoverRequest, date_text: str, visuals: tuple[str, str]
+) -> tuple[bytes, str, bytes, str]:
+    """純 prompt 版：整張封面由生圖模型畫，之後只補貼正版 Logo＋節目標籤＋AI示意圖。
+
+    回 (成品 PNG, 生圖模型名, 後貼前的模型原圖, 那張圖的 MIME)。第三、四項給追加修改用：
+    把貼過 Logo 的成品餵回生圖模型改圖，模型會把 Logo 一起重畫（那是播出事故），
+    所以 refine 一律拿後貼前的原圖（與主流程「refine 送置框前原圖」同一個道理）。
+
+    `req.background_image_base64` 有值＝追加修改後回來，模型圖已改好，這裡一次 API
+    都不打，只重跑後貼（比照 YT 封面的 `yt-cover:overlay`）。
 
     標題**先由程式拆好行**再進模板（2026-09-07）：以前 AI 版讓模型自己拆，同一個標題
     在 ai 與 composite 兩種模式下的斷句不一樣，使用者切模式比對時看到的是兩張不同版面
     的圖。拆法與合成版同一支 `compose.cover_title_lines`（使用者自己分的行優先，超寬再
     防呆拆），比照 YT ai-title 的 line1／line2。
     """
+    def _post_paste(raw: bytes) -> bytes:
+        cover = compose.paste_cover_logo(raw)
+        # 「AI示意圖」小標改由程式壓（2026-09-07）：模板要模型自己畫時，只要使用者附了
+        # 實景參考圖，apply_user_references_to_image_request 的「Do NOT render any 示意圖
+        # label」就會把它壓掉。整張都是 AI 生的，這個標籤不能取決於模型聽不聽話。
+        return compose.paste_cover_ai_note(cover, split=req.layout != "full")
+
+    if req.background_image_base64:
+        raw = base64.b64decode(req.background_image_base64)
+        return _post_paste(raw), "ten-cover:overlay", raw, req.background_mime_type or "image/png"
+
     badge_text = compose.COVER_BADGES[req.badge][0]
 
     def _lines_block(title: str, *, full_width: bool) -> str:
@@ -3396,12 +3422,8 @@ def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) ->
     image_req = _cover_apply_portraits(image_req, "ai")
     result = generate_image_raw(image_req)
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
-    cover = compose.paste_cover_logo(base64.b64decode(result.image_data_base64))
-    # 「AI示意圖」小標改由程式壓（2026-09-07）：模板要模型自己畫時，只要使用者附了
-    # 實景參考圖，apply_user_references_to_image_request 的「Do NOT render any 示意圖
-    # label」就會把它壓掉。整張都是 AI 生的，這個標籤不能取決於模型聽不聽話。
-    cover = compose.paste_cover_ai_note(cover, split=req.layout != "full")
-    return cover, result.model
+    raw = base64.b64decode(result.image_data_base64)
+    return _post_paste(raw), result.model, raw, result.mime_type
 
 
 def _cover_full_image(
@@ -3597,7 +3619,10 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
     if has_asis and req.mode == editor_formats.COVER_MODE_AI:
         print("[cover] 滿版附圖 → 改合成版（程式壓字）", flush=True)
         req = req.model_copy(update={"mode": editor_formats.COVER_MODE_COMPOSITE})
-    if has_asis:
+    ai_overlay = req.mode == editor_formats.COVER_MODE_AI and bool(req.background_image_base64)
+    if has_asis or ai_overlay:
+        # ai_overlay＝追加修改後回來只重貼固定元素，底圖不重生，所以一次文字模型都不打
+        # （比照 YT 封面 resolve_yt_cover_plan 的 need_visual）
         visual = req.visual_left.strip() or req.title_left.strip()
     else:
         # 借雙切的補描述流程：右欄填成跟左欄一樣，只取左邊；一次文字模型。
@@ -3609,11 +3634,12 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
             (cover_portrait_photos(resolved, 0), {}),
         )
     is_ai = True
+    source_raw, source_mime = b"", ""
     request_id = request_log.new_request_id()
     portrait_fields = cover_portrait_log_fields(visual)
     try:
         if req.mode == editor_formats.COVER_MODE_AI:
-            cover, image_model = _cover_ai(req, date_text, visual if isinstance(visual, CoverVisuals) else CoverVisuals(visual, visual))
+            cover, image_model, source_raw, source_mime = _cover_ai(req, date_text, visual if isinstance(visual, CoverVisuals) else CoverVisuals(visual, visual))
         else:
             cover, is_ai, image_model = _cover_full_composite(req, date_text, visual)
     except compose.ComposeError as exc:
@@ -3646,6 +3672,9 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         image_data_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
         model=f"ten-cover-full:{req.mode}" + ("-asis" if has_asis else ""),
+        # 追加修改的源圖＝後貼前的模型原圖（只有 AI 版有；合成版是程式拼的，沒有源圖）
+        source_image_base64=base64.b64encode(source_raw).decode("ascii") if source_raw else "",
+        source_mime_type=source_mime,
         visual_left=(visual[0] if isinstance(visual, CoverVisuals) else visual),
         visual_right="",
         left_is_ai=is_ai,
@@ -3684,7 +3713,11 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         print(f"[cover] 原圖放置附圖 {asis_count} 張 → 改合成版（程式壓字）", flush=True)
         req = req.model_copy(update={"mode": editor_formats.COVER_MODE_COMPOSITE})
 
-    if all(slots):
+    if req.mode == editor_formats.COVER_MODE_AI and req.background_image_base64:
+        # 追加修改後回來只重貼固定元素，底圖不重生，所以一次文字模型都不打
+        # （比照 YT 封面 resolve_yt_cover_plan 的 need_visual）
+        visuals = (req.visual_left.strip() or req.title_left.strip(), req.visual_right.strip() or req.title_right.strip())
+    elif all(slots):
         # 兩格都有圖：什麼都不生，一次文字模型都不打
         visuals = (req.visual_left.strip() or req.title_left.strip(), req.visual_right.strip() or req.title_right.strip())
     elif any(slots):
@@ -3701,12 +3734,13 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     else:
         visuals = resolve_cover_visuals(req)
     panel_is_ai = (True, True)
+    source_raw, source_mime = b"", ""
     request_id = request_log.new_request_id()
     log_prompt = f"L: {visuals[0]}\nR: {visuals[1]}"
     portrait_fields = cover_portrait_log_fields(visuals)
     try:
         if req.mode == editor_formats.COVER_MODE_AI:
-            cover, image_model = _cover_ai(req, date_text, visuals)
+            cover, image_model, source_raw, source_mime = _cover_ai(req, date_text, visuals)
         else:
             cover, panel_is_ai, image_model = _cover_composite(req, date_text, visuals)
     except compose.ComposeError as exc:
@@ -3741,6 +3775,9 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         image_data_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
         model=f"ten-cover:{req.mode}{asis_label}",
+        # 追加修改的源圖＝後貼前的模型原圖（只有 AI 版有；合成版是程式拼的，沒有源圖）
+        source_image_base64=base64.b64encode(source_raw).decode("ascii") if source_raw else "",
+        source_mime_type=source_mime,
         visual_left=visuals[0],
         visual_right=visuals[1],
         left_is_ai=panel_is_ai[0],

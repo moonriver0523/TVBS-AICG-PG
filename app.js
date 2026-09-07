@@ -358,6 +358,8 @@ let state = {
     ytCoverBackgroundIsAi: false,
     // 目前成品是哪種標題模式（來自後端回應）：追加修改與重疊固定元素要跟成品一致，不看勾選框
     ytCoverTitleMode: 'ai',
+    // 十點封面：目前成品是 ai 還是 composite（來自後端回應）。只有 ai 版能追加修改。
+    tenCoverMode: 'ai',
     refineStack: []
 };
 
@@ -1580,6 +1582,42 @@ function applyDigestToForm(data) {
 
 const COVER_BACKEND_URL = `${API_BASE}/api/editor/cover`;
 
+// 追加修改後重貼固定元素用（2026-09-07，比照 recomposeYtCover）：AI 版的成品是
+// 「模型畫的整張圖＋程式後貼的 Logo／節目標籤／AI示意圖」，refine 改的是後貼前的
+// 模型原圖，改完要再走一次後貼才是成品。欄位取現況，所以順便改標題也會生效。
+function tenCoverFields() {
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    const fullLayout = editorFormat().coverLayout === 'full';
+    return {
+        title_left: val('coverTitleLeft'),
+        title_right: fullLayout ? '' : val('coverTitleRight'),
+        layout: fullLayout ? 'full' : 'split',
+        visual_left: val('coverVisualLeft'),
+        visual_right: fullLayout ? '' : val('coverVisualRight'),
+        date_text: val('coverDate'),
+        badge: document.getElementById('coverBadge')?.value || 'on_air',
+        provider: effectiveImageProvider(),
+    };
+}
+
+async function recomposeTenCover(refined) {
+    const source = refineSourceFromResponse(refined);
+    if (!source) throw new Error('沒有可重貼的底圖');
+    const res = await fetch(COVER_BACKEND_URL, {
+        method: 'POST',
+        headers: _apiHeaders(),
+        body: JSON.stringify({
+            ...tenCoverFields(),
+            mode: 'ai',
+            background_image_base64: source.base64,
+            background_mime_type: source.mimeType,
+        }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(_apiError(data, res.status));
+    return data;
+}
+
 // 十點不一樣封面：使用者直接給兩個標題，中間沒有消化這一段，所以走自己的端點。
 // 下拉、產出區、下載都還在同一頁同一個位置，編輯不用切分頁。
 async function handleTenCoverGenerate() {
@@ -1641,8 +1679,12 @@ async function handleTenCoverGenerate() {
         download.href = imageUrl;
         download.download = 'tvbs-ten-cover.png';
         download.innerText = '下載 PNG';
-        // 封面是程式合成的，沒有可以餵回生圖模型的「置框前原圖」，追加修改不適用
-        resetRefineState(null, null);
+        // 追加修改只在 AI 版適用（2026-09-07）：AI 版的源圖是後貼 Logo 前的模型原圖，
+        // 改完再走一次後貼就是新成品。合成版的成品是程式用 Pillow 拼的，沒有可以餵回
+        // 生圖模型的原圖——把拼好的成品餵回去，模型會把 Logo 與標題一起重畫。
+        state.tenCoverMode = data.mode || 'ai';
+        const tenCoverSource = data.mode === 'ai' ? refineSourceFromResponse(data) : null;
+        resetRefineState(tenCoverSource, tenCoverSource ? data : null);
         // 回填實際採用的畫面描述（留空時是 AI 補的）。不填回去，使用者永遠不知道
         // AI 幫他決定了什麼，也沒辦法在此基礎上微調重生。
         [['coverVisualLeft', data.visual_left], ['coverVisualRight', data.visual_right]]
@@ -2388,6 +2430,10 @@ async function handleRefine() {
     // AI 標題模式改的是含標題的模型圖，走一般 refine 規則（字要保留）。
     const isYtCover = editorFormat().inputs === 'yt_cover';
     const ytTextFree = isYtCover && state.ytCoverTitleMode !== 'ai';
+    // 十點封面的 AI 版：與 YT 的 AI 標題模式同一條路——改的是含標題的模型圖，
+    // 走一般 refine 規則（字要保留），不置框、不挖洞、固定 16:9。
+    const isTenCover = editorFormat().inputs === 'cover' && state.tenCoverMode === 'ai';
+    const isCover = isYtCover || isTenCover;
     try {
         const response = await fetch(REFINE_BACKEND_URL, {
             method: 'POST',
@@ -2397,22 +2443,24 @@ async function handleRefine() {
                 source_mime_type: state.refineSource.mimeType,
                 instruction,
                 provider: effectiveImageProvider(),
-                aspect_ratio: isYtCover ? '16:9' : currentAspectRatio(),
+                aspect_ratio: isCover ? '16:9' : currentAspectRatio(),
                 image_size: state.imageSize,
-                safe_frame: isYtCover ? false : state.safeFrame,
+                safe_frame: isCover ? false : state.safeFrame,
                 safe_frame_profile: state.currentRole,
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
-                broadcast_hole: isYtCover ? '' : broadcastHoleForApi(),
+                broadcast_hole: isCover ? '' : broadcastHoleForApi(),
                 text_free: ytTextFree,
             }),
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(_apiError(data, response.status));
 
-        // YT 直播封面：refine 只改了無文字底圖，要再疊一次文字才是成品。
-        // 回來的 data 帶著 source_image_base64＝新底圖，refineSource 因此自動接上。
-        const shown = isYtCover ? await recomposeYtCover(data) : data;
+        // 封面兩條線：refine 只改了模型那張圖，要再走一次程式後貼才是成品。
+        // 回來的 data 帶著 source_image_base64＝新的模型圖，refineSource 因此自動接上。
+        const shown = isYtCover ? await recomposeYtCover(data)
+            : isTenCover ? await recomposeTenCover(data)
+            : data;
 
         // 退回上一版用：存目前這一版的置框前原圖與顯示中成品（都在 state，不碰 DOM）
         state.refineStack.push({
@@ -2424,7 +2472,7 @@ async function handleRefine() {
         state.refineDisplay = shown;
         showRefinedImage(shown);
         // 封面的成品標籤維持版型名，不顯示內部的 recomposite 模型字串
-        if (isYtCover) document.getElementById('oneClickLabel').innerText = editorFormat().label;
+        if (isCover) document.getElementById('oneClickLabel').innerText = editorFormat().label;
         input.value = '';
         showToast('修改完成');
     } catch (err) {
