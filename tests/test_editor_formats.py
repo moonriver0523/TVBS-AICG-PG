@@ -328,19 +328,31 @@ class CoverVisualFallbackTests(unittest.TestCase):
         self.assertEqual(request.visual_left, "")
         self.assertEqual(request.visual_right, "")
 
-    def test_both_supplied_skips_the_api_entirely(self):
+    def test_both_supplied_still_asks_for_portrait_subjects(self):
+        # 2026-09-07：描述都填了也要打一次文字模型——不打就沒有肖像名單，具名真人會被畫成背影。
+        # 使用者填的描述仍然優先，AI 只提供名單。
+        import json
         import main
+        from types import SimpleNamespace
         called = []
+
+        def fake(**kw):
+            called.append(kw)
+            payload = {"visual_left": "AI 亂改的描述", "visual_right": "AI 亂改的描述",
+                       "portrait_subjects_left": ["梅爾茨"], "portrait_subjects_left_en": ["Friedrich Merz"],
+                       "portrait_subjects_right": [], "portrait_subjects_right_en": []}
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload, ensure_ascii=False)))])
+
         original = main.digest_completion
-        main.digest_completion = lambda **kw: called.append(kw)
+        main.digest_completion = fake
         try:
-            result = main.resolve_cover_visuals(
-                self.req(visual_left="政府大樓", visual_right="實驗室")
-            )
+            result = main.resolve_cover_visuals(self.req(visual_left="政府大樓", visual_right="實驗室"))
         finally:
             main.digest_completion = original
-        self.assertEqual(result, ("政府大樓", "實驗室"))
-        self.assertEqual(called, [], "兩欄都有值時不該打 API")
+        self.assertEqual(tuple(result), ("政府大樓", "實驗室"))
+        self.assertEqual(len(called), 1)
+        self.assertEqual(main.cover_portraits(result, 0), (["梅爾茨"], ["Friedrich Merz"]))
+        self.assertEqual(main.cover_portraits(result, 1), ([], []))
 
     def test_user_value_wins_over_the_derived_one(self):
         import main

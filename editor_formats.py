@@ -192,9 +192,11 @@ Rules for every description:
 - Traditional Chinese (Taiwan), one sentence, roughly twenty to forty characters. No bullet points.
 - NEVER mention text, captions, headlines, numbers, charts, logos or watermarks — the photograph carries no writing at all.
 - Do not restate the headline. Turn its meaning into a scene.
-- No named real people and no identifiable faces: use anonymous figures, back views, crowds, or objects and places instead.
+- If a headline is about a specific named real person (a head of state, a politician, a celebrity), the photograph should be a portrait-style shot of that person as its subject, face towards the camera. Otherwise use anonymous figures, back views, crowds, objects or places.
 - If a headline is about data, money or policy, choose a real-world scene that stands for it (a building, a counter, hands, equipment), never a graph.
-- If a side's description is already supplied, repeat it back unchanged.
+- If a side's description is already supplied, repeat it back unchanged — but still list the named real people it shows.
+
+Also return, per side, "portrait_subjects_left" / "portrait_subjects_right": every specific named real person whose face that side's photograph would show, names exactly as the headline writes them (no title, no organisation), at most three per side; an empty array when the scene shows no named real person. "portrait_subjects_left_en" / "portrait_subjects_right_en": the same people, same order, as the name Wikipedia uses in English (e.g. 梅爾茨 → "Friedrich Merz"); empty string when unsure.
 """
 
 COVER_VISUAL_SCHEMA = {
@@ -202,8 +204,16 @@ COVER_VISUAL_SCHEMA = {
     "properties": {
         "visual_left": {"type": "string"},
         "visual_right": {"type": "string"},
+        "portrait_subjects_left": {"type": "array", "items": {"type": "string"}},
+        "portrait_subjects_left_en": {"type": "array", "items": {"type": "string"}},
+        "portrait_subjects_right": {"type": "array", "items": {"type": "string"}},
+        "portrait_subjects_right_en": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["visual_left", "visual_right"],
+    "required": [
+        "visual_left", "visual_right",
+        "portrait_subjects_left", "portrait_subjects_left_en",
+        "portrait_subjects_right", "portrait_subjects_right_en",
+    ],
     "additionalProperties": False,
 }
 

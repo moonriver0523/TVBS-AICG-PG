@@ -3142,11 +3142,38 @@ def ten_cover_uses_slots(req: "TenCoverRequest") -> bool:
     return bool(req.asis_left.strip() or req.asis_right.strip())
 
 
+class CoverVisuals(tuple):
+    """(visual_left, visual_right) 加上每格的具名真人名單（2026-09-07）。
+
+    做成 tuple 子類別：既有呼叫端與測試都用 `left, right = resolve_cover_visuals(...)` 解包，
+    mock 回傳純 tuple 也照樣能用（沒有 subjects 屬性就當沒有人）。
+    """
+
+    subjects: tuple[list[str], list[str]] = ([], [])
+    english: tuple[list[str], list[str]] = ([], [])
+
+    def __new__(cls, left: str, right: str, subjects=None, english=None):
+        self = super().__new__(cls, (left, right))
+        self.subjects = tuple(subjects) if subjects else ([], [])
+        self.english = tuple(english) if english else ([], [])
+        return self
+
+
+def cover_portraits(visuals, side: int) -> tuple[list[str], list[str]]:
+    """從 resolve_cover_visuals 的結果取某一格（0 左／1 右）的肖像名單；純 tuple 就是沒有人。"""
+    subjects = getattr(visuals, "subjects", ([], []))
+    english = getattr(visuals, "english", ([], []))
+    return list(subjects[side]), list(english[side])
+
+
 def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
-    """畫面描述留空時依標題補齊；兩欄都有值就原樣回傳，不打 API。"""
+    """畫面描述留空時依標題補齊，並列出每格的具名真人。
+
+    2026-09-07 使用者回報：十點封面把德國總理畫成背影。根因有二——這條線從沒接肖像查圖，
+    且舊 prompt 明文禁止具名真人的臉。現在即使兩欄描述都填了也照打一次文字模型：不打就
+    沒有 portrait_subjects，生圖規則會把具名真人一律畫成背影。
+    """
     left, right = req.visual_left.strip(), req.visual_right.strip()
-    if left and right:
-        return left, right
 
     material = 'LEFT headline: {}\\nLEFT description already supplied: {}\\nRIGHT headline: {}\\nRIGHT description already supplied: {}'.format(
         req.title_left.strip(),
@@ -3176,21 +3203,47 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
         # 補描述失敗不該讓整張封面失敗：退回用標題本身當畫面提示，
         # 畫出來會比較平淡但仍是一張可用的封面。
         print(f"[cover] 自動補畫面描述失敗，改用標題：{type(exc).__name__}: {exc}", flush=True)
-        return left or req.title_left.strip(), right or req.title_right.strip()
+        return CoverVisuals(left or req.title_left.strip(), right or req.title_right.strip())
 
     derived_left = (data.get("visual_left") or "").strip()
     derived_right = (data.get("visual_right") or "").strip()
-    # 使用者填的永遠優先，AI 只補空的那一欄
-    return (
+    subjects, english = [], []
+    for side in ("left", "right"):
+        names = clean_portrait_subjects(data.get(f"portrait_subjects_{side}"))
+        subjects.append(names)
+        english.append(align_english_names(
+            names,
+            [str(x) for x in (data.get(f"portrait_subjects_{side}_en") or [])],
+            [str(x) for x in (data.get(f"portrait_subjects_{side}") or [])],
+        ))
+    # 使用者填的永遠優先，AI 只補空的那一欄；肖像名單一律採 AI 的
+    return CoverVisuals(
         left or derived_left or req.title_left.strip(),
         right or derived_right or req.title_right.strip(),
+        subjects, english,
     )
 
 
+def _cover_apply_portraits(image_req: ImageGenerateRequest, tag: str) -> ImageGenerateRequest:
+    """十點封面共用：肖像規則＋參考照 → 附圖用途規則。順序同 YT 封面。"""
+    image_req = apply_portrait_to_image_request(image_req)
+    if image_req.portrait_subjects:
+        attached = len(image_req.portrait_reference_data_urls) + (1 if image_req.reference_image_data_url else 0)
+        print(
+            f"[ten-cover:{tag}] portrait_subjects={image_req.portrait_subjects} en={image_req.portrait_subjects_en} 參考照={attached} 張",
+            flush=True,
+        )
+    if image_req.reference_images:
+        image_req = apply_user_references_to_image_request(image_req)
+    return image_req
+
+
 def _cover_panel_image(
-    visual: str, provider: str, references: list[UserReferenceImage] | None = None
+    visual: str, provider: str, references: list[UserReferenceImage] | None = None,
+    subjects: list[str] | None = None, english: list[str] | None = None,
 ) -> bytes:
-    """生一張 1:1 的無文字底圖。references＝非 asis 的附圖，依用途規則當生圖參考。"""
+    """生一張 1:1 的無文字底圖。references＝非 asis 的附圖，依用途規則當生圖參考；
+    subjects／english＝這格的具名真人（查得到參考照才畫臉）。"""
     image_req = ImageGenerateRequest(
         prompt=editor_formats.COVER_VISUAL_PROMPT_TEMPLATE.format(visual=visual.strip()),
         provider=provider,
@@ -3198,9 +3251,10 @@ def _cover_panel_image(
         image_size="1K",
         safe_frame=False,
         reference_images=[ref for ref in (references or []) if ref.purpose != "asis"],
+        portrait_subjects=list(subjects or []),
+        portrait_subjects_en=list(english or []),
     )
-    if image_req.reference_images:
-        image_req = apply_user_references_to_image_request(image_req)
+    image_req = _cover_apply_portraits(image_req, "panel")
     result = generate_image_raw(image_req)
     return base64.b64decode(result.image_data_base64)
 
@@ -3224,6 +3278,12 @@ def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) ->
             visual_left=visuals[0],
             visual_right=visuals[1],
         )
+    # 整張一起生：兩格的具名真人合成一份名單（去重、保持順序）
+    subjects, english = [], []
+    for side in (0, 1) if req.layout != "full" else (0,):
+        for name, en in zip(*cover_portraits(visuals, side)):
+            if name not in subjects:
+                subjects.append(name); english.append(en)
     image_req = ImageGenerateRequest(
         prompt=prompt,
         provider=req.provider,
@@ -3232,15 +3292,19 @@ def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) ->
         safe_frame=False,
         # asis 走不到這裡（有 asis 端點就強制 composite）；其他用途依規則當生圖參考
         reference_images=[ref for ref in req.reference_images if ref.purpose != "asis"],
+        portrait_subjects=subjects,
+        portrait_subjects_en=english,
     )
-    if image_req.reference_images:
-        image_req = apply_user_references_to_image_request(image_req)
+    image_req = _cover_apply_portraits(image_req, "ai")
     result = generate_image_raw(image_req)
     return compose.paste_cover_logo(base64.b64decode(result.image_data_base64))
 
 
-def _cover_full_image(visual: str, provider: str, references: list[UserReferenceImage] | None = None) -> bytes:
-    """滿版：生一張 16:9 的無文字底圖。"""
+def _cover_full_image(
+    visual: str, provider: str, references: list[UserReferenceImage] | None = None,
+    subjects: list[str] | None = None, english: list[str] | None = None,
+) -> bytes:
+    """滿版：生一張 16:9 的無文字底圖。subjects／english＝具名真人（查得到參考照才畫臉）。"""
     image_req = ImageGenerateRequest(
         prompt=editor_formats.COVER_VISUAL_FULL_PROMPT_TEMPLATE.format(visual=visual.strip()),
         provider=provider,
@@ -3248,14 +3312,15 @@ def _cover_full_image(visual: str, provider: str, references: list[UserReference
         image_size="1K",
         safe_frame=False,
         reference_images=[ref for ref in (references or []) if ref.purpose != "asis"],
+        portrait_subjects=list(subjects or []),
+        portrait_subjects_en=list(english or []),
     )
-    if image_req.reference_images:
-        image_req = apply_user_references_to_image_request(image_req)
+    image_req = _cover_apply_portraits(image_req, "full")
     result = generate_image_raw(image_req)
     return base64.b64decode(result.image_data_base64)
 
 
-def _cover_full_composite(req: TenCoverRequest, date_text: str, visual: str) -> tuple[bytes, bool]:
+def _cover_full_composite(req: TenCoverRequest, date_text: str, visual) -> tuple[bytes, bool]:
     """滿版合成：附圖（asis_left）有就直接鋪滿，沒有就生一張 16:9；單一標題壓左下。回 (PNG, 是否 AI 底圖)。"""
     slot, _ = ten_cover_slot_images(req)
     if slot is None:
@@ -3264,7 +3329,8 @@ def _cover_full_composite(req: TenCoverRequest, date_text: str, visual: str) -> 
     is_ai = slot is None
     if is_ai:
         references = [ref for ref in req.reference_images if ref.purpose != "asis"]
-        slot = _cover_full_image(visual, req.provider, references)
+        subjects, english = cover_portraits(visual, 0)
+        slot = _cover_full_image(visual[0] if isinstance(visual, CoverVisuals) else visual, req.provider, references, subjects, english)
     cover = compose.compose_ten_cover(
         slot, None,
         title_left=req.title_left.strip(), title_right="",
@@ -3301,7 +3367,7 @@ def _cover_composite(
     if todo:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             futures = {
-                i: pool.submit(_cover_panel_image, visuals[i], req.provider, references)
+                i: pool.submit(_cover_panel_image, visuals[i], req.provider, references, *cover_portraits(visuals, i))
                 for i in todo
             }
             for i, future in futures.items():
@@ -3396,15 +3462,18 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         req = req.model_copy(update={"mode": editor_formats.COVER_MODE_COMPOSITE})
     if has_asis:
         visual = req.visual_left.strip() or req.title_left.strip()
-    elif req.visual_left.strip():
-        visual = req.visual_left.strip()
     else:
-        # 借雙切的補描述流程：右欄填成跟左欄一樣，只取左邊；一次文字模型
-        visual, _ = resolve_cover_visuals(req.model_copy(update={"title_right": req.title_left, "visual_right": ""}))
+        # 借雙切的補描述流程：右欄填成跟左欄一樣，只取左邊；一次文字模型。
+        # 描述有填也要打——沒打就沒有肖像名單，具名真人會被畫成背影（2026-09-07）。
+        resolved = resolve_cover_visuals(req.model_copy(update={"title_right": req.title_left, "visual_right": req.visual_left}))
+        visual = CoverVisuals(
+            req.visual_left.strip() or resolved[0], "",
+            (cover_portraits(resolved, 0)[0], []), (cover_portraits(resolved, 0)[1], []),
+        )
     is_ai = True
     try:
         if req.mode == editor_formats.COVER_MODE_AI:
-            cover = _cover_ai(req, date_text, (visual, visual))
+            cover = _cover_ai(req, date_text, visual if isinstance(visual, CoverVisuals) else CoverVisuals(visual, visual))
         else:
             cover, is_ai = _cover_full_composite(req, date_text, visual)
     except compose.ComposeError as exc:
@@ -3423,7 +3492,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         image_data_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
         model=f"ten-cover-full:{req.mode}" + ("-asis" if has_asis else ""),
-        visual_left=visual,
+        visual_left=(visual[0] if isinstance(visual, CoverVisuals) else visual),
         visual_right="",
         left_is_ai=is_ai,
         right_is_ai=False,

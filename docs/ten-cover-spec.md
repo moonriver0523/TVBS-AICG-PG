@@ -31,6 +31,17 @@
 - 沒分且超過 7 字：對切兩行。
 - **只切不改字**：分行接回去必須等於原標題去掉分隔符。
 
+## 具名真人肖像（2026-09-07 使用者回報：梅爾茨被畫成背影）
+
+- 根因：這條線從沒接 `apply_portrait_to_image_request`，且補畫面描述的 prompt 明文禁止具名真人的臉。
+- 現在 `COVER_VISUAL_DERIVE_SYSTEM` 比照 YT 封面：標題主角是具名真人就描述成正面肖像鏡頭，並回
+  `portrait_subjects_left/right`（＋`_en` 英文維基名，例：梅爾茨 → Friedrich Merz；中文名單獨查不到）。
+- `resolve_cover_visuals` 回 `CoverVisuals`（tuple 子類別，多帶 `.subjects`／`.english`），**描述有填也照打
+  一次文字模型**——不打就沒有名單，具名真人一律背影。附圖格（asis）不打。
+- 三條生圖路徑（雙切每格 `_cover_panel_image`、滿版 `_cover_full_image`、AI 整張 `_cover_ai`）都走
+  `_cover_apply_portraits`：肖像規則＋維基參考照 → 附圖用途規則，與其他版型同一套（查不到照舊背影）。
+- 本機 native 模式（`IMAGE_BACKEND=native` + gpt）送不出參考圖，會走 no_reference；正式站 OpenRouter 才會畫臉。
+
 ## 兩個獨立版型：滿版／雙切（2026-09-07 使用者裁決）
 
 - `ten_cover`＝**十點不一樣（雙切）**：左右兩格各一個標題、各一個附圖位（下節）。`layout="split"`。

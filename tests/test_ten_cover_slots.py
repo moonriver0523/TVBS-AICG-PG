@@ -45,7 +45,7 @@ class SlotTests(unittest.TestCase):
     def _post(self, body, panel_colour=GREEN, visuals=("左景", "右景")):
         calls = []
 
-        def fake_panel(visual, provider, references=None):
+        def fake_panel(visual, provider, references=None, *args):
             calls.append(visual)
             return _png_bytes(colour=panel_colour)
 

@@ -51,7 +51,7 @@ class FullEndpointTests(unittest.TestCase):
     def _post(self, body):
         calls = []
 
-        def fake_full(visual, provider, references=None):
+        def fake_full(visual, provider, references=None, *args):
             calls.append(visual)
             return _png_bytes(size=(1600, 900), colour=GREEN)
 
@@ -99,11 +99,13 @@ class FullEndpointTests(unittest.TestCase):
         w, h = img.size
         self.assertEqual(img.getpixel((w // 2, round(h * 0.30))), GREEN)
 
-    def test_full_uses_supplied_visual_without_text_model(self):
+    def test_full_uses_supplied_visual_but_still_resolves_portraits(self):
+        # 2026-09-07：描述有填仍打一次文字模型拿肖像名單；畫面描述採使用者填的
         res, calls, resolve = self._post({"title_left": "標題", "layout": "full", "mode": "composite", "visual_left": "冰川"})
         self.assertEqual(res.status_code, 200, res.text)
         self.assertEqual(calls, ["冰川"])
-        self.assertFalse(resolve.called)
+        self.assertTrue(resolve.called)
+        self.assertEqual(res.json()["visual_left"], "冰川")
 
     def test_full_ai_mode_uses_full_template(self):
         seen = {}
