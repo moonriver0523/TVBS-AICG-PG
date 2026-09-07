@@ -31,7 +31,7 @@ BRAND_DIR = pathlib.Path(__file__).resolve().parent / "static" / "brand"
 TVBS_LOGO_WHITE = BRAND_DIR / "tvbs-logo-white.png"
 # 2026-09-07：節目／單元標籤改貼固定模板（gpt-image-2 依型錄原版重繪、透明底），
 # 程式畫的圓角矩形＋字型版本被使用者裁定不好看。模板只縮放不變形，缺檔直接報錯。
-TEN_SHOW_TAG = BRAND_DIR / "ten-show-tag.png"   # 「十點不一樣」藍色斜切標籤
+TEN_SHOW_TAG = BRAND_DIR / "ten-show-tag.png"  # 2026-09-07 換成正版樣式：藍色斜切、金「十」＋白字、NEWS NIGHT
 HOT_SEARCH_TAG = BRAND_DIR / "hot-search-tag.png"  # 「今日｜熱搜🔍」紅色三格標籤
 TEN_BOTTOM_LINE = BRAND_DIR / "ten-bottom-line.png"  # 十點封面底部：深藍帶＋發光直線（依 0901／0902 原版）
 TEN_HIGHLIGHT_STAMP = BRAND_DIR / "ten-highlight-stamp.png"  # 精華圓章：深藍圓＋藍光環＋「十點不一樣／精華」（依 0819 原版）
@@ -289,6 +289,10 @@ COVER_TITLE_MIN_SIZE_RATIO = 0.045
 COVER_TITLE_WIDTH_RATIO = 0.84       # 標題最寬佔該格寬的比例
 COVER_TITLE_LINE_GAP = 1.06          # 行距（字級倍數）
 COVER_TITLE_BOTTOM_RATIO = 0.085     # 最後一行字底離畫面底的距離
+# 滿版（單一標題，2026-09-07 使用者裁決）：比照今日熱搜，標題橫跨整個畫面寬、置中，
+# 字級起點放大；每行各自以整寬決定字級（最寬行決定，全部同字級）。
+COVER_FULL_TITLE_SIZE_RATIO = 0.15    # 每行各自撐滿寬（比照今日熱搜逐行 fit），此為字級上限
+COVER_FULL_TITLE_WIDTH_RATIO = 0.90
 COVER_TITLE_STROKE_RATIO = 0.055
 # 逐行配色：第 1 行白、第 2 行黃、第 3 行紅（紅字用白描邊，其餘深色描邊）。
 # 這張表同時是 editor_formats.COVER_AI_PROMPT_TEMPLATE 對模型描述的配色規則，改要一起改。
@@ -312,32 +316,35 @@ COVER_STAMP_TOP_RATIO = 0.67         # 圓章頂端位置（0819：底部文字�
 COVER_MAX_TITLE_LINES = 3
 
 
-# 純 prompt 版唯一的後製：把正版白色 Logo 貼在模型刻意留空的左上角。
+# 純 prompt 版的後製：把正版白色 Logo＋「十點不一樣」節目標籤貼進模型留空的標頭帶左半。
 # 位置與大小用畫布比例算，模型回什麼解析度都對得上。
-# 比例取自使用者的範例封面（1672×941）：logo 佔 x 20..345、y 10..178。
-COVER_LOGO_WIDTH_RATIO = 0.185
-COVER_LOGO_LEFT_RATIO = 0.015
-COVER_LOGO_TOP_RATIO = 0.015
+# 2026-09-07：原本 Logo 寬佔 18.5%（量自舊範例），在一成高的標頭帶裡整個爆出來壓到照片；
+# 改成跟合成版同一套幾何——以標頭帶高為準，Logo 佔帶高 70%、標籤佔 80%，垂直置中。
+COVER_AI_HEADER_RATIO = 0.10          # prompt 寫「about one tenth」，貼圖以此為準
+COVER_AI_LEFT_RATIO = 0.015
 
 
 def paste_cover_logo(image_bytes: bytes) -> bytes:
-    """在 AI 畫好的封面左上角貼上正版白色 Logo。
+    """在 AI 畫好的封面標頭帶左半貼上正版白色 Logo 與節目標籤模板。
 
-    prompt 已明令模型不准畫任何電視台標誌、並把左上角留白（見
+    prompt 已明令模型不准畫任何電視台標誌／節目名、並把標頭帶左半留白（見
     editor_formats.COVER_AI_PROMPT_TEMPLATE）。就算模型沒聽話畫了東西，
     貼上去也會蓋掉——與播出鏡面挖空框同一個原則：不靠模型自律。
     """
     with Image.open(io.BytesIO(image_bytes)) as opened:
-        canvas = opened.convert("RGB")
-        width = max(1, round(canvas.width * COVER_LOGO_WIDTH_RATIO))
-        box = (
-            round(canvas.width * COVER_LOGO_LEFT_RATIO),
-            round(canvas.height * COVER_LOGO_TOP_RATIO),
-        )
-        _paste_logo(canvas, box, width)
+        canvas = opened.convert("RGBA")
+    width, height = canvas.size
+    band_h = round(height * COVER_AI_HEADER_RATIO)
+    logo_h = max(1, round(band_h * 0.70))
+    with Image.open(TVBS_LOGO_WHITE) as logo_file:
+        logo_w = max(1, round(logo_h * logo_file.width / logo_file.height))
+    logo_x = round(width * COVER_AI_LEFT_RATIO)
+    _paste_logo(canvas, (logo_x, (band_h - logo_h) // 2), logo_w)
+    tag_h = max(1, round(band_h * 0.80))
+    _paste_template(canvas, TEN_SHOW_TAG, (logo_x + logo_w + round(width * 0.02), (band_h - tag_h) // 2), tag_h)
 
     buffer = io.BytesIO()
-    canvas.save(buffer, format="PNG")
+    canvas.convert("RGB").save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -451,15 +458,21 @@ def _draw_cover_ai_note(canvas: Image.Image, x_anchor: int, y0: int, align_right
     _draw_text(ImageDraw.Draw(canvas), ((x0 + x1) // 2, y0 + note_h // 2), COVER_AI_NOTE, font, stroke_width=0, anchor="mm")
 
 
-def _draw_cover_title(canvas: Image.Image, lines: list[str], panel_x0: int, panel_x1: int, align_right: bool) -> None:
-    """一格的標題：2–3 行由下往上堆，全部同一字級（以最寬那行決定），逐行白／黃／紅。"""
+def _draw_cover_title(
+    canvas: Image.Image, lines: list[str], panel_x0: int, panel_x1: int, align_right: bool, *, full_width: bool = False
+) -> None:
+    """一格的標題：2–3 行由下往上堆，全部同一字級（以最寬那行決定），逐行白／黃／紅。
+
+    full_width=True（滿版單一標題）：橫跨整個畫面、置中、字級起點放大，比照今日熱搜。
+    """
     width, height = COVER_CANVAS
     lines = [ln for ln in lines if ln.strip()][:COVER_MAX_TITLE_LINES]
     if not lines:
         return
     panel_w = panel_x1 - panel_x0
-    max_w = round(panel_w * COVER_TITLE_WIDTH_RATIO)
-    size = round(height * COVER_TITLE_SIZE_RATIO)
+    width_ratio = COVER_FULL_TITLE_WIDTH_RATIO if full_width else COVER_TITLE_WIDTH_RATIO
+    max_w = round(panel_w * width_ratio)
+    size = round(height * (COVER_FULL_TITLE_SIZE_RATIO if full_width else COVER_TITLE_SIZE_RATIO))
     min_size = round(height * COVER_TITLE_MIN_SIZE_RATIO)
     font = None
     while size > min_size:
@@ -470,14 +483,24 @@ def _draw_cover_title(canvas: Image.Image, lines: list[str], panel_x0: int, pane
     else:
         font = _font(min_size)
         size = min_size
+    # 滿版：逐行各自 fit 到整寬（短行放大、長行縮小），比照今日熱搜；雙切：全部同字級
+    if full_width:
+        fonts = [_fit_font(ln, max_w, size, min_size) for ln in lines]
+    else:
+        fonts = [font] * len(lines)
     stroke = max(3, round(size * COVER_TITLE_STROKE_RATIO))
-    step = round(size * COVER_TITLE_LINE_GAP)
     baseline = height - round(height * COVER_TITLE_BOTTOM_RATIO)
-    x = panel_x1 - round(panel_w * (1 - COVER_TITLE_WIDTH_RATIO) / 2) if align_right else panel_x0 + round(panel_w * (1 - COVER_TITLE_WIDTH_RATIO) / 2)
-    anchor = "rs" if align_right else "ls"
+    if full_width:
+        x, anchor = panel_x0 + panel_w // 2, "ms"
+    elif align_right:
+        x, anchor = panel_x1 - round(panel_w * (1 - COVER_TITLE_WIDTH_RATIO) / 2), "rs"
+    else:
+        x, anchor = panel_x0 + round(panel_w * (1 - COVER_TITLE_WIDTH_RATIO) / 2), "ls"
     draw = ImageDraw.Draw(canvas)
     # 由最後一行往上畫，配色照行序（第 1 行白…）
     for idx in range(len(lines) - 1, -1, -1):
+        font = fonts[idx]
+        stroke = max(3, round(font.size * COVER_TITLE_STROKE_RATIO))
         colour = COVER_TITLE_LINE_COLOURS[min(idx, len(COVER_TITLE_LINE_COLOURS) - 1)]
         is_red = colour == COVER_TITLE_LINE_COLOURS[2]
         # 陰影一層再正字，字壓在照片上才立得住
@@ -487,7 +510,8 @@ def _draw_cover_title(canvas: Image.Image, lines: list[str], panel_x0: int, pane
             stroke=COVER_TITLE_STROKE_LIGHT if is_red else COVER_TITLE_STROKE_DARK,
             stroke_width=stroke, anchor=anchor,
         )
-        baseline -= step
+        # 往上一行：用上一行（畫面上方那行）的字級算行距
+        baseline -= round((fonts[idx - 1].size if idx > 0 else font.size) * COVER_TITLE_LINE_GAP)
 
 
 def compose_ten_cover(
@@ -540,8 +564,12 @@ def compose_ten_cover(
         _draw_cover_ai_note(canvas, width - COVER_MARGIN, note_y, align_right=True)
 
     _draw_cover_bottom_line(canvas)
-    _draw_cover_title(canvas, split_cover_title(title_left), left_box[0] + COVER_MARGIN, left_box[2], align_right=False)
-    _draw_cover_title(canvas, split_cover_title(title_right), right_box[0], right_box[2] - COVER_MARGIN, align_right=True)
+    if right_image is None and not title_right.strip():
+        # 滿版單一標題：橫跨整寬、置中（2026-09-07）
+        _draw_cover_title(canvas, split_cover_title(title_left), 0, width, align_right=False, full_width=True)
+    else:
+        _draw_cover_title(canvas, split_cover_title(title_left), left_box[0] + COVER_MARGIN, left_box[2], align_right=False)
+        _draw_cover_title(canvas, split_cover_title(title_right), right_box[0], right_box[2] - COVER_MARGIN, align_right=True)
     if badge == "highlight":
         _draw_cover_highlight_stamp(canvas)
 

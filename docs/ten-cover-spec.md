@@ -9,8 +9,8 @@
   `compose.split_canvas`，斜度 `YT_SPLIT_SLANT_RATIO`）。每格各自 COVER 裁切不變形。
 - **下半壓暗**：每格自 42% 高度往下漸暗（`COVER_SHADE_*`），標題才壓得住亮照片。
 - **標頭帶**：畫面頂端 10.5% 高的深藍帶，底緣一條亮藍細線。由左至右：正版白色 Logo、
-  「十點不一樣」藍色斜切標籤（**貼模板** `static/brand/ten-show-tag.png`，gpt-image-2 依型錄原版重繪、
-  透明底，高度佔帶高 80%；2026-09-07 起不再用程式畫）、日期（白字）、ON AIR 紅色標籤（前有白點）。
+  「十點不一樣」節目標籤（**貼模板** `static/brand/ten-show-tag.png`：2026-09-07 使用者給的正版樣式——藍色斜切、
+  金色「十」＋白字「點不一樣」、下行 NEWS NIGHT，gpt-image-2 重繪、透明底，高度佔帶高 80%；不再用程式畫）、日期（白字）、ON AIR 紅色標籤（前有白點）。
 - **精華**：標頭照樣是 ON AIR，另在畫面水平正中、頂端 67% 高處貼一枚圓章模板
   `static/brand/ten-highlight-stamp.png`（深藍圓＋藍色光環＋「十點不一樣／精華」黃字，直徑佔畫布高 23%，
   gpt-image-2 依型錄 0819 原版重繪）。2026-09-07 起取代原本標頭紅字「精華」，位置照原版跨在底部標題區上。
@@ -27,10 +27,30 @@
 - 沒分且超過 7 字：對切兩行。
 - **只切不改字**：分行接回去必須等於原標題去掉分隔符。
 
-## 原圖放置（TenCoverRequest.reference_images）
+## 兩個獨立版型：滿版／雙切（2026-09-07 使用者裁決）
+
+- `ten_cover`＝**十點不一樣（雙切）**：左右兩格各一個標題、各一個附圖位（下節）。`layout="split"`。
+- `ten_cover_full`＝**十點不一樣（滿版）**：一張圖鋪滿、**一個標題**（`title_left`，`title_right` 留空）。
+  附圖位（`asis_left`）有圖就直接鋪滿（強制合成版、零 API）；沒圖就生一張 16:9
+  （`COVER_VISUAL_FULL_PROMPT_TEMPLATE`）。標題**橫跨整寬置中**、逐行各自撐滿（比照今日熱搜，字級上限
+  `COVER_FULL_TITLE_SIZE_RATIO`=15%、寬 90%，最多 3 行，白／黃／紅）。AI 整張版用 `COVER_AI_FULL_PROMPT_TEMPLATE`
+  （單張照片、單一標題、無斜線）。`model` 記 `ten-cover-full:<mode>[-asis]`。
+- 「AI 消化標題」對滿版送 `target="ten_cover_full"`，回單一 `title`（2–3 段）。
+- 前端同一組欄位：滿版隱藏右半標題／右半附圖（`.cover-split-only`），左標籤改「標題」。
+
+## 左右附圖位（TenCoverRequest.asis_left／asis_right，2026-09-07，雙切）
+
+- 使用者裁決：左右格各自一個上傳位（data URL），才不會分不清哪張是左、哪張是右。
+- **有圖的格直接上版，沒圖的格生底圖**：左有右無＝只生右格（`model` 記 `-asisL`／`-asisR`／`-asisLR`），
+  `left_is_ai`／`right_is_ai` 反映哪格是生的。只有一格有圖時**不做全版**。
+- 兩格都有圖：零 API。一格有圖：有圖那格的畫面描述用標題佔位，只有要生的那格留空時才打一次文字模型補。
+- 任一附圖位有圖就強制合成版（`mode` 改 `composite`），真照不進生圖模型。
+- 前端（index.html `coverAsisLeft*`／`coverAsisRight*`）在十點版型下，通用「附參考圖」清單不再提供「原圖放置」用途。
+
+## 舊路徑：原圖放置（TenCoverRequest.reference_images，附圖位都空時才生效）
 
 - 用途 `asis` 依上傳順序：**1 張＝整版鋪滿**（不切格、不生另一格，兩標題壓左下／右下）、
-  2 張＝左格＋右格；超過 2 張只取前 2 張並記 log。
+  2 張＝左格＋右格；超過 2 張只取前 2 張並記 log。舊呼叫端相容用，新前端不會走到。
 - 有任何 asis 一律強制合成版（`mode` 改 `composite`），真照不進生圖模型；回應 `mode`
   會反映實際採用的模式，`left_is_ai`／`right_is_ai` 說明哪格是 AI 底圖。
 - 有 asis（1 張或 2 張）都不打文字模型補畫面描述，一次 API 都不打。
@@ -52,3 +72,9 @@ prompt 的版面描述已同步成斜切全幅＋薄標頭帶＋白／黃／紅�
 （system prompt 接 `CONTENT_FIDELITY_RULES`）出十點兩標題（各 2–3 段，空格分行）或 YT 單標題
 （兩段）→ 回填標題欄位，**不接生圖**，編輯看過再自己按「生成」（2026-09-06 使用者裁決）。
 裁切到欄位上限（40／60 字）；模型失敗回 502。每次多一次文字模型呼叫。
+
+## AI 整張版的後貼（2026-09-07）
+
+純 prompt 版現在也由 `compose.paste_cover_logo` 貼 Logo＋節目標籤：prompt 要求模型把標頭帶**左半整個留空**、
+不得寫節目名；貼圖幾何與合成版一致（以帶高 `COVER_AI_HEADER_RATIO`=10% 為準，Logo 佔 70%、標籤 80%，垂直置中）。
+舊版 Logo 寬佔畫面 18.5%（量自 2026-09-03 的舊範例），在一成高的標頭帶裡整個爆出來壓到照片，已廢除。

@@ -94,6 +94,12 @@
             border-bottom: 2px solid var(--accent);
         }
         /* 記者／編輯：整組紅（選中實心紅底白字，未選紅字） */
+        /* 2026-09-07 使用者回報：深色底上未選的按鈕看不出是按鈕。
+           一律補上「與選中色同色」的細邊框，底維持深色；選中態改成透明邊框，尺寸不跳。 */
+        [data-role], [data-density], .tone-btn { border: 1px solid transparent; }
+        [data-role]:not(.role-active) { border-color: var(--accent); }
+        [data-density]:not(.density-active) { border-color: var(--accent); }
+        .tone-btn:not(.tone-active) { border-color: #4059ad; }
         .role-btn { color: #ef6a63; }
         .role-btn:hover { color: #ff8f89; }
         .role-active {
@@ -327,7 +333,7 @@
                         <span id="newsCounter" class="text-[9px] font-mono text-slate-500">0 字</span>
                     </div>
                     <textarea id="aiInput" oninput="updateNewsCounter()"
-                           class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 input-focus-ring h-[88px] min-h-[72px] resize-y"
+                           class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 input-focus-ring h-[132px] min-h-[96px] resize-y"
                            placeholder="貼上新聞文字…"></textarea>
 
                     <!-- ① 指令拆欄：專用高信賴度通道；在文章內夾指令的舊習慣仍然有效 -->
@@ -368,15 +374,26 @@
 
                     <div id="coverInputs" class="hidden mt-3 mb-2 flex flex-col gap-2">
                         <div>
-                            <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">左半標題</label>
+                            <label id="coverTitleLeftLabel" class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">左半標題</label>
                             <input id="coverTitleLeft" type="text" maxlength="40"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                    placeholder="政府明年勞保撥補上看1300億" />
                             <input id="coverVisualLeft" type="text" maxlength="500"
                                    class="w-full mt-1 bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-300 input-focus-ring"
                                    placeholder="左半畫面描述（選填）——留空由 AI 依標題自動產生" />
+                            <div class="mt-1 flex items-center gap-2">
+                                <button type="button" id="coverAsisLeftBtn" onclick="document.getElementById('coverAsisLeftInput').click()"
+                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">＋ 左半附圖（選填）</button>
+                                <input id="coverAsisLeftInput" type="file" accept="image/*" class="hidden" onchange="handleCoverAsisSelected('left', this)" />
+                                <div id="coverAsisLeftPreview" class="hidden items-center gap-2">
+                                    <img id="coverAsisLeftImg" class="w-10 h-10 object-cover rounded border border-slate-700" alt="" />
+                                    <span id="coverAsisLeftName" class="text-[10px] text-slate-400 truncate max-w-[140px]"></span>
+                                    <button type="button" onclick="clearCoverAsis('left')" class="text-[10px] font-black text-slate-500 hover:text-red-400 px-1">✕</button>
+                                </div>
+                                <span id="coverAsisLeftHint" class="text-[9px] text-slate-600">沒圖＝這格由 AI 生底圖</span>
+                            </div>
                         </div>
-                        <div>
+                        <div class="cover-split-only">
                             <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">右半標題</label>
                             <input id="coverTitleRight" type="text" maxlength="40"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
@@ -384,6 +401,17 @@
                             <input id="coverVisualRight" type="text" maxlength="500"
                                    class="w-full mt-1 bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-300 input-focus-ring"
                                    placeholder="右半畫面描述（選填）——留空由 AI 依標題自動產生" />
+                            <div class="mt-1 flex items-center gap-2">
+                                <button type="button" onclick="document.getElementById('coverAsisRightInput').click()"
+                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">＋ 右半附圖（選填）</button>
+                                <input id="coverAsisRightInput" type="file" accept="image/*" class="hidden" onchange="handleCoverAsisSelected('right', this)" />
+                                <div id="coverAsisRightPreview" class="hidden items-center gap-2">
+                                    <img id="coverAsisRightImg" class="w-10 h-10 object-cover rounded border border-slate-700" alt="" />
+                                    <span id="coverAsisRightName" class="text-[10px] text-slate-400 truncate max-w-[140px]"></span>
+                                    <button type="button" onclick="clearCoverAsis('right')" class="text-[10px] font-black text-slate-500 hover:text-red-400 px-1">✕</button>
+                                </div>
+                                <span id="coverAsisRightHint" class="text-[9px] text-slate-600">沒圖＝這格由 AI 生底圖</span>
+                            </div>
                         </div>
                         <div class="flex flex-col gap-1">
                             <textarea id="coverNewsText" rows="3" maxlength="20000"
@@ -406,7 +434,7 @@
                             <input id="coverAiTitle" type="checkbox" class="accent-red-600" checked />標題由 AI 生成
                             <span class="text-[9px] font-normal text-slate-500">（關閉＝程式壓字，零錯字）</span>
                         </label>
-                        <p class="text-[9px] text-slate-600 leading-relaxed">畫面描述<span class="text-amber-500/90">選填</span>：留空時由 AI 讀標題自動補，生成後會填回欄位讓你微調重生。標題用空白分行（最多 3 行，白／黃／紅逐行變色）。附圖選「<span class="text-amber-500/90">原圖放置</span>」：1 張＝整版鋪滿、2 張＝左格＋右格，直接上版不生圖，並自動改程式壓字；其他用途當生圖參考。Logo 一律由程式貼正版檔。</p>
+                        <p class="text-[9px] text-slate-600 leading-relaxed">畫面描述<span class="text-amber-500/90">選填</span>：留空時由 AI 讀標題自動補，生成後會填回欄位讓你微調重生。標題用空白分行（最多 3 行，白／黃／紅逐行變色）。左右各有自己的<span class="text-amber-500/90">附圖位</span>：有圖的那格直接上版（不生圖、自動改程式壓字），沒圖的那格由 AI 依標題生底圖，左有右無就只生右格。上方「附參考圖」的實景／肖像／地圖用途仍當生圖參考。Logo 與節目標籤一律由程式貼正版檔。</p>
                     </div>
 
                     <!-- YT 直播封面（國內外新聞／整點兩版型共用）：一句標題（半形空格分段）＋副標或整點時間＋日期；
@@ -463,7 +491,7 @@
                         <div class="flex bg-black/40 p-1 rounded-lg">
                             <button data-density="verbatim" onclick="switchDigestDensity('verbatim')"
                                     title="使用者貼的內文一字不改，AI 只做版面設計"
-                                    class="flex-1 px-1 py-1.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">不消化</button>
+                                    class="flex-1 px-1 py-1.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">不改字</button>
                             <button data-density="simplified" onclick="switchDigestDensity('simplified')"
                                     title="濃縮成 1–3 個重點，單一視覺焦點"
                                     class="density-active flex-1 px-1 py-1.5 rounded-md text-[10px] font-black transition-all">字少</button>
@@ -475,13 +503,13 @@
 
                     <div class="flex flex-wrap items-center gap-1.5 mb-3">
                         <div class="flex bg-black/40 p-1 rounded-lg">
-                            <button id="p1-engine-gpt" onclick="switchEngine('gpt')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all bg-blue-600 text-white">GPT</button>
-                            <button id="p1-engine-gemini" onclick="switchEngine('gemini')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all text-slate-500 hover:text-white">Gemini</button>
+                            <button id="p1-engine-gpt" onclick="switchEngine('gpt')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-blue-600 bg-blue-600 text-white">GPT</button>
+                            <button id="p1-engine-gemini" onclick="switchEngine('gemini')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-blue-600 text-slate-400 hover:text-white">Gemini</button>
                         </div>
                         <!-- 第一頁刻意不放 1K／2K：預設引擎是 GPT，而 GPT 固定 1280×720
                              忽略這個設定，擺著只會讓人以為按了有用。第二／三頁保留。 -->
-                        <button id="p1-btnSafeFrame" onclick="toggleSafeFrame()" title="開啟後滿版生成，後端再置入安全框" class="px-2.5 py-1 rounded text-[9px] font-black transition-all bg-emerald-600 text-white">安全框 ON</button>
-                        <button id="p1-btnStamp" onclick="toggleStamp()" title="最後一行加 <蓋章> 結論條；指令欄若寫到蓋章，以指令欄為準" class="px-2.5 py-1 rounded text-[9px] font-black transition-all bg-amber-600 text-white">蓋章 ON</button>
+                        <button id="p1-btnSafeFrame" onclick="toggleSafeFrame()" title="開啟後滿版生成，後端再置入安全框" class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-emerald-600 bg-emerald-600 text-white">安全框 ON</button>
+                        <button id="p1-btnStamp" onclick="toggleStamp()" title="最後一行加 <蓋章> 結論條；指令欄若寫到蓋章，以指令欄為準" class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-amber-600 text-slate-400 hover:text-white">蓋章 OFF</button>
                     </div>
 
                     <button id="aiBtn" onclick="handleOneClickGenerate()"
@@ -728,15 +756,15 @@
                 <div class="flex items-center gap-2">
                     <!-- Gemini / GPT 語法切換 -->
                     <div class="flex bg-black/40 p-1 rounded-lg">
-                        <button id="engine-gpt" onclick="switchEngine('gpt', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all bg-blue-600 text-white">GPT</button>
-                        <button id="engine-gemini" onclick="switchEngine('gemini', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all text-slate-500 hover:text-white">Gemini</button>
+                        <button id="engine-gpt" onclick="switchEngine('gpt', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all border border-blue-600 bg-blue-600 text-white">GPT</button>
+                        <button id="engine-gemini" onclick="switchEngine('gemini', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all border border-blue-600 text-slate-400 hover:text-white">Gemini</button>
                     </div>
                     <!-- Gemini 解析度切換（GPT 固定 1280×720，此選項僅對 Gemini 生效） -->
                     <div id="sizeToggle" class="flex bg-black/40 p-1 rounded-lg">
-                        <button id="size-1K" onclick="switchImageSize('1K', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all bg-blue-600 text-white">1K</button>
-                        <button id="size-2K" onclick="switchImageSize('2K', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all text-slate-500 hover:text-white">2K</button>
+                        <button id="size-1K" onclick="switchImageSize('1K', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all border border-blue-600 bg-blue-600 text-white">1K</button>
+                        <button id="size-2K" onclick="switchImageSize('2K', this)" class="px-3 py-1 rounded text-[9px] font-black transition-all border border-blue-600 text-slate-400 hover:text-white">2K</button>
                     </div>
-                        <button id="btnSafeFrame" onclick="toggleSafeFrame()" title="開啟後：模型畫滿版，後端再把整張圖精準置入 TVBS 安全框並補背景（輸出 1920×1080）" class="ml-2 px-3 py-1 rounded text-[9px] font-black transition-all text-slate-500 hover:text-white">安全框 OFF</button>
+                        <button id="btnSafeFrame" onclick="toggleSafeFrame()" title="開啟後：模型畫滿版，後端再把整張圖精準置入 TVBS 安全框並補背景（輸出 1920×1080）" class="ml-2 px-3 py-1 rounded text-[9px] font-black transition-all border border-emerald-600 text-slate-400 hover:text-white">安全框 OFF</button>
                     <span id="aspectBadge" class="text-[9px] font-mono text-slate-500 bg-slate-800 px-2 py-0.5 rounded">16:9 / 1K</span>
                 </div>
             </div>

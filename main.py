@@ -1128,7 +1128,7 @@ def build_digest_instructions(
         instructions += TONE_LIGHT_RULES
     # 編輯專屬版型（播出鏡面）。editor_formats.digest_rules 對非編輯角色一律回空字串，
     # 這是「記者不可能誤用」的第三層防呆（前兩層在前端）。
-    instructions += editor_formats.digest_rules(editor_format, role)
+    instructions += editor_formats.digest_rules(editor_format, role, stamp)
     # 沒有 asis 附圖時完全不注入，消化 prompt 逐字元不變。
     if asis_reference_count:
         instructions += USER_REFERENCE_ASIS_DIGEST_RULES
@@ -1381,6 +1381,19 @@ def strip_wrapping_quotes(variable: str) -> str:
             continue
         return inner.strip()
     return text
+
+
+_STAMP_LINE_RE = re.compile(r"^\s*[<＜]\s*蓋章\s*[>＞]")
+
+
+def drop_stamp_lines(variable: str) -> str:
+    """蓋章 OFF 的硬保險（2026-09-07）：不管消化模型有沒有聽話，<蓋章> 行一律拿掉。
+
+    使用者回報播出鏡面 OFF 仍蓋章——prompt 層已修（editor_formats 第 6 條），但 prompt
+    只是勸告，這裡做確定性的兜底，任何版型都適用。只刪以 <蓋章> 開頭的整行。
+    """
+    kept = [line for line in (variable or "").splitlines() if not _STAMP_LINE_RE.match(line)]
+    return "\n".join(kept).strip()
 
 
 def verbatim_fidelity_problem(variable: str, news_text: str) -> str:
@@ -1646,10 +1659,14 @@ def generate(req: GenerateRequest):
             # AI 未回報或回報不在清單內；指定類型時退回原值，自動判斷時留空由前端處理
             chart_type = "" if type_label == AUTO_TYPE_LABEL else type_label
 
+        variable = strip_wrapping_quotes(data.get("variable", ""))
+        if req.stamp is False and any(_STAMP_LINE_RE.match(line) for line in variable.splitlines()):
+            print("[generate] 蓋章 OFF 但消化結果仍有 <蓋章> 行，已強制移除", flush=True)
+            variable = drop_stamp_lines(variable)
         result = GenerateResponse(
             style=data.get("style", ""),
             structure=data.get("structure", ""),
-            variable=strip_wrapping_quotes(data.get("variable", "")),
+            variable=variable,
             chart_type=chart_type,
             # 只有地圖類會真的去查（resolve_map_points 自己擋掉其他類型）。
             # 查不到就是空陣列，後續一切照舊，不會有人拿到錯誤。
@@ -3194,7 +3211,9 @@ def news_image_generate(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
 
 class TenCoverRequest(BaseModel):
     title_left: str = Field(min_length=1, max_length=40)
-    title_right: str = Field(min_length=1, max_length=40)
+    # 2026-09-07：layout=full（滿版）只有一個標題，title_right 允許空；split（雙切）兩個都要
+    title_right: str = Field(default="", max_length=40)
+    layout: Literal["split", "full"] = "split"
     # 給生圖模型的視覺描述（畫什麼場景），不會出現在成品文字上。
     # 2026-09-03 起改選填：留空時由 resolve_cover_visuals 依標題請文字模型補。
     visual_left: str = Field(default="", max_length=500)
@@ -3211,6 +3230,11 @@ class TenCoverRequest(BaseModel):
     reference_images: list[UserReferenceImage] = Field(
         default_factory=list, max_length=MAX_INPUT_REFERENCES
     )
+    # 2026-09-07 使用者裁決：左右格各自一個上傳位，才不會分不清哪張是左、哪張是右。
+    # data URL；有圖的那格直接上版，沒圖的那格照舊生底圖（左有右無＝只生右格）。
+    # 兩欄都空時才退回上面 reference_images 的 asis 順序規則（舊呼叫端相容）。
+    asis_left: str = Field(default="", max_length=2_800_000)
+    asis_right: str = Field(default="", max_length=2_800_000)
 
 
 class TenCoverResponse(ImageGenerateResponse):
@@ -3236,6 +3260,24 @@ def ten_cover_asis_images(req: "TenCoverRequest") -> list[bytes]:
     if len(asis) > 2:
         print(f"[cover] 原圖放置附圖 {len(asis)} 張，十點封面只有兩格，只取前 2 張", flush=True)
     return raws
+
+
+def ten_cover_slot_images(req: "TenCoverRequest") -> tuple[bytes | None, bytes | None]:
+    """左右上傳位的原始 bytes；沒圖的位子是 None。"""
+    out: list[bytes | None] = []
+    for data_url in (req.asis_left, req.asis_right):
+        if not data_url.strip():
+            out.append(None)
+            continue
+        _, _, encoded = _split_data_url(data_url)
+        if not encoded:
+            raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
+        out.append(base64.b64decode(encoded))
+    return out[0], out[1]
+
+
+def ten_cover_uses_slots(req: "TenCoverRequest") -> bool:
+    return bool(req.asis_left.strip() or req.asis_right.strip())
 
 
 def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
@@ -3302,16 +3344,24 @@ def _cover_panel_image(
 
 
 def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) -> bytes:
-    """純 prompt 版：整張封面由生圖模型畫，之後只補貼正版 Logo。"""
+    """純 prompt 版：整張封面由生圖模型畫，之後只補貼正版 Logo＋節目標籤。"""
     badge_text = compose.COVER_BADGES[req.badge][0]
-    prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE.format(
-        badge_text=badge_text,
-        date_text=date_text,
-        title_left=req.title_left.strip(),
-        title_right=req.title_right.strip(),
-        visual_left=visuals[0],
-        visual_right=visuals[1],
-    )
+    if req.layout == "full":
+        prompt = editor_formats.COVER_AI_FULL_PROMPT_TEMPLATE.format(
+            badge_text=badge_text,
+            date_text=date_text,
+            title_left=req.title_left.strip(),
+            visual_left=visuals[0],
+        )
+    else:
+        prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE.format(
+            badge_text=badge_text,
+            date_text=date_text,
+            title_left=req.title_left.strip(),
+            title_right=req.title_right.strip(),
+            visual_left=visuals[0],
+            visual_right=visuals[1],
+        )
     image_req = ImageGenerateRequest(
         prompt=prompt,
         provider=req.provider,
@@ -3327,6 +3377,40 @@ def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) ->
     return compose.paste_cover_logo(base64.b64decode(result.image_data_base64))
 
 
+def _cover_full_image(visual: str, provider: str, references: list[UserReferenceImage] | None = None) -> bytes:
+    """滿版：生一張 16:9 的無文字底圖。"""
+    image_req = ImageGenerateRequest(
+        prompt=editor_formats.COVER_VISUAL_FULL_PROMPT_TEMPLATE.format(visual=visual.strip()),
+        provider=provider,
+        aspect_ratio="16:9",
+        image_size="1K",
+        safe_frame=False,
+        reference_images=[ref for ref in (references or []) if ref.purpose != "asis"],
+    )
+    if image_req.reference_images:
+        image_req = apply_user_references_to_image_request(image_req)
+    result = generate_image_raw(image_req)
+    return base64.b64decode(result.image_data_base64)
+
+
+def _cover_full_composite(req: TenCoverRequest, date_text: str, visual: str) -> tuple[bytes, bool]:
+    """滿版合成：附圖（asis_left）有就直接鋪滿，沒有就生一張 16:9；單一標題壓左下。回 (PNG, 是否 AI 底圖)。"""
+    slot, _ = ten_cover_slot_images(req)
+    if slot is None:
+        legacy = ten_cover_asis_images(req)
+        slot = legacy[0] if legacy else None
+    is_ai = slot is None
+    if is_ai:
+        references = [ref for ref in req.reference_images if ref.purpose != "asis"]
+        slot = _cover_full_image(visual, req.provider, references)
+    cover = compose.compose_ten_cover(
+        slot, None,
+        title_left=req.title_left.strip(), title_right="",
+        date_text=date_text, badge=req.badge, left_is_ai=is_ai, right_is_ai=False,
+    )
+    return cover, is_ai
+
+
 def _cover_composite(
     req: TenCoverRequest, date_text: str, visuals: tuple[str, str]
 ) -> tuple[bytes, tuple[bool, bool]]:
@@ -3334,17 +3418,22 @@ def _cover_composite(
 
     回 (PNG, (左格是否 AI, 右格是否 AI))。
     """
-    asis = ten_cover_asis_images(req)
     references = [ref for ref in req.reference_images if ref.purpose != "asis"]
-    if len(asis) == 1:
-        # 單張原圖＝全版（不切左右格、不生另一格），兩個標題壓在同一張圖的左下與右下
-        cover = compose.compose_ten_cover(
-            asis[0], None,
-            title_left=req.title_left.strip(), title_right=req.title_right.strip(),
-            date_text=date_text, badge=req.badge, left_is_ai=False, right_is_ai=False,
-        )
-        return cover, (False, False)
-    panels: list[bytes | None] = [asis[0] if len(asis) >= 1 else None, asis[1] if len(asis) >= 2 else None]
+    if ten_cover_uses_slots(req):
+        # 左右上傳位（2026-09-07）：有圖的格直接上版，沒圖的格生底圖；只有一格有圖也不做全版
+        slot_left, slot_right = ten_cover_slot_images(req)
+        panels: list[bytes | None] = [slot_left, slot_right]
+    else:
+        asis = ten_cover_asis_images(req)
+        if len(asis) == 1:
+            # 舊路徑（不分左右的附圖）：單張原圖＝全版，兩個標題壓在同一張圖的左下與右下
+            cover = compose.compose_ten_cover(
+                asis[0], None,
+                title_left=req.title_left.strip(), title_right=req.title_right.strip(),
+                date_text=date_text, badge=req.badge, left_is_ai=False, right_is_ai=False,
+            )
+            return cover, (False, False)
+        panels = [asis[0] if len(asis) >= 1 else None, asis[1] if len(asis) >= 2 else None]
     todo = [i for i, panel in enumerate(panels) if panel is None]
     # 要生的圖平行生。序列跑會讓等待時間直接加倍——單張本來就要 30–90 秒。
     if todo:
@@ -3355,7 +3444,7 @@ def _cover_composite(
             }
             for i, future in futures.items():
                 panels[i] = future.result()
-    left_is_ai, right_is_ai = len(asis) < 1, len(asis) < 2
+    left_is_ai, right_is_ai = 0 in todo, 1 in todo
     cover = compose.compose_ten_cover(
         panels[0],
         panels[1],
@@ -3371,7 +3460,7 @@ def _cover_composite(
 
 class CoverTitleDigestRequest(BaseModel):
     news_text: str = Field(min_length=10, max_length=20_000)
-    target: Literal["ten_cover", "yt_cover"] = "ten_cover"
+    target: Literal["ten_cover", "ten_cover_full", "yt_cover"] = "ten_cover"
 
 
 class CoverTitleDigestResponse(BaseModel):
@@ -3396,9 +3485,13 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
     2026-09-06 使用者裁決：封面類版型也要能自動消化，但回填後停下來讓編輯看過。
     """
     ten = req.target == "ten_cover"
-    system_prompt = (
-        editor_formats.COVER_TITLE_DIGEST_SYSTEM_TEN if ten else editor_formats.COVER_TITLE_DIGEST_SYSTEM_YT
-    ) + CONTENT_FIDELITY_RULES
+    if ten:
+        base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_TEN
+    elif req.target == "ten_cover_full":
+        base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_TEN_FULL
+    else:
+        base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_YT
+    system_prompt = base_prompt + CONTENT_FIDELITY_RULES
     schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_TEN if ten else editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT
     model = (
         os.getenv("DIGEST_MODEL")
@@ -3433,6 +3526,49 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
     return CoverTitleDigestResponse(title=title)
 
 
+def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse:
+    """十點不一樣（滿版）：一張圖、一個標題。附圖有就放、沒有就生一張。"""
+    has_asis = bool(req.asis_left.strip()) or any(ref.purpose == "asis" for ref in req.reference_images)
+    if has_asis and req.mode == editor_formats.COVER_MODE_AI:
+        print("[cover] 滿版附圖 → 改合成版（程式壓字）", flush=True)
+        req = req.model_copy(update={"mode": editor_formats.COVER_MODE_COMPOSITE})
+    if has_asis:
+        visual = req.visual_left.strip() or req.title_left.strip()
+    elif req.visual_left.strip():
+        visual = req.visual_left.strip()
+    else:
+        # 借雙切的補描述流程：右欄填成跟左欄一樣，只取左邊；一次文字模型
+        visual, _ = resolve_cover_visuals(req.model_copy(update={"title_right": req.title_left, "visual_right": ""}))
+    is_ai = True
+    try:
+        if req.mode == editor_formats.COVER_MODE_AI:
+            cover = _cover_ai(req, date_text, (visual, visual))
+        else:
+            cover, is_ai = _cover_full_composite(req, date_text, visual)
+    except compose.ComposeError as exc:
+        print(f"[compose] 封面失敗：{exc}", flush=True)
+        raise HTTPException(status_code=500, detail=f"封面生成失敗：{exc}") from exc
+    request_log.log_generation(
+        request_id=request_log.new_request_id(),
+        source="editor-cover-full",
+        news_text=req.title_left,
+        variable=req.title_left,
+        prompt=f"FULL: {visual}",
+        role="編輯",
+        provider=req.provider,
+    )
+    return TenCoverResponse(
+        image_data_base64=base64.b64encode(cover).decode("ascii"),
+        mime_type="image/png",
+        model=f"ten-cover-full:{req.mode}" + ("-asis" if has_asis else ""),
+        visual_left=visual,
+        visual_right="",
+        left_is_ai=is_ai,
+        right_is_ai=False,
+        mode=req.mode,
+    )
+
+
 @app.post(
     "/api/editor/cover",
     response_model=TenCoverResponse,
@@ -3445,16 +3581,37 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
             detail=f"未知的標籤：{req.badge}（可用：{list(compose.COVER_BADGES)}）",
         )
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
+    if req.layout == "full":
+        return _editor_cover_full(req, date_text)
+    if not req.title_right.strip():
+        raise HTTPException(status_code=400, detail="雙切版型左右標題都要填")
 
-    asis_count = sum(1 for ref in req.reference_images if ref.purpose == "asis")
+    slots = (bool(req.asis_left.strip()), bool(req.asis_right.strip()))
+    if any(slots):
+        asis_count = sum(slots)
+        asis_label = "-asis" + ("L" if slots[0] else "") + ("R" if slots[1] else "")
+    else:
+        asis_count = sum(1 for ref in req.reference_images if ref.purpose == "asis")
+        asis_label = f"-asis{min(asis_count, 2)}" if asis_count else ""
     if asis_count and req.mode == editor_formats.COVER_MODE_AI:
         # 原圖放置＝真實新聞照直接上版，不交給生圖模型重畫；整張 AI 版做不到「原圖」，
         # 所以有 asis 一律走合成版（與 YT 直播封面多圖分切同一原則）。
         print(f"[cover] 原圖放置附圖 {asis_count} 張 → 改合成版（程式壓字）", flush=True)
         req = req.model_copy(update={"mode": editor_formats.COVER_MODE_COMPOSITE})
 
-    # 有原圖放置（1 張全版或 2 張雙格）就不需要畫面描述，一次文字模型都不打
-    if asis_count >= 1:
+    if all(slots):
+        # 兩格都有圖：什麼都不生，一次文字模型都不打
+        visuals = (req.visual_left.strip() or req.title_left.strip(), req.visual_right.strip() or req.title_right.strip())
+    elif any(slots):
+        # 有圖的格不生圖，畫面描述用標題佔位；只有要生的那格留空時才打一次文字模型補
+        prefill = {}
+        if slots[0] and not req.visual_left.strip():
+            prefill["visual_left"] = req.title_left.strip()
+        if slots[1] and not req.visual_right.strip():
+            prefill["visual_right"] = req.title_right.strip()
+        visuals = resolve_cover_visuals(req.model_copy(update=prefill) if prefill else req)
+    elif asis_count >= 1:
+        # 舊路徑：有原圖放置（1 張全版或 2 張雙格）就不需要畫面描述，一次文字模型都不打
         visuals = (req.visual_left.strip() or req.title_left.strip(), req.visual_right.strip() or req.title_right.strip())
     else:
         visuals = resolve_cover_visuals(req)
@@ -3480,7 +3637,7 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     return TenCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
-        model=f"ten-cover:{req.mode}" + (f"-asis{min(asis_count, 2)}" if asis_count else ""),
+        model=f"ten-cover:{req.mode}{asis_label}",
         visual_left=visuals[0],
         visual_right=visuals[1],
         left_is_ai=panel_is_ai[0],
