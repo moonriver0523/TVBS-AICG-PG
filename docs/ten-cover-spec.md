@@ -42,6 +42,21 @@
   `_cover_apply_portraits`：肖像規則＋維基參考照 → 附圖用途規則，與其他版型同一套（查不到照舊背影）。
 - 本機 native 模式（`IMAGE_BACKEND=native` + gpt）送不出參考圖，會走 no_reference；正式站 OpenRouter 才會畫臉。
 
+## 合成版底圖的無文字覆寫（2026-09-07）
+
+- 合成版的兩條生圖路徑（雙切每格 1:1 `_cover_panel_image`、滿版 16:9 `_cover_full_image`）產的是
+  **無文字底圖**，文字全部由 Pillow 疊。但肖像規則與附圖用途規則都寫著「示意圖標籤要保持可見」，
+  不壓掉模型會自己在底圖上畫一個「示意圖」字樣，程式疊的字蓋不掉。
+- 所以 `_cover_apply_portraits(..., text_free=True)` 在肖像規則＋附圖用途規則**之後**追加
+  `editor_formats.YT_COVER_TEXT_FREE_OVERRIDE`——與 YT 直播封面 `_yt_cover_background` 同一段，
+  不另開一套措辭。AI 整張版（`_cover_ai`）就是要模型畫字，**不加**。
+
+### 被剔除者禁畫（2026-09-08 審查必修）
+`keep_subjects_with_photos` 回第 4 個元素＝查不到參考照而被剔除的人；`CoverVisuals.excluded`／`YtCoverPlan.excluded`
+帶到生圖端，`_cover_apply_portraits`（十點）與 YT 兩條生圖在肖像規則之後接 `excluded_people_block`
+（「這些人沒有可用參考照，不得畫出可辨識的臉；畫面描述提到就背影／剪影或不入鏡」）。否則剩一人時走的
+單人肖像規則沒有「其他人不畫臉」條款，被剔除的那位會被模型憑空捏臉。
+
 ## 兩個獨立版型：滿版／雙切（2026-09-07 使用者裁決）
 
 - `ten_cover`＝**十點不一樣（雙切）**：左右兩格各一個標題、各一個附圖位（下節）。`layout="split"`。
@@ -50,8 +65,28 @@
   （`COVER_VISUAL_FULL_PROMPT_TEMPLATE`）。標題**橫跨整寬置中**、逐行各自撐滿（比照今日熱搜，字級上限
   `COVER_FULL_TITLE_SIZE_RATIO`=15%、寬 90%，最多 3 行，白／黃／紅）。AI 整張版用 `COVER_AI_FULL_PROMPT_TEMPLATE`
   （單張照片、單一標題、無斜線）。`model` 記 `ten-cover-full:<mode>[-asis]`。
-- 「AI 消化標題」對滿版送 `target="ten_cover_full"`，回單一 `title`（2–3 段）。
+- 「AI 消化標題」對滿版送 `target="ten_cover_full"`，回單一 `title`（一律 3 段，白／黃／紅；2026-09-08 起）。
 - 前端同一組欄位：滿版隱藏右半標題／右半附圖（`.cover-split-only`），左標籤改「標題」。
+
+### 滿版合成版的「只改文字」（2026-09-08）
+
+合成版的成品＝一張底圖＋Pillow 壓上去的標題／日期／Logo，所以**改標題不必重生底圖**：
+
+- **回應**帶 `background_image_base64`／`background_mime_type`／`background_is_ai`＝壓字前的底圖
+  （`_cover_full_composite` 裡的 `slot`）。只有 `layout=full` ＋ `mode=composite` 會帶，AI 整張版留空。
+  刻意**不塞進 `source_image_base64`**——那格的語意是「餵回 `/api/images/refine` 的原圖」，合成版
+  一律留空（`tests/test_cover_refine.py` 的紅線 1）。混用會讓前端的「修改」鈕誤以為合成版能 refine。
+- **請求**把那三個欄位原樣送回來（`mode=composite`），後端跳過生底圖與文字模型（`recomposite` 旗標
+  併進 `has_asis or ai_overlay` 那條），直接走 `compose.compose_ten_cover`，`left_is_ai` 沿用
+  `background_is_ai`（決定要不要壓「AI示意圖」）。一次 API 都不打，`model` 記
+  `ten-cover-full:recomposite`（比照 YT 的 `yt-cover:recomposite`）。同時掛著附圖時**以底圖為準**：
+  使用者按的是「只改文字」。
+- **雙切合成版不支援**：成品是左右兩張底圖拼的，拼完分不回去。`layout=split` ＋ `mode=composite`
+  ＋ 帶 `background_image_base64` 回 **400**（不默默忽略——那會把一個零 API 的請求變成重生兩張底圖）。
+  雙切 AI 版的後貼路徑（`ten-cover:overlay`）不受影響。
+- 前端：`state.tenCoverBackground` 存底圖（不共用 `refineSource`），`#coverRecomposeBtn`
+  →`handleTenCoverGenerate(true)`；切版型就清掉並把按鈕收起來。測試在
+  `tests/test_cover_full_recompose.py`。
 
 ## 左右附圖位（TenCoverRequest.asis_left／asis_right，2026-09-07，雙切）
 
@@ -76,15 +111,37 @@
 prompt 的版面描述已同步成斜切全幅＋薄標頭帶＋白／黃／紅逐行；「十點不一樣」是帶內小標籤
 而非大標題。Logo 仍由程式後貼（`paste_cover_logo`）。
 
+**「AI示意圖」小標也改由程式壓（2026-09-07 裁決）**：兩個 AI 模板不再要模型畫這個標籤，
+改成明文「不要畫任何示意圖標籤、把外側角落留乾淨，之後由程式加」。根因是只要使用者附了
+實景參考圖，`apply_user_references_to_image_request` 就會追加「Do NOT render any 示意圖
+label」——位置在後、又是明文 OVERRIDE，模型照做，標籤整個消失。做法比照 YT ai-title：
+文字類固定元素一律後貼，標籤在不在不再取決於模型聽不聽話。
+`compose.paste_cover_ai_note(image_bytes, split=...)` 在 `paste_cover_logo` 之後壓：
+雙切左右格外側各一枚、滿版只有左上一枚，位置同合成版（標頭帶下方 2.5% 畫面高）。
+幾何一律以**模型回來那張圖的解析度**為準——AI 版不是固定 1920×1080。
+
 ## 測試
 
 `tests/test_ten_cover.py`：分行規則、斜切像素、標頭與底部飾帶、AI示意圖只印 AI 格、
 三色標題、端點（雙 asis 零 API、單 asis 左格、無 asis 維持 ai 模式）、prompt 同步。
 
+2026-09-07 的路徑對齊另有七支：`test_cover_text_free.py`（合成版底圖的無文字覆寫）、
+`test_cover_aspect_guard.py`（五條線的成圖比例驗證）、`test_cover_photo_availability.py`
+（查不到參考照的人先排除）、`test_cover_request_log.py`（落檔欄位與失敗記錄）、
+`test_cover_ai_note.py`（AI示意圖小標由程式壓）、`test_cover_ai_title_lines.py`
+（AI 版標題分行）、`test_cover_refine.py`（AI 版追加修改）；refine 規則在
+`tests/test_refine_rules.py`。
+
+**已知缺口**：兩個 AI 模板的「不要畫示意圖標籤」寫在 HARD CONSTRAINTS，而肖像規則
+（`PORTRAIT_*_RULES`，內含「示意圖標籤要保持可見」）由 `_cover_apply_portraits` 加在
+**後面**。依 repo 的「位置＋明文 OVERRIDE」慣例，有具名真人時後到的那段可能贏——模型
+自己畫一個標籤、程式再壓一個。YT ai-title（`YT_COVER_FULL_PROMPT_*`）有完全相同的
+狀態，這裡刻意維持一致，未一併加尾端 override。
+
 ## AI 消化標題（/api/editor/cover-titles）
 
 十點與 YT 封面欄位各有「新聞內文」textarea＋「AI 消化標題」鈕。貼內文 → 文字模型
-（system prompt 接 `CONTENT_FIDELITY_RULES`）出十點兩標題（各 2–3 段，空格分行）或 YT 單標題
+（system prompt 接 `CONTENT_FIDELITY_RULES`）出十點兩標題（各一律 3 段，空格分行，2026-09-08 起）或 YT 單標題
 （兩段）→ 回填標題欄位，**不接生圖**，編輯看過再自己按「生成」（2026-09-06 使用者裁決）。
 裁切到欄位上限（40／60 字）；模型失敗回 502。每次多一次文字模型呼叫。
 
@@ -93,3 +150,79 @@ prompt 的版面描述已同步成斜切全幅＋薄標頭帶＋白／黃／紅�
 純 prompt 版現在也由 `compose.paste_cover_logo` 貼 Logo＋節目標籤：prompt 要求模型把標頭帶**左半整個留空**、
 不得寫節目名；貼圖幾何與合成版一致（以帶高 `COVER_AI_HEADER_RATIO`=10% 為準，Logo 佔 70%、標籤 80%，垂直置中）。
 舊版 Logo 寬佔畫面 18.5%（量自 2026-09-03 的舊範例），在一成高的標頭帶裡整個爆出來壓到照片，已廢除。
+
+## 成圖比例驗證（2026-09-07）
+
+`_cover_panel_image`（1:1）、`_cover_full_image`（16:9）、`_cover_ai`（16:9）三條線都直呼
+`generate_image_raw`，繞過 `finalize_image_result`。生成端間歇性降級（宣告支援卻回別的尺寸，
+見 `verify_output_aspect_ratio` 的說明）以前不會被發現：1:1 的格子拿到 16:9，
+`split_canvas` 會把它裁掉一半照樣合成。三條線拿到 result 後都補驗一次，降級當場 502。
+`_cover_ai` 在 `paste_cover_logo` **之前**驗，貼完 Logo 才發現不對等於白貼。
+
+## 追加修改的品牌與具名真人條款（2026-09-07）
+
+`news_prompt.build_refine_prompt` 兩條分支（一般 CG 與 YT 封面的無文字底圖）都加上
+`REFINE_REAL_WORLD_RULES`：品牌條款逐字沿用主流程抽出的 `SOURCE_BRANDS_RULE`
+（2026-09-07 起是「素材提到就可畫真實 LOGO、沒提到一律去識別化」），具名真人是精簡版
+（沒有參考照就不得新畫任何具名真人的臉、既有的臉逐像素不動、背影仍是背影）。
+理由：refine 是一次獨立的生圖呼叫，模型只看得到那支 prompt，原本只寫「不要新增事實與
+logo」，一句「背景弄熱鬧一點」就能替沒提到的店家捏一個牌子，或補一張假臉。
+
+## 參考照可用性：查不到的人先排除（2026-09-07）
+
+`main.keep_subjects_with_photos`，封面與 YT 封面共用，是主流程 `apply_photo_availability`
+在這兩條線上的等價物（它們沒有消化階段，名單是補畫面描述時一併產生的）。
+
+- `resolve_cover_visuals` 每格拿到名單後先查一次照片，查不到的人從該格名單移除。
+  不做會怎樣：`resolve_portraits` 是全有或全無，兩人裡一人查不到就整格退回不畫臉，
+  連查得到的那位也變背影。
+- 使用者上傳的肖像照（用途 `portrait`）視為對應「系統查不到的人」、依序保留幾位，
+  假設與理由同 `apply_photo_availability`。附圖清單不分左右，兩格各以同一張數計。
+- **全部都查不到時不清空名單**（刻意與主流程不同）：主流程清掉後會重新消化、
+  版面描述也不再提那個人；封面沒有第二次消化，描述仍寫著「梅爾茨站在講台前正面半身」。
+  名單一空就不注入任何肖像規則，模型會替真名捏一張臉。保留名單才會走 `no_reference`
+  （明文禁止畫臉、改背影）。
+- **已知缺口**：被移除的那位仍留在畫面描述裡，模型可能照樣把他畫進去（只是沒有名字
+  標籤、也沒有參考照）。要補得靠第二次消化，成本是多一次文字模型呼叫，暫不做。
+- 回傳的照片只用來落檔記出處；生圖端會再查一次（`apply_portrait_to_image_request`
+  沒有收現成照片的參數，查圖有快取層，重查很便宜）。
+
+## 落檔欄位（2026-09-07）
+
+`/api/editor/cover`（雙切與滿版）與 `/api/editor/yt-cover` 的 `log_generation` 補上：
+
+- `image_model`：三支生圖函式（`_cover_panel_image`／`_cover_full_image`／`_cover_ai`）
+  改回 `(bytes, 生圖模型名)`，合成版兩支再往上回傳給端點。一次 API 都不打的附圖路徑
+  記 `ten-cover:asis`／`ten-cover-full:asis`（比照 YT 的 `yt-cover:asis`）。
+- `portrait_subject`／`portrait_photo_source`：由 `cover_portrait_log_fields` 從
+  `CoverVisuals.photos` 攤平（YT 走 `YtCoverPlan.photos`）。出處**逐位對齊人名**，
+  查不到的位子記「（查無）」——只記查到的幾張，多人時事後對不出是哪一位。
+- `log_failure`：三條端點都補上，比照 `/api/images/generate`——生圖端的失敗
+  （安全過濾、比例降級、逾時）以前只會 print，事後查不到是哪一則標題觸發的。
+  記完原樣往外丟，不吞例外。
+
+## 純 AI 版的標題分行（2026-09-07）
+
+以前合成版走 `split_cover_title`、AI 版讓模型自己拆（模板寫 split ... yourself），
+同一個標題在兩種模式下斷句不一樣，使用者切模式比對時看到的是兩張不同版面的圖。
+現在兩邊共用 `compose.cover_title_lines`：使用者自己分的行優先，超寬再由
+`wrap_cover_title_lines` 防呆拆（版位寬由 `cover_title_panel_width` 給，
+滿版＝整寬、雙切＝左格安全內框扣邊界；字級推導抽成 `_cover_title_metrics`，
+與 `_draw_cover_title` 同一支）。兩個 AI 模板改收 `{title_left_lines}`／
+`{title_right_lines}`（每行一條 `Line N: …`），並明文「照給定的行印、不得重拆或重排」，
+比照 YT ai-title 的 line1／line2。
+
+## 純 AI 版的追加修改（2026-09-07）
+
+比照 YT 直播封面 ai-title 那條路，完全同一套欄位與流程：
+
+- 回應帶 `source_image_base64`／`source_mime_type`＝**後貼 Logo 前的模型原圖**。
+  把貼過 Logo 的成品餵回生圖模型，模型會把 Logo 與節目標籤一起重畫，那是播出事故
+  （與主流程「refine 送置框前原圖」同一個道理）。合成版兩個欄位留空——成品是程式用
+  Pillow 拼的，沒有可以餵回模型的原圖，前端在合成版也不開放追加修改。
+- `TenCoverRequest.background_image_base64`／`background_mime_type`：改完的模型圖送回
+  `/api/editor/cover`，`mode=ai` 時跳過生圖與補描述（一次 API 都不打），只重跑
+  `paste_cover_logo` ＋ `paste_cover_ai_note`，`model` 記 `ten-cover:overlay`。
+- 前端：`handleTenCoverGenerate` 只在 `data.mode === 'ai'` 時設 refine 源；refine 送出
+  時十點封面比照 YT（16:9、不置框、不挖洞、`text_free:false`），回來再走
+  `recomposeTenCover`。欄位取現況，所以順便改標題也會生效。
