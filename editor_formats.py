@@ -44,7 +44,7 @@ _BROADCAST_RULES_TEMPLATE = """
 BROADCAST INSERT LAYOUT ({side_zh}側留給後製) — OVERRIDES THE LAYOUT SENTENCE ABOVE WHERE THEY CONFLICT:
 1. A large rectangular area filling most of the {side_en} half of the frame, centred vertically, is reserved for a video window that is composited in after this image is made. Treat that whole half as if it were already occupied.
 2. Put NOTHING there: no text, no headline, no icon, no chart, no figure, no logo, no callout, no decorative element. Whatever you place there will be covered and lost.
-3. The layout sentence above asks for the design to be centred. FOR THIS FORMAT IT IS NOT CENTRED: write into "structure" that the headline AND every content block — every card, figure, icon and label — sit in the {opposite_en} half, stacked from top to bottom with the headline on top, entirely clear of the {side_en} half. The headline is NOT allowed to span the frame, to be centred on the frame, or to cross the vertical midline into the {side_en} half — not even its first line, not even one character.
+3. The layout sentence above asks for the design to be centred. FOR THIS FORMAT THE BODY IS NOT CENTRED: write into "structure" that the HEADLINE is the ONLY element allowed to span the full width — it runs across the top strip of the frame, above the reserved area, as ONE line (two tightly-leaded lines only if it cannot fit in one), and it must end above the reserved area: nothing of it may hang down beside or into the video window. Every OTHER content block — every card, figure, icon and label — sits in the {opposite_en} half, stacked from top to bottom under the headline, entirely clear of the {side_en} half.
 4. Keep the reserved area visually calm — plain continuous background, no busy texture, no bright focal point, no face. Say so in "structure".
 {stamp_rules}7. Each [內文小標] line is one short scannable fact. Wrap the figure or the key phrase of each line in angle brackets so it can be highlighted.
 8. Describe positions with direction words only (upper, lower, {side_en}, {opposite_en}, alongside, stacked). NEVER express any position or size as a percentage, pixel count, ratio or number of any kind.
@@ -53,10 +53,10 @@ BROADCAST INSERT LAYOUT ({side_zh}側留給後製) — OVERRIDES THE LAYOUT SENT
 
 # 第 5／6 條依蓋章開關二選一（2026-09-07 使用者回報：蓋章 OFF 在播出鏡面失效——
 # 這兩條原本無條件要求 <蓋章>，注入順序又在 STAMP_OFF_RULES 之後，把 OFF 壓掉了）。
-_BROADCAST_STAMP_ON = """5. THE CLOSING <蓋章> BANNER IS NOT FULL WIDTH IN THIS FORMAT. Every earlier rule that calls it "the lowest row of the content area" or "the lowest row of the design" refers to the content half only. Write into "structure" that the stamp banner sits inside the {opposite_en} half, directly under the last card, and does NOT span the frame or reach across into the reserved {side_en} half. The same goes for the headline: it stays inside the {opposite_en} half above the cards, and nothing may cross the midline into the reserved area.
+_BROADCAST_STAMP_ON = """5. THE CLOSING <蓋章> BANNER IS NOT FULL WIDTH IN THIS FORMAT. Every earlier rule that calls it "the lowest row of the content area" or "the lowest row of the design" refers to the content half only. Write into "structure" that the stamp banner sits inside the {opposite_en} half, directly under the last card, and does NOT span the frame or reach across into the reserved {side_en} half. The headline is the one exception: it spans the full width across the top strip, but nothing of it may hang down into the reserved area.
 6. "variable" must be exactly one [標題] line, then exactly three [內文小標] lines, then one <蓋章> line. Three points, no more and no fewer: this format's card stack has three rows.
 """
-_BROADCAST_STAMP_OFF = """5. THERE IS NO STAMP BANNER IN THIS GRAPHIC (the user switched it OFF, and that setting wins over every rule above or below that mentions a closing banner). Do NOT write any stamp banner, conclusion strip or closing bar into "structure": the last card is the lowest element of the {opposite_en} half. The headline stays inside the {opposite_en} half above the cards, and nothing may cross the midline into the reserved {side_en} area.
+_BROADCAST_STAMP_OFF = """5. THERE IS NO STAMP BANNER IN THIS GRAPHIC (the user switched it OFF, and that setting wins over every rule above or below that mentions a closing banner). Do NOT write any stamp banner, conclusion strip or closing bar into "structure": the last card is the lowest element of the {opposite_en} half. The headline is the one exception: it spans the full width across the top strip, but nothing of it may hang down into the reserved {side_en} area.
 6. "variable" must be exactly one [標題] line, then exactly three [內文小標] lines, and NOTHING after them — no <蓋章> line. Three points, no more and no fewer: this format's card stack has three rows.
 """
 
@@ -328,23 +328,24 @@ def split_cover_title(title: str) -> list[str]:
 # 編輯看過再自己按生成，不直接接生圖）----
 #
 # 十點不一樣：兩個標題（左格、右格）各自是同一則新聞的兩個切面，每個標題用半形空格
-# 分成 2–3 段（每段就是封面上的一行）。YT 直播：一句標題用一個半形空格分兩段。
+# 分成 **3 段**（每段就是封面上的一行，白／黃／紅；2026-09-08 使用者回報只出 2 段就沒有紅字、
+# 或生圖階段瞎掰第三段，改成一律 3 段）。YT 直播：一句標題用一個半形空格分兩段（版型固定兩行）。
 # 忠實度規則由 main.CONTENT_FIDELITY_RULES 接在後面（同主流程），標題只能用原文有的事實。
 COVER_TITLE_DIGEST_SYSTEM_TEN = """You write the two headlines for a Taiwanese prime-time news programme cover (十點不一樣) from one news article.
 
 Return JSON with "title_left" and "title_right".
 - Each is a punchy Traditional Chinese (Taiwan) headline for one facet of the story; the two must cover DIFFERENT facets (e.g. what happened / the impact, the scene / the numbers, the cause / the response). Never repeat the same facts in both.
-- Each headline is 2 or 3 segments separated by ONE half-width space; each segment 3–7 characters; whole headline at most 18 characters excluding spaces. Each segment becomes one printed line.
+- Each headline is EXACTLY 3 segments separated by ONE half-width space (two spaces in total, never one, never three); each segment 3–7 characters; whole headline at most 18 characters excluding spaces. Each segment becomes one printed line, coloured white / yellow / red in order, so a headline with only two segments loses its red line — that is a defect.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
 """
 
-# 十點不一樣（滿版）：只有一個標題，2–3 段（每段一行）。
+# 十點不一樣（滿版）：只有一個標題，一律 3 段（每段一行，白／黃／紅）。
 COVER_TITLE_DIGEST_SYSTEM_TEN_FULL = """You write the single headline for a Taiwanese prime-time news programme cover (十點不一樣, full-bleed single-photo layout) from one news article.
 
 Return JSON with "title".
 - One punchy Traditional Chinese (Taiwan) headline for the core of the story.
-- 2 or 3 segments separated by ONE half-width space; each segment 3–7 characters; whole headline at most 18 characters excluding spaces. Each segment becomes one printed line.
+- EXACTLY 3 segments separated by ONE half-width space (two spaces in total, never one, never three); each segment 3–7 characters; whole headline at most 18 characters excluding spaces. Each segment becomes one printed line, coloured white / yellow / red in order, so a headline with only two segments loses its red line — that is a defect.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
 """

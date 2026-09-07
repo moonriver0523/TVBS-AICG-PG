@@ -95,7 +95,7 @@ class BroadcastDigestRulesTests(unittest.TestCase):
 
     def test_rules_override_the_centred_layout_sentence(self):
         text = editor_formats.get("broadcast_left")["digest_rules"]
-        self.assertIn("FOR THIS FORMAT IT IS NOT CENTRED", text)
+        self.assertIn("FOR THIS FORMAT THE BODY IS NOT CENTRED", text)
 
 
 class BroadcastStampSwitchTests(unittest.TestCase):

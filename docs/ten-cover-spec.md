@@ -59,7 +59,7 @@
   （`COVER_VISUAL_FULL_PROMPT_TEMPLATE`）。標題**橫跨整寬置中**、逐行各自撐滿（比照今日熱搜，字級上限
   `COVER_FULL_TITLE_SIZE_RATIO`=15%、寬 90%，最多 3 行，白／黃／紅）。AI 整張版用 `COVER_AI_FULL_PROMPT_TEMPLATE`
   （單張照片、單一標題、無斜線）。`model` 記 `ten-cover-full:<mode>[-asis]`。
-- 「AI 消化標題」對滿版送 `target="ten_cover_full"`，回單一 `title`（2–3 段）。
+- 「AI 消化標題」對滿版送 `target="ten_cover_full"`，回單一 `title`（一律 3 段，白／黃／紅；2026-09-08 起）。
 - 前端同一組欄位：滿版隱藏右半標題／右半附圖（`.cover-split-only`），左標籤改「標題」。
 
 ## 左右附圖位（TenCoverRequest.asis_left／asis_right，2026-09-07，雙切）
