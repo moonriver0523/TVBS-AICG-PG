@@ -102,3 +102,11 @@ prompt 的版面描述已同步成斜切全幅＋薄標頭帶＋白／黃／紅�
 純 prompt 版現在也由 `compose.paste_cover_logo` 貼 Logo＋節目標籤：prompt 要求模型把標頭帶**左半整個留空**、
 不得寫節目名；貼圖幾何與合成版一致（以帶高 `COVER_AI_HEADER_RATIO`=10% 為準，Logo 佔 70%、標籤 80%，垂直置中）。
 舊版 Logo 寬佔畫面 18.5%（量自 2026-09-03 的舊範例），在一成高的標頭帶裡整個爆出來壓到照片，已廢除。
+
+## 成圖比例驗證（2026-09-07）
+
+`_cover_panel_image`（1:1）、`_cover_full_image`（16:9）、`_cover_ai`（16:9）三條線都直呼
+`generate_image_raw`，繞過 `finalize_image_result`。生成端間歇性降級（宣告支援卻回別的尺寸，
+見 `verify_output_aspect_ratio` 的說明）以前不會被發現：1:1 的格子拿到 16:9，
+`split_canvas` 會把它裁掉一半照樣合成。三條線拿到 result 後都補驗一次，降級當場 502。
+`_cover_ai` 在 `paste_cover_logo` **之前**驗，貼完 Logo 才發現不對等於白貼。

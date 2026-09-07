@@ -298,8 +298,9 @@ class BackgroundPathTests(unittest.TestCase):
 
         def fake_generate(image_req):
             captured["req"] = image_req
+            # 16:9：底圖路徑會驗成圖比例（2026-09-07），4:3 會被當成模型降級而 502
             return main.ImageGenerateResponse(
-                image_data_base64=base64.b64encode(_png_bytes()).decode("ascii"),
+                image_data_base64=base64.b64encode(_png_bytes(size=(1280, 720))).decode("ascii"),
                 mime_type="image/png", model="fake-image",
             )
 

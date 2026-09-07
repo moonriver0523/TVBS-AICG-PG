@@ -56,8 +56,13 @@ class PortraitWiringTests(unittest.TestCase):
 
         def fake_raw(image_req):
             seen.append(image_req)
+            # 尺寸要跟著請求的比例走：封面路徑會驗成圖比例（2026-09-07），
+            # 1:1 的格子拿到 16:9 會被當成模型降級而 502。
+            ratio = main.parse_aspect_ratio(image_req.aspect_ratio) or 1.0
             return main.ImageGenerateResponse(
-                image_data_base64=__import__("base64").b64encode(_png_bytes(size=(1536, 864))).decode("ascii"),
+                image_data_base64=__import__("base64").b64encode(
+                    _png_bytes(size=(round(864 * ratio), 864))
+                ).decode("ascii"),
                 mime_type="image/png", model="fake",
             )
 

@@ -3268,6 +3268,9 @@ def _cover_panel_image(
     )
     image_req = _cover_apply_portraits(image_req, "panel", text_free=True)
     result = generate_image_raw(image_req)
+    # 比例驗證：這條線直呼 generate_image_raw，繞過 finalize_image_result，
+    # 悄悄降級的方圖進 split_canvas 會被裁掉一半（見 verify_output_aspect_ratio）。
+    verify_output_aspect_ratio(result, image_req.aspect_ratio)
     return base64.b64decode(result.image_data_base64)
 
 
@@ -3309,6 +3312,7 @@ def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) ->
     )
     image_req = _cover_apply_portraits(image_req, "ai")
     result = generate_image_raw(image_req)
+    verify_output_aspect_ratio(result, image_req.aspect_ratio)
     return compose.paste_cover_logo(base64.b64decode(result.image_data_base64))
 
 
@@ -3329,6 +3333,7 @@ def _cover_full_image(
     )
     image_req = _cover_apply_portraits(image_req, "full", text_free=True)
     result = generate_image_raw(image_req)
+    verify_output_aspect_ratio(result, image_req.aspect_ratio)
     return base64.b64decode(result.image_data_base64)
 
 
@@ -3763,6 +3768,7 @@ def _yt_cover_background(
         update={"prompt": f"{image_req.prompt.rstrip()}\n\n{editor_formats.YT_COVER_TEXT_FREE_OVERRIDE}"}
     )
     result = generate_image_raw(image_req)
+    verify_output_aspect_ratio(result, image_req.aspect_ratio)
     return base64.b64decode(result.image_data_base64), result.mime_type, True, result.model
 
 
@@ -3800,6 +3806,7 @@ def _yt_cover_full_image(
     )
     image_req = apply_user_references_to_image_request(image_req)
     result = generate_image_raw(image_req)
+    verify_output_aspect_ratio(result, image_req.aspect_ratio)
     return base64.b64decode(result.image_data_base64), result.mime_type, result.model
 
 

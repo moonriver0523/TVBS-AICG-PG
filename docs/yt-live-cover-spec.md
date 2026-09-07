@@ -121,3 +121,11 @@ hourly 另收 `time_text`。前端 `EDITOR_FORMATS[*].ytLayout` 帶到 `ytCoverF
 - 底部深紅底帶（`_draw_title_band` 加顏色參數）＋兩行置中標題白／黃，幾何同新聞版。
 - AI 標題模式用 `YT_COVER_FULL_PROMPT_HOT`；底圖／附圖／分切規則與新聞版完全相同。
 對照圖：`D:\Downloads\aicg_font_20260906\catalog_hot\hot_01~08.png`，樣張 `yt_hot.png`。
+
+## 2026-09-07 補充：成圖比例驗證
+
+`_yt_cover_background`（無文字底圖）與 `_yt_cover_full_image`（AI 標題整張）都直呼
+`generate_image_raw`，繞過 `finalize_image_result`，以前生成端間歇性降級（要 16:9 回 3:2）
+不會被發現，圖照樣合成上鏡。兩條線拿到 result 後都補 `verify_output_aspect_ratio`，
+降級當場變成 502 而不是一張裁壞的封面。既有底圖（`background_image_base64`）不驗——
+那張不是這次生的。
