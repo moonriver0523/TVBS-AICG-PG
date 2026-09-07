@@ -12,7 +12,7 @@ from news_prompt import build_prompt  # noqa: E402
 class DigestStageTests(unittest.TestCase):
     def test_block_present_for_every_variant(self):
         for role in ("記者", "編輯"):
-            for density in ("standard", "simplified"):
+            for density in ("standard", "simplified", "verbatim"):
                 with self.subTest(role=role, density=density):
                     prompt = build_digest_instructions(role, density, "資料圖表")
                     self.assertIn("DIRECTIONAL COLOUR CONVENTION", prompt)

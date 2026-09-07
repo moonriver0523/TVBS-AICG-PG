@@ -1,5 +1,8 @@
 import base64
+import concurrent.futures
+import copy
 import contextvars
+import datetime
 import hmac
 import io
 import json
@@ -32,7 +35,10 @@ from pydantic import BaseModel, Field
 import admin_console
 import audit_archive
 import clerk_auth
+import compose
+import editor_formats
 import gcs_archive
+import map_lookup
 import photo_lookup
 import request_log
 import safe_area_spec
@@ -77,7 +83,12 @@ if DIGEST_BACKEND == "gemini":
         api_key=_gemini_key,
     )
     DEFAULT_DIGEST_MODEL = os.getenv("GEMINI_DIGEST_MODEL", "gemini-3.6-flash")
-elif _openrouter_key:
+# 2026-09-03：這裡原本寫 `elif _openrouter_key:`，等於只要環境裡有一把
+# OPENROUTER_API_KEY 就一定走 OpenRouter，DIGEST_BACKEND=native 完全沒有效果——
+# 上面那段註解講的「設回 openrouter 即可切回」暗示這個變數是說了算的，實際上
+# 切不回原生。使用者的 OPENROUTER_API_KEY 同時存在於 .env 與 Windows 使用者
+# 環境變數，光在 .env 註解掉沒有用，因此改成 DIGEST_BACKEND 明說時聽它的。
+elif DIGEST_BACKEND == "openrouter" and _openrouter_key:
     openai_client = OpenAI(
         base_url="https://openrouter.ai/api/v1", api_key=_openrouter_key
     )
@@ -101,8 +112,61 @@ GEMINI_DIGEST_MIN_TOKENS = 6000
 # 的 variable（語法上仍是合法 JSON，因此舊版直接收下送去生圖）。分開給預算是治本。
 # 上限是天花板不是用量，只有真的寫出來的 token 才計費，因此寧可寬裕。
 # 3000 實測仍會截斷（同案例），拉到 6000 比照 GEMINI_DIGEST_MIN_TOKENS 的量級。
-DIGEST_MAX_TOKENS = 1500
-MAP_DIGEST_MAX_TOKENS = 6000
+#
+# 2026-09-05 二度修訂。當天稍早曾把地圖類收到 3000，理由是「那些截斷其實是
+# gpt-5.6-terra 脫軌後吐空白填到天花板，預算只是脫軌的成本上限」——脫軌那半段
+# 沒錯（見 docs/error-cases/2026-09-05-消化模型頻道洩漏-賭博垃圾與空白填充.md），
+# 但推論錯了，而且量測只在**記者**角色上做過。換 claude-sonnet-5 上線後，
+# 編輯＋地圖 5 次 attempt 全部 budget=3000 ratio=1.00 finish=length，其中兩次
+# raw content 整個空白——3000 在吐出第一個字之前就被思考 token 用光。
+#
+# 用 8000 的寬鬆上限量出真實分布（記者／編輯 × 自動判斷／資料圖表，16 次全過）：
+#   實際寫出來的內容非常穩定，872-1259 token；
+#   會爆的是思考，560-3140，編輯＋自動判斷那一格最兇；
+#   total 因此落在 1591-4258。
+# 也就是說預算對**不會脫軌的模型**就是真的要夠，不能拿脫軌的成本上限來訂。
+# 這裡取 total 觀測最大值再留約四成餘裕。上限是天花板不是用量，只有真的寫出來
+# 的 token 才計費，寧可寬裕——省下的那點錢遠不值一次 5 連截斷的 502。
+#
+# 2026-09-05 傍晚第三次調整。當天累積的規則把 system prompt 從 23,795 字元推到
+# 28,105，**寫出來的內容完全沒變**（856-1361 token，與早上量的一樣），暴漲的
+# 全是思考：早上 560-3140，傍晚 603-4873。編輯＋自動判斷的 total 量到 6042，
+# 已經超過當時的 6000 預算，所以那類稿必然偶爾整個截斷（實測 raw content 空字串、
+# 重試後 269 秒才回應）。餘裕要抓在思考上而不是正文上：思考量會隨規則增加而漲，
+# 正文不會。這裡照 total 觀測最大值再留約六成。
+DIGEST_MAX_TOKENS = 6000
+MAP_DIGEST_MAX_TOKENS = 10000
+
+# 「不消化」的輸出長度**由輸入長度決定**——模型要把整篇原文一字不差抄進 variable，
+# 再另外寫 style/structure。固定 1500 等於「原文超過某個長度就一定失敗」。
+# 2026-09-04 實測（正式站）：943 字過關且逐字相符；1850 字連續 5 次
+# finish_reason=length 且 raw content 是空字串——DEFAULT_DIGEST_MODEL 是推理模型，
+# 思考 token 也算進 max_completion_tokens，1500 在吐出第一個字之前就用光了，
+# 使用者等 90 秒收到 502。中文在 o200k 約 1 字 1 token，這裡抓 2 倍當保險，
+# OVERHEAD 要同時吃下 style/structure 與看不見的思考 token。
+# 上限是天花板不是用量，只有真的寫出來的 token 才計費，因此寧可寬裕。
+VERBATIM_TOKENS_PER_CHAR = 2
+VERBATIM_DIGEST_OVERHEAD = 2500
+# 天花板的天花板：news_text 上限 20000 字，照公式會算到 42500。真要那麼長的原文
+# 本來就不該用不消化，讓它撞 length 收到明確錯誤，比默默燒一次大額呼叫好。
+VERBATIM_DIGEST_MAX_TOKENS = 24000
+
+
+def digest_token_budget(type_label: str, density: str, news_text: str) -> int:
+    """這次消化該給多少輸出上限。
+
+    地圖類與不消化各有各的理由要比一般寬裕，但兩者的依據不同：地圖是「要寫的
+    東西本來就多」，是固定加碼；不消化是「輸出長度等於輸入長度」，必須隨輸入縮放。
+    """
+    base = (
+        MAP_DIGEST_MAX_TOKENS
+        if type_label in (MAP_TYPE_LABEL, AUTO_TYPE_LABEL)
+        else DIGEST_MAX_TOKENS
+    )
+    if density != "verbatim":
+        return base
+    needed = len(news_text) * VERBATIM_TOKENS_PER_CHAR + VERBATIM_DIGEST_OVERHEAD
+    return min(max(base, needed), VERBATIM_DIGEST_MAX_TOKENS)
 
 # 消化重試次數。上游（OpenRouter 輪替的 provider）會間歇性脫軌——2026-08-01 實測
 # 休達那則新聞，模型會在 variable 裡吐出韓文／西里爾／馬拉雅拉姆等隨機文字碎片，
@@ -286,7 +350,9 @@ async def site_password_gate(request, call_next):
     )
 
 
-DigestDensity = Literal["standard", "simplified"]
+DigestDensity = Literal["standard", "simplified", "verbatim"]
+# 色調。None＝呼叫端沒表態（LINE、舊呼叫端），完全不注入。
+DigestTone = Literal["light", "dark"]
 
 
 # 一張圖最多畫幾張具名真人的臉（2026-08-18 使用者裁定，從「兩人以上一律不畫臉」放寬）。
@@ -320,6 +386,28 @@ class GenerateRequest(BaseModel):
     # 規則蓋掉，模型因此憑空捏一張替代圖（記者/編輯版都各出過一次）。
     # 上傳的圖本身在生圖階段才送，消化階段只需要知道張數。
     asis_reference_count: int = Field(default=0, ge=0, le=3)
+    # 蓋章開關（2026-09-03）。None＝呼叫端不表態，維持舊行為（由消化階段自行決定）；
+    # 網頁版一律送明確的 True／False。
+    stamp: bool | None = None
+    tone: DigestTone | None = None
+    # 編輯專屬版型（2026-09-03）。記者角色帶了也會被忽略，見 editor_formats。
+    editor_format: str = editor_formats.DEFAULT_FORMAT
+
+
+class MapPoint(BaseModel):
+    """一個查得到真實座標的地點。name 是要標在圖上的名字，不是查詢字串。"""
+
+    name: str = Field(min_length=1, max_length=40)
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+
+
+# 一張圖上最多查幾個地點。Nominatim 要求每秒一次，四個就是四秒的等待——
+# 再多，使用者等待的時間就開始比省下來的錯誤還貴。
+MAX_MAP_PLACES = 4
+# 少於兩個點不做底圖：一個點沒有「相對位置」可言，那正是地圖類存在的理由，
+# 而且單點底圖只會是一張放大的街廓，不如讓模型自己畫示意圖。
+MIN_MAP_POINTS = 2
 
 
 class GenerateResponse(BaseModel):
@@ -337,6 +425,10 @@ class GenerateResponse(BaseModel):
     # 維基的條目名——「卡利巴夫」「阿拉奇」「巴薩尼」「瓦希迪」實測全部查無條目，
     # 但英文名查得到。不確定就留空字串，絕不亂猜拼寫。
     portrait_subjects_en: list[str] = Field(default_factory=list)
+    # 地圖類專用：消化端列出的地點裡，**實查得到真實座標**的那些。
+    # 查不到的不會出現在這裡——標錯地點在新聞畫面上就是播出事故，寧可少標。
+    # 前端把它原樣帶進生圖請求，後端據此產生真實底圖（見 build_map_reference）。
+    map_points: list[MapPoint] = Field(default_factory=list)
 
 
 # input_references 的上限。模型端 gpt-image-2 收 0–16、Gemini 0–14（PLAN.md 查證），
@@ -372,6 +464,9 @@ class ImageGenerateRequest(BaseModel):
     #   編輯 OFF  → 對位框，拉伸填滿
     #   編輯 ON   → 2% 薄框，等比例置中
     safe_frame_profile: str = "記者"
+    # 播出鏡面的挖空側（'left'／'right'）。空字串＝不挖。挖空框在**置框之後**才貼，
+    # 因為置框會縮放平移內容，在原圖座標算好的框置框後會跑掉（見 compose.py）。
+    broadcast_hole: str = ""
     # 真人肖像的參考照片（data URL）。空字串＝這次不附參考圖。
     reference_image_data_url: str = ""
     # 使用者上傳的參考圖（地圖底稿／實景參考）。與肖像參考照分開兩個欄位：
@@ -380,6 +475,9 @@ class ImageGenerateRequest(BaseModel):
     reference_images: list[UserReferenceImage] = Field(
         default_factory=list, max_length=MAX_INPUT_REFERENCES
     )
+    # 地圖類的真實座標（來自 /api/generate 的 map_points）。後端據此拼一張真實
+    # 底圖、把標點畫在正確位置，再當參考圖附上去——地理不交給模型憑印象畫。
+    map_points: list[MapPoint] = Field(default_factory=list, max_length=MAX_MAP_PLACES)
     # 後端自動查來的肖像參考照（2-3 人時用；data URL）。刻意與 reference_images
     # 分開兩個欄位：後者代表「使用者親自提供素材」，會觸發「不標示意圖」override，
     # 而自動查來的維基照片沒有那個語意——寫實感＋真名＋沒有示意圖標籤是最糟組合。
@@ -442,6 +540,22 @@ DIGEST_OUTPUT_SCHEMA = {
 }
 
 
+# 地圖類專用的 schema 變體。刻意做成變體而不是直接加欄位：strict 模式下新欄位必須
+# 進 required，等於每一則新聞（含記者、含非地圖類）都要多回一個永遠是空陣列的欄位。
+# 只有地圖類與自動判斷會拿到它，非地圖類的 schema 物件與過去逐位元組相同。
+MAP_PLACES_PROPERTY = {"type": "array", "items": {"type": "string"}}
+
+
+def digest_schema(type_label: str) -> dict:
+    """這次消化要用哪份 schema。地圖／自動判斷多一個 map_places。"""
+    if type_label not in (MAP_TYPE_LABEL, AUTO_TYPE_LABEL):
+        return DIGEST_OUTPUT_SCHEMA
+    schema = copy.deepcopy(DIGEST_OUTPUT_SCHEMA)
+    schema["properties"]["map_places"] = MAP_PLACES_PROPERTY
+    schema["required"] = [*schema["required"], "map_places"]
+    return schema
+
+
 AUTO_TYPE_SELECTION_RULES = """
 
 CHART TYPE AUTO-SELECTION (do this first):
@@ -450,6 +564,7 @@ No chart type was specified. Read the news material and choose the ONE most suit
 - "情境示意圖": the story's core is what a scene or incident looked like (accidents, disasters,人物場景).
 - "地圖／位置": the story's core is where something is — location, route, territory, or geographic relationship.
 - "3D示意／流程": the story's core is how something happened step by step, or how a mechanism works.
+GEOGRAPHY WINS OVER THE INCIDENT. If the user asks for a place to be located, marked or drawn (「請畫出地理位置」「標出…的位置」「位置圖」), or if the named places in the material only make sense when the viewer sees where they are relative to one another, the answer is "地圖／位置" — even when the incident itself (a flood, a fire, a crash, a protest) would otherwise read as 情境示意圖. Drawing what the scene looked like is NOT a substitute for showing where it happened, and a request naming several places in one city is a location story, not a scene story.
 Pick the single best fit; do not blend types. Report it in the "chart_type" field, and design "style" and
 "structure" for the type you picked.
 """
@@ -460,6 +575,93 @@ def chart_type_directive(type_label: str) -> str:
     if type_label == AUTO_TYPE_LABEL:
         return AUTO_TYPE_SELECTION_RULES
     return f'\n\nThe "chart_type" field MUST be exactly "{type_label}".'
+
+
+# ---- 兩段式消化：先便宜分類、再只注入該類型的規則（條件注入）----
+#
+# 為什麼：網頁預設是「自動判斷」，而自動判斷組 prompt 時不知道 AI 會選哪一類，
+# 只好把 MAP_ACCURACY_RULES 一律注入——每一則新聞都在付地圖稅，即使內容跟地理
+# 無關。2026-09-05 量測（同一則稿、n=7）：自動判斷 28,501 字元思考 2,184、
+# 耗時 38.7s；不注入地圖規則 19,615 字元思考 1,063、耗時 23.7s。同日另一組對照
+# 證明「合併精簡」省不到（約束數不變、字元 −6%，思考沒降）：思考量是被約束數量
+# 推高的，不是字元數。所以要省，就得讓非地圖新聞真的少掉那一整塊約束。
+#
+# 作法：分類呼叫只帶 AUTO_TYPE_SELECTION_RULES 與原文，輸出只有一個 enum；
+# 分類成功就把這次消化當成「使用者明確指定該類型」來組 prompt、選 schema、給預算。
+#
+# 失敗一律退回舊路徑（注入地圖規則的自動判斷）：逾時、例外、finish=length、
+# 空內容、不認得的類型都算失敗。單次呼叫、不重試——多一個呼叫不可以變成新的
+# 失敗模式（當天已有一次 502 是重試風暴造成的）。
+#
+# 旗標預設關：DIGEST_TWO_STAGE=1 才啟用。分類正確率與總延遲要先量過再上，
+# 分類錯的代價是整張圖用錯類型，比多花思考 token 嚴重。
+DIGEST_TWO_STAGE = os.getenv("DIGEST_TWO_STAGE", "") == "1"
+# 推理模型的思考 token 算在輸出上限內；給太小會 finish=length → 全數退回舊路徑，
+# 測試全綠、零效益、沒人知道。實測請以「分類器實際回標籤率」為準。
+CLASSIFY_MAX_TOKENS = 1500
+CLASSIFY_TIMEOUT_SECONDS = 20.0
+CLASSIFY_SYSTEM_PROMPT = (
+    "You are a broadcast news graphics director for a Taiwanese news desk. "
+    "Read the news material (and any user instruction that follows it) and decide "
+    "which ONE chart type the graphic should be. Return ONLY the JSON object."
+    + AUTO_TYPE_SELECTION_RULES
+)
+CLASSIFY_SCHEMA = {
+    "type": "object",
+    "properties": {"chart_type": {"type": "string", "enum": CHART_TYPE_CHOICES}},
+    "required": ["chart_type"],
+    "additionalProperties": False,
+}
+
+
+def classify_chart_type(
+    news_text: str, user_instruction: str, model: str
+) -> str | None:
+    """先用一次便宜的呼叫決定圖表類型。回 None 代表「用舊路徑」。
+
+    一定要連 user_instruction 一起看：現行 DEDICATED_INSTRUCTION_RULES 允許指令欄
+    改類型（「請畫出地理位置」），改成明確指定後那條路就沒了，分類器若只看原文，
+    會重演 test_map_gate_and_usage 記錄的那個病灶。
+    """
+    material = f'News Source Material:\n"{news_text}"'
+    if user_instruction.strip():
+        material += f"\n\nUser instruction:\n{user_instruction.strip()}"
+    try:
+        response = digest_completion(
+            model=model,
+            system_prompt=CLASSIFY_SYSTEM_PROMPT,
+            news_text=material,
+            max_output_tokens=CLASSIFY_MAX_TOKENS,
+            schema_name="news_cg_chart_type",
+            schema=CLASSIFY_SCHEMA,
+            site="classify",
+            raw_user_message=True,
+            timeout=CLASSIFY_TIMEOUT_SECONDS,
+        )
+        choice = response.choices[0]
+        if choice.finish_reason != "stop":
+            print(f"[classify] finish_reason={choice.finish_reason}，退回舊路徑", flush=True)
+            return None
+        data = json.loads(choice.message.content or "")
+    except Exception as exc:  # noqa: BLE001 — 任何失敗都只是退回舊路徑
+        print(f"[classify] 失敗，退回舊路徑：{type(exc).__name__}: {exc}", flush=True)
+        return None
+    label = data.get("chart_type") if isinstance(data, dict) else None
+    if label not in CHART_TYPE_CHOICES:
+        print(f"[classify] 回了不認得的類型 {label!r}，退回舊路徑", flush=True)
+        return None
+    return label
+
+
+def resolve_effective_type_label(req: "GenerateRequest", model: str) -> str:
+    """這次消化實際依哪個類型組 prompt。只有自動判斷＋旗標開才會去分類。"""
+    if req.type_label != AUTO_TYPE_LABEL or not DIGEST_TWO_STAGE:
+        return req.type_label
+    label = classify_chart_type(req.news_text, req.user_instruction, model)
+    if label is None:
+        return AUTO_TYPE_LABEL
+    print(f"[classify] 自動判斷 → {label}，只注入該類型規則", flush=True)
+    return label
 
 
 def extract_image_content(result: dict) -> dict | None:
@@ -552,6 +754,108 @@ SIMPLIFIED MODE OVERRIDE — THESE RULES OVERRIDE ANY EARLIER STANDARD-MODE LENG
 """
 
 
+# 「不消化」檔（2026-09-03 使用者要求）。原本只有標準／簡化兩檔，兩檔都會改寫使用者
+# 的字。這一檔把消化整個關掉：使用者貼的內文一個字都不准動。
+#
+# 為什麼要獨立一塊而不是重用 USER_INSTRUCTION_RULES 第 5 條的 VERBATIM MODE：
+# 那一條是「使用者在文字裡寫了逐字保留才觸發」，觸發與否要靠模型自己判斷；
+# 這一檔是使用者按下按鈕的結構事實，不該再讓模型判斷一次。兩者同向，同時成立。
+#
+# 放在 SIMPLIFIED_DENSITY_RULES 的同一個位置（density 二選一），並且明文列出它
+# 蓋掉哪幾條——編輯版樣板的「嚴禁『，』與『。』」「標題強制拆兩行」「150-180 字」
+# 是 NON-NEGOTIABLE 措辭，不逐條點名的話模型會兩邊都想遵守，結果還是動了字。
+VERBATIM_DENSITY_RULES = """
+
+VERBATIM MODE (THE USER TURNED DIGESTION OFF) — THIS BLOCK OVERRIDES EVERY LENGTH, COUNT, PUNCTUATION AND FORMAT REQUIREMENT STATED ABOVE:
+1. Do not digest. Do not summarise, shorten, lengthen, re-order, re-word, translate, correct, polish or otherwise "improve" the news material in any way.
+2. "variable" MUST reproduce the news material exactly: the same characters, in the same order, with the same figures, the same punctuation and the same line breaks. Not one character may be added, and not one character may be removed.
+3. THIS OVERRIDES, EXPLICITLY: the 150-180 character target, the maximum-three-points rule, the SIMPLIFIED MODE OVERRIDE, "Concise phrases, no punctuation", the ban on 「，」and「。」, the forced two-line 標題 split, the 15-characters-per-line limit, and every other length or format requirement above. If the source contains 「，」or「。」, they stay. If a line is long, it stays long.
+4. THIS CANCELS THE FRAMING OF THE WHOLE TASK ABOVE. The opening sentence told you to digest the raw news text and requirement 1 told you to extract key points as concise phrases without punctuation. In this mode you are not digesting and not extracting: you are laying out text you may not touch.
+5. The ONLY things you may add to "variable" are the structural markers [標題] and [內文小標] at the start of a line, angle brackets placed around wording that is already there, and the <蓋章> marker. A marker wraps or prefixes wording the user already wrote — it never introduces new wording. Never write out the NAME of a marker (for example the characters 強調文字) as if it were content. If you cannot place a marker without inventing text, place no marker.
+6. The NUMERAL FORMAT requirement above does NOT apply here. Numbers stay exactly as the user wrote them, Chinese numerals included.
+7. TEXT THAT IS NOT NEWS MATERIAL IS STILL NOT CONTENT. An instruction the user wrote to you — in the dedicated instruction field, or on an instruction line inside the material — is not part of the news material, must never be reproduced in "variable", and must never be drawn in the graphic. Verbatim reproduction applies to the news material only.
+8. "style" and "structure" are still yours to design — in this mode your entire job is visual design for text you are forbidden to change. Design a layout that fits ALL of the supplied wording legibly; when there is a lot of it, say so in "structure" and lay it out as a dense but readable text-forward composition rather than dropping any of it.
+"""
+
+
+# 蓋章開關（2026-09-03 使用者要求）。原本有沒有蓋章是消化階段自己決定的：編輯版樣板
+# 規定最後一行必須是 <蓋章>，簡化檔又說「optional」，記者版則整段沒提——同一個產品
+# 三種行為，使用者無從控制。改成由使用者按鈕決定，兩塊規則明文蓋掉上面的樣板措辭。
+#
+# stamp=None（沒帶這個欄位的呼叫端，例如 LINE）時兩塊都不注入，消化 prompt 逐字元
+# 不變，記者 frozen 測試靠這點維持綠燈。
+STAMP_ON_RULES = """
+
+STAMP BANNER: ON (USER SETTING — OVERRIDES ANY EARLIER RULE THAT MAKES <蓋章> OPTIONAL OR OMITS IT):
+1. "variable" MUST end with a line that begins with the marker <蓋章>, followed by the single most important conclusion or quote of the whole graphic, written short and punchy.
+2. There is exactly one <蓋章> line and it is the last line of "variable".
+3. The stamp wording must come from the source material — a condensation of what is already there, never an invented claim, figure or slogan.
+4. Design for it in "structure": the stamp banner is a solid full-box highlight bar and is the lowest row of the content area.
+5. IN VERBATIM MODE THE STAMP IS A MARKER ONLY. Mark the line the user already wrote that best serves as the conclusion; never write a new one. If no existing line can serve as the conclusion, place no stamp — rule 2 of the verbatim block (add not one character) wins over this block.
+6. <蓋章> IS THE ONLY MARKER WHOSE NAME IS WRITTEN OUT. Every other angle-bracket marker wraps wording that belongs in the graphic — you write <today's record high>, never <強調文字>today's record high. Never emit the characters 強調文字 (or any other placeholder name) as if they were content, and never write a closing tag.
+7. THE STAMP MAY NOT SHARPEN WHAT THE SOURCE HEDGED. The stamp is the one line rendered as a solid colour bar, so an overstatement costs more there than anywhere else — and shortening is exactly where hedges get lost. 「疑與濃霧及路面濕滑有關」 may not become 「濃霧路滑肇禍」; 「上午9點半才陸續排除」 may not become 「9點半後車流恢復順暢」. Carry 疑, 可能, 傳, 初步研判, 陸續, 約, 預計 through into the stamp, or pick a different conclusion that needs no hedge. A fact you can state flatly makes a better stamp than a hedged one you flattened.
+8. THE STAMP MUST NOT REPEAT A 內文小標. It is the conclusion of everything above it, so it may not say what one of the lines above it already said. Rewording is not enough — 「水利局出動抽水機 預計傍晚前退水」 as a 內文小標 and 「水利局已出動抽水機 預計傍晚前退水」 as the stamp are the same sentence twice, and the graphic prints both, one under the other. Before you settle on the stamp, read it against every 內文小標: if it carries the same fact as one of them, either pick a different conclusion, or drop that 內文小標 and let the stamp carry it alone.
+"""
+
+
+# 擺在所有規則的最後（含指令欄），因為本 repo 的慣例是「位置＋明文 OVERRIDE 同向」，
+# 而 VERBATIM_DENSITY_RULES 夾在中間，實測（2026-09-03 gpt-5.6-terra）壓不住樣板
+# 開頭的「Digest the raw news text」：83 字的原文被改寫成 59 字、標點全刪。
+# 最後一句刻意保留指令欄的優先權：使用者自己叫你精簡時，這塊要讓路。
+VERBATIM_FINAL_REMINDER = """
+
+FINAL CHECK BEFORE YOU ANSWER — DIGESTION IS OFF FOR THIS REQUEST:
+You were told at the top to digest the news text and to extract key points as concise phrases without punctuation. FOR THIS REQUEST THAT IS CANCELLED. You are not digesting anything; you are designing a layout for text you may not alter.
+Read your draft "variable" against the news material one character at a time before you answer:
+- Every character of the news material appears in "variable", in the same order — 「，」「。」and every other punctuation mark included.
+- Nothing has been rephrased, compressed, merged, re-ordered or dropped: not one word, not one 的, not one figure. 「今天下午出現強降雨」may not become 「午後強降雨」.
+- Nothing has been added except the structural markers, and no marker name has been written out as text.
+If the draft fails any of these, throw it away and rebuild it from the user's exact wording.
+The only thing that may relax this is an explicit request from the user asking you to shorten or rewrite. The interface setting alone never does.
+"""
+
+
+STAMP_OFF_RULES = """
+
+STAMP BANNER: OFF (USER SETTING — OVERRIDES ANY EARLIER RULE THAT REQUIRES OR OFFERS <蓋章>):
+1. "variable" MUST NOT contain the marker <蓋章> anywhere, and MUST NOT end with a conclusion banner line.
+2. This overrides the format requirement above that makes the last line a <蓋章> line: the last line is simply the last content line.
+3. "structure" must not describe, reserve space for, or place any stamp banner, conclusion bar, or full-box highlighted closing strip.
+4. Do not compensate by inventing some other closing slogan, sign-off or summary bar under a different name.
+5. Angle-bracket markers elsewhere in "variable" wrap wording that belongs in the graphic — you write <today's record high>, never <強調文字>today's record high. Never emit the characters 強調文字 (or any other placeholder name) as if they were content, and never write a closing tag.
+"""
+
+
+# 色調（2026-09-04 使用者要求）。原本畫面一律偏深藍夜色系——災害、突發題材對，
+# 但民生、政策、財經、生活題材用同一套會顯得每則都在出事。因此交給使用者選。
+#
+# 兩檔都明說「這是使用者設定、蓋過上面的風格描述」：樣板與各類型規則裡本來就
+# 散落著偏暗的措辭，只寫「請用亮色」而不點名要蓋過誰，模型會兩邊各聽一半、
+# 出一張半亮半暗的圖。tone=None（LINE 與舊呼叫端）完全不注入，維持既有行為，
+# 記者 frozen 快照也靠這點維持綠燈——作法比照 STAMP_ON_RULES／STAMP_OFF_RULES。
+#
+# 只寫「亮／暗」是不夠的：實務上出問題的是**對比**。淺底配淺字、深底配深字都
+# 會在電視上糊掉，所以兩檔各自把「字要怎麼配」寫死，不讓模型自己配。
+TONE_DARK_RULES = """
+
+COLOUR TONE: DARK (USER SETTING — OVERRIDES ANY TONE WORDING IN THE STYLE GUIDANCE ABOVE):
+1. Write "style" around a DARK ground: deep navy, charcoal, slate or near-black, with the imagery lit against it.
+2. All headline and body text on that ground must be light — white or near-white — with enough weight to hold up against a busy photographic background. Never place dark text on the dark ground.
+3. Accent colours stay saturated and bright (amber, red, cyan) so they read against the dark ground. Keep the directional colour rules above unchanged: a rise is still red, a fall is still green.
+4. This is the mood the user asked for, not a description of the subject. Do not brighten it because the story is upbeat, and do not ask for a light panel behind the text to "make it readable" — the contrast requirement in rule 2 already handles that.
+"""
+
+TONE_LIGHT_RULES = """
+
+COLOUR TONE: LIGHT (USER SETTING — OVERRIDES ANY TONE WORDING IN THE STYLE GUIDANCE ABOVE):
+1. Write "style" around a LIGHT ground: off-white, warm paper, pale grey or a soft daylight photograph, with the imagery sitting on it.
+2. All headline and body text on that ground must be DARK — near-black, deep navy or deep charcoal — heavy enough to read at broadcast distance. Never place white text on the light ground.
+3. Accent colours must be deep enough to hold against a pale ground: use deep red, deep amber and strong blue rather than pastel or neon. Keep the directional colour rules above unchanged: a rise is still red, a fall is still green.
+4. Any dark banner that the format requires (the <蓋章> stamp strip, a headline bar) may keep its dark fill with light text on it — that is a deliberate block of contrast, not a return to the dark tone. Everything outside those blocks stays light.
+5. This is the mood the user asked for, not a description of the subject. Do not darken it because the story is grim.
+"""
+
+
 # 消化階段的內容忠實度規則。生圖階段一律不得添加內容（那條在 news_prompt.py 的
 # FINAL OUTPUT RULE）；補充只能發生在這一層，而且只有使用者原文明確要求時才可以。
 # 起因：2026-07-30 實測 GPT 自行畫出來源沒有的完整季線數值與「資料來源 ICE／
@@ -563,8 +867,14 @@ CONTENT FIDELITY (NON-NEGOTIABLE — OVERRIDES ANY LAYOUT OR LENGTH PREFERENCE A
 2. NEVER invent or infer: extra data points, a series of values over time, quarters or years, axis scales, rankings, totals, percentages, currency conversions, casualty or headcount figures, or any statistic not stated in the source.
 3. NEVER invent a data source, agency, wire service, publisher, institution, analyst name, or "as of" date. If the source material does not name one, do not supply one, and do not ask for one to be drawn.
 4. If the source material is thin, produce fewer points. A short, wholly accurate specification is correct; padding it with plausible-sounding detail is a defect, not a service.
-5. Do not upgrade hedged wording into certainty (e.g. "約"/"可能"/"預估" must not become a flat assertion), and do not sharpen a rounded figure into a precise one.
-6. EXCEPTION — supplementation is allowed ONLY when the source material itself explicitly asks for it (e.g. it contains an instruction such as 「幫我補充」「請補充」「幫我加上」「請加入背景說明」). In that case you may add widely-established background, and only within the scope requested. Absent such an instruction, add nothing.
+5. Do not upgrade hedged wording into certainty (e.g. "約"/"可能"/"預估" must not become a flat assertion), nor add a hedge the source did not use — writing 「遊覽車疑煞車不及」 where the source simply reported the collision casts doubt the reporting never raised. Do not sharpen a rounded figure into a precise one either. THE 標題 IS WHERE THIS SLIPS, because it is the line you compress hardest and a hedge is the cheapest word to drop: keeping 「疑因濃霧路滑」 in the stamp while the headline reads 「濃霧路滑回堵12公里」 states a suspected cause as established fact, in the largest type on the graphic. Either the headline carries the hedge too, or the cause stays out of the headline.
+6. THE NAME OF THE LAYOUT IS NOT NEWS. 示意圖, 資料圖表, 地圖, 位置圖, 流程圖, 3D示意 and the like describe what kind of graphic you are designing; they are not part of the story. Never let one of them end up inside "variable" — least of all trailing the 標題 line, where the renderer sets it in headline type and the viewer reads 「台中火鍋店疑食物中毒 示意圖」 as if 示意圖 were part of the news — nor at the end of a 內文小標, which is the next place it tries to go once the headline is closed off. Where the graphic genuinely needs to be flagged as a reconstruction, say so in "structure" as a small caption; the headline states what happened and nothing else.
+7. PAIRING A FACT WITH A PLACE IS ITSELF A CLAIM — AND SO IS UNPAIRING ONE. Two halves, and you need both.
+   KEEP EVERY PAIRING THE SOURCE ALREADY MADE. Where the source says what happened at a named place, that pairing is reported fact and belongs in the graphic, tied to that place: 「楊梅路段砂石車追撞2人受傷」「中壢交流道4車連環1人輕傷」「湖口路段貨櫃車起火駕駛脫困」 must survive as three place-specific lines, each keeping its place and its detail together on ONE line. Splitting them into a line of places and a line of details hands the pairing back to the renderer to guess, which is the very thing the next paragraph forbids. On a location graphic「哪裡發生什麼」IS the story; stripping the places out to be safe empties the graphic of the only thing it exists to show.
+   INVENT NO PAIRING THE SOURCE DID NOT MAKE. Where the source lists several places and separately lists what happened, it has not told you which detail belongs to which — and you may not decide. 「三處路段積水，最深40公分，多輛機車熄火，水利局出動抽水機」 does not license 「左營區博愛二路 多輛機車熄火」: the source never said the scooters stalled there. Keep those places in one line and the unassigned details in their own.
+   The test is simply whether the source itself put the two together. It usually did so in the same clause; when in doubt, quote its own sentence order rather than redistributing.
+8. SEPARATE EVENTS STAY SEPARATE. Several incidents in one story are not thereby one incident. Do not write 連環, 接連引發, 造成, 導致, 連鎖 or any other wording that makes them a chain or makes one the cause of another unless the source says so. 「兩起機車自摔，另有一起貨車爆胎」 is three unrelated events and a headline calling them 連環車禍 asserts a causal link the source never reported. Count them and say how many; leave the relationship alone.
+9. EXCEPTION — supplementation is allowed ONLY when the source material itself explicitly asks for it (e.g. it contains an instruction such as 「幫我補充」「請補充」「幫我加上」「請加入背景說明」). In that case you may add widely-established background, and only within the scope requested. Absent such an instruction, add nothing.
 """
 
 
@@ -585,6 +895,20 @@ REAL-WORLD ACCURACY (governs "style" and "structure" — the pictures you commis
 """
 
 
+# 小孩肖像過審率。生圖供應商（GPT／Gemini）對「寫實風格畫出兒童」的安全過濾器
+# 誤殺率高，同一張圖只要把兒童角色改成插畫／卡通風格就能過關（2026-09-01 使用者
+# 實測發現的解法）。只調整「有兒童角色」那個 figure 的畫風，其餘版面與人物維持
+# 原本選定的 style，避免整張圖為了一個小孩角色被迫變成兒童繪本風。
+CHILD_DEPICTION_STYLE_RULES = """
+
+CHILD DEPICTION STYLE (governs "style" and "structure" — applies whenever the scene includes a child):
+1. Whenever the scene you are designing would depict one or more children or minors as a figure (a schoolchild, a young child in a family/rescue/incident scene, a student, etc.), rendering that figure photorealistically frequently triggers the image generator's safety filter and the whole image fails to generate. To avoid this, explicitly render ONLY those child figures in a simple, flat CARTOON / CHILDREN'S-BOOK ILLUSTRATION style — never photorealistic, never lifelike skin or facial detail. Every other element of the graphic (background, adults, icons, charts) keeps the graphic's normal chosen style unchanged.
+2. Write this into "style" explicitly, e.g. "the child figure is rendered in a soft flat cartoon illustration style, simplified features, no photorealistic skin or facial detail, while the rest of the scene stays photorealistic/[chosen style]". Note in "structure" which figure this applies to and where it sits.
+3. This does not relax the NAMED REAL PEOPLE / AT MOST THREE FACES rules above: if the child is a specific named real person, the portrait and 示意圖 rules there still apply on top of this cartoon treatment.
+4. If no child or minor would be shown in the scene, ignore this rule entirely — do not mention children or cartoon style in "style" or "structure".
+"""
+
+
 # 台灣漲跌配色慣例（漲紅跌綠，與西方相反）。第 3 條同時回答 TODO 的疑問：
 # 禁數字條款只管畫布幾何，顏色語意與箭頭方向屬於內容、不受該條款拘束。
 DIRECTIONAL_COLOR_RULES = """
@@ -598,24 +922,48 @@ DIRECTIONAL COLOUR CONVENTION (Taiwan convention — the Western one is wrong he
 
 
 # 地圖準確性。對「禁數字」與「內容忠實度」各開一個範圍受限的豁免：
+#
+# 2026-09-04 正式站實測（基隆廟口／西定路／大武崙淹水）：本區塊原本的開頭句是
+# 「只在你指定的是地圖類圖表時適用，不是就整段忽略」，把適用範圍綁在模型自己回報的
+# chart_type 上。模型把那則判成「情境示意圖」，於是整套地理安全規則被它自己關掉——
+# 但它照樣在 structure 寫「Show a faithful geographic map of Keelung City」並要求
+# 把三個地名標在正確位置，卻一個經緯度、一句正北朝上、一個比例尺都沒給。生圖端
+# 手上只有地名，只能亂擺。因此適用範圍改成由「你要求了什麼」決定（開頭句），
+# 並補第 11 條：沒有定位資料就不准寫「忠實地圖」，只能改用示意型 fallback。
+# 分類本身也補強在 AUTO_TYPE_SELECTION_RULES：明確的地理需求一律選地圖類。
 # 座標／距離／方位角只做定位資料、永不印在畫面上，畫布幾何禁數字仍全面生效。
 # 座標來自模型記憶、冷門地點可能錯（沖之鳥島案例）——沒把握就改用座標網格；
 # 真正的解法是以圖生圖落地後改走 GIS 底圖路線（見 TODO.md）。
 # 措辭沿用 docs/error-cases/2026-07-23-沖之鳥島-位置偏移-分析.md 的通則化版本。
 MAP_ACCURACY_RULES = """
 
-MAP ACCURACY RULES (apply ONLY when the graphic you are specifying is a 地圖／位置 map graphic; if it is not, ignore this whole block):
-1. Geographic accuracy outranks visual balance. Never ask for a place, island, coastline, border, route or marker to be moved, compressed, rotated, enlarged or rearranged so the composition fits. If everything will not fit truthfully on one map, use two maps (rule 8), never a distorted one.
-2. Require a north-up orientation: north at the top, east on the right, west on the left, south at the bottom. Ask for a north arrow and a scale bar.
-3. SCOPED EXCEPTION TO THE NO-NUMBERS RULE ABOVE. That rule bans percentages, pixels, ratios and numbers used for LAYOUT geometry — positions, insets, gutters and sizes on the canvas — and it still binds in full; never describe canvas geometry with a number. It does NOT cover real-world geography. For a map you MUST write into "structure": the latitude and longitude of every named place you are confident about, the coverage window of each map in degrees, real distances in kilometres, and true bearings in degrees.
-4. Those geographic figures are POSITIONING DATA first: their job is to put markers in the right spot. Do NOT ask the renderer to print coordinates, degree values or bearings as labels — printing them is neither required nor requested, and "structure" must not instruct the renderer to display them. (If the renderer happens to label a marker with its coordinates anyway, that is tolerated; accuracy matters more than suppressing the label.) The text you DO ask for on the map is place names and any callout wording that already appears in "variable".
-5. SCOPED EXCEPTION TO CONTENT FIDELITY ABOVE. Rule 2 there bans inventing figures. The latitude and longitude of an existing named place are not invented figures — they are fixed properties of that place, like its name, and here they are used only to put a marker in the right spot. You may therefore supply coordinates from your own geographic knowledge for that purpose alone. Everything else in CONTENT FIDELITY still binds without exception: never invent casualty counts, distances, radii, dates, areas or any other quantity the source did not state, and never put a coordinate into "variable".
-6. If you are not confident of a place's real coordinates, say so in "structure" and ask for a plain coordinate grid with a labelled point marker instead of drawn coastlines. Never invent islands, coastlines, landmasses or maritime boundaries.
-7. Any distance the source states must be drawn to the same scale as the rest of the map and along a stated true bearing — not as an arbitrary line with a figure attached to it.
-8. When the story spans a wide area, ask for two map levels: a small north-up locator overview showing the true relative positions of the places involved, and a larger detail map centred on the incident. One map rarely serves both, and forcing it is what makes models drag distant places closer together.
-9. Disputed or claimed zones (EEZ, 主張海域, 爭議邊界) must be drawn as a thin schematic boundary, never as a settled international border, and must carry the label 主張範圍 示意. Because the renderer may only draw text that was supplied to it, write that label text into "variable" as well.
-10. "Simplified" applies to line styling and visual detail ONLY. Never simplify geographic positions, distances, bearings or relative scale. Use the phrase "geographically accurate simplified cartography" in "style".
-11. ONE SUBJECT PLACE IN THE HEADLINE. Decide which place the incident actually happened in, and let only that place be the subject of the 標題 line in "variable". Other countries that merely reacted, commented, protested or announced a response are secondary: put them in a 內文小標 or a callout, never in the headline as the acting subject. A headline that names a reacting country beside the incident location reads as if the incident happened there, and the renderer will place that country's callout on the incident itself. Name the reacting country inside its own callout wording so the two can never be confused.
+MAP ACCURACY RULES (SCOPE IS SET BY WHAT YOU ASK FOR, NOT BY THE LABEL YOU REPORT): this block binds whenever the graphic you specify puts real, named places on a map or shows them in their true relative positions — a map, locator, coastline, road or district layout, route, or markers pinned to real geography — even when you report "chart_type" as 情境示意圖, 資料圖表 or 3D示意／流程. Writing "a faithful map of X" or "mark these places at their real locations" into "structure" while treating this block as inapplicable is the exact failure it exists to prevent. If nothing you ask for places a real location, ignore this whole block.
+1. Geographic accuracy outranks visual balance. Never ask for a place, island, coastline, border, route or marker to be moved, compressed, rotated, enlarged or rearranged so the composition fits; if everything will not fit truthfully on one map, use two maps (rule 6), never a distorted one. "Simplified" applies to line styling and visual detail ONLY — never to positions, distances, bearings or relative scale. Use the phrase "geographically accurate simplified cartography" in "style".
+2. North-up orientation: north at the top, east on the right, west on the left, south at the bottom. Ask for a north arrow and a scale bar — the only map furniture allowed (rule 9).
+3. SCOPED EXCEPTION TO THE NO-NUMBERS RULE ABOVE, AND SCOPED EXCEPTION TO CONTENT FIDELITY ABOVE. The no-numbers rule bans numbers used for LAYOUT geometry — positions, insets, gutters and sizes on the canvas — and still binds in full; it does NOT cover real-world geography. For a map you MUST write into "structure": the latitude and longitude of every named place you are confident about, the coverage window of each map in degrees, real distances in kilometres, and true bearings in degrees. The coordinates of an existing named place are fixed properties of that place, not invented figures, so you may supply them from your own geographic knowledge for positioning alone; everything else in CONTENT FIDELITY still binds — never invent casualty counts, distances, radii, dates, areas or any other quantity the source did not state, and never put a coordinate into "variable". These figures are POSITIONING DATA: their job is to put markers in the right spot. Do NOT ask the renderer to print coordinates, degree values or bearings as labels — printing them is neither required nor requested, and "structure" must not instruct the renderer to display them (if the renderer labels a marker with its coordinates anyway, that is tolerated; accuracy matters more than suppressing the label). The only text you ask for on the map is place names and callout wording that already appears in "variable".
+4. NEVER ASK FOR A FAITHFUL MAP YOU HAVE NOT SUPPLIED THE DATA FOR. If "structure" asks for a real place to be drawn or marked at its real location, EVERY place it names must carry the rule 3 positioning data. If you are not confident of a place's real coordinates, say so in "structure" and you may not use "faithful", "accurate", "real" or "geographic" map wording for that graphic: switch it to the schematic fallback — a labelled coordinate grid or a schematic locator with the place names as labels — and say plainly there that the layout is schematic. Never invent islands, coastlines, landmasses or maritime boundaries — a truthful map with no coordinates behind it is precisely what makes the renderer invent geography.
+5. Any distance the source states must be drawn to the same scale as the rest of the map and along a stated true bearing — not as an arbitrary line with a figure attached.
+6. When the story spans a wide area, ask for two map levels: a small north-up locator overview showing the true relative positions of the places involved, and a larger detail map centred on the incident. Forcing one map to serve both is what makes models drag distant places closer together.
+7. Disputed or claimed zones (EEZ, 主張海域, 爭議邊界) must be drawn as a thin schematic boundary, never as a settled international border, and must carry the label 主張範圍 示意 — write that label into "variable" too, because the renderer may only draw text supplied to it.
+8. ONE SUBJECT PLACE IN THE HEADLINE. Only the place where the incident actually happened may be the subject of the 標題 line in "variable". Other countries that merely reacted, commented, protested or announced a response are secondary: put them in their own 內文小標 or callout wording, never in the headline as the acting subject — a headline naming a reacting country beside the incident location reads as if the incident happened there, and the renderer will pin that country's callout on the incident.
+9. THE MARKERS ARE THE PLACE LABELS — NEVER BUILD A LEGEND. Every marked place already carries its name beside its marker. Do not repeat those names as a 內文小標 line, caption list, key, legend, 圖例 panel or marker index, and never ask for a legend box, key panel or colour-code panel of any kind: on screen that is a separate box repeating what the map already says, eating the space the map needs. 內文小標 lines are for the news itself (what happened at those places, when, how serious), never for a list of places.
+10. "map_places" IS A LOOKUP QUERY, NOT A CAPTION. Put every place that should carry a marker into "map_places", one entry each, in reading order; leave the array empty if the graphic is not a map. The program geocodes these names against a real gazetteer and may attach a real basemap with the markers already drawn, so each entry must be a findable real name with the city and district that disambiguate it (「基隆市 西定路」, not 「西定路」 — a bare street or hill name matches dozens of places nationwide). Nothing you write in this field is ever printed on the graphic. ONLY LOOKUPABLE POINTS BELONG HERE: a gazetteer holds named points and named administrative areas, nothing else. Never put in a loose region or direction (「北海岸」「南部」「東海岸」「北台灣」「市區」「低窪地區」) or a position along a road (「楊梅路段北向68公里」「國道1號中壢路段」) — it returns nothing or, worse, matches an unrelated shop sharing the words, and that wrong point gets drawn. Name the district instead (「桃園市 楊梅區」) or leave it out and describe it in "structure" as a schematic position: leaving it out costs a marker, a wrong lookup puts a marker on the wrong town. A NAMED FACILITY IS LOOKED UP BY ITS OWN NAME, NOT BY THE ROAD IT SITS ON: write 「中壢交流道」, never 「國道1號中壢交流道」 — the road prefix makes it unfindable; if the bare name is ambiguous, prefix city and district instead (「桃園市 中壢區 中壢交流道」).
+11. ONE PLACE, ONE NAME ON SCREEN, AND NEVER LET AN INSTRUCTION WORD BECOME PRINTED TEXT. "map_places" may need the gazetteer's official full form (「基隆市 基隆廟口夜市」) to be findable, but everything the viewer reads — in "structure" and "variable" alike — must use the short name the story itself uses (「基隆廟口」), the same in both fields; carrying the gazetteer form into either is how one graphic labels the same place 基隆廟口夜市 on the map and 基隆廟口 in the text. Likewise 標示, 標出, 請標, 標記, 位置如下 and the like are directions about what to do with the map, not wording to display: the renderer prints "variable" verbatim, so an instruction word left there comes out as a caption reading 「標示 基隆廟口」. Write the place name on its own, with no verb in front of it.
+"""
+
+
+# 兩段式分類成「非地圖」時注入的 SCOPE 守門，取代整塊 MAP_ACCURACY_RULES。
+#
+# 為什麼不能整塊刪：MAP_ACCURACY_RULES 開頭刻意寫成「就算你報成情境示意圖也照樣
+# 綁住你」——SOT2 2026-09-05 第五輪實例：模糊地名那則被判成情境，成品仍畫了臺灣
+# 輪廓的示意地圖。分類成非地圖就把整塊拿掉，等於那張畫著真實地理的圖完全不受
+# 地理準確性約束。
+# 為什麼不整塊留：座標、指北針、雙層地圖、map_places 寫法只有真的要畫準確地圖時
+# 才用得到，而這條路徑的前提正是「不畫」。所以只留兩件事：範圍那句的精神
+# （要放真實地名上地圖就不該用這個類型）＋退路（示意定位圖／座標網格並明說示意）。
+MAP_SCOPE_GUARD_RULES = """
+
+MAP SCOPE GUARD (the chart type above was chosen for you and is NOT a map): if the graphic you end up specifying would put real, named places on a map or show them in their true relative positions — a locator, a coastline, a road or district layout, a route, or markers pinned to real geography — that is a map, and drawing one under this chart type is the exact failure this block exists to prevent. Do not ask for one. Where the story genuinely needs a sense of place, ask instead for a schematic locator or a plain coordinate grid with the place names as labels, say plainly in "structure" that the layout is schematic, and never invent coastlines, islands, landmasses or borders.
 """
 
 
@@ -649,6 +997,15 @@ DEDICATED USER INSTRUCTION (GUARANTEED CHANNEL — READ TOGETHER WITH THE BLOCK 
 The user has also supplied an instruction through a dedicated field, quoted between the markers below. Everything between the markers is CERTAIN to be an instruction to you and is NEVER news content — do not classify it, do not let it appear in "variable", and never draw or describe it in the graphic.
 Obey it under exactly the same rules as the block above: carry style or layout requests into "style" and "structure"; if it asks for the wording to be kept (e.g. 「逐字保留」「完全依照文字」「這是完稿」), VERBATIM MODE applies to the news material in full.
 If the news material ALSO contains instructions, obey both. When the two conflict on the same point, this dedicated instruction wins; on every other point each instruction still binds — neither cancels the other.
+
+PRIORITY OVER THE USER'S OWN UI SETTINGS. Some of the rules above were switched on by controls the user clicked in the interface. This dedicated instruction is the same user speaking directly, and it OUTRANKS those controls wherever the two conflict. It specifically outranks:
+- the digestion density block (不消化 / 字少 / 字多). 「逐字保留」「完全依照文字」forces exact reproduction even when the density block asks you to shorten; 「濃縮成三點」「再精簡一點」shortens even when the verbatim block says reproduce every character.
+- the stamp banner block. 「不要蓋章」「拿掉蓋章」removes the stamp even when the block above switched it ON; 「加上蓋章」「要有蓋章」adds one even when the block above switched it OFF.
+- the colour tone block (色調亮／色調暗). 「用亮一點的底」「不要那麼暗」forces the light tone even when the block above set DARK, and the reverse likewise. If the instruction names a specific palette («用米白底»、«深藍底»), follow the instruction's palette and keep the contrast requirement from the tone block that matches it.
+- the chart type directive, including a "MUST be exactly" requirement. If the user asks for a different kind of graphic, design that one and report the type you actually designed in "chart_type".
+- the visual style and any style guidance above.
+- how the user's uploaded reference images are used.
+It does NOT outrank, and can never relax: CONTENT FIDELITY (never invent facts, figures or sources), REAL-WORLD FIDELITY, the BROADCAST SAFE AREA / FULL-FRAME layout sentence together with its ban on expressing any position or size as a number, the reporter/editor role you were given, and the rule that instruction text never becomes content. Carry out a request that would break one of those only as far as those rules allow, and satisfy the rest of the instruction normally.
 <<USER INSTRUCTION START>>
 {instruction}
 <<USER INSTRUCTION END>>
@@ -678,6 +1035,43 @@ No usable reference photograph exists for the people listed below, so the graphi
 """
 
 
+def resolve_map_points(chart_type: str, places: list[str] | None) -> list[MapPoint]:
+    """把消化端列出的地名查成真實座標。查不到就少一個，全程不丟例外。
+
+    為什麼要實查而不用模型寫的經緯度：2026-09-04 量過，「基隆廟口」差 107 公尺
+    還可用，「西定路」差 1,470 公尺、「大武崙」差 2,296 公尺——在市區地圖上
+    已經標到別的行政區。地名越冷門越不準，而新聞要標的往往正是冷門地名。
+
+    失敗一律 fail-open：查不到、逾時、服務掛掉都只是沒有底圖，退回原本那條
+    純 prompt 的路。地理編碼打嗝不可以讓一則本來出得了圖的新聞變成錯誤。
+    """
+    if chart_type != MAP_TYPE_LABEL or not places:
+        return []
+    points: list[MapPoint] = []
+    for place in places[:MAX_MAP_PLACES]:
+        name = (place or "").strip()
+        if not name:
+            continue
+        try:
+            found = map_lookup.geocode(name)
+        except Exception as exc:  # noqa: BLE001 — 監控用，不能拖垮消化
+            print(f"[map] geocode 例外 {name}：{type(exc).__name__}: {exc}", flush=True)
+            continue
+        if found is None:
+            print(f"[map] 查無座標，略過：{name}", flush=True)
+            continue
+        # 標在圖上的是最後一段（「基隆市 西定路」→「西定路」）：查詢字串要夠明確
+        # 才找得到，但畫面上不該出現「基隆市 西定路」這種查詢用的寫法。
+        label = name.split()[-1] if " " in name else name
+        points.append(MapPoint(name=label[:40], lat=found[0], lon=found[1]))
+    if len(points) < MIN_MAP_POINTS:
+        if points:
+            print(f"[map] 只查到 {len(points)} 個點，不足以構成相對位置，不做底圖", flush=True)
+        return []
+    print(f"[map] 已定位 {len(points)} 個地點：{'、'.join(p.name for p in points)}", flush=True)
+    return points
+
+
 def build_digest_instructions(
     role: str,
     density: DigestDensity,
@@ -686,6 +1080,10 @@ def build_digest_instructions(
     user_instruction: str = "",
     exclude_people: list[str] | None = None,
     asis_reference_count: int = 0,
+    stamp: bool | None = None,
+    editor_format: str | None = None,
+    tone: DigestTone | None = None,
+    map_scope_guard: bool = False,
 ) -> str:
     is_editor = role == "編輯"
     template = EDITOR_SYSTEM_PROMPT_TEMPLATE if is_editor else SYSTEM_PROMPT_TEMPLATE
@@ -703,13 +1101,34 @@ def build_digest_instructions(
     instructions += chart_type_directive(type_label)
     instructions += CONTENT_FIDELITY_RULES
     instructions += REAL_WORLD_FIDELITY_RULES
+    instructions += CHILD_DEPICTION_STYLE_RULES
     instructions += DIRECTIONAL_COLOR_RULES
     # 自動判斷模式組 prompt 時還不知道 AI 會選哪一類，也要注入；
     # 區塊開頭自我限縮「非地圖類整段忽略」。明確指定非地圖類型時完全不注入。
     if type_label in (MAP_TYPE_LABEL, AUTO_TYPE_LABEL):
         instructions += MAP_ACCURACY_RULES
+    elif map_scope_guard:
+        # 只有兩段式把自動判斷分類成非地圖時才會是 True（見 resolve_effective_type_label）
+        instructions += MAP_SCOPE_GUARD_RULES
     if density == "simplified":
         instructions += SIMPLIFIED_DENSITY_RULES
+    elif density == "verbatim":
+        instructions += VERBATIM_DENSITY_RULES
+    # 蓋章緊接在 density 之後：ON 的第 5 條要引用逐字模式，順序不能倒過來。
+    # None＝呼叫端沒表態（LINE、舊呼叫端），完全不注入，維持既有行為。
+    if stamp is True:
+        instructions += STAMP_ON_RULES
+    elif stamp is False:
+        instructions += STAMP_OFF_RULES
+    # 色調緊接在蓋章之後：亮色調第 4 條要引用蓋章那條深色橫幅的例外，順序不能倒。
+    # None＝不注入（見 DigestTone 的說明）。
+    if tone == "dark":
+        instructions += TONE_DARK_RULES
+    elif tone == "light":
+        instructions += TONE_LIGHT_RULES
+    # 編輯專屬版型（播出鏡面）。editor_formats.digest_rules 對非編輯角色一律回空字串，
+    # 這是「記者不可能誤用」的第三層防呆（前兩層在前端）。
+    instructions += editor_formats.digest_rules(editor_format, role)
     # 沒有 asis 附圖時完全不注入，消化 prompt 逐字元不變。
     if asis_reference_count:
         instructions += USER_REFERENCE_ASIS_DIGEST_RULES
@@ -728,6 +1147,10 @@ def build_digest_instructions(
         instructions += EXCLUDED_PEOPLE_RULES_TEMPLATE.format(
             people="\n".join(f"- {name}" for name in excluded)
         )
+    # 真正的最後一塊：不消化必須壓過樣板開頭的「Digest the raw news text」，
+    # 中段的 VERBATIM_DENSITY_RULES 實測壓不住（見該區塊上方的註解）。
+    if density == "verbatim":
+        instructions += VERBATIM_FINAL_REMINDER
     return instructions
 
 
@@ -735,6 +1158,63 @@ def build_digest_instructions(
 # generate() 就不該再記一次半套的。用 contextvar 而不是函式參數，免得這個純內部
 # 的旗標變成 /api/generate 對外可見的欄位。
 _inside_pipeline = contextvars.ContextVar("inside_pipeline", default=False)
+
+
+# 截斷監控。三個呼叫端（generate／hybrid／cover）各有各的預算，過去只有真的炸了
+# 才看得到蛛絲馬跡，而且訊息是「AI 回傳格式無法解析」這種看不出病因的話——
+# 2026-09-04 的不消化截斷就是這樣被埋掉的，raw content 空字串，連截在哪都看不到。
+# 這裡在唯一的收斂點記一行可 grep 的結構化紀錄，並在「差一點就截斷」時就先示警：
+# 該提早看到的是逼近上限，不是已經撞牆。cover 那條寫死 600、hybrid 寫死 1200，
+# 兩個都沒有隨輸入縮放，是下一個會撞的地方，靠這行紀錄提前現形。
+DIGEST_USAGE_WARN_RATIO = 0.8
+
+
+def log_digest_usage(site: str, model: str, budget: int, response) -> None:
+    """把這次消化的用量記成一行。純觀測，絕不改變回傳或丟例外。"""
+    try:
+        usage = getattr(response, "usage", None)
+        completion = getattr(usage, "completion_tokens", None) or 0
+        finish = response.choices[0].finish_reason if response.choices else "?"
+        ratio = completion / budget if budget else 0.0
+        flag = ""
+        if finish == "length":
+            flag = " TRUNCATED"
+        elif ratio >= DIGEST_USAGE_WARN_RATIO:
+            flag = " NEAR-LIMIT"
+        # provider 是 OpenRouter 在回應裡多帶的欄位（原生／Gemini 端點沒有）。
+        # 2026-09-05 追這件事時最想知道卻查不到的就是它：同一個模型名可能被路由到
+        # 不同 provider，脫軌到底是模型本身還是某一家的部署，沒有這欄分不出來。
+        provider = (getattr(response, "model_extra", None) or {}).get("provider") or "-"
+        print(
+            f"[digest_usage] site={site} model={model} provider={provider} "
+            f"budget={budget} completion_tokens={completion} ratio={ratio:.2f} "
+            f"finish={finish}{flag}",
+            flush=True,
+        )
+    except Exception as exc:  # 監控壞掉不可以拖垮消化
+        print(f"[digest_usage] 記錄失敗（不影響本次消化）：{exc}", flush=True)
+
+
+def digest_excerpt(raw: str, head: int = 600, tail: int = 300) -> str:
+    """把原始輸出壓成一行可 grep 的摘要，保留頭也保留尾。
+
+    2026-09-05 的病因全在尾巴：模型脫軌後吐純空白直到撞天花板，而舊版只記
+    `raw_content[:800]`，日誌看到的永遠是正常的開頭，只好在本機重跑才看得到。
+    整段照印又不行——實測一筆 12,391 字元有 84% 是空白，塞進日誌只是洗版。
+    折衷是頭尾都留，中間換成統計，並把連續空白摺成一個記號。
+    """
+    if len(raw) <= head + tail:
+        return re.sub(r"\s{4,}", " ⋯空白⋯ ", raw)
+    ws = sum(1 for ch in raw if ch.isspace())
+    middle = (
+        f"\n…（中間省略 {len(raw) - head - tail} 字；全長 {len(raw)} 字、"
+        f"{raw.count(chr(10)) + 1} 行、空白佔 {ws / len(raw):.0%}）…\n"
+    )
+    return (
+        re.sub(r"\s{4,}", " ⋯空白⋯ ", raw[:head])
+        + middle
+        + re.sub(r"\s{4,}", " ⋯空白⋯ ", raw[-tail:])
+    )
 
 
 def digest_completion(
@@ -745,8 +1225,15 @@ def digest_completion(
     max_output_tokens: int,
     schema_name: str,
     schema: dict,
+    site: str = "digest",
+    raw_user_message: bool = False,
+    timeout: float | None = None,
 ):
     """呼叫 Chat Completions 取結構化消化結果。
+
+    raw_user_message：呼叫端已自行組好 user 訊息（分類器要把指令欄一起帶上），
+    不再套 News Source Material 包裝。timeout：只有分類呼叫會給——它必須快、
+    失敗就退回舊路徑；主消化維持 client 預設，行為不變。
 
     輸出長度上限的參數名兩邊不同：OpenRouter 吃 max_tokens，OpenAI 原生的新模型
     （如 gpt-5.6-terra）只吃 max_completion_tokens，送錯直接 400。因此先送
@@ -762,23 +1249,31 @@ def digest_completion(
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f'News Source Material:\n"{news_text}"'},
+            {
+                "role": "user",
+                "content": news_text
+                if raw_user_message
+                else f'News Source Material:\n"{news_text}"',
+            },
         ],
         "response_format": {
             "type": "json_schema",
             "json_schema": {"name": schema_name, "strict": True, "schema": schema},
         },
     }
+    client = openai_client if timeout is None else openai_client.with_options(timeout=timeout)
     try:
-        return openai_client.chat.completions.create(
+        response = client.chat.completions.create(
             **payload, max_tokens=max_output_tokens
         )
     except BadRequestError as exc:
         if "max_completion_tokens" not in str(exc):
             raise
-        return openai_client.chat.completions.create(
+        response = client.chat.completions.create(
             **payload, max_completion_tokens=max_output_tokens
         )
+    log_digest_usage(site, model, max_output_tokens, response)
+    return response
 
 
 # 消化輸出健檢用：新聞稿消化結果應該只由中文、日文假名、拉丁字母（含歐洲人名的
@@ -802,6 +1297,34 @@ DIGEST_MAX_STRAY_CHARS = 3
 # 36~46%，卡在舊門檻 0.35 造成 5 次重試全滅、拖到 502。先放寬到 0.55 止血，
 # 真正的自言自語（實測撞過 100%）仍會被擋下。
 DIGEST_MAX_LATIN_RATIO = 0.55
+# 角色／頻道標記洩漏。2026-09-05 實測 openai/gpt-5.6-terra（OpenRouter，
+# provider=OpenAI）：模型會把自己的頻道路由語法當成一般文字吐進內容，形如
+# 「<蓋章>提醒民眾避開低窪路段}} դժassistant to=system.summary  天天中彩票不json: {」，
+# 後面常接簡體賭博站語料與多語系碎片。
+# 字元集與拉丁字母比例都攔不到這一種：異常字元只有兩個（未達
+# DIGEST_MAX_STRAY_CHARS），其餘是 CJK 與 ASCII。於是它通過健檢、原樣寫進最終
+# prompt 被畫上成品。真正的指紋是標記本身，字元統計看不到。
+# 「assistant」單獨出現是正常英文字（AI assistant），只有帶 to= 的路由形式才算。
+#
+# 簡體與異體字。2026-09-05 實測撞到「貨櫃車起火脱困」——「脱」（U+8131）不是
+# 臺灣標準的「脫」（U+812B），單字級的異體形，消化端那句「台灣繁體中文」擋不住，
+# 成品照樣印出來。這是程式判得出來的事，而同日已經證明「再加一條 prompt 規則」
+# 會推高思考 token、程式檢查不會，所以擋在品質閘而不是寫進 prompt。
+#
+# 這份清單刻意**不追求完整**：完整的簡繁對照要靠 OpenCC 那類詞庫，為了一個
+# 字元級健檢引進相依套件不划算。收錄範圍是「臺灣新聞文字裡出現就一定是錯」的
+# 高頻簡體字，加上實測撞過的異體形。漏網的下次撞到再補——擋掉多數勝過都不擋。
+# 「台」刻意不收：台灣／電視台／台積電都是正當用法，收進來只會製造假警報。
+DIGEST_NON_TW_CHARS = frozenset(
+    "脱说这个们时会对关电车长门问见现义应学实发医华国图书报广东头马鸟龙汉"
+    "丽临举乐习乡买乱争产亲从价众优伟传伤纪级红约细纸练组经给统绝继续维绿"
+    "网罗职联胜脑致舰艰苏药处备复够夺奋妇孙宁宝宪审层岁岛峡师带帮庆废弃张"
+    "强归录彻恋总恶闷闻阅阳阴际陆随难题风"
+)
+DIGEST_CHANNEL_LEAK = re.compile(
+    r"assistant\s+to\s*=|to=(?:assistant|system|final)\b|numerusform",
+    re.IGNORECASE,
+)
 # 放寬 token 上限後出現的另一種失控：模型不再截斷，改成把原文每個詞都拆成一條
 # [內文小標] 灌到幾十行（實測撞到 90 行、同一詞重複出現）。長度本身不能當判準——
 # 逐字模式本來就會產生長 variable——但大量重複的行是失控獨有的訊號。
@@ -823,6 +1346,57 @@ def parse_digest_json(raw_content: str) -> dict:
             lines = lines[:-1]
         text = "\n".join(lines).strip()
     return json.loads(text)
+
+
+# 不消化模式的逐字守門員（2026-09-03）。
+#
+# 為什麼還需要它：prompt 已經寫得夠死，實測內容也確實一字不差了，但模型會在
+# variable 的頭尾多吐東西——實測撞到兩種：整段被 " 包起來、以及尾巴接上
+# 「}】}⟦json_schema_error_recovery: remove extraneous⟧{」。內容對、外殼不對，
+# 而這些字元會原樣被畫進鏡面。通用的 DIGEST_ALLOWED_CHARS 檢查抓不到（雜訊只有
+# 兩個字元超出白名單，沒到 3 個的門檻）。
+#
+# 只在「指令欄是空的」時才啟用：指令欄的優先序高於消化程度（使用者裁決），
+# 「濃縮成三點」本來就該把逐字要求放掉，這時候拿原文去比對會把正確結果判成錯的。
+_VERBATIM_MARKER_RE = re.compile(r"\[標題\]|\[內文小標\]|<蓋章>|[<>]")
+_VERBATIM_WS_RE = re.compile(r"\s+")
+
+
+# 逐字要求（不消化那一檔，或指令欄寫「逐字保留」）會誘發模型把整段 variable 用
+# 引號包起來——它以為自己在「引用」使用者的原文。那對引號會被原樣畫進鏡面。
+# 只在「頭尾是同一個引號、且整段只出現這兩次」時才剝，正常的 CG 文案不會長這樣，
+# 內文自己帶引號的句子（例如 他說「…」）也不會被誤傷。
+_WRAPPING_QUOTES = ('"', "'", "「", "『", "“", "‘")
+_CLOSING_QUOTES = {"「": "」", "『": "』", "“": "”", "‘": "’"}
+
+
+def strip_wrapping_quotes(variable: str) -> str:
+    text = (variable or "").strip()
+    for opening in _WRAPPING_QUOTES:
+        closing = _CLOSING_QUOTES.get(opening, opening)
+        if not (text.startswith(opening) and text.endswith(closing) and len(text) > 2):
+            continue
+        inner = text[len(opening):-len(closing)]
+        if opening in inner or closing in inner:
+            continue
+        return inner.strip()
+    return text
+
+
+def verbatim_fidelity_problem(variable: str, news_text: str) -> str:
+    """不消化模式：variable 去掉標記與空白後必須與原文逐字相同。"""
+    body = _VERBATIM_WS_RE.sub(
+        "", _VERBATIM_MARKER_RE.sub("", strip_wrapping_quotes(variable))
+    )
+    source = _VERBATIM_WS_RE.sub("", news_text or "")
+    if body == source:
+        return ""
+    missing = "".join(dict.fromkeys(ch for ch in source if ch not in body))
+    extra = "".join(dict.fromkeys(ch for ch in body if ch not in source))
+    return (
+        f"不消化模式但 variable 與原文不符（原文 {len(source)} 字、輸出 {len(body)} 字；"
+        f"缺 {ascii(missing[:20])}；多 {ascii(extra[:20])}）"
+    )
 
 
 def digest_quality_problem(data: dict, finish_reason: str) -> str:
@@ -848,6 +1422,14 @@ def digest_quality_problem(data: dict, finish_reason: str) -> str:
             # 用 ascii() 轉義：這些字元照原樣印會在 Windows cp950 主控台丟
             # UnicodeEncodeError，把診斷訊息本身變成當掉整條請求的新故障
             return f"{field} 含 {len(stray)} 個異常字元：{ascii(stray[:40])}"
+        if leak := DIGEST_CHANNEL_LEAK.search(value):
+            return f"{field} 含角色／頻道標記「{leak.group(0)}」，模型頻道洩漏"
+        # 只檢查 variable：style／structure 是寫給生圖模型的英文指令，不是畫面
+        # 文字，偶爾夾一個中文字不影響觀眾看到的東西，擋它只會製造無謂重試。
+        if field == "variable":
+            bad = sorted({ch for ch in value if ch in DIGEST_NON_TW_CHARS})
+            if bad:
+                return f"{field} 含簡體／異體字「{''.join(bad)}」，非臺灣標準字形"
 
     variable = data.get("variable") or ""
     latin = sum(1 for ch in variable if "a" <= ch.lower() <= "z")
@@ -942,33 +1524,41 @@ def apply_photo_availability(
     dependencies=[Depends(verify_internal_api_key)],
 )
 def generate(req: GenerateRequest):
-    system_prompt = build_digest_instructions(
-        role=req.role,
-        density=req.density,
-        type_label=req.type_label,
-        # 編輯版兩檔都要滿版版面，不能直接看 safe_frame（見 resolve_frame_plan）
-        full_bleed=resolve_frame_plan(req.role, req.safe_frame)[0],
-        user_instruction=req.user_instruction,
-        exclude_people=req.exclude_people,
-        asis_reference_count=req.asis_reference_count,
-    )
-
     # DIGEST_MODEL 可覆寫；沿用舊環境變數 OPENAI_DIGEST_MODEL 作為次要相容
     model = (
         os.getenv("DIGEST_MODEL")
         or os.getenv("OPENAI_DIGEST_MODEL")
         or DEFAULT_DIGEST_MODEL
     )
+    # 兩段式（條件注入）：分類成功就整段當成使用者指定了該類型——組 prompt、
+    # 選 schema、給預算、chart_type 退路四處一致；分類失敗則 type_label 原樣，
+    # 下面每一行都與舊路徑逐字元相同。
+    type_label = resolve_effective_type_label(req, model)
+    # 分類成非地圖時仍要一道短的地理範圍守門（理由見 MAP_SCOPE_GUARD_RULES）；
+    # 使用者自己指定非地圖類型時維持舊行為，不注入。
+    classified_non_map = (
+        req.type_label == AUTO_TYPE_LABEL and type_label not in (AUTO_TYPE_LABEL, MAP_TYPE_LABEL)
+    )
+    system_prompt = build_digest_instructions(
+        role=req.role,
+        density=req.density,
+        type_label=type_label,
+        map_scope_guard=classified_non_map,
+        # 編輯版兩檔都要滿版版面，不能直接看 safe_frame（見 resolve_frame_plan）
+        full_bleed=resolve_frame_plan(req.role, req.safe_frame)[0],
+        user_instruction=req.user_instruction,
+        exclude_people=req.exclude_people,
+        asis_reference_count=req.asis_reference_count,
+        stamp=req.stamp,
+        tone=req.tone,
+        editor_format=req.editor_format,
+    )
+
     # 上游（OpenRouter 多 provider 輪替）偶發 502、輸出截斷或不合 schema 的回傳是常態，
     # 重試圈必須涵蓋「呼叫＋解析」全程——只重試呼叫，解析失敗一樣會把錯誤丟給使用者。
     # 作法比照 hybrid_digest：金鑰／用量問題不重試（重試也沒用），其餘 3 次 × 1.5 秒。
-    # 地圖類（含自動判斷，因為 AI 可能選地圖）要寫雙層地圖與多組座標，字數本來就多，
-    # 用一般預算幾乎必定截斷，見 MAP_DIGEST_MAX_TOKENS 的說明。
-    max_output_tokens = (
-        MAP_DIGEST_MAX_TOKENS
-        if req.type_label in (MAP_TYPE_LABEL, AUTO_TYPE_LABEL)
-        else DIGEST_MAX_TOKENS
-    )
+    # 輸出上限依類型與消化程度分開給，理由見 digest_token_budget。
+    max_output_tokens = digest_token_budget(type_label, req.density, req.news_text)
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
     for attempt in range(DIGEST_ATTEMPTS):
         try:
@@ -978,7 +1568,8 @@ def generate(req: GenerateRequest):
                 news_text=req.news_text,
                 max_output_tokens=max_output_tokens,
                 schema_name="news_cg_digest",
-                schema=DIGEST_OUTPUT_SCHEMA,
+                schema=digest_schema(type_label),
+                site="generate",
             )
         except AuthenticationError as exc:
             raise HTTPException(
@@ -1009,14 +1600,38 @@ def generate(req: GenerateRequest):
             print(
                 f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} parse failed "
                 f"(finish_reason={finish_reason}): {exc}\n"
-                f"[generate] raw content: {raw_content[:800]}",
+                f"[generate] raw content: {digest_excerpt(raw_content)}",
                 flush=True,
             )
+            if req.density == "verbatim" and finish_reason == "length":
+                # 不消化的預算已經照原文長度放大過（digest_token_budget），還撞到
+                # length 就是這篇真的塞不下——重試每次都會撞同一面牆，5 次要燒掉
+                # 90 秒才讓使用者收到一句看不懂的「格式無法解析」。直接講清楚。
+                raise HTTPException(
+                    status_code=400,
+                    detail="原文太長，「不消化」要模型逐字抄完整篇才做得到；"
+                    "請改用「字少」／「字多」，或把原文縮短再試。",
+                )
             time.sleep(1.5)
             continue
 
         # 能解析不代表能用：截斷與字元污染都要跟解析失敗一樣重試，不能送去生圖
         problem = digest_quality_problem(data, finish_reason)
+        # 不消化的逐字比對排在通用檢查之後：兩者都過不了時，先報通用的那個。
+        # 最後一次刻意不擋——擋了就是整條 502，而這時手上的結果通常只是頭尾多了
+        # 雜訊，仍比沒有圖好；改成印警告讓回查時看得到。
+        if not problem and req.density == "verbatim" and not req.user_instruction.strip():
+            verbatim_problem = verbatim_fidelity_problem(
+                data.get("variable") or "", req.news_text
+            )
+            if verbatim_problem:
+                if attempt < DIGEST_ATTEMPTS - 1:
+                    problem = verbatim_problem
+                else:
+                    print(
+                        f"[generate] 最後一次嘗試仍未逐字相符，放行：{verbatim_problem}",
+                        flush=True,
+                    )
         if problem:
             last_detail = "AI 回傳內容異常，請稍後重試"
             print(
@@ -1029,13 +1644,16 @@ def generate(req: GenerateRequest):
         chart_type = data.get("chart_type", "")
         if chart_type not in CHART_TYPE_CHOICES:
             # AI 未回報或回報不在清單內；指定類型時退回原值，自動判斷時留空由前端處理
-            chart_type = "" if req.type_label == AUTO_TYPE_LABEL else req.type_label
+            chart_type = "" if type_label == AUTO_TYPE_LABEL else type_label
 
         result = GenerateResponse(
             style=data.get("style", ""),
             structure=data.get("structure", ""),
-            variable=data.get("variable", ""),
+            variable=strip_wrapping_quotes(data.get("variable", "")),
             chart_type=chart_type,
+            # 只有地圖類會真的去查（resolve_map_points 自己擋掉其他類型）。
+            # 查不到就是空陣列，後續一切照舊，不會有人拿到錯誤。
+            map_points=resolve_map_points(chart_type, data.get("map_places")),
             portrait_subjects=clean_portrait_subjects(data.get("portrait_subjects")),
             portrait_subjects_en=align_english_names(
                 clean_portrait_subjects(data.get("portrait_subjects")),
@@ -1175,9 +1793,14 @@ def hybrid_digest(req: HybridDigestRequest):
                 model=model,
                 system_prompt=HYBRID_SYSTEM_PROMPT,
                 news_text=req.news_text,
-                max_output_tokens=1200,
+                # 2026-09-05：思考 token 算進同一個上限，而它的變異遠大於
+                # 正文（同日量測 560-3140）。實測這條路徑只用 493（294 是
+                # 思考），但 1200 擋不住一次思考尖峰，留到 3000。
+                # 上限是天花板不是用量，只有真的寫出來的 token 才計費。
+                max_output_tokens=3000,
                 schema_name="hybrid_card_digest",
                 schema=HYBRID_DIGEST_SCHEMA,
+                site="hybrid",
             )
         except AuthenticationError as exc:
             raise HTTPException(
@@ -1221,7 +1844,7 @@ def hybrid_digest(req: HybridDigestRequest):
             print(
                 f"[hybrid] attempt {attempt + 1}/3 parse failed "
                 f"(finish_reason={finish_reason}): {exc}\n"
-                f"[hybrid] raw content: {raw_content[:800]}",
+                f"[hybrid] raw content: {digest_excerpt(raw_content)}",
                 flush=True,
             )
             time.sleep(1.5)
@@ -1246,6 +1869,9 @@ def generate_image(req: ImageGenerateRequest):
     generate_news_image 已組好 prompt，走這支時不要重複落檔。
     """
     req = apply_portrait_to_image_request(req)
+    # 順序有意義：自動底圖要先加進 reference_images，下一行才會替它注入
+    # ATTACHED MAP REFERENCE 那段用途規則（「標點已在真實位置，不要移動」）。
+    req = apply_map_reference_to_image_request(req)
     req = apply_user_references_to_image_request(req)
     request_id = request_log.new_request_id()
     try:
@@ -1259,6 +1885,7 @@ def generate_image(req: ImageGenerateRequest):
             aspect_ratio=req.aspect_ratio,
             safe_frame=needs_frame,
             profile=frame_profile,
+            broadcast_hole=req.broadcast_hole,
         )
     except Exception as exc:
         if not _inside_pipeline.get():
@@ -1529,12 +2156,36 @@ def frame_image_response(
     )
 
 
+def apply_broadcast_hole_response(
+    result: ImageGenerateResponse, side: str, profile: str
+) -> ImageGenerateResponse:
+    """在置框後的成品上貼出播出鏡面的挖空框。
+
+    與置框同一個原則：失敗就整支失敗。悄悄回傳一張沒有挖空框的圖，編輯會直接
+    拿去給後製，那邊才發現沒有位置放影片。
+    """
+    try:
+        holed = compose.apply_broadcast_hole(
+            base64.b64decode(result.image_data_base64), side, profile=profile
+        )
+    except Exception as exc:  # noqa: BLE001 — 影像處理失敗必須讓呼叫端知道
+        print(f"[compose] 挖空框失敗：{type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=500, detail=f"播出鏡面挖空框失敗：{exc}") from exc
+    return result.model_copy(
+        update={
+            "image_data_base64": base64.b64encode(holed).decode("ascii"),
+            "mime_type": "image/png",
+        }
+    )
+
+
 def finalize_image_result(
     result: ImageGenerateResponse,
     *,
     aspect_ratio: str,
     safe_frame: bool,
     profile: str,
+    broadcast_hole: str = "",
 ) -> ImageGenerateResponse:
     """生成後的共同收尾：驗比例，需要時置框並保留置框前原圖。
 
@@ -1544,9 +2195,17 @@ def finalize_image_result(
     """
     verify_output_aspect_ratio(result, aspect_ratio)
     if not safe_frame:
+        # 沒有置框就沒有可靠的成品座標系，挖空框無處可貼。播出鏡面一律開安全框，
+        # 走到這裡代表呼叫端組錯了，出聲比默默少一個框好。
+        if broadcast_hole:
+            print("[compose] safe_frame=False，跳過播出鏡面挖空框", flush=True)
         return result
-    return frame_image_response(result, profile).model_copy(
+    framed = frame_image_response(result, profile)
+    if broadcast_hole:
+        framed = apply_broadcast_hole_response(framed, broadcast_hole, profile)
+    return framed.model_copy(
         update={
+            # 追加修改要餵**置框前**原圖回去，不是挖過洞的成品（見欄位說明）
             "source_image_base64": result.image_data_base64,
             "source_mime_type": result.mime_type,
         }
@@ -1817,6 +2476,11 @@ class NewsImageGenerateRequest(BaseModel):
     # 專用指令欄位（PLAN.md ①），語意同 GenerateRequest.user_instruction。
     # LINE 端不傳（聊天框拆不了欄位，維持文內解析）。
     user_instruction: str = Field(default="", max_length=2_000)
+    # 蓋章開關（2026-09-03），語意同 GenerateRequest.stamp。LINE 端不傳。
+    stamp: bool | None = None
+    tone: DigestTone | None = None
+    # 編輯專屬版型（2026-09-03），語意同 GenerateRequest.editor_format。
+    editor_format: str = editor_formats.DEFAULT_FORMAT
 
 
 class NewsImageGenerateResponse(BaseModel):
@@ -2090,6 +2754,89 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
     )
 
 
+def verified_dots_block(points: list[MapPoint]) -> str:
+    """把「這張底圖上有哪幾個點」寫成一段由程式產生的事實陳述。
+
+    為什麼不繼續改 prompt 措辭：2026-09-05 第五到第七輪，同一條「沒有橘點的
+    地點不准畫標記」被繞過三次，每次換一種形狀——三角形警示圖示、末端停在
+    路面上的虛線、最後直接畫一支 pin。措辭再嚴，模型仍然要自己判斷「哪些
+    地點沒有點」，而它手上只有一張圖和一段文字，判斷本來就會出錯。
+
+    這裡改成不要它判斷：點的數量與名稱是程式已知的事實，直接列出來，並說明
+    清單之外的地點在這張圖上沒有位置。比照 safe_frame／compose 的原則——
+    能算出來的事情不要問模型。
+    """
+    names = "、".join(point.name for point in points)
+    return (
+        "==================================================\n"
+        "VERIFIED MAP POSITIONS (GENERATED — AUTHORITATIVE)\n"
+        "==================================================\n"
+        f"- The attached basemap carries EXACTLY {len(points)} verified dots, "
+        f"and they are these: {names}.\n"
+        "- Every other place mentioned anywhere in this prompt has NO verified position. "
+        "Do not give any of them a spot on the map: no pin, no marker of any other shape, "
+        "no icon, no highlighted segment, and no line that ends on the map. Mention them "
+        "only in text that touches no part of the map.\n"
+        f"- The finished graphic therefore carries {len(points)} map markers. "
+        "If you find yourself placing one more, the position for it is one you invented."
+    )
+
+
+def apply_map_reference_to_image_request(
+    req: ImageGenerateRequest,
+) -> ImageGenerateRequest:
+    """地圖類：把真實底圖（標點已畫在正確座標上）加進參考圖。
+
+    三個「不做」是刻意的：
+    1. **後端送不出參考圖時完全不做。** 原生 OpenAI 這條沒有多圖通道，硬加只會讓
+       apply_user_references_to_image_request 丟 400——那是使用者沒做錯任何事卻
+       收到的錯誤。沒有通道就安靜退回原本的純 prompt 路徑。
+    2. **失敗不擋成圖。** 圖磚抓不到、範圍太大、Pillow 出事，一律只是沒有底圖。
+       地圖底圖是加分項，不是必要條件。
+    3. **不覆寫使用者自己上傳的地圖底稿。** 使用者親自附的圖永遠優先，
+       自動底圖只在他沒附的時候補位。
+    """
+    if not req.map_points:
+        return req
+    if not supports_multiple_reference_images():
+        print("[map] 目前的生圖後端送不出參考圖，略過自動底圖", flush=True)
+        return req
+    if any(ref.purpose == "map" for ref in req.reference_images):
+        print("[map] 使用者已自行附上地圖底稿，不再自動產生", flush=True)
+        return req
+    if len(req.reference_images) >= MAX_INPUT_REFERENCES:
+        print("[map] 參考圖已達上限，略過自動底圖", flush=True)
+        return req
+    try:
+        png = map_lookup.render_basemap(
+            [(point.lat, point.lon) for point in req.map_points],
+            width=1024,
+            height=576,
+            mark=True,
+            # 地名跟著點一起烙進底圖。少了這個，模型只看得到三個一模一樣的
+            # 橘點，只能自己猜哪個是誰——2026-09-05 連兩輪把最北的中壢交流道
+            # 標成楊梅，連旁邊的事故圖示都跟著配錯。
+            labels=[point.name for point in req.map_points],
+        )
+    except Exception as exc:  # noqa: BLE001 — 底圖是加分項，不能拖垮成圖
+        print(f"[map] 底圖產生失敗（照舊出圖）：{type(exc).__name__}: {exc}", flush=True)
+        return req
+    data_url = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+    print(
+        f"[map] 已附上真實底圖（{len(req.map_points)} 個標點，{len(png)} bytes）",
+        flush=True,
+    )
+    return req.model_copy(
+        update={
+            "prompt": f"{req.prompt.rstrip()}\n\n{verified_dots_block(req.map_points)}",
+            "reference_images": [
+                *req.reference_images,
+                UserReferenceImage(data_url=data_url, purpose="map"),
+            ],
+        }
+    )
+
+
 def apply_user_references_to_image_request(
     req: ImageGenerateRequest,
 ) -> ImageGenerateRequest:
@@ -2140,6 +2887,11 @@ class ImageRefineRequest(BaseModel):
     image_size: str = "1K"
     safe_frame: bool = False
     safe_frame_profile: str = "記者"
+    # 追加修改要沿用同一個挖空側，否則改完圖那塊空位就不見了
+    broadcast_hole: str = ""
+    # YT 直播封面：附圖是無文字底圖，改完仍須無文字（文字由程式疊）。
+    # 見 news_prompt.TEXT_FREE_REFINE_RULES。
+    text_free: bool = False
 
 
 @app.post(
@@ -2160,12 +2912,13 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             detail="目前的生圖後端無法附上參考圖，無法以圖改圖；請整張重新生成",
         )
     image_req = ImageGenerateRequest(
-        prompt=build_refine_prompt(req.instruction),
+        prompt=build_refine_prompt(req.instruction, text_free=req.text_free),
         provider=req.provider,
         aspect_ratio=req.aspect_ratio,
         image_size=req.image_size,
         safe_frame=req.safe_frame,
         safe_frame_profile=req.safe_frame_profile,
+        broadcast_hole=req.broadcast_hole,
         reference_image_data_url=(
             f"data:{req.source_mime_type};base64,{req.source_image_base64}"
         ),
@@ -2182,6 +2935,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             aspect_ratio=req.aspect_ratio,
             safe_frame=needs_frame,
             profile=frame_profile,
+            broadcast_hole=req.broadcast_hole,
         )
     except Exception as exc:
         request_log.log_failure(
@@ -2250,6 +3004,9 @@ def resolve_digest_portraits(
             density=req.density,
             safe_frame=req.safe_frame,
             user_instruction=req.user_instruction,
+            stamp=req.stamp,
+            tone=req.tone,
+            editor_format=req.editor_format,
             exclude_people=missing,
         )
     )
@@ -2289,6 +3046,9 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 density=req.density,
                 safe_frame=req.safe_frame,
                 user_instruction=req.user_instruction,
+                stamp=req.stamp,
+                tone=req.tone,
+                editor_format=req.editor_format,
             )
         )
         digest, portrait_photos = resolve_digest_portraits(digest, req, provider)
@@ -2311,12 +3071,16 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 ImageGenerateRequest(
                     prompt=prompt,
                     provider=provider,
+                    broadcast_hole=editor_formats.hole_side(req.editor_format, req.role) or "",
                     aspect_ratio=aspect_ratio,
                     image_size=req.image_size,
                     safe_frame=req.safe_frame,
                     # 傳角色而非解析後的 profile：generate_image 會解析一次，
                     # 這裡先解析會讓它拿「編輯安全框」當角色再解析一次而解錯。
                     safe_frame_profile=req.role,
+                    # 地圖類的真實座標。generate_image 會據此拼底圖並附上去；
+                    # 送不出參考圖的後端會安靜略過（見 apply_map_reference_to_image_request）。
+                    map_points=digest.map_points,
                     # 單人走既有的單張欄位（措辭與行為與放寬前逐字相同），
                     # 2-3 人才走多張通道
                     reference_image_data_url=(
@@ -2414,6 +3178,626 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
 )
 def news_image_generate(req: NewsImageGenerateRequest) -> NewsImageGenerateResponse:
     return generate_news_image(req)
+
+
+# ============================================================
+# 編輯專屬版型 B：十點不一樣封面圖
+#
+# 刻意不走 generate_news_image：那條是「新聞原文 → 消化 → 一張 CG」，這裡是
+# 「使用者給兩個標題 → 兩張無文字底圖 → 程式合成」，中間根本沒有消化這一段。
+# 硬塞進同一條會讓兩邊都變醜。前端仍在同一頁、同一個下拉選到它（見 app.js）。
+#
+# 文字全部由 compose.compose_ten_cover 用字型畫，不交給模型：Logo 畫了會變形、
+# 中文標題畫了會有錯字，而封面圖上的錯字是對外事故。
+# ============================================================
+
+
+class TenCoverRequest(BaseModel):
+    title_left: str = Field(min_length=1, max_length=40)
+    title_right: str = Field(min_length=1, max_length=40)
+    # 給生圖模型的視覺描述（畫什麼場景），不會出現在成品文字上。
+    # 2026-09-03 起改選填：留空時由 resolve_cover_visuals 依標題請文字模型補。
+    visual_left: str = Field(default="", max_length=500)
+    visual_right: str = Field(default="", max_length=500)
+    date_text: str = Field(default="", max_length=20)
+    badge: str = compose.COVER_DEFAULT_BADGE
+    provider: Literal["gemini", "gpt"] = "gpt"
+    # ai＝整張交給生圖模型畫（預設，2026-09-03 使用者裁決要設計感）
+    # composite＝AI 只出兩張無文字底圖、文字由 Pillow 畫（零錯字但沒設計感，留作備援）
+    mode: Literal["ai", "composite"] = editor_formats.COVER_MODE_AI
+    # 2026-09-06：十點也收附圖。用途 asis（原圖放置）1 張＝整版鋪滿（使用者裁決，不切格）、
+    # 2 張＝左格、右格；有任何 asis 就強制 composite（真照不進生圖模型），也不再生任何底圖。
+    # 其他用途（實景／肖像／地圖）當兩格 AI 底圖的生圖參考。
+    reference_images: list[UserReferenceImage] = Field(
+        default_factory=list, max_length=MAX_INPUT_REFERENCES
+    )
+
+
+class TenCoverResponse(ImageGenerateResponse):
+    # 這次實際採用的畫面描述（使用者留空時是 AI 補的）。前端會填回欄位——
+    # 不回報的話使用者永遠不知道 AI 幫他決定了什麼，也沒辦法微調後重生。
+    visual_left: str = ""
+    visual_right: str = ""
+    # 哪一格是 AI 底圖（決定「AI示意圖」印在哪格）；實際採用的模式（asis 會強制 composite）
+    left_is_ai: bool = True
+    right_is_ai: bool = True
+    mode: str = editor_formats.COVER_MODE_AI
+
+
+def ten_cover_asis_images(req: "TenCoverRequest") -> list[bytes]:
+    """依順序取出「原圖放置」附圖的原始 bytes（最多兩張）。1 張＝全版、2 張＝左格＋右格。"""
+    raws: list[bytes] = []
+    asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
+    for ref in asis[:2]:
+        _, _, encoded = _split_data_url(ref.data_url)
+        if not encoded:
+            raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
+        raws.append(base64.b64decode(encoded))
+    if len(asis) > 2:
+        print(f"[cover] 原圖放置附圖 {len(asis)} 張，十點封面只有兩格，只取前 2 張", flush=True)
+    return raws
+
+
+def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
+    """畫面描述留空時依標題補齊；兩欄都有值就原樣回傳，不打 API。"""
+    left, right = req.visual_left.strip(), req.visual_right.strip()
+    if left and right:
+        return left, right
+
+    material = 'LEFT headline: {}\\nLEFT description already supplied: {}\\nRIGHT headline: {}\\nRIGHT description already supplied: {}'.format(
+        req.title_left.strip(),
+        left or "(none — write one)",
+        req.title_right.strip(),
+        right or "(none — write one)",
+    )
+    model = (
+        os.getenv("DIGEST_MODEL")
+        or os.getenv("OPENAI_DIGEST_MODEL")
+        or DEFAULT_DIGEST_MODEL
+    )
+    try:
+        response = digest_completion(
+            model=model,
+            system_prompt=editor_formats.COVER_VISUAL_DERIVE_SYSTEM,
+            news_text=material,
+            # 同上：600 對推理模型太窄，一次思考尖峰就整條截斷。
+            # 實測這條路徑只用 186（74 是思考），留到 2000 當緩衝。
+            max_output_tokens=2000,
+            schema_name="cover_visuals",
+            schema=editor_formats.COVER_VISUAL_SCHEMA,
+            site="cover",
+        )
+        data = parse_digest_json(response.choices[0].message.content or "")
+    except Exception as exc:  # noqa: BLE001
+        # 補描述失敗不該讓整張封面失敗：退回用標題本身當畫面提示，
+        # 畫出來會比較平淡但仍是一張可用的封面。
+        print(f"[cover] 自動補畫面描述失敗，改用標題：{type(exc).__name__}: {exc}", flush=True)
+        return left or req.title_left.strip(), right or req.title_right.strip()
+
+    derived_left = (data.get("visual_left") or "").strip()
+    derived_right = (data.get("visual_right") or "").strip()
+    # 使用者填的永遠優先，AI 只補空的那一欄
+    return (
+        left or derived_left or req.title_left.strip(),
+        right or derived_right or req.title_right.strip(),
+    )
+
+
+def _cover_panel_image(
+    visual: str, provider: str, references: list[UserReferenceImage] | None = None
+) -> bytes:
+    """生一張 1:1 的無文字底圖。references＝非 asis 的附圖，依用途規則當生圖參考。"""
+    image_req = ImageGenerateRequest(
+        prompt=editor_formats.COVER_VISUAL_PROMPT_TEMPLATE.format(visual=visual.strip()),
+        provider=provider,
+        aspect_ratio="1:1",
+        image_size="1K",
+        safe_frame=False,
+        reference_images=[ref for ref in (references or []) if ref.purpose != "asis"],
+    )
+    if image_req.reference_images:
+        image_req = apply_user_references_to_image_request(image_req)
+    result = generate_image_raw(image_req)
+    return base64.b64decode(result.image_data_base64)
+
+
+def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) -> bytes:
+    """純 prompt 版：整張封面由生圖模型畫，之後只補貼正版 Logo。"""
+    badge_text = compose.COVER_BADGES[req.badge][0]
+    prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE.format(
+        badge_text=badge_text,
+        date_text=date_text,
+        title_left=req.title_left.strip(),
+        title_right=req.title_right.strip(),
+        visual_left=visuals[0],
+        visual_right=visuals[1],
+    )
+    image_req = ImageGenerateRequest(
+        prompt=prompt,
+        provider=req.provider,
+        aspect_ratio="16:9",
+        image_size="1K",
+        safe_frame=False,
+        # asis 走不到這裡（有 asis 端點就強制 composite）；其他用途依規則當生圖參考
+        reference_images=[ref for ref in req.reference_images if ref.purpose != "asis"],
+    )
+    if image_req.reference_images:
+        image_req = apply_user_references_to_image_request(image_req)
+    result = generate_image_raw(image_req)
+    return compose.paste_cover_logo(base64.b64decode(result.image_data_base64))
+
+
+def _cover_composite(
+    req: TenCoverRequest, date_text: str, visuals: tuple[str, str]
+) -> tuple[bytes, tuple[bool, bool]]:
+    """合成版：AI 只出無文字底圖（或直接用原圖放置的附圖），文字全部由 Pillow 畫。
+
+    回 (PNG, (左格是否 AI, 右格是否 AI))。
+    """
+    asis = ten_cover_asis_images(req)
+    references = [ref for ref in req.reference_images if ref.purpose != "asis"]
+    if len(asis) == 1:
+        # 單張原圖＝全版（不切左右格、不生另一格），兩個標題壓在同一張圖的左下與右下
+        cover = compose.compose_ten_cover(
+            asis[0], None,
+            title_left=req.title_left.strip(), title_right=req.title_right.strip(),
+            date_text=date_text, badge=req.badge, left_is_ai=False, right_is_ai=False,
+        )
+        return cover, (False, False)
+    panels: list[bytes | None] = [asis[0] if len(asis) >= 1 else None, asis[1] if len(asis) >= 2 else None]
+    todo = [i for i, panel in enumerate(panels) if panel is None]
+    # 要生的圖平行生。序列跑會讓等待時間直接加倍——單張本來就要 30–90 秒。
+    if todo:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {
+                i: pool.submit(_cover_panel_image, visuals[i], req.provider, references)
+                for i in todo
+            }
+            for i, future in futures.items():
+                panels[i] = future.result()
+    left_is_ai, right_is_ai = len(asis) < 1, len(asis) < 2
+    cover = compose.compose_ten_cover(
+        panels[0],
+        panels[1],
+        title_left=req.title_left.strip(),
+        title_right=req.title_right.strip(),
+        date_text=date_text,
+        badge=req.badge,
+        left_is_ai=left_is_ai,
+        right_is_ai=right_is_ai,
+    )
+    return cover, (left_is_ai, right_is_ai)
+
+
+class CoverTitleDigestRequest(BaseModel):
+    news_text: str = Field(min_length=10, max_length=20_000)
+    target: Literal["ten_cover", "yt_cover"] = "ten_cover"
+
+
+class CoverTitleDigestResponse(BaseModel):
+    title_left: str = ""
+    title_right: str = ""
+    title: str = ""
+
+
+def _clip_title(text: str, limit: int) -> str:
+    text = " ".join(str(text or "").split())
+    return text[:limit]
+
+
+@app.post(
+    "/api/editor/cover-titles",
+    response_model=CoverTitleDigestResponse,
+    dependencies=[Depends(verify_internal_api_key)],
+)
+def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestResponse:
+    """貼新聞內文 → 文字模型消化出封面標題 → 回填前端欄位；不接生圖，編輯確認後自己按。
+
+    2026-09-06 使用者裁決：封面類版型也要能自動消化，但回填後停下來讓編輯看過。
+    """
+    ten = req.target == "ten_cover"
+    system_prompt = (
+        editor_formats.COVER_TITLE_DIGEST_SYSTEM_TEN if ten else editor_formats.COVER_TITLE_DIGEST_SYSTEM_YT
+    ) + CONTENT_FIDELITY_RULES
+    schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_TEN if ten else editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT
+    model = (
+        os.getenv("DIGEST_MODEL")
+        or os.getenv("OPENAI_DIGEST_MODEL")
+        or DEFAULT_DIGEST_MODEL
+    )
+    try:
+        response = digest_completion(
+            model=model,
+            system_prompt=system_prompt,
+            news_text=req.news_text.strip(),
+            max_output_tokens=2000,
+            schema_name="cover_titles",
+            schema=schema,
+            site="cover",
+        )
+        data = parse_digest_json(response.choices[0].message.content or "")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[cover-titles] 消化標題失敗：{type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=502, detail=f"消化標題失敗：{type(exc).__name__}") from exc
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="消化標題失敗：回傳格式不對")
+    if ten:
+        left = _clip_title(data.get("title_left"), 40)
+        right = _clip_title(data.get("title_right"), 40)
+        if not left or not right:
+            raise HTTPException(status_code=502, detail="消化標題失敗：模型沒給齊兩個標題")
+        return CoverTitleDigestResponse(title_left=left, title_right=right)
+    title = _clip_title(data.get("title"), 60)
+    if not title:
+        raise HTTPException(status_code=502, detail="消化標題失敗：模型沒給標題")
+    return CoverTitleDigestResponse(title=title)
+
+
+@app.post(
+    "/api/editor/cover",
+    response_model=TenCoverResponse,
+    dependencies=[Depends(verify_internal_api_key)],
+)
+def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
+    if req.badge not in compose.COVER_BADGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"未知的標籤：{req.badge}（可用：{list(compose.COVER_BADGES)}）",
+        )
+    date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
+
+    asis_count = sum(1 for ref in req.reference_images if ref.purpose == "asis")
+    if asis_count and req.mode == editor_formats.COVER_MODE_AI:
+        # 原圖放置＝真實新聞照直接上版，不交給生圖模型重畫；整張 AI 版做不到「原圖」，
+        # 所以有 asis 一律走合成版（與 YT 直播封面多圖分切同一原則）。
+        print(f"[cover] 原圖放置附圖 {asis_count} 張 → 改合成版（程式壓字）", flush=True)
+        req = req.model_copy(update={"mode": editor_formats.COVER_MODE_COMPOSITE})
+
+    # 有原圖放置（1 張全版或 2 張雙格）就不需要畫面描述，一次文字模型都不打
+    if asis_count >= 1:
+        visuals = (req.visual_left.strip() or req.title_left.strip(), req.visual_right.strip() or req.title_right.strip())
+    else:
+        visuals = resolve_cover_visuals(req)
+    panel_is_ai = (True, True)
+    try:
+        if req.mode == editor_formats.COVER_MODE_AI:
+            cover = _cover_ai(req, date_text, visuals)
+        else:
+            cover, panel_is_ai = _cover_composite(req, date_text, visuals)
+    except compose.ComposeError as exc:
+        print(f"[compose] 封面失敗：{exc}", flush=True)
+        raise HTTPException(status_code=500, detail=f"封面生成失敗：{exc}") from exc
+
+    request_log.log_generation(
+        request_id=request_log.new_request_id(),
+        source="editor-cover",
+        news_text=f"{req.title_left} ｜ {req.title_right}",
+        variable=f"{req.title_left}\n{req.title_right}",
+        prompt=f"L: {visuals[0]}\nR: {visuals[1]}",
+        role="編輯",
+        provider=req.provider,
+    )
+    return TenCoverResponse(
+        image_data_base64=base64.b64encode(cover).decode("ascii"),
+        mime_type="image/png",
+        model=f"ten-cover:{req.mode}" + (f"-asis{min(asis_count, 2)}" if asis_count else ""),
+        visual_left=visuals[0],
+        visual_right=visuals[1],
+        left_is_ai=panel_is_ai[0],
+        right_is_ai=panel_is_ai[1],
+        mode=req.mode,
+    )
+
+
+# ============================================================
+# 編輯專屬版型 C：YT 直播封面（2026-09-05）
+#
+# 「一句標題（半形空格分兩段）＋副標＋可選附圖 → 一張直播封面」。
+# 跟十點不一樣一樣不經消化；跟它不同的是**所有文字都由程式疊**（compose.compose_yt_cover），
+# 生圖模型只負責一張無文字底圖，甚至有附圖時連生圖都不打。
+#
+# 追加修改：回應的 source_image_base64 帶的是**無文字底圖**，前端拿它走
+# /api/images/refine（text_free=True）改底圖，改完再帶 background_image_base64
+# 回來這條重疊一次文字。改標題不重生底圖也是同一條路。
+# ============================================================
+
+
+class YtCoverRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=60)
+    # news＝國內外新聞直播；hourly＝整點直播；hot＝今日熱搜（見 editor_formats.YT_COVER_LAYOUTS）
+    layout: Literal["news", "hourly", "hot"] = "news"
+    # ai＝整張連標題字交給生圖模型畫，程式只後貼固定元素（2026-09-06 使用者裁決預設）；
+    # composite＝模型只生無文字底圖，標題由程式壓字（零錯字）。
+    title_mode: Literal["ai", "composite"] = "ai"
+    # 國內外新聞直播的兩個獨立標示（頻道實際版面可並存）；整點直播忽略
+    original_audio: bool = False     # LIVE 章上方「原音呈現」
+    ai_translation: bool = False     # 日期下方「AI即時翻譯」
+    date_text: str = Field(default="", max_length=20)
+    # 整點直播專用：整點時間（如 20:00），選填，有填才掛在 LIVE 章下
+    time_text: str = Field(default="", max_length=10)
+    provider: Literal["gemini", "gpt"] = "gpt"
+    image_size: str = "1K"
+    # 與主流程共用同一組附圖欄位與用途：asis＝直接當底圖（不生圖）；
+    # scene／portrait／map＝生圖時當參考，用途規則由 apply_user_references_to_image_request 注入。
+    reference_images: list[UserReferenceImage] = Field(
+        default_factory=list, max_length=MAX_INPUT_REFERENCES
+    )
+    # 已有底圖時只重疊文字（追加修改後、或只改標題／副標／日期）。base64，不是 data URL。
+    background_image_base64: str = Field(default="", max_length=28_000_000)
+    background_mime_type: str = "image/png"
+    # 那張底圖是不是 AI 生的——決定要不要疊「AI示意圖」。前端原樣帶回上一次的回應值。
+    background_is_ai: bool = False
+
+
+class YtCoverResponse(ImageGenerateResponse):
+    # source_image_base64（繼承欄位）＝追加修改的源圖：composite 模式是無文字底圖，
+    # ai 模式是模型畫好含標題、但還沒貼固定元素的整張圖。
+    line1: str = ""
+    line2: str = ""
+    visual: str = ""
+    background_is_ai: bool = False
+    title_mode: str = "ai"
+
+
+def derive_yt_cover_plan(title: str, preset_lines: tuple[str, str] | None) -> dict:
+    """請文字模型補畫面描述（＋分段、＋具名真人）。失敗回空 dict，呼叫端自己退路。"""
+    if preset_lines:
+        split_note = (
+            "The split is ALREADY DECIDED — copy these two lines back exactly:\n"
+            f"line1: {preset_lines[0]}\nline2: {preset_lines[1]}"
+        )
+    else:
+        split_note = "The split is NOT decided — split the headline into two lines yourself."
+    material = f"Headline: {title.strip()}\n\n{split_note}"
+    model = (
+        os.getenv("DIGEST_MODEL")
+        or os.getenv("OPENAI_DIGEST_MODEL")
+        or DEFAULT_DIGEST_MODEL
+    )
+    try:
+        response = digest_completion(
+            model=model,
+            system_prompt=editor_formats.YT_COVER_DERIVE_SYSTEM,
+            news_text=material,
+            max_output_tokens=2000,
+            schema_name="yt_cover_plan",
+            schema=editor_formats.YT_COVER_DERIVE_SCHEMA,
+            site="cover",
+        )
+        data = parse_digest_json(response.choices[0].message.content or "")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[yt-cover] 補畫面描述失敗，改用退路：{type(exc).__name__}: {exc}", flush=True)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def resolve_yt_cover_plan(
+    req: "YtCoverRequest",
+) -> tuple[tuple[str, str], str, list[str], list[str]]:
+    """決定 (兩行標題, 畫面描述, 具名真人, 英文名)。
+
+    只有真的需要才打文字模型：標題已用一個空格分好、且底圖不用生（有 asis 附圖
+    或前端帶了現成底圖）時，一次 API 都不打。
+    """
+    title = req.title.strip()
+    lines = editor_formats.split_live_title(title)
+    has_asis = any(ref.purpose == "asis" for ref in req.reference_images)
+    # AI 標題模式一定要生圖（附圖只是參考），所以只要沒帶現成圖就需要畫面描述
+    need_visual = not req.background_image_base64 and (
+        req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI or not has_asis
+    )
+    if lines and not need_visual:
+        return lines, "", [], []
+
+    data = derive_yt_cover_plan(title, lines)
+    if not lines:
+        line1 = str(data.get("line1") or "").strip()
+        line2 = str(data.get("line2") or "").strip()
+        if editor_formats.title_split_is_faithful(title, line1, line2):
+            lines = editor_formats.realign_split_to_title(title, line1)
+        else:
+            if data:
+                print(f"[yt-cover] AI 分段改了字，不採用：{line1!r} / {line2!r}", flush=True)
+            lines = editor_formats.fallback_split_title(title)
+    if not need_visual:
+        return lines, "", [], []
+
+    visual = str(data.get("visual") or "").strip() or title
+    subjects = clean_portrait_subjects(data.get("portrait_subjects"))
+    english = align_english_names(
+        subjects,
+        [str(x) for x in (data.get("portrait_subjects_en") or [])],
+        [str(x) for x in (data.get("portrait_subjects") or [])],
+    )
+    return lines, visual, subjects, english
+
+
+def _yt_cover_background(
+    req: "YtCoverRequest", visual: str, subjects: list[str], english: list[str]
+) -> tuple[bytes, str, bool, str]:
+    """取得無文字底圖，回 (bytes, mime, 是否 AI 生的, 模型名)。"""
+    if req.background_image_base64:
+        return (
+            base64.b64decode(req.background_image_base64),
+            req.background_mime_type or "image/png",
+            req.background_is_ai,
+            "yt-cover:recomposite",
+        )
+    asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
+    if asis:
+        raws = []
+        for ref in asis[: compose.YT_SPLIT_MAX_PANELS]:
+            _, _, encoded = _split_data_url(ref.data_url)
+            if not encoded:
+                raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
+            raws.append(base64.b64decode(encoded))
+        if len(asis) > compose.YT_SPLIT_MAX_PANELS:
+            print(f"[yt-cover] 原圖放置附圖 {len(asis)} 張，只取前 {compose.YT_SPLIT_MAX_PANELS} 張分切", flush=True)
+        if len(raws) == 1:
+            return compose.crop_background_16x9(raws[0]), "image/png", False, "yt-cover:asis"
+        # 防呆：2 張＝左右雙切、3 張＝三切（2026-09-06 使用者裁決），不打生圖模型
+        return compose.split_backgrounds(raws), "image/png", False, f"yt-cover:asis-split{len(raws)}"
+
+    image_req = ImageGenerateRequest(
+        prompt=editor_formats.YT_COVER_VISUAL_PROMPT_TEMPLATE.format(visual=visual.strip()),
+        provider=req.provider,
+        aspect_ratio="16:9",
+        image_size=req.image_size,
+        safe_frame=False,
+        reference_images=[ref for ref in req.reference_images if ref.purpose != "asis"],
+        portrait_subjects=subjects,
+        portrait_subjects_en=english,
+    )
+    # 順序：肖像規則 → 附圖用途規則 → 最後壓上「無文字」override（前兩段都提到
+    # 示意圖標籤要保持可見，不壓掉模型會自己畫一個「示意圖」字樣）。
+    image_req = apply_portrait_to_image_request(image_req)
+    # 留證據：肖像這段靠 prompt 端列人名，會飄。沒這行分不出「附了維基照畫本人」
+    # 與「模型憑空捏一張臉掛真名」——後者是這個專案定義的最糟組合。
+    attached = len(image_req.portrait_reference_data_urls) + (1 if image_req.reference_image_data_url else 0)
+    print(
+        f"[yt-cover] portrait_subjects={subjects} en={english} 參考照={attached} 張",
+        flush=True,
+    )
+    image_req = apply_user_references_to_image_request(image_req)
+    image_req = image_req.model_copy(
+        update={"prompt": f"{image_req.prompt.rstrip()}\n\n{editor_formats.YT_COVER_TEXT_FREE_OVERRIDE}"}
+    )
+    result = generate_image_raw(image_req)
+    return base64.b64decode(result.image_data_base64), result.mime_type, True, result.model
+
+
+def _yt_cover_full_image(
+    req: "YtCoverRequest",
+    lines: tuple[str, str],
+    visual: str,
+    subjects: list[str],
+    english: list[str],
+) -> tuple[bytes, str, str]:
+    """AI 標題模式：整張封面（含兩行標題與底帶）交給生圖模型，回 (bytes, mime, model)。
+
+    附圖全數當參考（asis 也照主流程規則原圖放置）；肖像走主流程查參考照。
+    不壓 TEXT_FREE override——這條線就是要模型畫字。
+    """
+    template = {
+        editor_formats.YT_COVER_LAYOUT_HOURLY: editor_formats.YT_COVER_FULL_PROMPT_HOURLY,
+        editor_formats.YT_COVER_LAYOUT_HOT: editor_formats.YT_COVER_FULL_PROMPT_HOT,
+    }.get(req.layout, editor_formats.YT_COVER_FULL_PROMPT_NEWS)
+    image_req = ImageGenerateRequest(
+        prompt=template.format(line1=lines[0], line2=lines[1], visual=visual.strip() or req.title.strip()),
+        provider=req.provider,
+        aspect_ratio="16:9",
+        image_size=req.image_size,
+        safe_frame=False,
+        reference_images=list(req.reference_images),
+        portrait_subjects=subjects,
+        portrait_subjects_en=english,
+    )
+    image_req = apply_portrait_to_image_request(image_req)
+    attached = len(image_req.portrait_reference_data_urls) + (1 if image_req.reference_image_data_url else 0)
+    print(
+        f"[yt-cover:ai-title] portrait_subjects={subjects} en={english} 參考照={attached} 張 附圖={len(req.reference_images)}",
+        flush=True,
+    )
+    image_req = apply_user_references_to_image_request(image_req)
+    result = generate_image_raw(image_req)
+    return base64.b64decode(result.image_data_base64), result.mime_type, result.model
+
+
+def yt_cover_asis_count(req: "YtCoverRequest") -> int:
+    return sum(1 for ref in req.reference_images if ref.purpose == "asis")
+
+
+@app.post(
+    "/api/editor/yt-cover",
+    response_model=YtCoverResponse,
+    dependencies=[Depends(verify_internal_api_key)],
+)
+def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
+    if yt_cover_asis_count(req) >= 1 and req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI:
+        # 有原圖放置一律程式壓字（2026-09-07 使用者裁決，與十點封面同一原則）：
+        # 原圖放置＝真實新聞照直接上版，交給模型重畫會走樣；原本只在 ≥2 張時強制，
+        # 單張仍走整張 AI 生成、把照片當參考圖，和前端提示「直接當底圖不生圖」不符。
+        print(f"[yt-cover] 原圖放置附圖 {yt_cover_asis_count(req)} 張 → 直接當底圖，標題改程式壓字", flush=True)
+        req = req.model_copy(update={"title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE})
+    hourly = req.layout == editor_formats.YT_COVER_LAYOUT_HOURLY
+    hot = req.layout == editor_formats.YT_COVER_LAYOUT_HOT
+    # 整點直播與今日熱搜沒有原音呈現／AI即時翻譯（2026-09-06 使用者裁決），後端直接忽略
+    original_audio = bool(req.original_audio) and not (hourly or hot)
+    ai_translation = bool(req.ai_translation) and not (hourly or hot)
+    date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
+
+    lines, visual, subjects, english = resolve_yt_cover_plan(req)
+    ai_title = req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI
+    if ai_title and req.background_image_base64:
+        # 追加修改後回來：模型圖已含標題，只補貼固定元素
+        background = base64.b64decode(req.background_image_base64)
+        bg_mime, is_ai, image_model = req.background_mime_type or "image/png", req.background_is_ai, "yt-cover:overlay"
+    elif ai_title:
+        background, bg_mime, image_model = _yt_cover_full_image(req, lines, visual, subjects, english)
+        is_ai = True
+    else:
+        background, bg_mime, is_ai, image_model = _yt_cover_background(req, visual, subjects, english)
+    try:
+        if hot:
+            cover = compose.compose_yt_hot_cover(
+                background,
+                line1=lines[0],
+                line2=lines[1],
+                ai_note=is_ai,
+                draw_titles=not ai_title,
+            )
+        elif hourly:
+            cover = compose.compose_yt_hourly_cover(
+                background,
+                line1=lines[0],
+                line2=lines[1],
+                date_text=date_text,
+                time_text=req.time_text.strip(),
+                ai_note=is_ai,
+                draw_titles=not ai_title,
+            )
+        else:
+            cover = compose.compose_yt_cover(
+                background,
+                line1=lines[0],
+                line2=lines[1],
+                date_text=date_text,
+                original_audio=original_audio,
+                ai_translation=ai_translation,
+                ai_note=is_ai,
+                draw_titles=not ai_title,
+            )
+    except compose.ComposeError as exc:
+        print(f"[compose] YT 直播封面失敗：{exc}", flush=True)
+        raise HTTPException(status_code=500, detail=f"封面生成失敗：{exc}") from exc
+
+    request_log.log_generation(
+        request_id=request_log.new_request_id(),
+        source=f"editor-yt-cover-{req.layout}-{req.title_mode}",
+        news_text=req.title,
+        variable="\n".join(filter(None, [
+            lines[0], lines[1],
+            editor_formats.YT_COVER_ORIGINAL_AUDIO_LABEL if original_audio else "",
+            editor_formats.YT_COVER_AI_TRANSLATION_LABEL if ai_translation else "",
+            req.time_text.strip() if hourly else "",
+        ])),
+        prompt=visual or "（附圖／既有底圖）",
+        role="編輯",
+        provider=req.provider,
+        image_model=image_model,
+    )
+    return YtCoverResponse(
+        image_data_base64=base64.b64encode(cover).decode("ascii"),
+        mime_type="image/png",
+        model=image_model,
+        source_image_base64=base64.b64encode(background).decode("ascii"),
+        source_mime_type=bg_mime,
+        line1=lines[0],
+        line2=lines[1],
+        visual=visual,
+        background_is_ai=is_ai,
+        title_mode=req.title_mode,
+    )
 
 
 # 遠端／隧道測試：前端與 API 同一 origin，瀏覽器才打得到後端。

@@ -302,7 +302,22 @@ const TAB_META = {
 let state = {
     chartType: 'data',
     currentRole: '記者',
-    digestDensity: 'standard',
+    // 2026-09-03：三檔（verbatim=不消化／simplified=字少／standard=字多），預設字少
+    digestDensity: 'simplified',
+    // 蓋章由使用者決定（2026-09-03）。以前是消化階段自己決定，同一個產品三種行為。
+    // 預設 ON；指令欄若提到蓋章，後端以指令欄為準（見 main.py 的優先序規則）。
+    stamp: true,
+    // 色調（2026-09-04）。預設暗色調＝維持既有畫面風格，改成亮色調是使用者的主動選擇。
+    // 兩檔都會送給後端並注入 prompt（不是「預設不注入」），因為只寫亮不寫暗時，
+    // 樣板裡本來就偏暗的措辭會跟亮色調各聽一半，出半亮半暗的圖。
+    tone: 'dark',
+    // 最近一次消化查到的地圖座標；非地圖類一律空陣列
+    mapPoints: [],
+    // 編輯專屬版型（2026-09-03）。切回記者角色時一律重置成 default——
+    // 這是「記者不可能誤用」的第二層防呆（第一層是下拉根本不顯示，第三層在後端）。
+    // 寫字面值而不是 EDITOR_FORMAT_DEFAULT：那個 const 宣告在 state 之後，
+    // 引用它會在載入時就 ReferenceError（TDZ）。
+    editorFormat: 'default',
     currentTab: 'style',
     // 2026-08-17 改以 GPT 為預設引擎（UI 上 GPT 也排在 Gemini 前面）
     engine: 'gpt',
@@ -333,10 +348,119 @@ let state = {
     // refineStack 供「退回上一版」
     refineSource: null,
     refineDisplay: null,
+    // YT 直播封面：上一次的無文字底圖是不是 AI 生的（重疊文字時決定要不要標 AI示意圖）。
+    // 底圖本身走 refineSource（語意相同：給改圖用的原圖）。
+    ytCoverBackgroundIsAi: false,
+    // 目前成品是哪種標題模式（來自後端回應）：追加修改與重疊固定元素要跟成品一致，不看勾選框
+    ytCoverTitleMode: 'ai',
     refineStack: []
 };
 
 function curType() { return CHART_TYPES[state.chartType]; }
+
+/* ============================================================
+   編輯專屬版型（2026-09-03）
+   記者沒有這些需求，切到編輯角色才會出現這個下拉。
+   key 與 label 需與 editor_formats.py 一致（test_prompt_parity 守著）。
+
+   為什麼不併進「版面形式」：那組在後端是 strict JSON schema enum，
+   而「AI 自動判斷」就是叫模型從那組裡自己挑——加進去等於模型會主動挑給記者，
+   UI 藏得掉、模型挑不掉。
+   為什麼不另開分頁：編輯的工作流是連貫的（同一則新聞先出鏡面、再做封面），
+   而且輸入區以外的東西（產出、下載、追加修改）全部共用。
+   改成「同一頁、選了格式就換裝輸入區」。
+
+   inputs：'news'＝現行的新聞原文那組；'cover'＝左右標題那組
+   presets：切到這個版型時**幫忙調好**的開關——調完使用者仍可自己改
+   locks ：真的不准動的開關（只剩版面形式：它跟挖空框互相打架）
+   hides ：這個版型用不到、整組收起來的控制項（收起來勝過鎖起來——
+           留一排點不動的灰按鈕，使用者只會以為壞了；2026-09-04 使用者回報）
+   hole  ：播出鏡面的挖空側，生圖時送給後端由程式數學貼框
+   ============================================================ */
+const EDITOR_FORMATS = {
+    default: {
+        label: '預設（現行）',
+        hint: '',
+        inputs: 'news',
+        locks: {},
+        hole: null,
+    },
+    broadcast_left: {
+        label: '播出鏡面（左側挖空）',
+        hint: '畫面左半、垂直置中留一塊 16:9 空位給後製合成影片，內容自動靠右編排。',
+        inputs: 'news',
+        presets: { safeFrame: true, stamp: true, density: 'simplified' },
+        locks: { chartType: true },
+        hole: 'left',
+    },
+    broadcast_right: {
+        label: '播出鏡面（右側挖空）',
+        hint: '畫面右半、垂直置中留一塊 16:9 空位給後製合成影片，內容自動靠左編排。',
+        inputs: 'news',
+        presets: { safeFrame: true, stamp: true, density: 'simplified' },
+        locks: { chartType: true },
+        hole: 'right',
+    },
+    // 十點不一樣封面：「標題由 AI 生成」勾選框切換 ai／composite（比照 YT 直播封面）。
+    // 開＝整張由生圖模型畫（含節目名、標題、日期、標籤），只有 Logo 後製貼上；
+    // 關＝AI 只生左右兩張無文字底圖，所有文字由程式壓字，零錯字。
+    ten_cover: {
+        label: '十點不一樣封面',
+        hint: '預設整張由生圖模型設計，美術字有設計感；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。附圖選「原圖放置」＝1 張整版、2 張左右格，直接上版不生圖（自動改程式壓字）。正版 Logo 一律由程式貼上。',
+        inputs: 'cover',
+        coverMode: 'ai',
+        // 封面沒有消化這道程序：/api/editor/cover 不收 density／stamp／safe_frame／tone，
+        // 留著只會是四顆按了沒反應的按鈕，所以收起來而不是鎖起來
+        locks: {},
+        hides: { digestControls: true, safeFrame: true, stamp: true },
+        hole: null,
+    },
+    // YT 直播封面：底圖來自附圖（原圖放置）或 AI，LIVE 章／日期／Logo／兩行標題全由程式疊。
+    // 沿用主流程的附圖上傳區（用途：原圖放置＝直接當底圖；其他＝生圖參考）。
+    yt_live_cover: {
+        label: 'YT國內外新聞直播',
+        hint: '標題用半形空格分兩段（分不出來時由 AI 判斷）。有「原圖放置」附圖就直接當底圖，否則 AI 生底圖並標示 AI示意圖。原音呈現／AI即時翻譯可勾可並存。文字與 Logo 全由程式疊，零錯字。',
+        inputs: 'yt_cover',
+        ytLayout: 'news',
+        locks: {},
+        hides: { digestControls: true, safeFrame: true, stamp: true },
+        hole: null,
+    },
+    // YT 整點直播：同一條底圖流程，版面換成整點版（Logo 左上、LIVE 章右上＋選填整點時間、
+    // 紅底日期、沒有副標）。
+    yt_hourly_cover: {
+        label: 'YT整點直播',
+        hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。附圖與底圖規則同國內外新聞直播。',
+        inputs: 'yt_cover',
+        ytLayout: 'hourly',
+        locks: {},
+        hides: { digestControls: true, safeFrame: true, stamp: true },
+        hole: null,
+    },
+    // YT 今日熱搜（2026-09-06 型錄 H 類）：紅色系「今日熱搜」標籤＋紅色 Logo 斜標，
+    // 議題型版面，沒有日期、沒有 LIVE。底圖與標題規則同國內外新聞直播。
+    yt_hot_cover: {
+        label: 'YT今日熱搜',
+        hint: '今日熱搜封面：標題半形空格分兩段，沒有日期與 LIVE。附圖與底圖規則同國內外新聞直播。',
+        inputs: 'yt_cover',
+        ytLayout: 'hot',
+        locks: {},
+        hides: { digestControls: true, safeFrame: true, stamp: true },
+        hole: null,
+    },
+};
+const EDITOR_FORMAT_DEFAULT = 'default';
+
+function editorFormat() {
+    return EDITOR_FORMATS[state.editorFormat] || EDITOR_FORMATS[EDITOR_FORMAT_DEFAULT];
+}
+
+/* 消化程度三檔。key 與後端 DigestDensity 一致，改這裡要同步改 main.py */
+const DENSITY_LABELS = {
+    verbatim: '不消化',
+    simplified: '字少',
+    standard: '字多',
+};
 
 /* 第一頁「AI 自動判斷版型」的懶人選項，非真實 CHART_TYPES 成員 */
 const AUTO_TYPE_KEY = 'auto';
@@ -409,6 +533,14 @@ window.onload = () => {
         btn.className = "px-3 py-1 rounded text-[9px] font-black transition-all " + (state.safeFrame ? "bg-emerald-600 text-white" : "text-slate-500 hover:text-white");
         btn.innerText = state.safeFrame ? "安全框 ON" : "安全框 OFF";
     });
+    updateStampButton();
+    updateToneButtons();
+    renderEditorFormats();
+    document.querySelectorAll('[data-density]').forEach(btn => {
+        const isActive = btn.dataset.density === state.digestDensity;
+        btn.classList.toggle('density-active', isActive);
+        btn.classList.toggle('text-slate-500', !isActive);
+    });
     switchPage(1);
 };
 
@@ -477,23 +609,22 @@ function resetToType(key) {
    切換它不會重置第二頁已選的版型與已填的矩陣
    ============================================================ */
 function renderDigestTypes() {
-    const c = document.getElementById('digestTypeSelector');
+    const c = document.getElementById('digestTypeSelect');
     if (!c) return;
     c.innerHTML = '';
     // 懶人機制擺第一個並為預設
     const entries = [[AUTO_TYPE_KEY, AUTO_TYPE], ...Object.entries(CHART_TYPES)];
     entries.forEach(([key, t]) => {
-        const btn = document.createElement('button');
+        const opt = document.createElement('option');
         const isAuto = key === AUTO_TYPE_KEY;
-        const isActive = key === state.digestChartType;
-        btn.className = `digest-type-btn px-3 py-2 rounded-lg text-[10px] font-black border transition-all tracking-wide ${isActive ? 'digest-type-active' : ''}`;
-        // 自動判斷完成後，按鈕顯示 AI 選了什麼
-        btn.innerText = (isAuto && isActive && state.digestResolvedType)
+        opt.value = key;
+        // 自動判斷完成後，選項顯示 AI 選了什麼
+        opt.text = (isAuto && key === state.digestChartType && state.digestResolvedType)
             ? `AI 自動判斷：${CHART_TYPES[state.digestResolvedType].label}`
             : t.label;
-        btn.onclick = () => setDigestType(key);
-        c.appendChild(btn);
+        c.appendChild(opt);
     });
+    c.value = state.digestChartType;
     const hint = document.getElementById('digestTypeHint');
     if (hint) {
         hint.innerText = (state.digestChartType === AUTO_TYPE_KEY && !state.digestResolvedType)
@@ -572,10 +703,132 @@ function switchRole(role) {
     state.activeParent = Object.keys(curType().styles)[0];
     renderTabs();
     renderAll();
+    // 記者沒有編輯專屬版型，切回去一律重置，免得開關卡在被鎖住的狀態
+    if (role !== '編輯' && state.editorFormat !== EDITOR_FORMAT_DEFAULT) {
+        state.editorFormat = EDITOR_FORMAT_DEFAULT;
+    }
+    // 換角色＝換一則要做的東西，上一則的 AI 判定結果不該跟著過來。
+    // 2026-09-05 實測：記者那則被判為「情境示意圖」，切到編輯分頁後版面下拉
+    // 仍顯示「AI 自動判斷：情境示意圖」，新稿還沒消化就先掛著舊類型。
+    if (state.digestResolvedType) {
+        state.digestResolvedType = null;
+        renderDigestTypes();
+        updateActiveTypeBadge();
+        syncOutput();
+    }
+    renderEditorFormats();
+    applyEditorFormatInputs();
+    applyEditorFormatLocks();
     updateAIBtnRoleHint();
     updateAspectBadge();
     updateImageGenerationControls();
     showToast(`已切換至 ${role} 模式`);
+}
+
+/* ============================================================
+   編輯專屬版型：下拉、鎖開關、換裝輸入區
+   ============================================================ */
+function renderEditorFormats() {
+    const row = document.getElementById('editorFormatRow');
+    const select = document.getElementById('editorFormatSelect');
+    if (!row || !select) return;
+    row.classList.toggle('hidden', state.currentRole !== '編輯');
+    if (!select.options.length) {
+        Object.entries(EDITOR_FORMATS).forEach(([key, fmt]) => {
+            const opt = document.createElement('option');
+            opt.value = key;
+            opt.text = fmt.label;
+            select.appendChild(opt);
+        });
+    }
+    select.value = state.editorFormat;
+    const hint = document.getElementById('editorFormatHint');
+    if (hint) hint.innerText = editorFormat().hint || '';
+}
+
+// 鎖住的開關要看得出來是「這個版型規定的」而不是壞掉。淡化＋擋點擊是外觀，
+// 真正生效的是 state——applyEditorFormatLocks 會先把 state 改成版型要求的值。
+function _lock(el, locked) {
+    if (el) el.classList.toggle('locked-by-format', locked);
+}
+
+function applyEditorFormatLocks() {
+    const format = editorFormat();
+    const presets = format.presets || {};
+    const locks = format.locks || {};
+    const hides = format.hides || {};
+
+    // 預設值：幫忙調好，但不擋——2026-09-04 使用者回報「全都不能選」，查下來
+    // 播出鏡面四個鎖裡只有版面形式是真的必要，其餘三個鎖過頭了。
+    if (typeof presets.safeFrame === 'boolean' && state.safeFrame !== presets.safeFrame) toggleSafeFrame();
+    if (typeof presets.stamp === 'boolean' && state.stamp !== presets.stamp) toggleStamp();
+    if (presets.density && state.digestDensity !== presets.density) switchDigestDensity(presets.density);
+
+    _hide(document.getElementById('digestControlsRow'), !!hides.digestControls);
+    _hide(document.getElementById('p1-btnSafeFrame'), !!hides.safeFrame);
+    _hide(document.getElementById('p1-btnStamp'), !!hides.stamp);
+
+    // 唯一真的鎖著的：版面由挖空框決定，讓使用者再選一次只會互相打架
+    _lock(document.getElementById('digestTypeRow'), !!locks.chartType);
+}
+
+function _hide(el, hidden) {
+    if (el) el.classList.toggle('hidden', hidden);
+}
+
+// 換裝輸入區：同一頁、同一個位置，只有上半部欄位跟著版型換
+function todayText() {
+    const now = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    return `${now.getFullYear()}/${pad(now.getMonth() + 1)}/${pad(now.getDate())}`;
+}
+
+function applyEditorFormatInputs() {
+    const inputs = editorFormat().inputs;
+    const wantsCover = inputs === 'cover';
+    const wantsYt = inputs === 'yt_cover';
+    const news = document.getElementById('newsInputs');
+    const cover = document.getElementById('coverInputs');
+    const yt = document.getElementById('ytCoverInputs');
+    const refBox = document.getElementById('refUploadBox');
+    const digestRow = document.getElementById('digestTypeRow');
+    if (news) news.classList.toggle('hidden', wantsCover || wantsYt);
+    if (cover) cover.classList.toggle('hidden', !wantsCover);
+    if (yt) yt.classList.toggle('hidden', !wantsYt);
+    // 附圖上傳區：主流程、YT 直播封面、十點不一樣（2026-09-06 起收原圖放置）都用。
+    // 封面版型時把它搬到該組欄位下面——留在原位會跑到角色鈕正下方，看起來像消失了。
+    if (refBox) {
+        refBox.classList.remove('hidden');
+        const host = wantsYt ? yt : (wantsCover ? cover : news);
+        if (host && refBox.previousElementSibling !== host) host.insertAdjacentElement('afterend', refBox);
+    }
+    // 整點直播：沒有原音呈現／AI即時翻譯、多一格整點時間；今日熱搜：連日期都沒有
+    const ytLayout = wantsYt ? editorFormat().ytLayout : '';
+    const hourly = ytLayout === 'hourly';
+    const hot = ytLayout === 'hot';
+    const flagRow = document.getElementById('ytCoverFlags');
+    const timeField = document.getElementById('ytCoverTime');
+    const ytDateField = document.getElementById('ytCoverDate');
+    if (flagRow) flagRow.classList.toggle('hidden', hourly || hot);
+    if (timeField) timeField.classList.toggle('hidden', !hourly);
+    if (ytDateField) ytDateField.classList.toggle('hidden', hot);
+    // 封面模式完全沒有消化這一段，版面形式用不到，整組收起來
+    if (digestRow) digestRow.classList.toggle('hidden', wantsCover || wantsYt);
+    for (const id of ['coverDate', 'ytCoverDate']) {
+        const dateField = document.getElementById(id);
+        if ((wantsCover || wantsYt) && dateField && !dateField.value) dateField.value = todayText();
+    }
+}
+
+function setEditorFormat(key) {
+    state.editorFormat = EDITOR_FORMATS[key] ? key : EDITOR_FORMAT_DEFAULT;
+    renderEditorFormats();
+    applyEditorFormatInputs();
+    applyEditorFormatLocks();
+    updateAIBtnRoleHint();
+    if (state.editorFormat !== EDITOR_FORMAT_DEFAULT) {
+        showToast(`已切換版型：${editorFormat().label}`);
+    }
 }
 
 function switchDigestDensity(density) {
@@ -586,7 +839,10 @@ function switchDigestDensity(density) {
         btn.classList.toggle('text-slate-500', !isActive);
     });
     updateAIBtnRoleHint();
-    showToast(`AI 消化已切換至${density === 'simplified' ? '簡化' : '標準'}模式`);
+    const label = DENSITY_LABELS[density] || density;
+    showToast(density === 'verbatim'
+        ? '已切換至「不消化」：貼上的內文一字不改，AI 只做版面'
+        : `AI 消化已切換至「${label}」`);
 }
 
 // Prompt 顯示區高度壓低後，用字元數讓使用者確認 Prompt 已生成、長度多少
@@ -616,10 +872,19 @@ function updateAIBtnRoleHint() {
     const buttonText = document.getElementById('aiBtnText');
     // 生成中按鈕正顯示進度，切角色／密度不該把進度文字蓋掉
     if (_genTicker) return;
-    const densityLabel = state.digestDensity === 'simplified' ? '簡化' : '標準';
-    if (buttonText) {
-        buttonText.innerText = `一鍵生成（${state.currentRole}・${densityLabel}）`;
+    if (!buttonText) return;
+    if (editorFormat().inputs === 'cover') {
+        buttonText.innerText = '生成十點不一樣封面';
+        return;
     }
+    if (editorFormat().inputs === 'yt_cover') {
+        buttonText.innerText = `生成 ${editorFormat().label}`;
+        return;
+    }
+    const densityLabel = DENSITY_LABELS[state.digestDensity] || state.digestDensity;
+    const formatLabel = state.editorFormat === EDITOR_FORMAT_DEFAULT
+        ? '' : `・${editorFormat().label}`;
+    buttonText.innerText = `一鍵生成（${state.currentRole}・${densityLabel}${formatLabel}）`;
 }
 
 /* ============================================================
@@ -736,6 +1001,41 @@ function toggleSafeFrame() {
     });
     updateAspectBadge();
     syncOutput();
+}
+
+// 蓋章開關（2026-09-03）。安全框是綠的，這顆用琥珀色，避免兩個開關看起來同一組。
+function updateStampButton() {
+    const btn = document.getElementById('p1-btnStamp');
+    if (!btn) return;
+    btn.className = 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
+        + (state.stamp ? 'bg-amber-600 text-white' : 'text-slate-500 hover:text-white');
+    btn.innerText = state.stamp ? '蓋章 ON' : '蓋章 OFF';
+}
+
+function toggleStamp() {
+    state.stamp = !state.stamp;
+    updateStampButton();
+    updateInstructionOverrideHint();
+    showToast(state.stamp ? '蓋章：開（最後一行加結論條）' : '蓋章：關（不放結論條）');
+}
+
+// 色調切換（2026-09-04）。取代原本擺在這個位置的角色選擇——角色已移到最上方，
+// 因為它決定底下所有選項的可用範圍，要先選。
+function updateToneButtons() {
+    document.querySelectorAll('.tone-btn').forEach(btn => {
+        btn.classList.toggle('tone-active', btn.dataset.tone === state.tone);
+        btn.classList.toggle('text-slate-500', btn.dataset.tone !== state.tone);
+        btn.classList.toggle('hover:text-white', btn.dataset.tone !== state.tone);
+    });
+}
+
+function switchTone(tone) {
+    if (tone !== 'light' && tone !== 'dark') return;
+    state.tone = tone;
+    updateToneButtons();
+    updateInstructionOverrideHint();
+    invalidateGeneratedImage();
+    showToast(tone === 'dark' ? '色調：暗（深底亮字）' : '色調：亮（淺底深字）');
 }
 
 /* 置框模式送 21:9 生成：官方安全區本身是 2.176:1，用 21:9（2.333）去塞，
@@ -897,7 +1197,7 @@ function buildPrompt({ role, engine, typeLabel, style, structure, variable, safe
 
     // 視覺忠實度區塊：地圖規則只在已解析的類型是地圖時注入
     // （typeLabel 來自 activeType()，自動判斷模式下已是 AI 解析後的具體類型）
-    const extraBlocks = [REAL_WORLD_RENDERING_RULES, TW_DIRECTIONAL_COLOR_RULES];
+    const extraBlocks = [REAL_WORLD_RENDERING_RULES, TW_DIRECTIONAL_COLOR_RULES, TEXT_PLACEMENT_RULES];
     if (typeLabel === MAP_TYPE_LABEL) {
         extraBlocks.push(MAP_ACCURACY_IMAGE_RULES);
     }
@@ -1011,7 +1311,16 @@ REAL-WORLD ACCURACY (CRITICAL)
 - Do not fabricate identifying detail you do not know and present it as real. If the rendering is a generic stand-in or a reconstruction rather than the real thing, the 示意圖 label supplied in VARIABLE FIELDS must be clearly visible — never drop or hide it.
 - NO UNSOURCED BRANDS: every sign, storefront, banner, package, product body, vehicle livery, screen, badge and building facade must be blank or carry a generic non-readable mark. Do NOT draw any real company logo, wordmark, trademark, ticker symbol, exchange name or brand text — not even a small, faint, distant or background one. A brand name may appear only if that exact text is supplied in VARIABLE FIELDS, and then only as plain typeset text, never as a reproduced logotype.
 - NAMED REAL PEOPLE: how to depict a named real person is governed by the NAMED REAL PERSON block below whenever one is present — follow that block, not your own judgement. If no such block is present, do NOT draw a recognisable face for a named real person: use a back view or a plain silhouette and keep the 示意圖 label visible. Never show the person in a scene, action or context that STRUCTURE does not describe.
+- A STATED QUANTITY IS A NUMBER, NOT A HEADCOUNT TO DRAW. Where you do draw the individual items, the count on the canvas must equal the stated figure exactly, background and secondary items included — a graphic saying 4車追撞 with five vehicles in it is wrong. Only draw them individually while the figure is small enough to take in at a glance, up to about four. Beyond that do not attempt the instances at all: 12箱走私菸 is one representative crate with the figure 12 set beside it, never a heap the viewer would count as twenty, and 10部機組 is a figure rather than a row you would miscount.
 - SELF-CHECK before finalizing: look at every surface in the image for text or marks you added yourself. If any sign, screen, package or vehicle carries readable branding, blank it.`;
+
+const TEXT_PLACEMENT_RULES =
+`==================================================
+TEXT PLACEMENT (CRITICAL)
+==================================================
+- EVERY LINE OF VARIABLE FIELDS IS RENDERED EXACTLY ONCE. One line, one place on the canvas. Do not repeat a headline, a subhead or a callout in a second card, a second column, a corner block or a summary strip, and do not restate it in different words elsewhere. An empty region is not a reason to duplicate: leave it to the background rather than fill it with a copy.
+- THE <蓋章> LINE BELONGS TO THE STAMP BAR AND NOWHERE ELSE — never also as a body line, a subhead row, a card or a callout. It is the closing conclusion, so seeing it twice on one graphic reads as two separate statements of the same fact.
+- Add no text of your own. Every word on the canvas comes from VARIABLE FIELDS; if a layout region has nothing assigned to it, it carries no text.`;
 
 const TW_DIRECTIONAL_COLOR_RULES =
 `==================================================
@@ -1032,6 +1341,8 @@ MAP ACCURACY RULES (CRITICAL)
 - Distances stated in STRUCTURE must be drawn proportionally to the map scale and along the stated bearing.
 - Simplify coastline styling only. Never simplify or alter geographic positions, distances, bearings or relative scale.
 - Do not invent islands, coastlines, landmasses or maritime boundaries. If an accurate coastline cannot be maintained, draw a clean ocean coordinate grid with accurate point markers rather than fabricated geography.
+- EVERY MARKER CARRIES ITS OWN PLACE NAME, AND EVERY CALLOUT GOES TO THE MARKER THAT NAMES THE SAME PLACE. Set the place name beside its own marker, close enough that no reader has to guess which marker it belongs to. When a callout box names a place, its leader line must end at the marker for that place and no other; never let two leader lines cross each other on their way to markers whose names they do not match. A marker drawn in exactly the right spot still misreports the story if the box wired to it describes what happened somewhere else, and with no name on the marker itself the viewer has no way to catch it.
+- A FACT THAT NAMES NO PLACE BELONGS TO NONE OF THEM. Only wording that itself names a place may go into that place's marker label or callout. When a VARIABLE line does not itself name a place — 「最深積水40公分 多輛機車熄火」 sitting on its own line — do not attach it to one marker and do not spread it across several: deciding which of the marked places is the deepest, or which had the stalled scooters, is a claim the source never made, and on a map it reads as reported fact. Put such a line where it belongs to the whole graphic: a shared strip, a summary block, or a caption that points at nothing.
 - Claimed or disputed zones must read as schematic and carry only the label supplied in VARIABLE FIELDS, never as a settled international border.`;
 
 /* ---- 文字規則 / 安全區 常數 ---- */
@@ -1171,6 +1482,9 @@ async function digestNewsText(input) {
             type_label: digestTypeLabelForApi(),
             role: state.currentRole,
             density: state.digestDensity,
+            stamp: state.stamp,
+            tone: state.tone,
+            editor_format: state.editorFormat,
             safe_frame: state.safeFrame,
             user_instruction: currentUserInstruction(),
             portrait_photo_count: uploadedPortraitCount(),
@@ -1184,7 +1498,17 @@ async function digestNewsText(input) {
     return data;
 }
 
+// 指令欄可蓋過版面形式（2026-09-03），AI 回報的類型因此可能跟下拉選的不一樣。
+// 指定類型時把實際採用的類型講出來，免得下拉顯示 A、圖卻是 B。
+function noteChartTypeOverride(data) {
+    if (state.digestChartType === AUTO_TYPE_KEY) return;
+    const label = data && data.chart_type;
+    if (!label || label === digestType().label) return;
+    showToast(`依指令欄改用「${label}」版面`);
+}
+
 function applyDigestToForm(data) {
+    state.mapPoints = Array.isArray(data.map_points) ? data.map_points : [];
     const s = curSelected();
     s.style = {};
     s.structure = {};
@@ -1196,13 +1520,240 @@ function applyDigestToForm(data) {
         const resolvedKey = Object.keys(CHART_TYPES).find(k => CHART_TYPES[k].label === data.chart_type);
         state.digestResolvedType = resolvedKey || null;
         renderDigestTypes();
+    } else {
+        noteChartTypeOverride(data);
     }
     renderTags();
     updateCounter();
     claimPromptType("digest");
 }
 
+const COVER_BACKEND_URL = `${API_BASE}/api/editor/cover`;
+
+// 十點不一樣封面：使用者直接給兩個標題，中間沒有消化這一段，所以走自己的端點。
+// 下拉、產出區、下載都還在同一頁同一個位置，編輯不用切分頁。
+async function handleTenCoverGenerate() {
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    const titleLeft = val('coverTitleLeft');
+    const titleRight = val('coverTitleRight');
+    const visualLeft = val('coverVisualLeft');
+    const visualRight = val('coverVisualRight');
+    if (!titleLeft || !titleRight) return showToast('左右標題都要填');
+
+    const btn = document.getElementById('aiBtn');
+    const loading = document.getElementById('aiLoading');
+    btn.disabled = true;
+    loading.classList.remove('hidden');
+    let completed = false;
+    try {
+        const asisCount = uploadedAsisCount();
+        // 有原圖放置一律程式壓字（後端也會強制），這裡只是把提示講對
+        const composite = document.getElementById('coverAiTitle')?.checked === false || asisCount > 0;
+        const deriving = !visualLeft || !visualRight;
+        showToast(asisCount >= 2 ? '兩格都用附圖，合成中…'
+            : asisCount === 1 ? '單張附圖整版鋪滿，合成中…'
+            : composite
+                ? '生成左右底圖中，兩張平行跑，約 60–120 秒…'
+                : (deriving ? 'AI 補畫面描述後開始設計封面，約 40–140 秒…' : '設計封面中，約 30–120 秒…'));
+        beginGenerationProgress('image', asisCount >= 1 ? 0.3 : (composite ? 1.6 : 1.3));
+        const res = await fetch(COVER_BACKEND_URL, {
+            method: 'POST',
+            headers: _apiHeaders(),
+            body: JSON.stringify({
+                title_left: titleLeft,
+                title_right: titleRight,
+                visual_left: visualLeft,
+                visual_right: visualRight,
+                date_text: val('coverDate'),
+                badge: document.getElementById('coverBadge')?.value || 'on_air',
+                mode: composite ? 'composite' : 'ai',
+                provider: effectiveImageProvider(),
+                reference_images: userRefImagesPayload(),
+            }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(_apiError(data, res.status));
+
+        const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
+        document.getElementById('oneClickImage').src = imageUrl;
+        const download = document.getElementById('oneClickDownload');
+        download.href = imageUrl;
+        download.download = 'tvbs-ten-cover.png';
+        download.innerText = '下載 PNG';
+        // 封面是程式合成的，沒有可以餵回生圖模型的「置框前原圖」，追加修改不適用
+        resetRefineState(null, null);
+        // 回填實際採用的畫面描述（留空時是 AI 補的）。不填回去，使用者永遠不知道
+        // AI 幫他決定了什麼，也沒辦法在此基礎上微調重生。
+        [['coverVisualLeft', data.visual_left], ['coverVisualRight', data.visual_right]]
+            .forEach(([id, value]) => {
+                const field = document.getElementById(id);
+                if (field && value) field.value = value;
+            });
+        document.getElementById('oneClickLabel').innerText = editorFormat().label;
+        document.getElementById('oneClickMeta').innerText = `${titleLeft}｜${titleRight}`;
+        document.getElementById('oneClickEmpty').classList.add('hidden');
+        document.getElementById('oneClickResult').classList.remove('hidden');
+        completed = true;
+        showToast('封面已完成');
+    } catch (err) {
+        showToast(`封面生成失敗：${err.message}`);
+    } finally {
+        btn.disabled = false;
+        loading.classList.add('hidden');
+        endGenerationProgress(completed);
+    }
+}
+
+const COVER_TITLES_BACKEND_URL = `${API_BASE}/api/editor/cover-titles`;
+
+// 封面標題自動消化（2026-09-06）：貼新聞內文 → 文字模型出標題 → 回填欄位。
+// 刻意不接著生圖：使用者裁決要讓編輯看過標題再自己按「生成」。
+async function handleCoverTitleDigest(target) {
+    const ten = target === 'ten_cover';
+    const textarea = document.getElementById(ten ? 'coverNewsText' : 'ytCoverNewsText');
+    const newsText = (textarea?.value || '').trim();
+    if (newsText.length < 10) return showToast('先貼新聞內文（至少 10 個字）');
+    const btn = document.getElementById('aiBtn');
+    btn.disabled = true;
+    try {
+        showToast('AI 消化標題中，約 10–30 秒…');
+        const res = await fetch(COVER_TITLES_BACKEND_URL, {
+            method: 'POST',
+            headers: _apiHeaders(),
+            body: JSON.stringify({ news_text: newsText, target }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(_apiError(data, res.status));
+        if (ten) {
+            document.getElementById('coverTitleLeft').value = data.title_left || '';
+            document.getElementById('coverTitleRight').value = data.title_right || '';
+        } else {
+            document.getElementById('ytCoverTitle').value = data.title || '';
+        }
+        showToast('標題已回填，看過沒問題再按「生成」');
+    } catch (err) {
+        showToast(`消化標題失敗：${err.message}`);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+const YT_COVER_BACKEND_URL = `${API_BASE}/api/editor/yt-cover`;
+
+function ytCoverFields() {
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    const layout = editorFormat().ytLayout || 'news';
+    return {
+        title: val('ytCoverTitle'),
+        layout,
+        title_mode: document.getElementById('ytCoverAiTitle')?.checked === false ? 'composite' : 'ai',
+        original_audio: layout === 'news' && !!document.getElementById('ytCoverOriginalAudio')?.checked,
+        ai_translation: layout === 'news' && !!document.getElementById('ytCoverAiTranslation')?.checked,
+        date_text: val('ytCoverDate'),
+        time_text: layout === 'hourly' ? val('ytCoverTime') : '',
+    };
+}
+
+// 用既有底圖重疊文字（追加修改後、或只改標題／副標／日期）。
+// background 從 refineSource 來——那格語意就是「給改圖用的原圖」，這條線上它是無文字底圖。
+async function recomposeYtCover(refined) {
+    const source = refineSourceFromResponse(refined);
+    const res = await fetch(YT_COVER_BACKEND_URL, {
+        method: 'POST',
+        headers: _apiHeaders(),
+        body: JSON.stringify({
+            ...ytCoverFields(),
+            title_mode: state.ytCoverTitleMode,
+            provider: effectiveImageProvider(),
+            background_image_base64: source.base64,
+            background_mime_type: source.mimeType,
+            background_is_ai: state.ytCoverBackgroundIsAi,
+        }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(_apiError(data, res.status));
+    return data;
+}
+
+function showYtCoverResult(data, fields) {
+    const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
+    document.getElementById('oneClickImage').src = imageUrl;
+    const download = document.getElementById('oneClickDownload');
+    download.href = imageUrl;
+    download.download = { hourly: 'tvbs-yt-hourly-cover.png', hot: 'tvbs-yt-hot-cover.png' }[fields.layout] || 'tvbs-yt-live-cover.png';
+    download.innerText = '下載 PNG';
+    state.ytCoverBackgroundIsAi = !!data.background_is_ai;
+    state.ytCoverTitleMode = data.title_mode || 'ai';
+    // 追加修改：以無文字底圖為源，改完由 handleRefine 再疊一次文字
+    resetRefineState(refineSourceFromResponse(data), data);
+    const recompose = document.getElementById('ytCoverRecomposeBtn');
+    if (recompose) recompose.disabled = false;
+    document.getElementById('oneClickLabel').innerText = editorFormat().label;
+    document.getElementById('oneClickMeta').innerText =
+        [data.line1, data.line2,
+         fields.original_audio ? '原音呈現' : '', fields.ai_translation ? 'AI即時翻譯' : '',
+         fields.time_text].filter(Boolean).join('｜');
+    document.getElementById('oneClickEmpty').classList.add('hidden');
+    document.getElementById('oneClickResult').classList.remove('hidden');
+}
+
+// YT 直播封面。recomposeOnly=true：底圖不重生，只用目前欄位重疊文字。
+async function handleYtCoverGenerate(recomposeOnly = false) {
+    const fields = ytCoverFields();
+    if (!fields.title) return showToast('請輸入直播標題');
+    if (recomposeOnly && !state.refineSource) return showToast('還沒有底圖，請先生成一次');
+    // AI 標題模式的成品沒有「只改文字」這回事——字是模型畫的，改字就是整張重生
+    if (recomposeOnly && state.ytCoverTitleMode === 'ai') {
+        showToast('標題由 AI 生成，改字要整張重生…');
+        recomposeOnly = false;
+    }
+
+    const btn = document.getElementById('aiBtn');
+    const loading = document.getElementById('aiLoading');
+    btn.disabled = true;
+    loading.classList.remove('hidden');
+    let completed = false;
+    try {
+        let data;
+        if (recomposeOnly) {
+            showToast('用現有底圖重疊文字…');
+            data = await recomposeYtCover(state.refineDisplay || {
+                image_data_base64: state.refineSource.base64, mime_type: state.refineSource.mimeType,
+            });
+        } else {
+            const asis = state.userRefImages.some(ref => ref.purpose === 'asis');
+            const aiTitle = fields.title_mode === 'ai';
+            showToast(aiTitle ? 'AI 整張生成（含標題），約 30–120 秒…'
+                : asis ? '用附圖當底圖，合成中…' : 'AI 生底圖後合成，約 30–120 秒…');
+            beginGenerationProgress('image', (asis && !aiTitle) ? 0.3 : 1.3);
+            const res = await fetch(YT_COVER_BACKEND_URL, {
+                method: 'POST',
+                headers: _apiHeaders(),
+                body: JSON.stringify({
+                    ...fields,
+                    provider: effectiveImageProvider(),
+                    image_size: state.imageSize,
+                    reference_images: userRefImagesPayload(),
+                }),
+            });
+            data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(_apiError(data, res.status));
+        }
+        showYtCoverResult(data, fields);
+        completed = true;
+    } catch (err) {
+        console.error(err);
+        showToast(err.message || '封面生成失敗，請稍後再試');
+    } finally {
+        btn.disabled = false;
+        loading.classList.add('hidden');
+        endGenerationProgress(completed);
+    }
+}
+
 async function handleOneClickGenerate() {
+    if (editorFormat().inputs === 'cover') return handleTenCoverGenerate();
+    if (editorFormat().inputs === 'yt_cover') return handleYtCoverGenerate();
     const input = document.getElementById("aiInput").value.trim();
     if (!input) return showToast("請輸入欲生成的新聞內容");
 
@@ -1246,6 +1797,13 @@ async function handleOneClickGenerate() {
                 image_size: state.imageSize,
                 safe_frame: state.safeFrame,
                 safe_frame_profile: state.currentRole,
+                // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
+                // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
+                broadcast_hole: editorFormat().hole || '',
+                // 地圖類的真實座標（消化端列地名、後端實查 Nominatim）。後端據此
+                // 拼一張真實底圖、把標點畫在正確位置再當參考圖附上——模型記憶裡的
+                // 經緯度實測差到 2.3 公里，冷門地名尤其不準。
+                map_points: state.mapPoints,
                 portrait_subjects: state.portraitSubjects,
                 portrait_subjects_en: state.portraitSubjectsEn,
                 reference_images: userRefImagesPayload(),
@@ -1304,6 +1862,9 @@ async function handleAIDigestion() {
                 type_label: typeLabel,
                 role: state.currentRole,
                 density: state.digestDensity,
+                stamp: state.stamp,
+                tone: state.tone,
+                editor_format: state.editorFormat,
                 // 安全框 ON 時消化要出滿版版面，否則 STRUCTURE 的「縮小置中」
                 // 開頭句會跟最終 prompt 的 FULL-FRAME RULES 互相打架
                 safe_frame: state.safeFrame,
@@ -1332,6 +1893,8 @@ async function handleAIDigestion() {
                 .find(k => CHART_TYPES[k].label === data.chart_type);
             state.digestResolvedType = resolvedKey || null;
             renderDigestTypes();
+        } else {
+            noteChartTypeOverride(data);
         }
 
         renderTags(); updateCounter();
@@ -1424,6 +1987,13 @@ async function handleImageGeneration() {
                 image_size: state.imageSize,
                 safe_frame: state.safeFrame,
                 safe_frame_profile: state.currentRole,
+                // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
+                // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
+                broadcast_hole: editorFormat().hole || '',
+                // 地圖類的真實座標（消化端列地名、後端實查 Nominatim）。後端據此
+                // 拼一張真實底圖、把標點畫在正確位置再當參考圖附上——模型記憶裡的
+                // 經緯度實測差到 2.3 公里，冷門地名尤其不準。
+                map_points: state.mapPoints,
                 portrait_subjects: state.portraitSubjects,
                 portrait_subjects_en: state.portraitSubjectsEn
             })
@@ -1463,6 +2033,32 @@ function currentUserInstruction() {
     return el ? el.value.trim() : '';
 }
 
+// 指令欄的需求蓋過 UI 按鈕（2026-09-03 使用者裁決），後端已明文寫進優先序規則。
+// 前端只負責讓使用者看得出來「你在指令欄寫的會贏過旁邊那顆按鈕」，刻意不自動去
+// 翻開關——「不要蓋章／蓋章拿掉／要有蓋章」這類否定句用關鍵字判，翻錯比不翻更糟。
+const INSTRUCTION_OVERRIDE_HINTS = [
+    { re: /蓋章/, text: '蓋章' },
+    { re: /逐字|不要刪|不刪|完全依照|原文照|一字不|精簡|濃縮|字數|簡短|多一點字/, text: '消化程度' },
+    { re: /版面|版型|圖表|地圖|流程|示意|長條|折線|圓餅/, text: '版面形式' },
+    { re: /色調|亮一點|暗一點|亮色|暗色|淺底|深底|白底|黑底/, text: '色調' },
+    { re: /風格|手繪|寫實|扁平|質感/, text: '風格' },
+    { re: /附圖|參考圖|原圖|照片/, text: '參考附圖' },
+];
+
+function updateInstructionOverrideHint() {
+    const hint = document.getElementById('instructionOverrideHint');
+    if (!hint) return;
+    const text = currentUserInstruction();
+    const hits = text ? INSTRUCTION_OVERRIDE_HINTS.filter(h => h.re.test(text)).map(h => h.text) : [];
+    if (!hits.length) {
+        hint.classList.add('hidden');
+        hint.innerText = '';
+        return;
+    }
+    hint.classList.remove('hidden');
+    hint.innerText = `指令欄提到${hits.join('、')}：以指令欄為準，會蓋過上面的按鈕設定。`;
+}
+
 /* ============================================================
    ② 使用者上傳參考圖（地圖底稿／實景參考）
    肖像照仍由後端 resolve_portrait 自動查，這裡刻意不開人臉上傳。
@@ -1474,7 +2070,53 @@ const REF_MAX_BYTES = 1.5 * 1024 * 1024;
 // （2026-08-17 使用者裁決）；沒附照片的人後端規則仍要求不畫臉。
 const REF_PURPOSES = { map: '地圖底稿', scene: '實景參考', portrait: '肖像照片', asis: '原圖放置' };
 
-function handleRefFilesSelected(input) {
+// data URL 的 base64 部分解碼回原始 bytes 的實際大小（含 padding 校正）。
+function dataUrlByteLength(dataUrl) {
+    const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+    const padding = (base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0);
+    return Math.floor(base64.length * 0.75) - padding;
+}
+
+// 超過 REF_MAX_BYTES 時自動壓縮，不再直接擋掉使用者：
+// 依序降 JPEG 品質，再不行就等比縮小長邊，兩層都到底仍超標就取最後一次結果
+// （交給後端的 max_length 校驗把關，不在前端硬擋）。
+// 轉檔統一輸出 JPEG——參考圖（地圖底稿／實景／肖像／原圖放置）不需要透明度。
+function compressImageFile(file, maxBytes) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        const objectUrl = URL.createObjectURL(file);
+        img.onload = () => {
+            URL.revokeObjectURL(objectUrl);
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            let scale = 1;
+            const qualitySteps = [0.9, 0.8, 0.7, 0.6, 0.5, 0.4];
+            let best = null;
+            const renderAt = (currentScale) => {
+                canvas.width = Math.max(1, Math.round(img.naturalWidth * currentScale));
+                canvas.height = Math.max(1, Math.round(img.naturalHeight * currentScale));
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            };
+            outer:
+            for (let round = 0; round < 6; round += 1) {
+                renderAt(scale);
+                for (const quality of qualitySteps) {
+                    const dataUrl = canvas.toDataURL('image/jpeg', quality);
+                    const size = dataUrlByteLength(dataUrl);
+                    if (!best || size < dataUrlByteLength(best)) best = dataUrl;
+                    if (size <= maxBytes) break outer;
+                }
+                scale *= 0.75; // 品質降到底仍超標，縮小長邊再重試
+            }
+            resolve(best);
+        };
+        img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error('圖片讀取失敗')); };
+        img.src = objectUrl;
+    });
+}
+
+async function handleRefFilesSelected(input) {
     const files = Array.from(input.files || []);
     input.value = '';
     for (const file of files) {
@@ -1482,16 +2124,27 @@ function handleRefFilesSelected(input) {
             showToast(`參考圖最多 ${REF_MAX_FILES} 張`);
             break;
         }
-        if (file.size > REF_MAX_BYTES) {
-            showToast(`「${file.name}」超過 1.5MB，請縮小後再上傳`);
+        if (file.size <= REF_MAX_BYTES) {
+            const reader = new FileReader();
+            reader.onload = () => {
+                state.userRefImages.push({ dataUrl: reader.result, purpose: 'scene', name: file.name });
+                renderRefUploads();
+            };
+            reader.readAsDataURL(file);
             continue;
         }
-        const reader = new FileReader();
-        reader.onload = () => {
-            state.userRefImages.push({ dataUrl: reader.result, purpose: 'scene', name: file.name });
+        try {
+            const dataUrl = await compressImageFile(file, REF_MAX_BYTES);
+            if (dataUrlByteLength(dataUrl) > REF_MAX_BYTES) {
+                showToast(`「${file.name}」壓縮後仍過大，請換一張較小的圖`);
+                continue;
+            }
+            showToast(`「${file.name}」已自動壓縮上傳`);
+            state.userRefImages.push({ dataUrl, purpose: 'scene', name: file.name });
             renderRefUploads();
-        };
-        reader.readAsDataURL(file);
+        } catch (err) {
+            showToast(`「${file.name}」壓縮失敗：${err.message}`);
+        }
     }
 }
 
@@ -1612,6 +2265,10 @@ async function handleRefine() {
     btnText.innerText = '修改中…';
     loading.classList.remove('hidden');
 
+    // YT 直播封面：不置框、不挖洞、固定 16:9。壓字模式改的是無文字底圖（text_free）；
+    // AI 標題模式改的是含標題的模型圖，走一般 refine 規則（字要保留）。
+    const isYtCover = editorFormat().inputs === 'yt_cover';
+    const ytTextFree = isYtCover && state.ytCoverTitleMode !== 'ai';
     try {
         const response = await fetch(REFINE_BACKEND_URL, {
             method: 'POST',
@@ -1621,14 +2278,22 @@ async function handleRefine() {
                 source_mime_type: state.refineSource.mimeType,
                 instruction,
                 provider: effectiveImageProvider(),
-                aspect_ratio: currentAspectRatio(),
+                aspect_ratio: isYtCover ? '16:9' : currentAspectRatio(),
                 image_size: state.imageSize,
-                safe_frame: state.safeFrame,
+                safe_frame: isYtCover ? false : state.safeFrame,
                 safe_frame_profile: state.currentRole,
+                // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
+                // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
+                broadcast_hole: isYtCover ? '' : (editorFormat().hole || ''),
+                text_free: ytTextFree,
             }),
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(_apiError(data, response.status));
+
+        // YT 直播封面：refine 只改了無文字底圖，要再疊一次文字才是成品。
+        // 回來的 data 帶著 source_image_base64＝新底圖，refineSource 因此自動接上。
+        const shown = isYtCover ? await recomposeYtCover(data) : data;
 
         // 退回上一版用：存目前這一版的置框前原圖與顯示中成品（都在 state，不碰 DOM）
         state.refineStack.push({
@@ -1636,9 +2301,11 @@ async function handleRefine() {
             display: state.refineDisplay,
         });
         // 下一輪修改要用**新的**置框前原圖，不是成品
-        state.refineSource = refineSourceFromResponse(data);
-        state.refineDisplay = data;
-        showRefinedImage(data);
+        state.refineSource = refineSourceFromResponse(shown);
+        state.refineDisplay = shown;
+        showRefinedImage(shown);
+        // 封面的成品標籤維持版型名，不顯示內部的 recomposite 模型字串
+        if (isYtCover) document.getElementById('oneClickLabel').innerText = editorFormat().label;
         input.value = '';
         showToast('修改完成');
     } catch (err) {

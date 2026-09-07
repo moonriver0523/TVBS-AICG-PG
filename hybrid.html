@@ -63,6 +63,12 @@
     background: #0b1120; border: 1px solid var(--border); border-radius: 5px;
   }
   #btnPaletteReset { background: transparent; border: 1px solid var(--border); color: var(--muted); font-size: 12px; padding: 7px; }
+  /* 程式壓字統一用 repo 自帶台北黑體 Bold（與後端 compose.py 同一檔），預覽與匯出才一致 */
+  @font-face {
+    font-family: "Taipei Sans TC Beta";
+    src: url("/static/fonts/TaipeiSansTCBeta-Bold.ttf") format("truetype");
+    font-weight: 700; font-style: normal; font-display: block;
+  }
 </style>
 </head>
 <body>

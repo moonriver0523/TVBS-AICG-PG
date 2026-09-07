@@ -30,7 +30,7 @@ class DigestStageFidelityTests(unittest.TestCase):
 
     def all_variants(self):
         for role in ("記者", "編輯"):
-            for density in ("standard", "simplified"):
+            for density in ("standard", "simplified", "verbatim"):
                 yield role, density, build_digest_instructions(role, density, "資料圖表")
 
     def test_every_role_and_density_carries_the_rules(self):
