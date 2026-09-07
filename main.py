@@ -3151,11 +3151,15 @@ class CoverVisuals(tuple):
 
     subjects: tuple[list[str], list[str]] = ([], [])
     english: tuple[list[str], list[str]] = ([], [])
+    # 這次查到的參考照（{人名: ReferencePhoto}，每格一份）。留著是為了落檔記出處
+    # （portrait_photo_source），不是為了傳給生圖端——見 keep_subjects_with_photos。
+    photos: tuple[dict, dict] = ({}, {})
 
-    def __new__(cls, left: str, right: str, subjects=None, english=None):
+    def __new__(cls, left: str, right: str, subjects=None, english=None, photos=None):
         self = super().__new__(cls, (left, right))
         self.subjects = tuple(subjects) if subjects else ([], [])
         self.english = tuple(english) if english else ([], [])
+        self.photos = tuple(photos) if photos else ({}, {})
         return self
 
 
@@ -3164,6 +3168,65 @@ def cover_portraits(visuals, side: int) -> tuple[list[str], list[str]]:
     subjects = getattr(visuals, "subjects", ([], []))
     english = getattr(visuals, "english", ([], []))
     return list(subjects[side]), list(english[side])
+
+
+def cover_portrait_photos(visuals, side: int) -> dict:
+    """某一格查到的參考照；純 tuple（mock）就是沒有。"""
+    photos = getattr(visuals, "photos", ({}, {}))
+    return dict(photos[side])
+
+
+def keep_subjects_with_photos(
+    subjects: list[str],
+    english: list[str],
+    *,
+    uploaded_portraits: int = 0,
+    tag: str,
+) -> tuple[list[str], list[str], dict]:
+    """把查不到參考照的人從名單移除，回 (剩下的人, 對應英文名, 查到的照片)。
+
+    封面與 YT 封面的 `apply_photo_availability` 等價物（2026-09-07）。主流程在**消化階段**
+    就把查不到照片的人排出版面；封面這兩條線沒有消化階段，名單是補畫面描述時一併產生的，
+    所以在同一個地方做。
+
+    不做這件事會怎樣：`resolve_portraits` 是全有或全無——兩個人裡有一個查不到，
+    整張退回不畫臉，連查得到的那位也變成背影。使用者看到的是「明明有照片還是畫背影」。
+
+    使用者上傳的肖像照視為對應**系統查不到的人**、依序對應（假設與理由完整寫在
+    `apply_photo_availability`）：`uploaded_portraits` 張就保留前幾位查不到的人，
+    否則會把「正因為維基查不到才自己上傳照片」的那位刪掉。
+
+    回傳的 photos 只用來落檔記出處。生圖端（`apply_portrait_to_image_request`）沒有可以
+    收現成照片的參數，會再查一次——刻意接受這次重查，而不是為了省一次查詢在
+    `ImageGenerateRequest` 上開一個只有封面用得到的欄位。查圖有快取層，重查很便宜。
+    """
+    if not subjects:
+        return [], [], {}
+    photos, missing = lookup_portrait_photos(subjects, english)
+    if uploaded_portraits:
+        missing = missing[uploaded_portraits:]
+    if not missing:
+        return list(subjects), list(english), photos
+    kept = [(name, en) for name, en in zip(subjects, english) if name not in missing]
+    if not kept:
+        # 全部都查不到時**不清空名單**（刻意與 apply_photo_availability 不同）：
+        # 主流程清掉之後會重新消化一次，版面描述也跟著不提那個人；封面這條線
+        # 沒有第二次消化，畫面描述仍寫著「梅爾茨站在講台前正面半身」。名單一空，
+        # apply_portrait_to_image_request 就不注入任何肖像規則，模型會替一個真名
+        # 憑空捏一張臉——這個專案定義最糟的組合。保留名單才會走 no_reference
+        # （明文禁止畫臉、改背影），那仍是可播的結果。
+        print(
+            f"[{tag}] 查不到任何一位的參考照（{'、'.join(missing)}），"
+            "保留名單走「不生成臉孔」規則",
+            flush=True,
+        )
+        return list(subjects), list(english), photos
+    print(
+        f"[{tag}] 查不到參考照（{'、'.join(missing)}），把他們從肖像名單移除，"
+        "剩下的人照樣畫臉",
+        flush=True,
+    )
+    return [name for name, _ in kept], [en for _, en in kept], photos
 
 
 def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
@@ -3207,20 +3270,29 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
 
     derived_left = (data.get("visual_left") or "").strip()
     derived_right = (data.get("visual_right") or "").strip()
-    subjects, english = [], []
-    for side in ("left", "right"):
+    # 上傳的肖像照兩格共用（附圖清單不分左右），所以每格都以同一個張數計。
+    uploaded = sum(1 for ref in req.reference_images if ref.purpose == "portrait")
+    subjects, english, photos = [], [], []
+    for index, side in enumerate(("left", "right")):
         names = clean_portrait_subjects(data.get(f"portrait_subjects_{side}"))
-        subjects.append(names)
-        english.append(align_english_names(
+        aligned = align_english_names(
             names,
             [str(x) for x in (data.get(f"portrait_subjects_{side}_en") or [])],
             [str(x) for x in (data.get(f"portrait_subjects_{side}") or [])],
-        ))
+        )
+        # 查不到參考照的人先移除，不然 resolve_portraits 的「全有或全無」會讓
+        # 查得到的那位也一起變背影（見 keep_subjects_with_photos）
+        kept, kept_en, found = keep_subjects_with_photos(
+            names, aligned, uploaded_portraits=uploaded, tag=f"cover:{side}"
+        )
+        subjects.append(kept)
+        english.append(kept_en)
+        photos.append(found)
     # 使用者填的永遠優先，AI 只補空的那一欄；肖像名單一律採 AI 的
     return CoverVisuals(
         left or derived_left or req.title_left.strip(),
         right or derived_right or req.title_right.strip(),
-        subjects, english,
+        subjects, english, photos,
     )
 
 
@@ -3486,6 +3558,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         visual = CoverVisuals(
             req.visual_left.strip() or resolved[0], "",
             (cover_portraits(resolved, 0)[0], []), (cover_portraits(resolved, 0)[1], []),
+            (cover_portrait_photos(resolved, 0), {}),
         )
     is_ai = True
     try:
@@ -3676,6 +3749,25 @@ def derive_yt_cover_plan(title: str, preset_lines: tuple[str, str] | None) -> di
     return data if isinstance(data, dict) else {}
 
 
+class YtCoverPlan(tuple):
+    """(兩行標題, 畫面描述, 具名真人, 英文名) 再多帶查到的參考照（2026-09-07）。
+
+    做成 tuple 子類別的理由同 `CoverVisuals`：既有呼叫端與測試都是四元解包，
+    mock 回傳純 tuple 也照樣能用。`.photos` 只用來落檔記照片出處。
+    """
+
+    photos: dict = {}
+
+    def __new__(cls, lines, visual, subjects, english, photos=None):
+        self = super().__new__(cls, (lines, visual, subjects, english))
+        self.photos = dict(photos or {})
+        return self
+
+
+def yt_cover_plan_photos(plan) -> dict:
+    return dict(getattr(plan, "photos", {}))
+
+
 def resolve_yt_cover_plan(
     req: "YtCoverRequest",
 ) -> tuple[tuple[str, str], str, list[str], list[str]]:
@@ -3714,7 +3806,12 @@ def resolve_yt_cover_plan(
         [str(x) for x in (data.get("portrait_subjects_en") or [])],
         [str(x) for x in (data.get("portrait_subjects") or [])],
     )
-    return lines, visual, subjects, english
+    # 查不到參考照的人先移除，剩下的人照樣畫臉（見 keep_subjects_with_photos）
+    uploaded = sum(1 for ref in req.reference_images if ref.purpose == "portrait")
+    subjects, english, photos = keep_subjects_with_photos(
+        subjects, english, uploaded_portraits=uploaded, tag="yt-cover"
+    )
+    return YtCoverPlan(lines, visual, subjects, english, photos)
 
 
 def _yt_cover_background(
