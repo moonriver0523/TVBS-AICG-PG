@@ -343,6 +343,8 @@ let state = {
     selectedByType: {},
     // ② 使用者上傳的參考圖：[{dataUrl, purpose:'map'|'scene', name}]
     userRefImages: [],
+    // 十點封面左右上傳位（2026-09-07）：{left:{dataUrl,name}|null, right:...}
+    coverAsis: { left: null, right: null },
     // ③ 追加修改用：**置框前**原圖（不是顯示中的成品——成品餵回去會二次拉伸）
     // refineSource = {base64, mimeType}；refineDisplay = 顯示中成品的原始回傳；
     // refineStack 供「退回上一版」
@@ -458,7 +460,7 @@ function editorFormat() {
 
 /* 消化程度三檔。key 與後端 DigestDensity 一致，改這裡要同步改 main.py */
 const DENSITY_LABELS = {
-    verbatim: '不消化',
+    verbatim: '不改字',   // 2026-09-07 使用者裁決：UI 顯示改「不改字」，key 與後端 verbatim 不動
     simplified: '字少',
     standard: '字多',
 };
@@ -842,7 +844,7 @@ function switchDigestDensity(density) {
     updateAIBtnRoleHint();
     const label = DENSITY_LABELS[density] || density;
     showToast(density === 'verbatim'
-        ? '已切換至「不消化」：貼上的內文一字不改，AI 只做版面'
+        ? '已切換至「不改字」：貼上的內文一字不改，AI 只做版面'
         : `AI 消化已切換至「${label}」`);
 }
 
@@ -1547,16 +1549,21 @@ async function handleTenCoverGenerate() {
     loading.classList.remove('hidden');
     let completed = false;
     try {
-        const asisCount = uploadedAsisCount();
+        const slots = coverAsisSlots();
+        const slotCount = (slots.left ? 1 : 0) + (slots.right ? 1 : 0);
+        const asisCount = slotCount || uploadedAsisCount();
         // 有原圖放置一律程式壓字（後端也會強制），這裡只是把提示講對
         const composite = document.getElementById('coverAiTitle')?.checked === false || asisCount > 0;
         const deriving = !visualLeft || !visualRight;
-        showToast(asisCount >= 2 ? '兩格都用附圖，合成中…'
+        showToast(slots.left && slots.right ? '兩格都用附圖，合成中…'
+            : slots.left ? '左格用附圖，右格生底圖中，約 30–90 秒…'
+            : slots.right ? '右格用附圖，左格生底圖中，約 30–90 秒…'
+            : asisCount >= 2 ? '兩格都用附圖，合成中…'
             : asisCount === 1 ? '單張附圖整版鋪滿，合成中…'
             : composite
                 ? '生成左右底圖中，兩張平行跑，約 60–120 秒…'
                 : (deriving ? 'AI 補畫面描述後開始設計封面，約 40–140 秒…' : '設計封面中，約 30–120 秒…'));
-        beginGenerationProgress('image', asisCount >= 1 ? 0.3 : (composite ? 1.6 : 1.3));
+        beginGenerationProgress('image', asisCount >= 2 ? 0.3 : slotCount === 1 ? 1.0 : asisCount === 1 ? 0.3 : (composite ? 1.6 : 1.3));
         const res = await fetch(COVER_BACKEND_URL, {
             method: 'POST',
             headers: _apiHeaders(),
@@ -1570,6 +1577,8 @@ async function handleTenCoverGenerate() {
                 mode: composite ? 'composite' : 'ai',
                 provider: effectiveImageProvider(),
                 reference_images: userRefImagesPayload(),
+                asis_left: state.coverAsis.left?.dataUrl || '',
+                asis_right: state.coverAsis.right?.dataUrl || '',
             }),
         });
         const data = await res.json().catch(() => ({}));
@@ -2165,6 +2174,9 @@ function renderRefUploads() {
         const select = document.createElement('select');
         select.className = 'bg-slate-900 border border-slate-700 rounded text-[10px] text-slate-200 px-1.5 py-1';
         for (const [value, label] of Object.entries(REF_PURPOSES)) {
+            // 十點封面有自己的左右附圖位（2026-09-07），通用清單不再提供「原圖放置」，
+            // 免得又出現分不清左右的附圖
+            if (value === 'asis' && state.editorFormat === 'ten_cover' && ref.purpose !== 'asis') continue;
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
@@ -2211,6 +2223,57 @@ function uploadedPortraitCount() {
 // 的原圖放置規則（2026-08-23 記者/編輯版各出過一次附圖被忽略的案例）。
 function uploadedAsisCount() {
     return state.userRefImages.filter(ref => ref.purpose === 'asis').length;
+}
+
+// 十點封面左右上傳位：單張，超過大小自動壓縮（與參考圖同一套）。
+async function handleCoverAsisSelected(side, input) {
+    const file = (input.files || [])[0];
+    input.value = '';
+    if (!file) return;
+    try {
+        let dataUrl;
+        if (file.size <= REF_MAX_BYTES) {
+            dataUrl = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(new Error('圖片讀取失敗'));
+                reader.readAsDataURL(file);
+            });
+        } else {
+            dataUrl = await compressImageFile(file, REF_MAX_BYTES);
+            if (dataUrlByteLength(dataUrl) > REF_MAX_BYTES) return showToast(`「${file.name}」壓縮後仍過大，請換一張較小的圖`);
+            showToast(`「${file.name}」已自動壓縮上傳`);
+        }
+        state.coverAsis[side] = { dataUrl, name: file.name };
+    } catch (err) {
+        return showToast(`「${file.name}」讀取失敗：${err.message}`);
+    }
+    renderCoverAsis();
+}
+
+function clearCoverAsis(side) {
+    state.coverAsis[side] = null;
+    renderCoverAsis();
+}
+
+function renderCoverAsis() {
+    for (const [side, cap] of [['left', 'Left'], ['right', 'Right']]) {
+        const ref = state.coverAsis[side];
+        const preview = document.getElementById(`coverAsis${cap}Preview`);
+        const hint = document.getElementById(`coverAsis${cap}Hint`);
+        if (!preview) continue;
+        preview.classList.toggle('hidden', !ref);
+        preview.classList.toggle('flex', !!ref);
+        if (hint) hint.textContent = ref ? '這格直接用附圖' : '沒圖＝這格由 AI 生底圖';
+        if (ref) {
+            document.getElementById(`coverAsis${cap}Img`).src = ref.dataUrl;
+            document.getElementById(`coverAsis${cap}Name`).textContent = ref.name;
+        }
+    }
+}
+
+function coverAsisSlots() {
+    return { left: !!state.coverAsis.left, right: !!state.coverAsis.right };
 }
 
 /* ============================================================
