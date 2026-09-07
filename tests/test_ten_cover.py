@@ -130,6 +130,28 @@ class ComposeTests(unittest.TestCase):
         with self.assertRaises(compose.ComposeError):
             self._cover(badge="nope")
 
+    def test_ai_cover_paste_fits_logo_and_tag_inside_header_band(self):
+        """2026-09-07：AI 整張版的 Logo 原本寬佔 18.5%，在一成高的標頭帶裡爆出來壓到照片。
+        改成跟合成版同一套幾何：Logo＋節目標籤都貼在標頭帶左半、不超出帶高。"""
+        w, h = 1536, 864
+        base = Image.new("RGB", (w, h), (12, 20, 60))          # 整張深藍，模擬模型留白的標頭帶
+        buf = io.BytesIO(); base.save(buf, format="PNG")
+        out = Image.open(io.BytesIO(compose.paste_cover_logo(buf.getvalue()))).convert("RGB")
+        band_h = round(h * compose.COVER_AI_HEADER_RATIO)
+        px = list(out.getdata())
+        def count(box, pred):
+            x0, y0, x1, y1 = box
+            return sum(1 for y in range(y0, y1) for x in range(x0, x1) if pred(px[y * w + x]))
+        white = lambda p: p[0] > 220 and p[1] > 220 and p[2] > 220
+        gold = lambda p: p[0] > 170 and p[1] > 120 and p[2] < 110
+        # 帶內左半有 Logo 白點與標籤金「十」
+        self.assertGreater(count((0, 0, w // 2, band_h), white), 800)
+        self.assertGreater(count((0, 0, w // 2, band_h), gold), 100)
+        # 帶下方（照片區）完全沒被貼到
+        self.assertEqual(count((0, band_h + 2, w, h), lambda p: p != (12, 20, 60)), 0)
+        # 右半帶（日期／ON AIR 由模型畫）不動
+        self.assertEqual(count((w // 2, 0, w, band_h), lambda p: p != (12, 20, 60)), 0)
+
     def test_highlight_badge_pastes_round_stamp_mid_bottom(self):
         """精華：標頭仍 ON AIR，畫面中下方貼藍光圓章（模板），非精華時該區不出現亮藍環。"""
         on_air = self._cover(badge="on_air")

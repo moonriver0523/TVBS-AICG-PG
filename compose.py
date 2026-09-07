@@ -31,7 +31,7 @@ BRAND_DIR = pathlib.Path(__file__).resolve().parent / "static" / "brand"
 TVBS_LOGO_WHITE = BRAND_DIR / "tvbs-logo-white.png"
 # 2026-09-07：節目／單元標籤改貼固定模板（gpt-image-2 依型錄原版重繪、透明底），
 # 程式畫的圓角矩形＋字型版本被使用者裁定不好看。模板只縮放不變形，缺檔直接報錯。
-TEN_SHOW_TAG = BRAND_DIR / "ten-show-tag.png"   # 「十點不一樣」藍色斜切標籤
+TEN_SHOW_TAG = BRAND_DIR / "ten-show-tag.png"  # 2026-09-07 換成正版樣式：藍色斜切、金「十」＋白字、NEWS NIGHT
 HOT_SEARCH_TAG = BRAND_DIR / "hot-search-tag.png"  # 「今日｜熱搜🔍」紅色三格標籤
 TEN_BOTTOM_LINE = BRAND_DIR / "ten-bottom-line.png"  # 十點封面底部：深藍帶＋發光直線（依 0901／0902 原版）
 TEN_HIGHLIGHT_STAMP = BRAND_DIR / "ten-highlight-stamp.png"  # 精華圓章：深藍圓＋藍光環＋「十點不一樣／精華」（依 0819 原版）
@@ -312,32 +312,35 @@ COVER_STAMP_TOP_RATIO = 0.67         # 圓章頂端位置（0819：底部文字�
 COVER_MAX_TITLE_LINES = 3
 
 
-# 純 prompt 版唯一的後製：把正版白色 Logo 貼在模型刻意留空的左上角。
+# 純 prompt 版的後製：把正版白色 Logo＋「十點不一樣」節目標籤貼進模型留空的標頭帶左半。
 # 位置與大小用畫布比例算，模型回什麼解析度都對得上。
-# 比例取自使用者的範例封面（1672×941）：logo 佔 x 20..345、y 10..178。
-COVER_LOGO_WIDTH_RATIO = 0.185
-COVER_LOGO_LEFT_RATIO = 0.015
-COVER_LOGO_TOP_RATIO = 0.015
+# 2026-09-07：原本 Logo 寬佔 18.5%（量自舊範例），在一成高的標頭帶裡整個爆出來壓到照片；
+# 改成跟合成版同一套幾何——以標頭帶高為準，Logo 佔帶高 70%、標籤佔 80%，垂直置中。
+COVER_AI_HEADER_RATIO = 0.10          # prompt 寫「about one tenth」，貼圖以此為準
+COVER_AI_LEFT_RATIO = 0.015
 
 
 def paste_cover_logo(image_bytes: bytes) -> bytes:
-    """在 AI 畫好的封面左上角貼上正版白色 Logo。
+    """在 AI 畫好的封面標頭帶左半貼上正版白色 Logo 與節目標籤模板。
 
-    prompt 已明令模型不准畫任何電視台標誌、並把左上角留白（見
+    prompt 已明令模型不准畫任何電視台標誌／節目名、並把標頭帶左半留白（見
     editor_formats.COVER_AI_PROMPT_TEMPLATE）。就算模型沒聽話畫了東西，
     貼上去也會蓋掉——與播出鏡面挖空框同一個原則：不靠模型自律。
     """
     with Image.open(io.BytesIO(image_bytes)) as opened:
-        canvas = opened.convert("RGB")
-        width = max(1, round(canvas.width * COVER_LOGO_WIDTH_RATIO))
-        box = (
-            round(canvas.width * COVER_LOGO_LEFT_RATIO),
-            round(canvas.height * COVER_LOGO_TOP_RATIO),
-        )
-        _paste_logo(canvas, box, width)
+        canvas = opened.convert("RGBA")
+    width, height = canvas.size
+    band_h = round(height * COVER_AI_HEADER_RATIO)
+    logo_h = max(1, round(band_h * 0.70))
+    with Image.open(TVBS_LOGO_WHITE) as logo_file:
+        logo_w = max(1, round(logo_h * logo_file.width / logo_file.height))
+    logo_x = round(width * COVER_AI_LEFT_RATIO)
+    _paste_logo(canvas, (logo_x, (band_h - logo_h) // 2), logo_w)
+    tag_h = max(1, round(band_h * 0.80))
+    _paste_template(canvas, TEN_SHOW_TAG, (logo_x + logo_w + round(width * 0.02), (band_h - tag_h) // 2), tag_h)
 
     buffer = io.BytesIO()
-    canvas.save(buffer, format="PNG")
+    canvas.convert("RGB").save(buffer, format="PNG")
     return buffer.getvalue()
 
 

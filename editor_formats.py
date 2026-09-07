@@ -97,6 +97,8 @@ Requirements:
 # 「除了 Logo 之外所有文字都要有設計感」，所以整張交給生圖模型，一次成形。
 #
 # 唯一的後製只剩 Logo：正版 Logo 讓模型畫必定變形，那是播出事故，不能賭。
+# 2026-09-07 起「十點不一樣」節目標籤也改貼模板（static/brand/ten-show-tag.png，
+# 使用者給的正版樣式：藍色斜切、金色「十」＋白字、NEWS NIGHT），模型不再畫節目名。
 # 所以 prompt 明令不准畫任何電視台標誌，並在左上角留一塊乾淨的位置給程式貼。
 #
 # 代價講在前面：模型畫中文有機率出錯字，而封面上的錯字是對外事故。合成版仍留在
@@ -108,7 +110,6 @@ COVER_AI_PROMPT_TEMPLATE = """Design a complete, broadcast-quality Chinese-langu
 
 === TEXT TO RENDER (Traditional Chinese, Taiwan) ===
 Render EXACTLY these strings, character for character. Do not translate them, do not rewrite them, do not shorten them, and do not add any other words, letters or numbers anywhere in the image.
-- Programme name, as a SMALL blue rounded tag inside the header band, to the right of the empty logo area: 十點不一樣
 - Small red rounded tag at the RIGHT end of the header band: {badge_text}
 - Date, in the header band immediately to the left of that tag: {date_text}
 - Headline of the LEFT panel, LEFT-aligned in its lower-left area, over the photograph: {title_left}
@@ -116,7 +117,6 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 - A small unobtrusive label just below the header band, at the outer top corner of each panel: AI示意圖
 
 === TYPOGRAPHY (this is the point of the image) ===
-- Programme name 十點不一樣: FLAT, SOLID WHITE, bold sans-serif, small, sitting on a small blue rounded tag inside the header band. Absolutely NO metallic, chrome, silver, gold, gradient, glossy, bevelled, embossed or 3-D extruded treatment — it is plain white type on a blue tag, clean and quiet; it is NOT a large title.
 - The two headlines are the loudest thing in the frame: very heavy condensed Chinese display type, BROKEN INTO TWO OR THREE STACKED LINES each (split each headline at a natural phrase boundary yourself), tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of each photograph darkens gently so the headline stays readable.
 - COLOUR EACH LINE DIFFERENTLY within a headline — that variation is required, not optional. Follow this order: the FIRST line solid white, the SECOND line bright golden yellow, the THIRD line (if any) vivid red with a white outline. Never render a whole headline in one flat colour.
 - The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
@@ -130,7 +130,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 - Both are photographic, dramatically lit, news-documentary quality, filling their panel edge to edge behind the headline, meeting at the diagonal seam.
 
 === HARD CONSTRAINTS ===
-- NO television channel logo, NO station identity mark, NO broadcaster wordmark, NO dot-pattern emblem, NO watermark of any kind. The upper-LEFT corner of the header band (the left-most fifth of the band) must be left as clean empty navy background — a real logo is placed there afterwards, so keep that corner free of text, graphics and busy detail.
+- NO television channel logo, NO station identity mark, NO broadcaster wordmark, NO dot-pattern emblem, NO watermark of any kind, and do NOT write the programme name (十點不一樣) anywhere. The upper-LEFT corner of the header band — its entire LEFT HALF — must be left as clean empty navy background: the real channel logo and the official programme-name tag are pasted there afterwards, so keep that whole area free of text, graphics and busy detail. Only the date and the small red tag sit in the header band, at its right end.
 - No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles.
 - Keep every piece of text well inside the frame with clear breathing space; nothing may touch or be clipped by any edge.
 """

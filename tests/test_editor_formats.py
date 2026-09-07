@@ -276,13 +276,13 @@ class CoverPromptTests(unittest.TestCase):
         self.assertIn("NO television channel logo", prompt)
         self.assertIn("upper-LEFT corner", prompt)
 
-    def test_programme_name_is_not_metallic(self):
-        # 2026-09-03 使用者裁決：十點不一樣不要金屬材質，照範例圖的平面白字
+    def test_programme_name_is_pasted_not_drawn(self):
+        # 2026-09-07 使用者裁決：節目標籤改貼正版模板，模型不畫節目名、標頭帶左半留白
         prompt = self.render()
-        self.assertIn("FLAT, SOLID WHITE", prompt)
-        for banned in ("metallic", "chrome", "bevelled", "3-D extruded"):
-            with self.subTest(banned=banned):
-                self.assertIn(banned, prompt.split("=== IMAGERY ===")[0])
+        self.assertIn("do NOT write the programme name", prompt)
+        self.assertIn("LEFT HALF", prompt)
+        self.assertNotIn("Programme name, as a SMALL blue rounded tag", prompt)
+        self.assertNotIn("FLAT, SOLID WHITE", prompt)
 
     def test_headlines_must_vary_colour_per_line(self):
         # 範例圖的標題是分行、每行不同顏色（白／紅／金），不是整段一個顏色
