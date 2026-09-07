@@ -2019,6 +2019,13 @@ def frame_image_response(
     )
 
 
+def broadcast_hole_for(req: "NewsImageGenerateRequest") -> str:
+    """/api/news-image 要不要蓋播出鏡面的白色壓框：版型有挖空側**且**使用者開了壓框。"""
+    if not req.hole:
+        return ""
+    return editor_formats.hole_side(req.editor_format, req.role) or ""
+
+
 def apply_broadcast_hole_response(
     result: ImageGenerateResponse, side: str, profile: str
 ) -> ImageGenerateResponse:
@@ -2344,6 +2351,10 @@ class NewsImageGenerateRequest(BaseModel):
     tone: DigestTone | None = None
     # 編輯專屬版型（2026-09-03），語意同 GenerateRequest.editor_format。
     editor_format: str = editor_formats.DEFAULT_FORMAT
+    # 播出鏡面的白色壓框開關（2026-09-07 使用者裁決：預設 OFF）。False＝不蓋白框，
+    # 底圖完整交給後製自己決定影片位置；True＝置框後蓋白框給後製對位。
+    # 消化規則不受此開關影響：不管蓋不蓋框，內容都要避開影片那半邊。
+    hole: bool = False
 
 
 class NewsImageGenerateResponse(BaseModel):
@@ -2934,7 +2945,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 ImageGenerateRequest(
                     prompt=prompt,
                     provider=provider,
-                    broadcast_hole=editor_formats.hole_side(req.editor_format, req.role) or "",
+                    broadcast_hole=broadcast_hole_for(req),
                     aspect_ratio=aspect_ratio,
                     image_size=req.image_size,
                     safe_frame=req.safe_frame,

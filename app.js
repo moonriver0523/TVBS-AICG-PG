@@ -307,6 +307,9 @@ let state = {
     // 蓋章由使用者決定（2026-09-03）。以前是消化階段自己決定，同一個產品三種行為。
     // 2026-09-07 起預設 OFF（使用者裁決）；指令欄若提到蓋章，後端以指令欄為準（見 main.py 的優先序規則）。
     stamp: false,
+    // 播出鏡面白色壓框（2026-09-07 使用者裁決：預設 OFF）。OFF＝不蓋白框，底圖完整交給
+    // 後製自己放影片；ON＝置框後蓋白框給後製對位。只在播出鏡面兩個版型顯示這顆。
+    hole: false,
     // 色調（2026-09-04）。預設暗色調＝維持既有畫面風格，改成亮色調是使用者的主動選擇。
     // 兩檔都會送給後端並注入 prompt（不是「預設不注入」），因為只寫亮不寫暗時，
     // 樣板裡本來就偏暗的措辭會跟亮色調各聽一半，出半亮半暗的圖。
@@ -783,6 +786,8 @@ function applyEditorFormatLocks() {
     _hide(document.getElementById('digestControlsRow'), !!hides.digestControls);
     _hide(document.getElementById('p1-btnSafeFrame'), !!hides.safeFrame);
     _hide(document.getElementById('p1-btnStamp'), !!hides.stamp);
+    // 壓框開關只對有挖空側的版型有意義
+    _hide(document.getElementById('p1-btnHole'), !format.hole);
 
     // 唯一真的鎖著的：版面由挖空框決定，讓使用者再選一次只會互相打架
     _lock(document.getElementById('digestTypeRow'), !!locks.chartType);
@@ -1042,6 +1047,26 @@ function toggleStamp() {
     updateStampButton();
     updateInstructionOverrideHint();
     showToast(state.stamp ? '蓋章：開（最後一行加結論條）' : '蓋章：關（不放結論條）');
+}
+
+// 播出鏡面白色壓框開關（2026-09-07）。青色，與安全框（綠）／蓋章（琥珀）區分。
+function updateHoleButton() {
+    const btn = document.getElementById('p1-btnHole');
+    if (!btn) return;
+    btn.className = 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
+        + (state.hole ? 'border border-cyan-600 bg-cyan-600 text-white' : 'border border-cyan-600 text-slate-400 hover:text-white');
+    btn.innerText = state.hole ? '壓框 ON' : '壓框 OFF';
+}
+
+function toggleHole() {
+    state.hole = !state.hole;
+    updateHoleButton();
+    showToast(state.hole ? '壓框：開（影片位置蓋白框給後製對位）' : '壓框：關（底圖完整，後製自己放影片）');
+}
+
+// 播出鏡面要送給後端的挖空側：版型有挖空側且壓框開著才送，否則後端不蓋框。
+function broadcastHoleForApi() {
+    return state.hole ? (editorFormat().hole || '') : '';
 }
 
 // 色調切換（2026-09-04）。取代原本擺在這個位置的角色選擇——角色已移到最上方，
@@ -1839,7 +1864,7 @@ async function handleOneClickGenerate() {
                 safe_frame_profile: state.currentRole,
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
-                broadcast_hole: editorFormat().hole || '',
+                broadcast_hole: broadcastHoleForApi(),
                 // 地圖類的真實座標（消化端列地名、後端實查 Nominatim）。後端據此
                 // 拼一張真實底圖、把標點畫在正確位置再當參考圖附上——模型記憶裡的
                 // 經緯度實測差到 2.3 公里，冷門地名尤其不準。
@@ -2029,7 +2054,7 @@ async function handleImageGeneration() {
                 safe_frame_profile: state.currentRole,
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
-                broadcast_hole: editorFormat().hole || '',
+                broadcast_hole: broadcastHoleForApi(),
                 // 地圖類的真實座標（消化端列地名、後端實查 Nominatim）。後端據此
                 // 拼一張真實底圖、把標點畫在正確位置再當參考圖附上——模型記憶裡的
                 // 經緯度實測差到 2.3 公里，冷門地名尤其不準。
@@ -2378,7 +2403,7 @@ async function handleRefine() {
                 safe_frame_profile: state.currentRole,
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
-                broadcast_hole: isYtCover ? '' : (editorFormat().hole || ''),
+                broadcast_hole: isYtCover ? '' : broadcastHoleForApi(),
                 text_free: ytTextFree,
             }),
         });
