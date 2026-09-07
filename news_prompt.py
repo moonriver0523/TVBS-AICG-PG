@@ -173,12 +173,17 @@ EDGE-SAFE FULL-FRAME RULES (CRITICAL — MUST PRESERVE)
 # test_content_fidelity 的雙源逐字比對。
 # ============================================================
 
+# 禁品牌那一條抽成共用常數：追加修改（refine）也要帶著同一條，措辭必須逐字相同，
+# 否則兩條線對「什麼算品牌」的定義會慢慢分岔。REAL_WORLD_RENDERING_RULES 由它拼回去，
+# 拼出來的字串與抽取前逐字相同（test_prompt_parity 會對 app.js 逐字比對）。
+NO_UNSOURCED_BRANDS_RULE = "- NO UNSOURCED BRANDS: every sign, storefront, banner, package, product body, vehicle livery, screen, badge and building facade must be blank or carry a generic non-readable mark. Do NOT draw any real company logo, wordmark, trademark, ticker symbol, exchange name or brand text — not even a small, faint, distant or background one. A brand name may appear only if that exact text is supplied in VARIABLE FIELDS, and then only as plain typeset text, never as a reproduced logotype."
+
 REAL_WORLD_RENDERING_RULES = """==================================================
 REAL-WORLD ACCURACY (CRITICAL)
 ==================================================
 - Real, verifiable places and objects (skylines, specific buildings, highways and interchanges, airports, facilities, and specific models of aircraft, ship, vehicle or equipment) must look like the real thing: correct shape, layout, proportions and distinguishing features as far as they are known. Faithful, realistic rendering is welcome — do not distort reality for style.
 - Do not fabricate identifying detail you do not know and present it as real. If the rendering is a generic stand-in or a reconstruction rather than the real thing, the 示意圖 label supplied in VARIABLE FIELDS must be clearly visible — never drop or hide it.
-- NO UNSOURCED BRANDS: every sign, storefront, banner, package, product body, vehicle livery, screen, badge and building facade must be blank or carry a generic non-readable mark. Do NOT draw any real company logo, wordmark, trademark, ticker symbol, exchange name or brand text — not even a small, faint, distant or background one. A brand name may appear only if that exact text is supplied in VARIABLE FIELDS, and then only as plain typeset text, never as a reproduced logotype.
+""" + NO_UNSOURCED_BRANDS_RULE + """
 - NAMED REAL PEOPLE: how to depict a named real person is governed by the NAMED REAL PERSON block below whenever one is present — follow that block, not your own judgement. If no such block is present, do NOT draw a recognisable face for a named real person: use a back view or a plain silhouette and keep the 示意圖 label visible. Never show the person in a scene, action or context that STRUCTURE does not describe.
 - A STATED QUANTITY IS A NUMBER, NOT A HEADCOUNT TO DRAW. Where you do draw the individual items, the count on the canvas must equal the stated figure exactly, background and secondary items included — a graphic saying 4車追撞 with five vehicles in it is wrong. Only draw them individually while the figure is small enough to take in at a glance, up to about four. Beyond that do not attempt the instances at all: 12箱走私菸 is one representative crate with the figure 12 set beside it, never a heap the viewer would count as twenty, and 10部機組 is a figure rather than a row you would miscount.
 - SELF-CHECK before finalizing: look at every surface in the image for text or marks you added yourself. If any sign, screen, package or vehicle carries readable branding, blank it."""
@@ -380,16 +385,34 @@ TEXT-FREE BACKGROUND REFINE RULES (CRITICAL)
 - Keep the lower third free of essential detail and keep the extreme corners clear, so the overlaid headline and badges do not cover anything important."""
 
 
+# 追加修改也要守品牌與具名真人（2026-09-07）。
+#
+# 為什麼要補：refine 是一次獨立的生圖呼叫，模型只看得到這支 prompt。原本這裡只寫
+# 「不要新增事實與 logo」，沒有主流程那兩條硬規則——一句「把背景弄熱鬧一點」就足以
+# 讓它在店面招牌上補真實品牌，或替一張本來是背影的具名真人補一張憑空捏的臉。後者
+# 正是這個專案定義最糟的組合（真名＋假臉）。
+#
+# 禁品牌逐字沿用 NO_UNSOURCED_BRANDS_RULE，不另寫一套。具名真人這條刻意寫成精簡版：
+# 主流程那幾段（PORTRAIT_*_RULES）都以 STRUCTURE／VARIABLE FIELDS 為前提，refine 沒有
+# 那兩個區塊，照搬會叫模型去對照不存在的欄位。
+REFINE_REAL_WORLD_RULES = (
+    NO_UNSOURCED_BRANDS_RULE
+    + "\n- NAMED REAL PEOPLE: no reference photograph is attached to this edit, so you MUST NOT draw or complete the face of any named real person that is not already a face in the attached image. Faces already present stay exactly as they are — do not restyle, replace, age, beautify or re-render them. Where the attached image shows a figure as a back view or a silhouette, it stays a back view or a silhouette."
+)
+
+
 def build_refine_prompt(instruction: str, *, text_free: bool = False) -> str:
     """組追加修改（refine）的生圖 prompt。附圖＝上次置框前原圖，經 input_references 送出。
 
     text_free：附圖是無文字底圖（YT 直播封面那條線），改用 TEXT_FREE_REFINE_RULES。
+    兩條線都帶 REFINE_REAL_WORLD_RULES（禁品牌＋具名真人），理由見該常數。
     """
     if text_free:
         return (
             "Modify the attached text-free background photograph according to the change "
             "request below. This is an edit of an existing image, not a new design.\n\n"
-            f"{TEXT_FREE_REFINE_RULES}\n\n"
+            f"{TEXT_FREE_REFINE_RULES}\n"
+            f"{REFINE_REAL_WORLD_RULES}\n\n"
             "==================================================\n"
             "USER CHANGE REQUEST\n"
             "==================================================\n"
@@ -398,7 +421,8 @@ def build_refine_prompt(instruction: str, *, text_free: bool = False) -> str:
     return (
         "Modify the attached news infographic image according to the change "
         "request below. This is an edit of an existing image, not a new design.\n\n"
-        f"{IMAGE_REFINE_RULES}\n\n"
+        f"{IMAGE_REFINE_RULES}\n"
+        f"{REFINE_REAL_WORLD_RULES}\n\n"
         "==================================================\n"
         "USER CHANGE REQUEST\n"
         "==================================================\n"

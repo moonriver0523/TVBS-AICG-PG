@@ -110,3 +110,11 @@ prompt 的版面描述已同步成斜切全幅＋薄標頭帶＋白／黃／紅�
 見 `verify_output_aspect_ratio` 的說明）以前不會被發現：1:1 的格子拿到 16:9，
 `split_canvas` 會把它裁掉一半照樣合成。三條線拿到 result 後都補驗一次，降級當場 502。
 `_cover_ai` 在 `paste_cover_logo` **之前**驗，貼完 Logo 才發現不對等於白貼。
+
+## 追加修改的品牌與具名真人條款（2026-09-07）
+
+`news_prompt.build_refine_prompt` 兩條分支（一般 CG 與 YT 封面的無文字底圖）都加上
+`REFINE_REAL_WORLD_RULES`：禁品牌逐字沿用主流程抽出的 `NO_UNSOURCED_BRANDS_RULE`，
+具名真人是精簡版（沒有參考照就不得新畫任何具名真人的臉、既有的臉逐像素不動、
+背影仍是背影）。理由：refine 是一次獨立的生圖呼叫，模型只看得到那支 prompt，
+原本只寫「不要新增事實與 logo」，一句「背景弄熱鬧一點」就能補出真實品牌或一張假臉。
