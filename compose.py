@@ -34,6 +34,7 @@ TVBS_LOGO_WHITE = BRAND_DIR / "tvbs-logo-white.png"
 TEN_SHOW_TAG = BRAND_DIR / "ten-show-tag.png"   # 「十點不一樣」藍色斜切標籤
 HOT_SEARCH_TAG = BRAND_DIR / "hot-search-tag.png"  # 「今日｜熱搜🔍」紅色三格標籤
 TEN_BOTTOM_LINE = BRAND_DIR / "ten-bottom-line.png"  # 十點封面底部：深藍帶＋發光直線（依 0901／0902 原版）
+TEN_HIGHLIGHT_STAMP = BRAND_DIR / "ten-highlight-stamp.png"  # 精華圓章：深藍圓＋藍光環＋「十點不一樣／精華」（依 0819 原版）
 
 # 中文字型：Pillow 不吃系統字型後備，必須指名檔案。依序找，第一個存在的就用。
 #
@@ -299,11 +300,15 @@ COVER_SHADE_ALPHA = 190
 
 COVER_SHOW_NAME = "十點不一樣"
 COVER_AI_NOTE = "AI示意圖"
+# 2026-09-07：精華不再是標頭紅標；原版做法（0819／0805）是標頭照樣 ON AIR，
+# 另在畫面中下方貼一枚「十點不一樣 精華」圓章（模板 TEN_HIGHLIGHT_STAMP）。
 COVER_BADGES = {
     "on_air": ("ON AIR", (206, 26, 32)),
-    "highlight": ("精華", (206, 26, 32)),
+    "highlight": ("ON AIR", (206, 26, 32)),
 }
 COVER_DEFAULT_BADGE = "on_air"
+COVER_STAMP_HEIGHT_RATIO = 0.23      # 精華圓章直徑佔畫布高（量自 0819：約 140/612）
+COVER_STAMP_TOP_RATIO = 0.67         # 圓章頂端位置（0819：底部文字帶上緣附近，跨在帶上）
 COVER_MAX_TITLE_LINES = 3
 
 
@@ -380,6 +385,15 @@ def _draw_cover_bottom_line(canvas: Image.Image) -> None:
         canvas.alpha_composite(tpl, (0, height - strip_h))
 
 
+def _draw_cover_highlight_stamp(canvas: Image.Image) -> None:
+    """精華圓章：貼模板於畫面水平正中、中下方（跨在底部標題區上），照 0819 原版。"""
+    width, height = COVER_CANVAS
+    stamp_h = round(height * COVER_STAMP_HEIGHT_RATIO)
+    with Image.open(TEN_HIGHLIGHT_STAMP) as tpl:
+        stamp_w = round(tpl.width * stamp_h / tpl.height)
+    _paste_template(canvas, TEN_HIGHLIGHT_STAMP, ((width - stamp_w) // 2, round(height * COVER_STAMP_TOP_RATIO)), stamp_h)
+
+
 def _draw_cover_header(draw: ImageDraw.ImageDraw, canvas: Image.Image, date_text: str, badge: str) -> int:
     """薄標頭帶：Logo、「十點不一樣」小標、日期、ON AIR。回傳帶高。"""
     width, height = COVER_CANVAS
@@ -402,7 +416,7 @@ def _draw_cover_header(draw: ImageDraw.ImageDraw, canvas: Image.Image, date_text
     _paste_template(canvas, TEN_SHOW_TAG, (tag_x0, tag_y0), tag_h)
     draw = ImageDraw.Draw(canvas)
 
-    # ON AIR／精華：靠右紅底白字
+    # ON AIR：靠右紅底白字（精華版標頭也是 ON AIR，圓章另貼）
     badge_text, badge_colour = COVER_BADGES[badge]
     badge_font = _font(round(band_h * 0.42))
     badge_w = badge_font.getbbox(badge_text)[2] + round(band_h * 0.9)
@@ -528,6 +542,8 @@ def compose_ten_cover(
     _draw_cover_bottom_line(canvas)
     _draw_cover_title(canvas, split_cover_title(title_left), left_box[0] + COVER_MARGIN, left_box[2], align_right=False)
     _draw_cover_title(canvas, split_cover_title(title_right), right_box[0], right_box[2] - COVER_MARGIN, align_right=True)
+    if badge == "highlight":
+        _draw_cover_highlight_stamp(canvas)
 
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")

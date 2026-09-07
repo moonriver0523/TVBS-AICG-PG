@@ -130,6 +130,30 @@ class ComposeTests(unittest.TestCase):
         with self.assertRaises(compose.ComposeError):
             self._cover(badge="nope")
 
+    def test_highlight_badge_pastes_round_stamp_mid_bottom(self):
+        """精華：標頭仍 ON AIR，畫面中下方貼藍光圓章（模板），非精華時該區不出現亮藍環。"""
+        on_air = self._cover(badge="on_air")
+        highlight = self._cover(badge="highlight")
+        w, h = highlight.size
+        stamp_h = round(h * compose.COVER_STAMP_HEIGHT_RATIO)
+        top = round(h * compose.COVER_STAMP_TOP_RATIO)
+        box = (w // 2 - stamp_h // 2, top, w // 2 + stamp_h // 2, top + stamp_h)
+
+        def pixels(img):
+            raw = img.crop(box).tobytes()
+            return list(zip(raw[0::3], raw[1::3], raw[2::3]))
+
+        hi, base = pixels(highlight), pixels(on_air)
+        changed = sum(1 for a, b in zip(hi, base) if a != b) / len(hi)
+        self.assertGreater(changed, 0.5)          # 圓章確實蓋在這個區域
+        yellow = sum(1 for r, g, b in hi if r > 200 and g > 170 and b < 90) / len(hi)
+        self.assertGreater(yellow, 0.02)          # 「十點／精華」黃字
+        # 標頭右側仍是 ON AIR 紅標（精華不再是標頭紅字）
+        band_h = round(h * compose.COVER_HEADER_RATIO)
+        head = highlight.crop((w - 300, 0, w, band_h)).tobytes()
+        reds = sum(1 for r, g, b in zip(head[0::3], head[1::3], head[2::3]) if r > 180 and g < 60)
+        self.assertGreater(reds, 500)
+
 
 class EndpointTests(unittest.TestCase):
     def _payload(self, asis: int, mode="ai"):
