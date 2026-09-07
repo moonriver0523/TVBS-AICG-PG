@@ -98,6 +98,58 @@ class BroadcastDigestRulesTests(unittest.TestCase):
         self.assertIn("FOR THIS FORMAT IT IS NOT CENTRED", text)
 
 
+class BroadcastStampSwitchTests(unittest.TestCase):
+    """2026-09-07：蓋章 OFF 在播出鏡面失效——第 6 條無條件要求 <蓋章> 且注入在 OFF 之後。"""
+
+    def test_stamp_off_removes_the_mandatory_stamp_line(self):
+        for key in ("broadcast_left", "broadcast_right"):
+            off = editor_formats.digest_rules(key, "編輯", stamp=False)
+            self.assertIn("no <蓋章> line", off)
+            self.assertIn("NO STAMP BANNER", off)
+            self.assertNotIn("then one <蓋章> line", off)
+            self.assertNotIn("stamp banner sits inside", off)
+            # 其餘條文（挖空、三行卡片）照舊
+            self.assertIn("exactly three [內文小標] lines", off)
+            self.assertIn("reserved for a video window", off)
+
+    def test_stamp_on_or_unset_keeps_the_original_rules(self):
+        for key in ("broadcast_left", "broadcast_right"):
+            base = editor_formats.digest_rules(key, "編輯")
+            self.assertIn("then one <蓋章> line", base)
+            self.assertEqual(editor_formats.digest_rules(key, "編輯", stamp=True), base)
+            self.assertEqual(editor_formats.digest_rules(key, "編輯", stamp=None), base)
+
+    def test_stamp_off_keeps_sides_straight(self):
+        left = editor_formats.digest_rules("broadcast_left", "編輯", stamp=False)
+        self.assertIn("lowest element of the right half", left)
+        self.assertIn("reserved left area", left)
+        right = editor_formats.digest_rules("broadcast_right", "編輯", stamp=False)
+        self.assertIn("lowest element of the left half", right)
+        self.assertIn("reserved right area", right)
+
+    def test_off_rules_still_carry_no_digits(self):
+        for key in ("broadcast_left", "broadcast_right"):
+            body = editor_formats.digest_rules(key, "編輯", stamp=False)
+            self.assertNotRegex(re.sub(r"(?m)^\d+\.", "", body), r"\d")
+
+    def test_full_prompt_off_has_no_mandatory_stamp(self):
+        from main import build_digest_instructions
+        text = build_digest_instructions(role="編輯", density="simplified", type_label="資料圖表",
+                                         stamp=False, editor_format="broadcast_left")
+        self.assertIn("STAMP BANNER: OFF", text)
+        self.assertNotIn("then one <蓋章> line", text)
+        self.assertIn("no <蓋章> line", text)
+
+
+class StampDefaultTests(unittest.TestCase):
+    def test_web_default_is_off(self):
+        js = io.open(APP_JS, encoding="utf-8").read()
+        self.assertRegex(js, r"\n\s*stamp:\s*false,")
+        html = io.open(APP_JS.parent / "index.html", encoding="utf-8").read()
+        self.assertIn(">蓋章 OFF</button>", html)
+        self.assertNotIn(">蓋章 ON</button>", html)
+
+
 class HoleGeometryTests(unittest.TestCase):
     CANVAS = safe_area_spec.BASE_CANVAS
 
@@ -414,8 +466,10 @@ class LockScopeTests(FrontendParityTests):
             with self.subTest(key=key):
                 presets = re.search(r"presets:\s*\{([^}]*)\}", self.js_entries()[key])
                 self.assertIsNotNone(presets, "播出鏡面應該還有預設值")
-                for field in ("safeFrame", "stamp", "density"):
+                for field in ("safeFrame", "density"):
                     self.assertIn(field, presets.group(1))
+                # 2026-09-07：preset 不碰蓋章——否則使用者關掉的蓋章一切版型就被切回 ON
+                self.assertNotIn("stamp", presets.group(1))
 
     def test_cover_hides_the_controls_it_cannot_use(self):
         # /api/editor/cover 不收 density／stamp／safe_frame／tone，

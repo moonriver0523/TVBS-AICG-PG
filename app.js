@@ -305,8 +305,8 @@ let state = {
     // 2026-09-03：三檔（verbatim=不消化／simplified=字少／standard=字多），預設字少
     digestDensity: 'simplified',
     // 蓋章由使用者決定（2026-09-03）。以前是消化階段自己決定，同一個產品三種行為。
-    // 預設 ON；指令欄若提到蓋章，後端以指令欄為準（見 main.py 的優先序規則）。
-    stamp: true,
+    // 2026-09-07 起預設 OFF（使用者裁決）；指令欄若提到蓋章，後端以指令欄為準（見 main.py 的優先序規則）。
+    stamp: false,
     // 色調（2026-09-04）。預設暗色調＝維持既有畫面風格，改成亮色調是使用者的主動選擇。
     // 兩檔都會送給後端並注入 prompt（不是「預設不注入」），因為只寫亮不寫暗時，
     // 樣板裡本來就偏暗的措辭會跟亮色調各聽一半，出半亮半暗的圖。
@@ -389,7 +389,8 @@ const EDITOR_FORMATS = {
         label: '播出鏡面（左側挖空）',
         hint: '畫面左半、垂直置中留一塊 16:9 空位給後製合成影片，內容自動靠右編排。',
         inputs: 'news',
-        presets: { safeFrame: true, stamp: true, density: 'simplified' },
+        // 2026-09-07：preset 不再碰蓋章——原本 stamp:true 會把使用者關掉的蓋章切回 ON
+        presets: { safeFrame: true, density: 'simplified' },
         locks: { chartType: true },
         hole: 'left',
     },
@@ -397,7 +398,7 @@ const EDITOR_FORMATS = {
         label: '播出鏡面（右側挖空）',
         hint: '畫面右半、垂直置中留一塊 16:9 空位給後製合成影片，內容自動靠左編排。',
         inputs: 'news',
-        presets: { safeFrame: true, stamp: true, density: 'simplified' },
+        presets: { safeFrame: true, density: 'simplified' },
         locks: { chartType: true },
         hole: 'right',
     },

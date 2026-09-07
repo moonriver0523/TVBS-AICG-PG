@@ -998,7 +998,7 @@ def build_digest_instructions(
         instructions += TONE_LIGHT_RULES
     # 編輯專屬版型（播出鏡面）。editor_formats.digest_rules 對非編輯角色一律回空字串，
     # 這是「記者不可能誤用」的第三層防呆（前兩層在前端）。
-    instructions += editor_formats.digest_rules(editor_format, role)
+    instructions += editor_formats.digest_rules(editor_format, role, stamp)
     # 沒有 asis 附圖時完全不注入，消化 prompt 逐字元不變。
     if asis_reference_count:
         instructions += USER_REFERENCE_ASIS_DIGEST_RULES
@@ -1253,6 +1253,19 @@ def strip_wrapping_quotes(variable: str) -> str:
     return text
 
 
+_STAMP_LINE_RE = re.compile(r"^\s*[<＜]\s*蓋章\s*[>＞]")
+
+
+def drop_stamp_lines(variable: str) -> str:
+    """蓋章 OFF 的硬保險（2026-09-07）：不管消化模型有沒有聽話，<蓋章> 行一律拿掉。
+
+    使用者回報播出鏡面 OFF 仍蓋章——prompt 層已修（editor_formats 第 6 條），但 prompt
+    只是勸告，這裡做確定性的兜底，任何版型都適用。只刪以 <蓋章> 開頭的整行。
+    """
+    kept = [line for line in (variable or "").splitlines() if not _STAMP_LINE_RE.match(line)]
+    return "\n".join(kept).strip()
+
+
 def verbatim_fidelity_problem(variable: str, news_text: str) -> str:
     """不消化模式：variable 去掉標記與空白後必須與原文逐字相同。"""
     body = _VERBATIM_WS_RE.sub(
@@ -1504,10 +1517,14 @@ def generate(req: GenerateRequest):
             # AI 未回報或回報不在清單內；指定類型時退回原值，自動判斷時留空由前端處理
             chart_type = "" if type_label == AUTO_TYPE_LABEL else type_label
 
+        variable = strip_wrapping_quotes(data.get("variable", ""))
+        if req.stamp is False and any(_STAMP_LINE_RE.match(line) for line in variable.splitlines()):
+            print("[generate] 蓋章 OFF 但消化結果仍有 <蓋章> 行，已強制移除", flush=True)
+            variable = drop_stamp_lines(variable)
         result = GenerateResponse(
             style=data.get("style", ""),
             structure=data.get("structure", ""),
-            variable=strip_wrapping_quotes(data.get("variable", "")),
+            variable=variable,
             chart_type=chart_type,
             # 只有地圖類會真的去查（resolve_map_points 自己擋掉其他類型）。
             # 查不到就是空陣列，後續一切照舊，不會有人拿到錯誤。
