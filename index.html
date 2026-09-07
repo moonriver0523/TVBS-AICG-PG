@@ -426,6 +426,9 @@
                                 <option value="on_air">ON AIR</option>
                                 <option value="highlight">精華</option>
                             </select>
+                            <button id="coverRecomposeBtn" type="button" onclick="handleTenCoverGenerate(true)" disabled
+                                    title="滿版程式壓字版專用：底圖不重生，只用新的標題／日期／標籤重壓文字"
+                                    class="hidden px-2.5 py-1.5 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all disabled:opacity-40">只改文字</button>
                         </div>
                         <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-300 cursor-pointer"
                                title="開：整張連標題字交給 AI 畫（美術字有設計感，但可能出錯字）；關：AI 只生左右底圖、所有文字由程式壓字，零錯字">

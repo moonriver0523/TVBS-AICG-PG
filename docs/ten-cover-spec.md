@@ -62,6 +62,26 @@
 - 「AI 消化標題」對滿版送 `target="ten_cover_full"`，回單一 `title`（一律 3 段，白／黃／紅；2026-09-08 起）。
 - 前端同一組欄位：滿版隱藏右半標題／右半附圖（`.cover-split-only`），左標籤改「標題」。
 
+### 滿版合成版的「只改文字」（2026-09-08）
+
+合成版的成品＝一張底圖＋Pillow 壓上去的標題／日期／Logo，所以**改標題不必重生底圖**：
+
+- **回應**帶 `background_image_base64`／`background_mime_type`／`background_is_ai`＝壓字前的底圖
+  （`_cover_full_composite` 裡的 `slot`）。只有 `layout=full` ＋ `mode=composite` 會帶，AI 整張版留空。
+  刻意**不塞進 `source_image_base64`**——那格的語意是「餵回 `/api/images/refine` 的原圖」，合成版
+  一律留空（`tests/test_cover_refine.py` 的紅線 1）。混用會讓前端的「修改」鈕誤以為合成版能 refine。
+- **請求**把那三個欄位原樣送回來（`mode=composite`），後端跳過生底圖與文字模型（`recomposite` 旗標
+  併進 `has_asis or ai_overlay` 那條），直接走 `compose.compose_ten_cover`，`left_is_ai` 沿用
+  `background_is_ai`（決定要不要壓「AI示意圖」）。一次 API 都不打，`model` 記
+  `ten-cover-full:recomposite`（比照 YT 的 `yt-cover:recomposite`）。同時掛著附圖時**以底圖為準**：
+  使用者按的是「只改文字」。
+- **雙切合成版不支援**：成品是左右兩張底圖拼的，拼完分不回去。`layout=split` ＋ `mode=composite`
+  ＋ 帶 `background_image_base64` 回 **400**（不默默忽略——那會把一個零 API 的請求變成重生兩張底圖）。
+  雙切 AI 版的後貼路徑（`ten-cover:overlay`）不受影響。
+- 前端：`state.tenCoverBackground` 存底圖（不共用 `refineSource`），`#coverRecomposeBtn`
+  →`handleTenCoverGenerate(true)`；切版型就清掉並把按鈕收起來。測試在
+  `tests/test_cover_full_recompose.py`。
+
 ## 左右附圖位（TenCoverRequest.asis_left／asis_right，2026-09-07，雙切）
 
 - 使用者裁決：左右格各自一個上傳位（data URL），才不會分不清哪張是左、哪張是右。

@@ -360,6 +360,10 @@ let state = {
     ytCoverTitleMode: 'ai',
     // 十點封面：目前成品是 ai 還是 composite（來自後端回應）。只有 ai 版能追加修改。
     tenCoverMode: 'ai',
+    // 十點封面（滿版合成版）的「只改文字」：上一次的壓字前底圖 {base64, mimeType, isAi}。
+    // 刻意不共用 refineSource——那格的語意是「餵回 /api/images/refine 的原圖」，合成版
+    // 沒有那種東西；混用會讓「修改」鈕誤以為合成版可以 refine（見 handleRefine）。
+    tenCoverBackground: null,
     refineStack: []
 };
 
@@ -826,6 +830,14 @@ function applyEditorFormatInputs() {
     if (leftBtn) leftBtn.textContent = fullLayout ? '＋ 附圖（選填）' : '＋ 左半附圖（選填）';
     const leftVisual = document.getElementById('coverVisualLeft');
     if (leftVisual) leftVisual.placeholder = fullLayout ? '畫面描述（選填）——留空由 AI 依標題自動產生' : '左半畫面描述（選填）——留空由 AI 依標題自動產生';
+    // 切版型就丟掉上一版的底圖：滿版的底圖送進雙切會被後端擋（400），留著只會誤導。
+    // 「只改文字」只有滿版合成版有，雙切時整顆收起來，不留一顆永遠按不動的鈕。
+    state.tenCoverBackground = null;
+    const coverRecompose = document.getElementById('coverRecomposeBtn');
+    if (coverRecompose) {
+        coverRecompose.disabled = true;
+        coverRecompose.classList.toggle('hidden', !fullLayout);
+    }
     if (yt) yt.classList.toggle('hidden', !wantsYt);
     // 附圖上傳區：主流程、YT 直播封面、十點不一樣（2026-09-06 起收原圖放置）都用。
     // 封面版型時把它搬到該組欄位下面——留在原位會跑到角色鈕正下方，看起來像消失了。
@@ -1618,9 +1630,43 @@ async function recomposeTenCover(refined) {
     return data;
 }
 
+// 只改文字（2026-09-08，滿版合成版）：底圖不重生，用目前欄位重壓一次標題，零 API。
+// 底圖走 state.tenCoverBackground，不是 refineSource——見該欄位的註解。
+function setTenCoverBackground(data) {
+    const usable = editorFormat().coverLayout === 'full'
+        && data.mode === 'composite' && !!data.background_image_base64;
+    state.tenCoverBackground = usable ? {
+        base64: data.background_image_base64,
+        mimeType: data.background_mime_type || 'image/png',
+        isAi: !!data.background_is_ai,
+    } : null;
+    const btn = document.getElementById('coverRecomposeBtn');
+    if (btn) btn.disabled = !usable;
+}
+
+async function recomposeTenCoverText() {
+    const background = state.tenCoverBackground;
+    if (!background) throw new Error('還沒有底圖，請先生成一次');
+    const res = await fetch(COVER_BACKEND_URL, {
+        method: 'POST',
+        headers: _apiHeaders(),
+        body: JSON.stringify({
+            ...tenCoverFields(),
+            mode: 'composite',
+            background_image_base64: background.base64,
+            background_mime_type: background.mimeType,
+            background_is_ai: background.isAi,
+        }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(_apiError(data, res.status));
+    return data;
+}
+
 // 十點不一樣封面：使用者直接給兩個標題，中間沒有消化這一段，所以走自己的端點。
 // 下拉、產出區、下載都還在同一頁同一個位置，編輯不用切分頁。
-async function handleTenCoverGenerate() {
+// recomposeOnly=true：滿版合成版的「只改文字」，底圖不重生（比照 handleYtCoverGenerate）。
+async function handleTenCoverGenerate(recomposeOnly = false) {
     const val = id => (document.getElementById(id)?.value || '').trim();
     const titleLeft = val('coverTitleLeft');
     const titleRight = val('coverTitleRight');
@@ -1628,6 +1674,8 @@ async function handleTenCoverGenerate() {
     const visualRight = val('coverVisualRight');
     const fullLayout = editorFormat().coverLayout === 'full';
     if (fullLayout ? !titleLeft : (!titleLeft || !titleRight)) return showToast(fullLayout ? '標題要填' : '左右標題都要填');
+    // 只改文字只做滿版合成版：AI 版的字是模型畫的、雙切拼完分不回去（後端也會回 400）
+    if (recomposeOnly && !state.tenCoverBackground) return showToast('還沒有底圖，請先生成一次');
 
     const btn = document.getElementById('aiBtn');
     const loading = document.getElementById('aiLoading');
@@ -1635,43 +1683,49 @@ async function handleTenCoverGenerate() {
     loading.classList.remove('hidden');
     let completed = false;
     try {
-        const slots = coverAsisSlots();
-        if (fullLayout) slots.right = false;   // 滿版只有一個附圖位
-        const slotCount = (slots.left ? 1 : 0) + (slots.right ? 1 : 0);
-        const asisCount = slotCount || uploadedAsisCount();
-        // 有原圖放置一律程式壓字（後端也會強制），這裡只是把提示講對
-        const composite = document.getElementById('coverAiTitle')?.checked === false || asisCount > 0;
-        const deriving = !visualLeft || !visualRight;
-        showToast(fullLayout ? (slots.left ? '附圖鋪滿，合成中…' : (composite ? '生成底圖中，約 30–90 秒…' : '設計封面中，約 30–120 秒…'))
-            : slots.left && slots.right ? '兩格都用附圖，合成中…'
-            : slots.left ? '左格用附圖，右格生底圖中，約 30–90 秒…'
-            : slots.right ? '右格用附圖，左格生底圖中，約 30–90 秒…'
-            : asisCount >= 2 ? '兩格都用附圖，合成中…'
-            : asisCount === 1 ? '單張附圖整版鋪滿，合成中…'
-            : composite
-                ? '生成左右底圖中，兩張平行跑，約 60–120 秒…'
-                : (deriving ? 'AI 補畫面描述後開始設計封面，約 40–140 秒…' : '設計封面中，約 30–120 秒…'));
-        beginGenerationProgress('image', asisCount >= 2 ? 0.3 : slotCount === 1 ? 1.0 : asisCount === 1 ? 0.3 : (composite ? 1.6 : 1.3));
-        const res = await fetch(COVER_BACKEND_URL, {
-            method: 'POST',
-            headers: _apiHeaders(),
-            body: JSON.stringify({
-                title_left: titleLeft,
-                title_right: fullLayout ? '' : titleRight,
-                layout: fullLayout ? 'full' : 'split',
-                visual_left: visualLeft,
-                visual_right: fullLayout ? '' : visualRight,
-                date_text: val('coverDate'),
-                badge: document.getElementById('coverBadge')?.value || 'on_air',
-                mode: composite ? 'composite' : 'ai',
-                provider: effectiveImageProvider(),
-                reference_images: userRefImagesPayload(),
-                asis_left: state.coverAsis.left?.dataUrl || '',
-                asis_right: fullLayout ? '' : (state.coverAsis.right?.dataUrl || ''),
-            }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(_apiError(data, res.status));
+        let data;
+        if (recomposeOnly) {
+            showToast('用現有底圖重壓文字…');
+            data = await recomposeTenCoverText();
+        } else {
+            const slots = coverAsisSlots();
+            if (fullLayout) slots.right = false;   // 滿版只有一個附圖位
+            const slotCount = (slots.left ? 1 : 0) + (slots.right ? 1 : 0);
+            const asisCount = slotCount || uploadedAsisCount();
+            // 有原圖放置一律程式壓字（後端也會強制），這裡只是把提示講對
+            const composite = document.getElementById('coverAiTitle')?.checked === false || asisCount > 0;
+            const deriving = !visualLeft || !visualRight;
+            showToast(fullLayout ? (slots.left ? '附圖鋪滿，合成中…' : (composite ? '生成底圖中，約 30–90 秒…' : '設計封面中，約 30–120 秒…'))
+                : slots.left && slots.right ? '兩格都用附圖，合成中…'
+                : slots.left ? '左格用附圖，右格生底圖中，約 30–90 秒…'
+                : slots.right ? '右格用附圖，左格生底圖中，約 30–90 秒…'
+                : asisCount >= 2 ? '兩格都用附圖，合成中…'
+                : asisCount === 1 ? '單張附圖整版鋪滿，合成中…'
+                : composite
+                    ? '生成左右底圖中，兩張平行跑，約 60–120 秒…'
+                    : (deriving ? 'AI 補畫面描述後開始設計封面，約 40–140 秒…' : '設計封面中，約 30–120 秒…'));
+            beginGenerationProgress('image', asisCount >= 2 ? 0.3 : slotCount === 1 ? 1.0 : asisCount === 1 ? 0.3 : (composite ? 1.6 : 1.3));
+            const res = await fetch(COVER_BACKEND_URL, {
+                method: 'POST',
+                headers: _apiHeaders(),
+                body: JSON.stringify({
+                    title_left: titleLeft,
+                    title_right: fullLayout ? '' : titleRight,
+                    layout: fullLayout ? 'full' : 'split',
+                    visual_left: visualLeft,
+                    visual_right: fullLayout ? '' : visualRight,
+                    date_text: val('coverDate'),
+                    badge: document.getElementById('coverBadge')?.value || 'on_air',
+                    mode: composite ? 'composite' : 'ai',
+                    provider: effectiveImageProvider(),
+                    reference_images: userRefImagesPayload(),
+                    asis_left: state.coverAsis.left?.dataUrl || '',
+                    asis_right: fullLayout ? '' : (state.coverAsis.right?.dataUrl || ''),
+                }),
+            });
+            data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(_apiError(data, res.status));
+        }
 
         const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
         document.getElementById('oneClickImage').src = imageUrl;
@@ -1685,6 +1739,8 @@ async function handleTenCoverGenerate() {
         state.tenCoverMode = data.mode || 'ai';
         const tenCoverSource = data.mode === 'ai' ? refineSourceFromResponse(data) : null;
         resetRefineState(tenCoverSource, tenCoverSource ? data : null);
+        // 滿版合成版：把壓字前底圖記下來，「只改文字」才有東西可以帶回去（零 API 重壓）
+        setTenCoverBackground(data);
         // 回填實際採用的畫面描述（留空時是 AI 補的）。不填回去，使用者永遠不知道
         // AI 幫他決定了什麼，也沒辦法在此基礎上微調重生。
         [['coverVisualLeft', data.visual_left], ['coverVisualRight', data.visual_right]]
