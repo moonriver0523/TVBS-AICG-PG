@@ -115,7 +115,7 @@ label」——位置在後、又是明文 OVERRIDE，模型照做，標籤整個
 ## AI 消化標題（/api/editor/cover-titles）
 
 十點與 YT 封面欄位各有「新聞內文」textarea＋「AI 消化標題」鈕。貼內文 → 文字模型
-（system prompt 接 `CONTENT_FIDELITY_RULES`）出十點兩標題（各 2–3 段，空格分行）或 YT 單標題
+（system prompt 接 `CONTENT_FIDELITY_RULES`）出十點兩標題（各一律 3 段，空格分行，2026-09-08 起）或 YT 單標題
 （兩段）→ 回填標題欄位，**不接生圖**，編輯看過再自己按「生成」（2026-09-06 使用者裁決）。
 裁切到欄位上限（40／60 字）；模型失敗回 502。每次多一次文字模型呼叫。
 
