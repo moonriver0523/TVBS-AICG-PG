@@ -53,7 +53,8 @@ class FullEndpointTests(unittest.TestCase):
 
         def fake_full(visual, provider, references=None, *args):
             calls.append(visual)
-            return _png_bytes(size=(1600, 900), colour=GREEN)
+            # 2026-09-07 起這幾支回 (bytes, 生圖模型名)，落檔要記 image_model
+            return _png_bytes(size=(1600, 900), colour=GREEN), "fake-image-model"
 
         with patch.object(main, "_cover_full_image", side_effect=fake_full), \
              patch.object(main, "_cover_panel_image", side_effect=AssertionError("滿版不該生 1:1 格圖")), \

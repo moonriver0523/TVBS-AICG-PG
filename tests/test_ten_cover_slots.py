@@ -47,7 +47,8 @@ class SlotTests(unittest.TestCase):
 
         def fake_panel(visual, provider, references=None, *args):
             calls.append(visual)
-            return _png_bytes(colour=panel_colour)
+            # 2026-09-07 起這幾支回 (bytes, 生圖模型名)，落檔要記 image_model
+            return _png_bytes(colour=panel_colour), "fake-image-model"
 
         with patch.object(main, "_cover_panel_image", side_effect=fake_panel), \
              patch.object(main, "resolve_cover_visuals", return_value=visuals) as resolve, \

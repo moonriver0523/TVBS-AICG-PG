@@ -137,3 +137,17 @@ prompt 的版面描述已同步成斜切全幅＋薄標頭帶＋白／黃／紅�
   標籤、也沒有參考照）。要補得靠第二次消化，成本是多一次文字模型呼叫，暫不做。
 - 回傳的照片只用來落檔記出處；生圖端會再查一次（`apply_portrait_to_image_request`
   沒有收現成照片的參數，查圖有快取層，重查很便宜）。
+
+## 落檔欄位（2026-09-07）
+
+`/api/editor/cover`（雙切與滿版）與 `/api/editor/yt-cover` 的 `log_generation` 補上：
+
+- `image_model`：三支生圖函式（`_cover_panel_image`／`_cover_full_image`／`_cover_ai`）
+  改回 `(bytes, 生圖模型名)`，合成版兩支再往上回傳給端點。一次 API 都不打的附圖路徑
+  記 `ten-cover:asis`／`ten-cover-full:asis`（比照 YT 的 `yt-cover:asis`）。
+- `portrait_subject`／`portrait_photo_source`：由 `cover_portrait_log_fields` 從
+  `CoverVisuals.photos` 攤平（YT 走 `YtCoverPlan.photos`）。出處**逐位對齊人名**，
+  查不到的位子記「（查無）」——只記查到的幾張，多人時事後對不出是哪一位。
+- `log_failure`：三條端點都補上，比照 `/api/images/generate`——生圖端的失敗
+  （安全過濾、比例降級、逾時）以前只會 print，事後查不到是哪一則標題觸發的。
+  記完原樣往外丟，不吞例外。

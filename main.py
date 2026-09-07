@@ -3327,7 +3327,7 @@ def _cover_panel_image(
     subjects: list[str] | None = None, english: list[str] | None = None,
 ) -> bytes:
     """生一張 1:1 的無文字底圖。references＝非 asis 的附圖，依用途規則當生圖參考；
-    subjects／english＝這格的具名真人（查得到參考照才畫臉）。"""
+    subjects／english＝這格的具名真人（查得到參考照才畫臉）。回 (PNG bytes, 生圖模型名)。"""
     image_req = ImageGenerateRequest(
         prompt=editor_formats.COVER_VISUAL_PROMPT_TEMPLATE.format(visual=visual.strip()),
         provider=provider,
@@ -3343,7 +3343,7 @@ def _cover_panel_image(
     # 比例驗證：這條線直呼 generate_image_raw，繞過 finalize_image_result，
     # 悄悄降級的方圖進 split_canvas 會被裁掉一半（見 verify_output_aspect_ratio）。
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
-    return base64.b64decode(result.image_data_base64)
+    return base64.b64decode(result.image_data_base64), result.model
 
 
 def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) -> bytes:
@@ -3385,14 +3385,14 @@ def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) ->
     image_req = _cover_apply_portraits(image_req, "ai")
     result = generate_image_raw(image_req)
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
-    return compose.paste_cover_logo(base64.b64decode(result.image_data_base64))
+    return compose.paste_cover_logo(base64.b64decode(result.image_data_base64)), result.model
 
 
 def _cover_full_image(
     visual: str, provider: str, references: list[UserReferenceImage] | None = None,
     subjects: list[str] | None = None, english: list[str] | None = None,
 ) -> bytes:
-    """滿版：生一張 16:9 的無文字底圖。subjects／english＝具名真人（查得到參考照才畫臉）。"""
+    """滿版：生一張 16:9 的無文字底圖。回 (PNG bytes, 生圖模型名)。"""
     image_req = ImageGenerateRequest(
         prompt=editor_formats.COVER_VISUAL_FULL_PROMPT_TEMPLATE.format(visual=visual.strip()),
         provider=provider,
@@ -3406,34 +3406,40 @@ def _cover_full_image(
     image_req = _cover_apply_portraits(image_req, "full", text_free=True)
     result = generate_image_raw(image_req)
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
-    return base64.b64decode(result.image_data_base64)
+    return base64.b64decode(result.image_data_base64), result.model
 
 
-def _cover_full_composite(req: TenCoverRequest, date_text: str, visual) -> tuple[bytes, bool]:
-    """滿版合成：附圖（asis_left）有就直接鋪滿，沒有就生一張 16:9；單一標題壓左下。回 (PNG, 是否 AI 底圖)。"""
+def _cover_full_composite(req: TenCoverRequest, date_text: str, visual) -> tuple[bytes, bool, str]:
+    """滿版合成：附圖（asis_left）有就直接鋪滿，沒有就生一張 16:9；單一標題壓左下。
+
+    回 (PNG, 是否 AI 底圖, 生圖模型名)。附圖直接上版時一次 API 都不打，模型名記
+    `ten-cover-full:asis`（比照 YT 封面的 `yt-cover:asis`），落檔才看得出那張沒經過模型。
+    """
     slot, _ = ten_cover_slot_images(req)
     if slot is None:
         legacy = ten_cover_asis_images(req)
         slot = legacy[0] if legacy else None
     is_ai = slot is None
+    image_model = "ten-cover-full:asis"
     if is_ai:
         references = [ref for ref in req.reference_images if ref.purpose != "asis"]
         subjects, english = cover_portraits(visual, 0)
-        slot = _cover_full_image(visual[0] if isinstance(visual, CoverVisuals) else visual, req.provider, references, subjects, english)
+        slot, image_model = _cover_full_image(visual[0] if isinstance(visual, CoverVisuals) else visual, req.provider, references, subjects, english)
     cover = compose.compose_ten_cover(
         slot, None,
         title_left=req.title_left.strip(), title_right="",
         date_text=date_text, badge=req.badge, left_is_ai=is_ai, right_is_ai=False,
     )
-    return cover, is_ai
+    return cover, is_ai, image_model
 
 
 def _cover_composite(
     req: TenCoverRequest, date_text: str, visuals: tuple[str, str]
-) -> tuple[bytes, tuple[bool, bool]]:
+) -> tuple[bytes, tuple[bool, bool], str]:
     """合成版：AI 只出無文字底圖（或直接用原圖放置的附圖），文字全部由 Pillow 畫。
 
-    回 (PNG, (左格是否 AI, 右格是否 AI))。
+    回 (PNG, (左格是否 AI, 右格是否 AI), 生圖模型名)。兩格都是附圖時一次 API 都不打，
+    模型名記 `ten-cover:asis`；兩格都生時兩個模型名相同就只記一次。
     """
     references = [ref for ref in req.reference_images if ref.purpose != "asis"]
     if ten_cover_uses_slots(req):
@@ -3449,9 +3455,10 @@ def _cover_composite(
                 title_left=req.title_left.strip(), title_right=req.title_right.strip(),
                 date_text=date_text, badge=req.badge, left_is_ai=False, right_is_ai=False,
             )
-            return cover, (False, False)
+            return cover, (False, False), "ten-cover:asis"
         panels = [asis[0] if len(asis) >= 1 else None, asis[1] if len(asis) >= 2 else None]
     todo = [i for i, panel in enumerate(panels) if panel is None]
+    models: list[str] = []
     # 要生的圖平行生。序列跑會讓等待時間直接加倍——單張本來就要 30–90 秒。
     if todo:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
@@ -3460,7 +3467,9 @@ def _cover_composite(
                 for i in todo
             }
             for i, future in futures.items():
-                panels[i] = future.result()
+                panels[i], model = future.result()
+                if model not in models:
+                    models.append(model)
     left_is_ai, right_is_ai = 0 in todo, 1 in todo
     cover = compose.compose_ten_cover(
         panels[0],
@@ -3472,7 +3481,7 @@ def _cover_composite(
         left_is_ai=left_is_ai,
         right_is_ai=right_is_ai,
     )
-    return cover, (left_is_ai, right_is_ai)
+    return cover, (left_is_ai, right_is_ai), "、".join(models) or "ten-cover:asis"
 
 
 class CoverTitleDigestRequest(BaseModel):
@@ -3543,6 +3552,29 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
     return CoverTitleDigestResponse(title=title)
 
 
+def cover_portrait_log_fields(visuals) -> dict:
+    """把兩格的具名真人與照片出處攤平成落檔欄位（欄位名同主流程 log_generation）。
+
+    出處逐位對齊人名，查不到的位子記「（查無）」——只記查到的那幾張會讓事後回查
+    對不上是哪一位（多人時尤其），與主流程「每一張出處都記下來」同一個理由。
+    """
+    subjects: list[str] = []
+    sources: list[str] = []
+    for side in (0, 1):
+        names, _ = cover_portraits(visuals, side)
+        found = cover_portrait_photos(visuals, side)
+        for name in names:
+            if name in subjects:
+                continue
+            subjects.append(name)
+            photo = found.get(name)
+            sources.append(photo.source_page if photo is not None else "（查無）")
+    return {
+        "portrait_subject": "、".join(subjects),
+        "portrait_photo_source": "、".join(sources),
+    }
+
+
 def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse:
     """十點不一樣（滿版）：一張圖、一個標題。附圖有就放、沒有就生一張。"""
     has_asis = bool(req.asis_left.strip()) or any(ref.purpose == "asis" for ref in req.reference_images)
@@ -3561,22 +3593,38 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
             (cover_portrait_photos(resolved, 0), {}),
         )
     is_ai = True
+    request_id = request_log.new_request_id()
+    portrait_fields = cover_portrait_log_fields(visual)
     try:
         if req.mode == editor_formats.COVER_MODE_AI:
-            cover = _cover_ai(req, date_text, visual if isinstance(visual, CoverVisuals) else CoverVisuals(visual, visual))
+            cover, image_model = _cover_ai(req, date_text, visual if isinstance(visual, CoverVisuals) else CoverVisuals(visual, visual))
         else:
-            cover, is_ai = _cover_full_composite(req, date_text, visual)
+            cover, is_ai, image_model = _cover_full_composite(req, date_text, visual)
     except compose.ComposeError as exc:
         print(f"[compose] 封面失敗：{exc}", flush=True)
+        request_log.log_failure(
+            request_id=request_id, source="editor-cover-full", news_text=req.title_left,
+            error=str(exc), prompt=f"FULL: {visual}", role="編輯", provider=req.provider,
+        )
         raise HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}") from exc
+    except Exception as exc:
+        # 生圖端的失敗（安全過濾、比例降級、逾時）以前只會 print，事後查不到是哪一則
+        # 標題觸發的。比照 /api/images/generate：記一筆再原樣往外丟。
+        request_log.log_failure(
+            request_id=request_id, source="editor-cover-full", news_text=req.title_left,
+            error=str(exc), prompt=f"FULL: {visual}", role="編輯", provider=req.provider,
+        )
+        raise
     request_log.log_generation(
-        request_id=request_log.new_request_id(),
+        request_id=request_id,
         source="editor-cover-full",
         news_text=req.title_left,
         variable=req.title_left,
         prompt=f"FULL: {visual}",
         role="編輯",
         provider=req.provider,
+        image_model=image_model,
+        **portrait_fields,
     )
     return TenCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
@@ -3637,23 +3685,41 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     else:
         visuals = resolve_cover_visuals(req)
     panel_is_ai = (True, True)
+    request_id = request_log.new_request_id()
+    log_prompt = f"L: {visuals[0]}\nR: {visuals[1]}"
+    portrait_fields = cover_portrait_log_fields(visuals)
     try:
         if req.mode == editor_formats.COVER_MODE_AI:
-            cover = _cover_ai(req, date_text, visuals)
+            cover, image_model = _cover_ai(req, date_text, visuals)
         else:
-            cover, panel_is_ai = _cover_composite(req, date_text, visuals)
+            cover, panel_is_ai, image_model = _cover_composite(req, date_text, visuals)
     except compose.ComposeError as exc:
         print(f"[compose] 封面失敗：{exc}", flush=True)
+        request_log.log_failure(
+            request_id=request_id, source="editor-cover",
+            news_text=f"{req.title_left} ｜ {req.title_right}",
+            error=str(exc), prompt=log_prompt, role="編輯", provider=req.provider,
+        )
         raise HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}") from exc
+    except Exception as exc:
+        # 生圖端的失敗（安全過濾、比例降級、逾時）比照 /api/images/generate 記一筆再原樣往外丟
+        request_log.log_failure(
+            request_id=request_id, source="editor-cover",
+            news_text=f"{req.title_left} ｜ {req.title_right}",
+            error=str(exc), prompt=log_prompt, role="編輯", provider=req.provider,
+        )
+        raise
 
     request_log.log_generation(
-        request_id=request_log.new_request_id(),
+        request_id=request_id,
         source="editor-cover",
         news_text=f"{req.title_left} ｜ {req.title_right}",
         variable=f"{req.title_left}\n{req.title_right}",
-        prompt=f"L: {visuals[0]}\nR: {visuals[1]}",
+        prompt=log_prompt,
         role="編輯",
         provider=req.provider,
+        image_model=image_model,
+        **portrait_fields,
     )
     return TenCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
@@ -3930,17 +3996,35 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     ai_translation = bool(req.ai_translation) and not (hourly or hot)
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
 
-    lines, visual, subjects, english = resolve_yt_cover_plan(req)
+    plan = resolve_yt_cover_plan(req)
+    lines, visual, subjects, english = plan
+    photos = yt_cover_plan_photos(plan)
+    request_id = request_log.new_request_id()
+    log_source = f"editor-yt-cover-{req.layout}-{req.title_mode}"
+    log_prompt = visual or "（附圖／既有底圖）"
+
+    def _log_failure(exc: Exception) -> None:
+        # 生圖與合成的失敗以前只會 print，事後查不到是哪一則標題觸發的。
+        # 比照 /api/images/generate：記一筆再原樣往外丟。
+        request_log.log_failure(
+            request_id=request_id, source=log_source, news_text=req.title,
+            error=str(exc), prompt=log_prompt, role="編輯", provider=req.provider,
+        )
+
     ai_title = req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI
-    if ai_title and req.background_image_base64:
-        # 追加修改後回來：模型圖已含標題，只補貼固定元素
-        background = base64.b64decode(req.background_image_base64)
-        bg_mime, is_ai, image_model = req.background_mime_type or "image/png", req.background_is_ai, "yt-cover:overlay"
-    elif ai_title:
-        background, bg_mime, image_model = _yt_cover_full_image(req, lines, visual, subjects, english)
-        is_ai = True
-    else:
-        background, bg_mime, is_ai, image_model = _yt_cover_background(req, visual, subjects, english)
+    try:
+        if ai_title and req.background_image_base64:
+            # 追加修改後回來：模型圖已含標題，只補貼固定元素
+            background = base64.b64decode(req.background_image_base64)
+            bg_mime, is_ai, image_model = req.background_mime_type or "image/png", req.background_is_ai, "yt-cover:overlay"
+        elif ai_title:
+            background, bg_mime, image_model = _yt_cover_full_image(req, lines, visual, subjects, english)
+            is_ai = True
+        else:
+            background, bg_mime, is_ai, image_model = _yt_cover_background(req, visual, subjects, english)
+    except Exception as exc:
+        _log_failure(exc)
+        raise
     try:
         if hot:
             cover = compose.compose_yt_hot_cover(
@@ -3973,11 +4057,12 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             )
     except compose.ComposeError as exc:
         print(f"[compose] YT 直播封面失敗：{exc}", flush=True)
+        _log_failure(exc)
         raise HTTPException(status_code=500, detail=f"封面生成失敗：{exc}") from exc
 
     request_log.log_generation(
-        request_id=request_log.new_request_id(),
-        source=f"editor-yt-cover-{req.layout}-{req.title_mode}",
+        request_id=request_id,
+        source=log_source,
         news_text=req.title,
         variable="\n".join(filter(None, [
             lines[0], lines[1],
@@ -3985,10 +4070,15 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             editor_formats.YT_COVER_AI_TRANSLATION_LABEL if ai_translation else "",
             req.time_text.strip() if hourly else "",
         ])),
-        prompt=visual or "（附圖／既有底圖）",
+        prompt=log_prompt,
         role="編輯",
         provider=req.provider,
         image_model=image_model,
+        # 具名真人與照片出處：肖像這段靠 prompt 端列人名，會飄，事後要能一位一位對
+        portrait_subject="、".join(subjects),
+        portrait_photo_source="、".join(
+            photos[name].source_page if name in photos else "（查無）" for name in subjects
+        ),
     )
     return YtCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
