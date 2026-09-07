@@ -99,6 +99,19 @@ label」——位置在後、又是明文 OVERRIDE，模型照做，標籤整個
 `tests/test_ten_cover.py`：分行規則、斜切像素、標頭與底部飾帶、AI示意圖只印 AI 格、
 三色標題、端點（雙 asis 零 API、單 asis 左格、無 asis 維持 ai 模式）、prompt 同步。
 
+2026-09-07 的路徑對齊另有七支：`test_cover_text_free.py`（合成版底圖的無文字覆寫）、
+`test_cover_aspect_guard.py`（五條線的成圖比例驗證）、`test_cover_photo_availability.py`
+（查不到參考照的人先排除）、`test_cover_request_log.py`（落檔欄位與失敗記錄）、
+`test_cover_ai_note.py`（AI示意圖小標由程式壓）、`test_cover_ai_title_lines.py`
+（AI 版標題分行）、`test_cover_refine.py`（AI 版追加修改）；refine 規則在
+`tests/test_refine_rules.py`。
+
+**已知缺口**：兩個 AI 模板的「不要畫示意圖標籤」寫在 HARD CONSTRAINTS，而肖像規則
+（`PORTRAIT_*_RULES`，內含「示意圖標籤要保持可見」）由 `_cover_apply_portraits` 加在
+**後面**。依 repo 的「位置＋明文 OVERRIDE」慣例，有具名真人時後到的那段可能贏——模型
+自己畫一個標籤、程式再壓一個。YT ai-title（`YT_COVER_FULL_PROMPT_*`）有完全相同的
+狀態，這裡刻意維持一致，未一併加尾端 override。
+
 ## AI 消化標題（/api/editor/cover-titles）
 
 十點與 YT 封面欄位各有「新聞內文」textarea＋「AI 消化標題」鈕。貼內文 → 文字模型
