@@ -546,7 +546,7 @@ window.onload = () => {
     ["btnSafeFrame", "p1-btnSafeFrame"].forEach(id => {
         const btn = document.getElementById(id);
         if (!btn) return;
-        btn.className = "px-3 py-1 rounded text-[9px] font-black transition-all " + (state.safeFrame ? "bg-emerald-600 text-white" : "text-slate-500 hover:text-white");
+        btn.className = "px-3 py-1 rounded text-[9px] font-black transition-all " + (state.safeFrame ? "border border-emerald-600 bg-emerald-600 text-white" : "border border-emerald-600 text-slate-400 hover:text-white");
         btn.innerText = state.safeFrame ? "安全框 ON" : "安全框 OFF";
     });
     updateStampButton();
@@ -991,7 +991,7 @@ function switchTab(tab, el) {
 function _setToggle(id, on) {
     const el = document.getElementById(id);
     if (!el) return;
-    el.className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (on ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-white');
+    el.className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (on ? 'border border-blue-600 bg-blue-600 text-white' : 'border border-blue-600 text-slate-400 hover:text-white');
 }
 
 function syncEngineSizeButtons() {
@@ -1021,7 +1021,7 @@ function toggleSafeFrame() {
     ['btnSafeFrame', 'p1-btnSafeFrame'].forEach(id => {
         const btn = document.getElementById(id);
         if (!btn) return;
-        btn.className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (state.safeFrame ? 'bg-emerald-600 text-white' : 'text-slate-500 hover:text-white');
+        btn.className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (state.safeFrame ? 'border border-emerald-600 bg-emerald-600 text-white' : 'border border-emerald-600 text-slate-400 hover:text-white');
         btn.innerText = state.safeFrame ? '安全框 ON' : '安全框 OFF';
     });
     updateAspectBadge();
@@ -1033,7 +1033,7 @@ function updateStampButton() {
     const btn = document.getElementById('p1-btnStamp');
     if (!btn) return;
     btn.className = 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
-        + (state.stamp ? 'bg-amber-600 text-white' : 'text-slate-500 hover:text-white');
+        + (state.stamp ? 'border border-amber-600 bg-amber-600 text-white' : 'border border-amber-600 text-slate-400 hover:text-white');
     btn.innerText = state.stamp ? '蓋章 ON' : '蓋章 OFF';
 }
 

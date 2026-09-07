@@ -289,6 +289,10 @@ COVER_TITLE_MIN_SIZE_RATIO = 0.045
 COVER_TITLE_WIDTH_RATIO = 0.84       # 標題最寬佔該格寬的比例
 COVER_TITLE_LINE_GAP = 1.06          # 行距（字級倍數）
 COVER_TITLE_BOTTOM_RATIO = 0.085     # 最後一行字底離畫面底的距離
+# 滿版（單一標題，2026-09-07 使用者裁決）：比照今日熱搜，標題橫跨整個畫面寬、置中，
+# 字級起點放大；每行各自以整寬決定字級（最寬行決定，全部同字級）。
+COVER_FULL_TITLE_SIZE_RATIO = 0.15    # 每行各自撐滿寬（比照今日熱搜逐行 fit），此為字級上限
+COVER_FULL_TITLE_WIDTH_RATIO = 0.90
 COVER_TITLE_STROKE_RATIO = 0.055
 # 逐行配色：第 1 行白、第 2 行黃、第 3 行紅（紅字用白描邊，其餘深色描邊）。
 # 這張表同時是 editor_formats.COVER_AI_PROMPT_TEMPLATE 對模型描述的配色規則，改要一起改。
@@ -454,15 +458,21 @@ def _draw_cover_ai_note(canvas: Image.Image, x_anchor: int, y0: int, align_right
     _draw_text(ImageDraw.Draw(canvas), ((x0 + x1) // 2, y0 + note_h // 2), COVER_AI_NOTE, font, stroke_width=0, anchor="mm")
 
 
-def _draw_cover_title(canvas: Image.Image, lines: list[str], panel_x0: int, panel_x1: int, align_right: bool) -> None:
-    """一格的標題：2–3 行由下往上堆，全部同一字級（以最寬那行決定），逐行白／黃／紅。"""
+def _draw_cover_title(
+    canvas: Image.Image, lines: list[str], panel_x0: int, panel_x1: int, align_right: bool, *, full_width: bool = False
+) -> None:
+    """一格的標題：2–3 行由下往上堆，全部同一字級（以最寬那行決定），逐行白／黃／紅。
+
+    full_width=True（滿版單一標題）：橫跨整個畫面、置中、字級起點放大，比照今日熱搜。
+    """
     width, height = COVER_CANVAS
     lines = [ln for ln in lines if ln.strip()][:COVER_MAX_TITLE_LINES]
     if not lines:
         return
     panel_w = panel_x1 - panel_x0
-    max_w = round(panel_w * COVER_TITLE_WIDTH_RATIO)
-    size = round(height * COVER_TITLE_SIZE_RATIO)
+    width_ratio = COVER_FULL_TITLE_WIDTH_RATIO if full_width else COVER_TITLE_WIDTH_RATIO
+    max_w = round(panel_w * width_ratio)
+    size = round(height * (COVER_FULL_TITLE_SIZE_RATIO if full_width else COVER_TITLE_SIZE_RATIO))
     min_size = round(height * COVER_TITLE_MIN_SIZE_RATIO)
     font = None
     while size > min_size:
@@ -473,14 +483,24 @@ def _draw_cover_title(canvas: Image.Image, lines: list[str], panel_x0: int, pane
     else:
         font = _font(min_size)
         size = min_size
+    # 滿版：逐行各自 fit 到整寬（短行放大、長行縮小），比照今日熱搜；雙切：全部同字級
+    if full_width:
+        fonts = [_fit_font(ln, max_w, size, min_size) for ln in lines]
+    else:
+        fonts = [font] * len(lines)
     stroke = max(3, round(size * COVER_TITLE_STROKE_RATIO))
-    step = round(size * COVER_TITLE_LINE_GAP)
     baseline = height - round(height * COVER_TITLE_BOTTOM_RATIO)
-    x = panel_x1 - round(panel_w * (1 - COVER_TITLE_WIDTH_RATIO) / 2) if align_right else panel_x0 + round(panel_w * (1 - COVER_TITLE_WIDTH_RATIO) / 2)
-    anchor = "rs" if align_right else "ls"
+    if full_width:
+        x, anchor = panel_x0 + panel_w // 2, "ms"
+    elif align_right:
+        x, anchor = panel_x1 - round(panel_w * (1 - COVER_TITLE_WIDTH_RATIO) / 2), "rs"
+    else:
+        x, anchor = panel_x0 + round(panel_w * (1 - COVER_TITLE_WIDTH_RATIO) / 2), "ls"
     draw = ImageDraw.Draw(canvas)
     # 由最後一行往上畫，配色照行序（第 1 行白…）
     for idx in range(len(lines) - 1, -1, -1):
+        font = fonts[idx]
+        stroke = max(3, round(font.size * COVER_TITLE_STROKE_RATIO))
         colour = COVER_TITLE_LINE_COLOURS[min(idx, len(COVER_TITLE_LINE_COLOURS) - 1)]
         is_red = colour == COVER_TITLE_LINE_COLOURS[2]
         # 陰影一層再正字，字壓在照片上才立得住
@@ -490,7 +510,8 @@ def _draw_cover_title(canvas: Image.Image, lines: list[str], panel_x0: int, pane
             stroke=COVER_TITLE_STROKE_LIGHT if is_red else COVER_TITLE_STROKE_DARK,
             stroke_width=stroke, anchor=anchor,
         )
-        baseline -= step
+        # 往上一行：用上一行（畫面上方那行）的字級算行距
+        baseline -= round((fonts[idx - 1].size if idx > 0 else font.size) * COVER_TITLE_LINE_GAP)
 
 
 def compose_ten_cover(
@@ -543,8 +564,12 @@ def compose_ten_cover(
         _draw_cover_ai_note(canvas, width - COVER_MARGIN, note_y, align_right=True)
 
     _draw_cover_bottom_line(canvas)
-    _draw_cover_title(canvas, split_cover_title(title_left), left_box[0] + COVER_MARGIN, left_box[2], align_right=False)
-    _draw_cover_title(canvas, split_cover_title(title_right), right_box[0], right_box[2] - COVER_MARGIN, align_right=True)
+    if right_image is None and not title_right.strip():
+        # 滿版單一標題：橫跨整寬、置中（2026-09-07）
+        _draw_cover_title(canvas, split_cover_title(title_left), 0, width, align_right=False, full_width=True)
+    else:
+        _draw_cover_title(canvas, split_cover_title(title_left), left_box[0] + COVER_MARGIN, left_box[2], align_right=False)
+        _draw_cover_title(canvas, split_cover_title(title_right), right_box[0], right_box[2] - COVER_MARGIN, align_right=True)
     if badge == "highlight":
         _draw_cover_highlight_stamp(canvas)
 

@@ -32,7 +32,8 @@
 - `ten_cover`＝**十點不一樣（雙切）**：左右兩格各一個標題、各一個附圖位（下節）。`layout="split"`。
 - `ten_cover_full`＝**十點不一樣（滿版）**：一張圖鋪滿、**一個標題**（`title_left`，`title_right` 留空）。
   附圖位（`asis_left`）有圖就直接鋪滿（強制合成版、零 API）；沒圖就生一張 16:9
-  （`COVER_VISUAL_FULL_PROMPT_TEMPLATE`），標題壓左下（最多 3 行）。AI 整張版用 `COVER_AI_FULL_PROMPT_TEMPLATE`
+  （`COVER_VISUAL_FULL_PROMPT_TEMPLATE`）。標題**橫跨整寬置中**、逐行各自撐滿（比照今日熱搜，字級上限
+  `COVER_FULL_TITLE_SIZE_RATIO`=15%、寬 90%，最多 3 行，白／黃／紅）。AI 整張版用 `COVER_AI_FULL_PROMPT_TEMPLATE`
   （單張照片、單一標題、無斜線）。`model` 記 `ten-cover-full:<mode>[-asis]`。
 - 「AI 消化標題」對滿版送 `target="ten_cover_full"`，回單一 `title`（2–3 段）。
 - 前端同一組欄位：滿版隱藏右半標題／右半附圖（`.cover-split-only`），左標籤改「標題」。

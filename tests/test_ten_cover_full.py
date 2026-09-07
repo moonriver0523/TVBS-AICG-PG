@@ -79,10 +79,13 @@ class FullEndpointTests(unittest.TestCase):
         y = round(h * 0.30)
         for x in (w // 4, w // 2, 3 * w // 4):
             self.assertEqual(img.getpixel((x, y)), RED)          # 一張圖鋪滿，沒有斜線
-        # 右下沒有第二個標題：右格下方區域仍是底圖顏色系（沒有白／黃字）
-        region = img.crop((w // 2 + 60, round(h * 0.60), w - 40, h - round(h * 0.06))).tobytes()
-        whites = sum(1 for r, g, b in zip(region[0::3], region[1::3], region[2::3]) if r > 240 and g > 240 and b > 240)
-        self.assertLess(whites, 50)
+        # 滿版標題橫跨整寬置中（2026-09-07 比照今日熱搜）：標題區左半、右半都要有字（白／黃／紅）
+        def ink(box):
+            raw = img.crop(box).tobytes()
+            return sum(1 for r, g, b in zip(raw[0::3], raw[1::3], raw[2::3]) if (r > 230 and g > 230) or (r > 200 and b < 90))
+        title_zone = (round(h * 0.55), h - round(h * 0.06))
+        self.assertGreater(ink((0, title_zone[0], w // 2, title_zone[1])), 2000)
+        self.assertGreater(ink((w // 2, title_zone[0], w, title_zone[1])), 2000)
 
     def test_full_without_asis_generates_one_wide_image(self):
         res, calls, resolve = self._post({"title_left": "全球3100條 躍動冰川", "layout": "full", "mode": "composite"})
