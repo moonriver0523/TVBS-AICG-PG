@@ -173,20 +173,26 @@ EDGE-SAFE FULL-FRAME RULES (CRITICAL — MUST PRESERVE)
 # test_content_fidelity 的雙源逐字比對。
 # ============================================================
 
-# 禁品牌那一條抽成共用常數：追加修改（refine）也要帶著同一條，措辭必須逐字相同，
-# 否則兩條線對「什麼算品牌」的定義會慢慢分岔。REAL_WORLD_RENDERING_RULES 由它拼回去，
-# 拼出來的字串與抽取前逐字相同（test_prompt_parity 會對 app.js 逐字比對）。
-NO_UNSOURCED_BRANDS_RULE = "- NO UNSOURCED BRANDS: every sign, storefront, banner, package, product body, vehicle livery, screen, badge and building facade must be blank or carry a generic non-readable mark. Do NOT draw any real company logo, wordmark, trademark, ticker symbol, exchange name or brand text — not even a small, faint, distant or background one. A brand name may appear only if that exact text is supplied in VARIABLE FIELDS, and then only as plain typeset text, never as a reproduced logotype."
+# 品牌那一條抽成共用常數：追加修改（refine）也要帶著同一條，措辭必須逐字相同，
+# 否則兩條線對「什麼算品牌」的定義會慢慢分岔。REAL_WORLD_RENDERING_RULES 由它拼回去
+# （test_prompt_parity 會對 app.js 逐字比對，改這裡一定要同步 app.js）。
+#
+# 2026-09-07 使用者裁決：**新聞素材提到的品牌就畫出真實 LOGO**，取代 2026-08-xx 的
+# 「只能純文字、不得重現 logotype」。理由是新聞本來就在講那個品牌，把它的招牌塗白
+# 反而是失真。**沒提到的品牌仍然一律去識別化**——那半段是多輪實驗磨出來的，措辭
+# 原文強度保留，不要放寬：模型只要覺得「畫個 logo 比較像真的」就會替沒提到的店家
+# 捏一個牌子出來。
+SOURCE_BRANDS_RULE = "- BRANDS: ONLY THOSE IN THE SOURCE. A brand that VARIABLE FIELDS or STRUCTURE names may be shown with its real logo, wordmark or brand text, rendered as faithfully to the real mark as your knowledge allows, and plain typeset text is equally acceptable. Place it ONLY on the objects that belong to that brand — its own signage, packaging, product body, vehicle livery, screen or jersey — and never put one brand's mark on another brand's object. Every OTHER sign, storefront, banner, package, product body, vehicle livery, screen, badge and building facade must be blank or carry a generic non-readable mark: do NOT draw any real company logo, wordmark, trademark, ticker symbol, exchange name or brand text for a brand the source material does not name — not even a small, faint, distant or background one, and never invent one."
 
 REAL_WORLD_RENDERING_RULES = """==================================================
 REAL-WORLD ACCURACY (CRITICAL)
 ==================================================
 - Real, verifiable places and objects (skylines, specific buildings, highways and interchanges, airports, facilities, and specific models of aircraft, ship, vehicle or equipment) must look like the real thing: correct shape, layout, proportions and distinguishing features as far as they are known. Faithful, realistic rendering is welcome — do not distort reality for style.
 - Do not fabricate identifying detail you do not know and present it as real. If the rendering is a generic stand-in or a reconstruction rather than the real thing, the 示意圖 label supplied in VARIABLE FIELDS must be clearly visible — never drop or hide it.
-""" + NO_UNSOURCED_BRANDS_RULE + """
+""" + SOURCE_BRANDS_RULE + """
 - NAMED REAL PEOPLE: how to depict a named real person is governed by the NAMED REAL PERSON block below whenever one is present — follow that block, not your own judgement. If no such block is present, do NOT draw a recognisable face for a named real person: use a back view or a plain silhouette and keep the 示意圖 label visible. Never show the person in a scene, action or context that STRUCTURE does not describe.
 - A STATED QUANTITY IS A NUMBER, NOT A HEADCOUNT TO DRAW. Where you do draw the individual items, the count on the canvas must equal the stated figure exactly, background and secondary items included — a graphic saying 4車追撞 with five vehicles in it is wrong. Only draw them individually while the figure is small enough to take in at a glance, up to about four. Beyond that do not attempt the instances at all: 12箱走私菸 is one representative crate with the figure 12 set beside it, never a heap the viewer would count as twenty, and 10部機組 is a figure rather than a row you would miscount.
-- SELF-CHECK before finalizing: look at every surface in the image for text or marks you added yourself. If any sign, screen, package or vehicle carries readable branding, blank it."""
+- SELF-CHECK before finalizing: look at every surface in the image for text or marks you added yourself. If any sign, screen, package or vehicle carries readable branding for a brand the source material does not name, blank it."""
 
 TW_DIRECTIONAL_COLOR_RULES = """==================================================
 DIRECTIONAL COLOUR CONVENTION (TAIWAN)
@@ -289,7 +295,7 @@ ATTACHED SCENE REFERENCE (CRITICAL)
 ==================================================
 - One of the attached images is a real-scene photograph supplied by the user. The appearance of the scene, buildings, vehicles or equipment in the graphic must follow that attached image: same shape, layout, proportions and distinguishing features.
 - Re-draw it in the graphic's own visual style; do not paste or photographically reproduce the attached image itself.
-- Do not copy any readable text, logo or brand mark visible inside the attached image; the NO UNSOURCED BRANDS rule above still applies in full.
+- Do not copy readable text or brand marks visible inside the attached image, except a brand the source material names — that one may be reproduced on its own objects; the BRANDS rule above still applies in full.
 - Do not copy any recognisable human face from the attached image; how to depict named real people is governed solely by the NAMED REAL PERSON rules."""
 
 # 使用者上傳肖像照（2026-08-17 使用者裁決開放）。
@@ -314,7 +320,7 @@ ATTACHED IMAGE — PLACE AS-IS, DO NOT REDRAW (CRITICAL)
 - One of the attached images must be placed into the graphic exactly as supplied: unchanged pixels, colours, proportions and content. Do NOT re-draw, re-style, repaint, colour-grade, stylise or reinterpret it in the graphic's own illustration style.
 - Do not crop, stretch, rotate, mirror or otherwise distort the attached image; if it must be resized to fit the layout, scale it uniformly (preserve aspect ratio) only.
 - This attached image is exempt from the "re-draw in the graphic's own visual style" instruction that applies to other attached reference images; place it as its own distinct element in the composition (e.g. an inset panel or designated area), not blended or repainted into the surrounding artwork.
-- Any brand marks, logos, readable text or real human faces already present in this attached image may remain exactly as supplied — the NO UNSOURCED BRANDS rule and the face-rendering rules above govern what you generate elsewhere in the graphic, not this attached image's own untouched content."""
+- Any brand marks, logos, readable text or real human faces already present in this attached image may remain exactly as supplied — the BRANDS rule and the face-rendering rules above govern what you generate elsewhere in the graphic, not this attached image's own untouched content."""
 
 USER_REFERENCE_MODES = {
     "map": USER_REFERENCE_MAP_RULES,
@@ -347,7 +353,7 @@ USER REFERENCE SUPPLIED — NO 示意圖 LABEL (OVERRIDE)
 - The user has supplied reference image(s) for this graphic, so the depiction is based on real supplied material rather than a generic stand-in.
 - Do NOT render any 示意圖 label anywhere in the image. If the text 示意圖 appears in VARIABLE FIELDS, omit that text and render everything else exactly as supplied.
 - This rule OVERRIDES every earlier instruction that asks for a 示意圖 label to be present or kept visible, including the REAL-WORLD ACCURACY and NAMED REAL PERSON blocks.
-- Every other rule in those blocks still binds in full: the brand bans, likeness and face rules, and geographic accuracy are unchanged."""
+- Every other rule in those blocks still binds in full: the brand rules, likeness and face rules, and geographic accuracy are unchanged."""
 
 
 # ============================================================
@@ -396,7 +402,7 @@ TEXT-FREE BACKGROUND REFINE RULES (CRITICAL)
 # 主流程那幾段（PORTRAIT_*_RULES）都以 STRUCTURE／VARIABLE FIELDS 為前提，refine 沒有
 # 那兩個區塊，照搬會叫模型去對照不存在的欄位。
 REFINE_REAL_WORLD_RULES = (
-    NO_UNSOURCED_BRANDS_RULE
+    SOURCE_BRANDS_RULE
     + "\n- NAMED REAL PEOPLE: no reference photograph is attached to this edit, so you MUST NOT draw or complete the face of any named real person that is not already a face in the attached image. Faces already present stay exactly as they are — do not restyle, replace, age, beautify or re-render them. Where the attached image shows a figure as a back view or a silhouette, it stays a back view or a silhouette."
 )
 

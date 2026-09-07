@@ -36,7 +36,7 @@ class DigestStageTests(unittest.TestCase):
         # 2026-08-05 改成陣列：要列出畫面上每一位具名真人，漏列第二個人正是那天的事故成因。
         prompt = build_digest_instructions("記者", "standard", "情境示意圖")
         for phrase in (
-            "NO UNSOURCED BRANDS",
+            "BRANDS: ONLY THOSE IN THE SOURCE",
             "NAMED REAL PEOPLE",
             "as faithfully to its real appearance as your knowledge allows",
             "LABEL WHAT IS NOT REAL",

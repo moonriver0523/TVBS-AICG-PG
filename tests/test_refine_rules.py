@@ -18,14 +18,14 @@ import news_prompt  # noqa: E402
 class RefineRealWorldRulesTests(unittest.TestCase):
     def test_brand_clause_is_the_same_string_the_main_flow_uses(self):
         # 抽共用常數而不是複製貼上：兩條線對「什麼算品牌」的定義不能分岔
-        self.assertIn(news_prompt.NO_UNSOURCED_BRANDS_RULE, news_prompt.REAL_WORLD_RENDERING_RULES)
-        self.assertIn(news_prompt.NO_UNSOURCED_BRANDS_RULE, news_prompt.REFINE_REAL_WORLD_RULES)
+        self.assertIn(news_prompt.SOURCE_BRANDS_RULE, news_prompt.REAL_WORLD_RENDERING_RULES)
+        self.assertIn(news_prompt.SOURCE_BRANDS_RULE, news_prompt.REFINE_REAL_WORLD_RULES)
 
     def test_both_refine_prompts_carry_brands_and_named_person_clauses(self):
         for text_free in (False, True):
             with self.subTest(text_free=text_free):
                 prompt = news_prompt.build_refine_prompt("把背景弄熱鬧一點", text_free=text_free)
-                self.assertIn(news_prompt.NO_UNSOURCED_BRANDS_RULE, prompt)
+                self.assertIn(news_prompt.SOURCE_BRANDS_RULE, prompt)
                 self.assertIn("NAMED REAL PEOPLE", prompt)
                 self.assertIn("MUST NOT draw or complete the face", prompt)
                 # 條款要排在使用者指令之前，指令才不會反過來被當成後到的覆寫
