@@ -2019,6 +2019,11 @@ def frame_image_response(
     )
 
 
+def _compose_error_status(exc: Exception) -> int:
+    """合成失敗的 HTTP 狀態：使用者能自己修的（標題太長）回 400，其餘 500。"""
+    return 400 if "標題太長" in str(exc) else 500
+
+
 def broadcast_hole_for(req: "NewsImageGenerateRequest") -> str:
     """/api/news-image 要不要蓋播出鏡面的白色壓框：版型有挖空側**且**使用者開了壓框。"""
     if not req.hole:
@@ -3404,7 +3409,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
             cover, is_ai = _cover_full_composite(req, date_text, visual)
     except compose.ComposeError as exc:
         print(f"[compose] 封面失敗：{exc}", flush=True)
-        raise HTTPException(status_code=500, detail=f"封面生成失敗：{exc}") from exc
+        raise HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}") from exc
     request_log.log_generation(
         request_id=request_log.new_request_id(),
         source="editor-cover-full",
@@ -3480,7 +3485,7 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
             cover, panel_is_ai = _cover_composite(req, date_text, visuals)
     except compose.ComposeError as exc:
         print(f"[compose] 封面失敗：{exc}", flush=True)
-        raise HTTPException(status_code=500, detail=f"封面生成失敗：{exc}") from exc
+        raise HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}") from exc
 
     request_log.log_generation(
         request_id=request_log.new_request_id(),

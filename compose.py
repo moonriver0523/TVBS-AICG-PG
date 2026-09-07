@@ -284,7 +284,10 @@ COVER_HEADER_LINE = (40, 150, 245)  # 標頭帶底一條亮藍細線
 COVER_HEADER_LINE_RATIO = 0.004
 COVER_MARGIN = 26                    # 內容離左右畫框的距離
 COVER_ONAIR_FILL = (206, 26, 32)
-COVER_TITLE_SIZE_RATIO = 0.085       # 標題起始字級（佔畫面高）
+# 2026-09-07 使用者回報「字明顯太小」：起始字級 0.085 → 0.11，且雙切也改成逐行各自撐滿
+# （比照 AI 版：每行依自己的寬度決定字級，短行大、長行小），不再全格同字級。
+COVER_TITLE_SIZE_RATIO = 0.11        # 標題起始字級（佔畫面高）
+COVER_TITLE_LINE_SIZE_SPREAD = 1.35  # 雙切：短行最多比最寬行大這麼多倍，免得一行巨大一行極小
 COVER_TITLE_MIN_SIZE_RATIO = 0.045
 COVER_TITLE_WIDTH_RATIO = 0.84       # 標題最寬佔該格寬的比例
 COVER_TITLE_LINE_GAP = 1.06          # 行距（字級倍數）
@@ -458,12 +461,54 @@ def _draw_cover_ai_note(canvas: Image.Image, x_anchor: int, y0: int, align_right
     _draw_text(ImageDraw.Draw(canvas), ((x0 + x1) // 2, y0 + note_h // 2), COVER_AI_NOTE, font, stroke_width=0, anchor="mm")
 
 
+# 拆行點偏好：切在「數量詞結尾」之後（5年｜各自…、184億元｜提升…），比純粹對半自然得多。
+_SPLIT_AFTER_CHARS = set("年月日元億萬千人次件位家戶%％度歲倍")
+
+
+def _split_line_near_middle(text: str) -> tuple[str, str]:
+    """把一行從中間附近切成兩行。
+
+    優先切在中點附近（±3 字）緊接數量詞結尾的位置；沒有就取最靠近中點、且不切在數字
+    中間的位置（184億元 不能變 18／4億元）。
+    """
+    n = len(text)
+    mid = n // 2
+    for offset in range(0, 4):
+        for i in (mid - offset, mid + offset):
+            if 2 <= i <= n - 2 and text[i - 1] in _SPLIT_AFTER_CHARS and not text[i].isdigit():
+                return text[:i], text[i:]
+    for offset in range(0, n):
+        for i in (mid + offset, mid - offset):
+            if 1 <= i < n and not (text[i - 1].isdigit() and text[i].isdigit()):
+                return text[:i], text[i:]
+    return text[:mid], text[mid:]
+
+
+def wrap_cover_title_lines(lines: list[str], max_w: int, size: int, max_lines: int = COVER_MAX_TITLE_LINES) -> list[str]:
+    """超寬防呆（2026-09-07 使用者回報：太長的段落直接衝出版面）。
+
+    在**起始字級**下塞不進格寬的行，從中間切成兩行（最長的先切），總行數不超過 max_lines；
+    行數用完就不再切，交給後面的縮字。比照 AI 版：18 字的段落 AI 自己會拆成兩行，不會硬縮。
+    """
+    lines = list(lines)
+    font = _font(size)
+    while len(lines) < max_lines:
+        widths = [font.getbbox(ln)[2] for ln in lines]
+        idx = max(range(len(lines)), key=widths.__getitem__)
+        if widths[idx] <= max_w or len(lines[idx]) < 4:
+            break
+        head, tail = _split_line_near_middle(lines[idx])
+        lines[idx : idx + 1] = [head, tail]
+    return lines
+
+
 def _draw_cover_title(
     canvas: Image.Image, lines: list[str], panel_x0: int, panel_x1: int, align_right: bool, *, full_width: bool = False
 ) -> None:
-    """一格的標題：2–3 行由下往上堆，全部同一字級（以最寬那行決定），逐行白／黃／紅。
+    """一格的標題：2–3 行由下往上堆，逐行各自撐滿格寬（短行大、長行小），逐行白／黃／紅。
 
-    full_width=True（滿版單一標題）：橫跨整個畫面、置中、字級起點放大，比照今日熱搜。
+    full_width=True（滿版單一標題）：橫跨整個畫面、置中、字級起點再放大，比照今日熱搜。
+    超寬的行先由 wrap_cover_title_lines 拆行；拆完仍塞不進最小字級就整支失敗，不出超線的圖。
     """
     width, height = COVER_CANVAS
     lines = [ln for ln in lines if ln.strip()][:COVER_MAX_TITLE_LINES]
@@ -474,21 +519,15 @@ def _draw_cover_title(
     max_w = round(panel_w * width_ratio)
     size = round(height * (COVER_FULL_TITLE_SIZE_RATIO if full_width else COVER_TITLE_SIZE_RATIO))
     min_size = round(height * COVER_TITLE_MIN_SIZE_RATIO)
-    font = None
-    while size > min_size:
-        font = _font(size)
-        if max(font.getbbox(ln)[2] for ln in lines) <= max_w:
-            break
-        size -= 2
-    else:
-        font = _font(min_size)
-        size = min_size
-    # 滿版：逐行各自 fit 到整寬（短行放大、長行縮小），比照今日熱搜；雙切：全部同字級
-    if full_width:
-        fonts = [_fit_font(ln, max_w, size, min_size) for ln in lines]
-    else:
-        fonts = [font] * len(lines)
-    stroke = max(3, round(size * COVER_TITLE_STROKE_RATIO))
+    lines = wrap_cover_title_lines(lines, max_w, size)
+    fonts = [_fit_font(ln, max_w, size, min_size) for ln in lines]
+    if not full_width:
+        # 雙切：短行不能比最寬行大太多（AI 版三行字級相近），滿版維持今日熱搜式逐行撐滿
+        cap = min(size, round(min(f.size for f in fonts) * COVER_TITLE_LINE_SIZE_SPREAD))
+        fonts = [_font(cap) if f.size > cap else f for f in fonts]
+    for ln, font in zip(lines, fonts):
+        if font.getbbox(ln)[2] > max_w:
+            raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{ln}」（請用半形空格分段或縮短）")
     baseline = height - round(height * COVER_TITLE_BOTTOM_RATIO)
     if full_width:
         x, anchor = panel_x0 + panel_w // 2, "ms"
@@ -510,8 +549,10 @@ def _draw_cover_title(
             stroke=COVER_TITLE_STROKE_LIGHT if is_red else COVER_TITLE_STROKE_DARK,
             stroke_width=stroke, anchor=anchor,
         )
-        # 往上一行：用上一行（畫面上方那行）的字級算行距
-        baseline -= round((fonts[idx - 1].size if idx > 0 else font.size) * COVER_TITLE_LINE_GAP)
+        # 往上一行：行距要用**這一行**的字級算——這行的字從 baseline 往上長 size 高，
+        # 上一行的 baseline 必須高過這行的字頂。（2026-09-07 前用上一行字級，逐行不同字級時
+        # 大字行會壓到上面的小字行。）
+        baseline -= round(font.size * COVER_TITLE_LINE_GAP)
 
 
 def compose_ten_cover(
