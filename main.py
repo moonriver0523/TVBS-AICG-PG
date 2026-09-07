@@ -3347,21 +3347,32 @@ def _cover_panel_image(
 
 
 def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) -> bytes:
-    """純 prompt 版：整張封面由生圖模型畫，之後只補貼正版 Logo＋節目標籤。"""
+    """純 prompt 版：整張封面由生圖模型畫，之後只補貼正版 Logo＋節目標籤。
+
+    標題**先由程式拆好行**再進模板（2026-09-07）：以前 AI 版讓模型自己拆，同一個標題
+    在 ai 與 composite 兩種模式下的斷句不一樣，使用者切模式比對時看到的是兩張不同版面
+    的圖。拆法與合成版同一支 `compose.cover_title_lines`（使用者自己分的行優先，超寬再
+    防呆拆），比照 YT ai-title 的 line1／line2。
+    """
     badge_text = compose.COVER_BADGES[req.badge][0]
+
+    def _lines_block(title: str, *, full_width: bool) -> str:
+        lines = compose.cover_title_lines(title.strip(), full_width=full_width)
+        return "\n".join(f"  Line {i}: {line}" for i, line in enumerate(lines, start=1))
+
     if req.layout == "full":
         prompt = editor_formats.COVER_AI_FULL_PROMPT_TEMPLATE.format(
             badge_text=badge_text,
             date_text=date_text,
-            title_left=req.title_left.strip(),
+            title_left_lines=_lines_block(req.title_left, full_width=True),
             visual_left=visuals[0],
         )
     else:
         prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE.format(
             badge_text=badge_text,
             date_text=date_text,
-            title_left=req.title_left.strip(),
-            title_right=req.title_right.strip(),
+            title_left_lines=_lines_block(req.title_left, full_width=False),
+            title_right_lines=_lines_block(req.title_right, full_width=False),
             visual_left=visuals[0],
             visual_right=visuals[1],
         )

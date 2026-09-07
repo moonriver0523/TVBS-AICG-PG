@@ -160,3 +160,14 @@ label」——位置在後、又是明文 OVERRIDE，模型照做，標籤整個
 - `log_failure`：三條端點都補上，比照 `/api/images/generate`——生圖端的失敗
   （安全過濾、比例降級、逾時）以前只會 print，事後查不到是哪一則標題觸發的。
   記完原樣往外丟，不吞例外。
+
+## 純 AI 版的標題分行（2026-09-07）
+
+以前合成版走 `split_cover_title`、AI 版讓模型自己拆（模板寫 split ... yourself），
+同一個標題在兩種模式下斷句不一樣，使用者切模式比對時看到的是兩張不同版面的圖。
+現在兩邊共用 `compose.cover_title_lines`：使用者自己分的行優先，超寬再由
+`wrap_cover_title_lines` 防呆拆（版位寬由 `cover_title_panel_width` 給，
+滿版＝整寬、雙切＝左格安全內框扣邊界；字級推導抽成 `_cover_title_metrics`，
+與 `_draw_cover_title` 同一支）。兩個 AI 模板改收 `{title_left_lines}`／
+`{title_right_lines}`（每行一條 `Line N: …`），並明文「照給定的行印、不得重拆或重排」，
+比照 YT ai-title 的 line1／line2。

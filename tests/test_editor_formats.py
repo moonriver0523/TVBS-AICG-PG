@@ -253,8 +253,9 @@ class CoverPromptTests(unittest.TestCase):
         fields = {
             "badge_text": "ON AIR",
             "date_text": "2026/09/03",
-            "title_left": "政府明年勞保撥補上看1300億",
-            "title_right": "病理醫師月薪65萬仍缺工",
+            # 2026-09-07 起模板收的是拆好的行，不是整條標題
+            "title_left_lines": "  Line 1: 政府明年勞保撥補\n  Line 2: 上看1300億",
+            "title_right_lines": "  Line 1: 病理醫師月薪65萬\n  Line 2: 仍缺工",
             "visual_left": "政府大樓與金幣",
             "visual_right": "病理科實驗室",
         }
@@ -265,7 +266,7 @@ class CoverPromptTests(unittest.TestCase):
         prompt = self.render()
         for needle in (
             "十點不一樣", "ON AIR", "2026/09/03", "AI示意圖",
-            "政府明年勞保撥補上看1300億", "病理醫師月薪65萬仍缺工",
+            "政府明年勞保撥補", "上看1300億", "病理醫師月薪65萬", "仍缺工",
             "政府大樓與金幣", "病理科實驗室",
         ):
             with self.subTest(needle=needle):
@@ -287,7 +288,7 @@ class CoverPromptTests(unittest.TestCase):
     def test_headlines_must_vary_colour_per_line(self):
         # 範例圖的標題是分行、每行不同顏色（白／紅／金），不是整段一個顏色
         prompt = self.render()
-        self.assertIn("STACKED LINES", prompt)
+        self.assertIn("STACKED ON THE LINES GIVEN ABOVE", prompt)
         self.assertIn("COLOUR EACH LINE DIFFERENTLY", prompt)
         self.assertIn("Never render a whole headline in one flat colour", prompt)
 

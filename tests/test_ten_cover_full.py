@@ -38,12 +38,14 @@ class FormatTableTests(unittest.TestCase):
 
     def test_full_prompt_has_one_photo_and_one_headline(self):
         text = editor_formats.COVER_AI_FULL_PROMPT_TEMPLATE.format(
-            badge_text="ON AIR", date_text="2026/09/07", title_left="全球3100條 躍動冰川", visual_left="冰川崩落"
+            badge_text="ON AIR", date_text="2026/09/07",
+            title_left_lines="  Line 1: 全球3100條\n  Line 2: 躍動冰川", visual_left="冰川崩落",
         )
         self.assertIn("ONE single photograph", text)
         self.assertNotIn("DIAGONAL seam", text)
         self.assertNotIn("RIGHT panel", text)
-        self.assertIn("全球3100條 躍動冰川", text)
+        self.assertIn("全球3100條", text)
+        self.assertIn("躍動冰川", text)
         self.assertIn("do NOT write the programme name", text)
 
 

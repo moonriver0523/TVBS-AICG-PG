@@ -533,6 +533,39 @@ def wrap_cover_title_lines(lines: list[str], max_w: int, size: int, max_lines: i
     return lines
 
 
+def _cover_title_metrics(panel_w: int, full_width: bool) -> tuple[int, int, int]:
+    """一格標題的 (可用寬, 起始字級, 最小字級)。合成版與 AI 版共用同一套推導。"""
+    height = COVER_CANVAS[1]
+    width_ratio = COVER_FULL_TITLE_WIDTH_RATIO if full_width else COVER_TITLE_WIDTH_RATIO
+    size = round(height * (COVER_FULL_TITLE_SIZE_RATIO if full_width else COVER_TITLE_SIZE_RATIO))
+    return round(panel_w * width_ratio), size, round(height * COVER_TITLE_MIN_SIZE_RATIO)
+
+
+def cover_title_panel_width(full_width: bool) -> int:
+    """一格標題的版位寬。滿版＝整寬；雙切＝左格安全內框扣掉邊界（見 compose_ten_cover）。"""
+    width = COVER_CANVAS[0]
+    if full_width:
+        return width
+    slant = round(width * YT_SPLIT_SLANT_RATIO)
+    return (width // 2 - slant // 2) - COVER_MARGIN
+
+
+def cover_title_lines(title: str, *, full_width: bool = False) -> list[str]:
+    """標題分行的單一來源：使用者自己分的行 → 超寬防呆拆行（2026-09-07）。
+
+    合成版由 `_draw_cover_title` 走同一套；純 AI 版在組 prompt 時先叫這支拆好，
+    模板只要模型照著印。以前 AI 版讓模型自己拆，同一個標題在兩種模式下的斷句不一樣，
+    使用者切模式比對時看到的是兩張不同版面的圖。
+    """
+    from editor_formats import split_cover_title
+
+    lines = [ln for ln in split_cover_title(title) if ln.strip()][:COVER_MAX_TITLE_LINES]
+    if not lines:
+        return []
+    max_w, size, _ = _cover_title_metrics(cover_title_panel_width(full_width), full_width)
+    return wrap_cover_title_lines(lines, max_w, size)
+
+
 def _draw_cover_title(
     canvas: Image.Image, lines: list[str], panel_x0: int, panel_x1: int, align_right: bool, *, full_width: bool = False
 ) -> None:
@@ -546,10 +579,7 @@ def _draw_cover_title(
     if not lines:
         return
     panel_w = panel_x1 - panel_x0
-    width_ratio = COVER_FULL_TITLE_WIDTH_RATIO if full_width else COVER_TITLE_WIDTH_RATIO
-    max_w = round(panel_w * width_ratio)
-    size = round(height * (COVER_FULL_TITLE_SIZE_RATIO if full_width else COVER_TITLE_SIZE_RATIO))
-    min_size = round(height * COVER_TITLE_MIN_SIZE_RATIO)
+    max_w, size, min_size = _cover_title_metrics(panel_w, full_width)
     lines = wrap_cover_title_lines(lines, max_w, size)
     fonts = [_fit_font(ln, max_w, size, min_size) for ln in lines]
     if not full_width:

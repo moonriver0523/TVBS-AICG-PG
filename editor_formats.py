@@ -124,11 +124,13 @@ COVER_AI_PROMPT_TEMPLATE = """Design a complete, broadcast-quality Chinese-langu
 Render EXACTLY these strings, character for character. Do not translate them, do not rewrite them, do not shorten them, and do not add any other words, letters or numbers anywhere in the image.
 - Small red rounded tag at the RIGHT end of the header band: {badge_text}
 - Date, in the header band immediately to the left of that tag: {date_text}
-- Headline of the LEFT panel, LEFT-aligned in its lower-left area, over the photograph: {title_left}
-- Headline of the RIGHT panel, RIGHT-aligned in its lower-right area, over the photograph: {title_right}
+- Headline of the LEFT panel, LEFT-aligned in its lower-left area, over the photograph. It is ALREADY split into lines — render each line on its own line, in this order, and do NOT re-split, merge or reorder them:
+{title_left_lines}
+- Headline of the RIGHT panel, RIGHT-aligned in its lower-right area, over the photograph. Same rule — render these lines as given:
+{title_right_lines}
 
 === TYPOGRAPHY (this is the point of the image) ===
-- The two headlines are the loudest thing in the frame: very heavy condensed Chinese display type, BROKEN INTO TWO OR THREE STACKED LINES each (split each headline at a natural phrase boundary yourself), tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of each photograph darkens gently so the headline stays readable.
+- The two headlines are the loudest thing in the frame: very heavy condensed Chinese display type, STACKED ON THE LINES GIVEN ABOVE (the split is already decided — never change it), tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of each photograph darkens gently so the headline stays readable.
 - COLOUR EACH LINE DIFFERENTLY within a headline — that variation is required, not optional. Follow this order: the FIRST line solid white, the SECOND line bright golden yellow, the THIRD line (if any) vivid red with a white outline. Never render a whole headline in one flat colour.
 - The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
 - The date is a clean, light, small white sans-serif, no effects, inside the header band.
@@ -156,10 +158,11 @@ COVER_AI_FULL_PROMPT_TEMPLATE = """Design a complete, broadcast-quality Chinese-
 Render EXACTLY these strings, character for character. Do not translate them, do not rewrite them, do not shorten them, and do not add any other words, letters or numbers anywhere in the image.
 - Small red rounded tag at the RIGHT end of the header band: {badge_text}
 - Date, in the header band immediately to the left of that tag: {date_text}
-- The headline, LEFT-aligned in the lower-left area of the frame, over the photograph: {title_left}
+- The headline, LEFT-aligned in the lower-left area of the frame, over the photograph. It is ALREADY split into lines — render each line on its own line, in this order, and do NOT re-split, merge or reorder them:
+{title_left_lines}
 
 === TYPOGRAPHY (this is the point of the image) ===
-- The headline is the loudest thing in the frame: very heavy condensed Chinese display type, BROKEN INTO TWO OR THREE STACKED LINES (split it at a natural phrase boundary yourself), occupying roughly the left half of the frame, tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of the photograph darkens gently so the headline stays readable.
+- The headline is the loudest thing in the frame: very heavy condensed Chinese display type, STACKED ON THE LINES GIVEN ABOVE (the split is already decided — never change it), occupying roughly the left half of the frame, tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of the photograph darkens gently so the headline stays readable.
 - COLOUR EACH LINE DIFFERENTLY within the headline — that variation is required, not optional. Follow this order: the FIRST line solid white, the SECOND line bright golden yellow, the THIRD line (if any) vivid red with a white outline. Never render a whole headline in one flat colour.
 - The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
 - The date is a clean, light, small white sans-serif, no effects, inside the header band.
