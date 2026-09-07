@@ -830,14 +830,10 @@ function applyEditorFormatInputs() {
     if (leftBtn) leftBtn.textContent = fullLayout ? '＋ 附圖（選填）' : '＋ 左半附圖（選填）';
     const leftVisual = document.getElementById('coverVisualLeft');
     if (leftVisual) leftVisual.placeholder = fullLayout ? '畫面描述（選填）——留空由 AI 依標題自動產生' : '左半畫面描述（選填）——留空由 AI 依標題自動產生';
-    // 切版型就丟掉上一版的底圖：滿版的底圖送進雙切會被後端擋（400），留著只會誤導。
     // 「只改文字」只有滿版合成版有，雙切時整顆收起來，不留一顆永遠按不動的鈕。
-    state.tenCoverBackground = null;
+    // 這裡只管顯隱：換角色也會走這支，清底圖要放在真的換版型的 setEditorFormat。
     const coverRecompose = document.getElementById('coverRecomposeBtn');
-    if (coverRecompose) {
-        coverRecompose.disabled = true;
-        coverRecompose.classList.toggle('hidden', !fullLayout);
-    }
+    if (coverRecompose) coverRecompose.classList.toggle('hidden', !fullLayout);
     if (yt) yt.classList.toggle('hidden', !wantsYt);
     // 附圖上傳區：主流程、YT 直播封面、十點不一樣（2026-09-06 起收原圖放置）都用。
     // 封面版型時把它搬到該組欄位下面——留在原位會跑到角色鈕正下方，看起來像消失了。
@@ -866,6 +862,11 @@ function applyEditorFormatInputs() {
 
 function setEditorFormat(key) {
     state.editorFormat = EDITOR_FORMATS[key] ? key : EDITOR_FORMAT_DEFAULT;
+    // 換版型就丟掉上一版的壓字前底圖：滿版的底圖送進雙切會被後端擋（400），留著只會誤導。
+    // 只在這裡清——applyEditorFormatInputs 換角色也會走，放那邊會把還能用的底圖洗掉。
+    state.tenCoverBackground = null;
+    const coverRecompose = document.getElementById('coverRecomposeBtn');
+    if (coverRecompose) coverRecompose.disabled = true;
     renderEditorFormats();
     applyEditorFormatInputs();
     applyEditorFormatLocks();
