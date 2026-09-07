@@ -3224,8 +3224,16 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
     )
 
 
-def _cover_apply_portraits(image_req: ImageGenerateRequest, tag: str) -> ImageGenerateRequest:
-    """十點封面共用：肖像規則＋參考照 → 附圖用途規則。順序同 YT 封面。"""
+def _cover_apply_portraits(
+    image_req: ImageGenerateRequest, tag: str, *, text_free: bool = False
+) -> ImageGenerateRequest:
+    """十點封面共用：肖像規則＋參考照 → 附圖用途規則 →（合成版）無文字覆寫。順序同 YT 封面。
+
+    text_free=True（合成版的無文字底圖）時，最後壓上與 YT 封面同一段 override：
+    前面兩段規則都提到「示意圖標籤要保持可見」，不壓掉模型會自己在底圖上畫一個
+    「示意圖」字樣，而合成版的文字全部由程式疊，模型畫的字蓋不掉（見 _yt_cover_background）。
+    AI 整張版（tag="ai"）就是要模型畫字，不壓。
+    """
     image_req = apply_portrait_to_image_request(image_req)
     if image_req.portrait_subjects:
         attached = len(image_req.portrait_reference_data_urls) + (1 if image_req.reference_image_data_url else 0)
@@ -3235,6 +3243,10 @@ def _cover_apply_portraits(image_req: ImageGenerateRequest, tag: str) -> ImageGe
         )
     if image_req.reference_images:
         image_req = apply_user_references_to_image_request(image_req)
+    if text_free:
+        image_req = image_req.model_copy(
+            update={"prompt": f"{image_req.prompt.rstrip()}\n\n{editor_formats.YT_COVER_TEXT_FREE_OVERRIDE}"}
+        )
     return image_req
 
 
@@ -3254,7 +3266,7 @@ def _cover_panel_image(
         portrait_subjects=list(subjects or []),
         portrait_subjects_en=list(english or []),
     )
-    image_req = _cover_apply_portraits(image_req, "panel")
+    image_req = _cover_apply_portraits(image_req, "panel", text_free=True)
     result = generate_image_raw(image_req)
     return base64.b64decode(result.image_data_base64)
 
@@ -3315,7 +3327,7 @@ def _cover_full_image(
         portrait_subjects=list(subjects or []),
         portrait_subjects_en=list(english or []),
     )
-    image_req = _cover_apply_portraits(image_req, "full")
+    image_req = _cover_apply_portraits(image_req, "full", text_free=True)
     result = generate_image_raw(image_req)
     return base64.b64decode(result.image_data_base64)
 

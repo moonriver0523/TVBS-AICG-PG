@@ -42,6 +42,15 @@
   `_cover_apply_portraits`：肖像規則＋維基參考照 → 附圖用途規則，與其他版型同一套（查不到照舊背影）。
 - 本機 native 模式（`IMAGE_BACKEND=native` + gpt）送不出參考圖，會走 no_reference；正式站 OpenRouter 才會畫臉。
 
+## 合成版底圖的無文字覆寫（2026-09-07）
+
+- 合成版的兩條生圖路徑（雙切每格 1:1 `_cover_panel_image`、滿版 16:9 `_cover_full_image`）產的是
+  **無文字底圖**，文字全部由 Pillow 疊。但肖像規則與附圖用途規則都寫著「示意圖標籤要保持可見」，
+  不壓掉模型會自己在底圖上畫一個「示意圖」字樣，程式疊的字蓋不掉。
+- 所以 `_cover_apply_portraits(..., text_free=True)` 在肖像規則＋附圖用途規則**之後**追加
+  `editor_formats.YT_COVER_TEXT_FREE_OVERRIDE`——與 YT 直播封面 `_yt_cover_background` 同一段，
+  不另開一套措辭。AI 整張版（`_cover_ai`）就是要模型畫字，**不加**。
+
 ## 兩個獨立版型：滿版／雙切（2026-09-07 使用者裁決）
 
 - `ten_cover`＝**十點不一樣（雙切）**：左右兩格各一個標題、各一個附圖位（下節）。`layout="split"`。
