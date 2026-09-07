@@ -27,10 +27,19 @@
 - 沒分且超過 7 字：對切兩行。
 - **只切不改字**：分行接回去必須等於原標題去掉分隔符。
 
-## 原圖放置（TenCoverRequest.reference_images）
+## 左右附圖位（TenCoverRequest.asis_left／asis_right，2026-09-07）
+
+- 使用者裁決：左右格各自一個上傳位（data URL），才不會分不清哪張是左、哪張是右。
+- **有圖的格直接上版，沒圖的格生底圖**：左有右無＝只生右格（`model` 記 `-asisL`／`-asisR`／`-asisLR`），
+  `left_is_ai`／`right_is_ai` 反映哪格是生的。只有一格有圖時**不做全版**。
+- 兩格都有圖：零 API。一格有圖：有圖那格的畫面描述用標題佔位，只有要生的那格留空時才打一次文字模型補。
+- 任一附圖位有圖就強制合成版（`mode` 改 `composite`），真照不進生圖模型。
+- 前端（index.html `coverAsisLeft*`／`coverAsisRight*`）在十點版型下，通用「附參考圖」清單不再提供「原圖放置」用途。
+
+## 舊路徑：原圖放置（TenCoverRequest.reference_images，附圖位都空時才生效）
 
 - 用途 `asis` 依上傳順序：**1 張＝整版鋪滿**（不切格、不生另一格，兩標題壓左下／右下）、
-  2 張＝左格＋右格；超過 2 張只取前 2 張並記 log。
+  2 張＝左格＋右格；超過 2 張只取前 2 張並記 log。舊呼叫端相容用，新前端不會走到。
 - 有任何 asis 一律強制合成版（`mode` 改 `composite`），真照不進生圖模型；回應 `mode`
   會反映實際採用的模式，`left_is_ai`／`right_is_ai` 說明哪格是 AI 底圖。
 - 有 asis（1 張或 2 張）都不打文字模型補畫面描述，一次 API 都不打。
