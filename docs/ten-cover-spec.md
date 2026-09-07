@@ -27,7 +27,17 @@
 - 沒分且超過 7 字：對切兩行。
 - **只切不改字**：分行接回去必須等於原標題去掉分隔符。
 
-## 左右附圖位（TenCoverRequest.asis_left／asis_right，2026-09-07）
+## 兩個獨立版型：滿版／雙切（2026-09-07 使用者裁決）
+
+- `ten_cover`＝**十點不一樣（雙切）**：左右兩格各一個標題、各一個附圖位（下節）。`layout="split"`。
+- `ten_cover_full`＝**十點不一樣（滿版）**：一張圖鋪滿、**一個標題**（`title_left`，`title_right` 留空）。
+  附圖位（`asis_left`）有圖就直接鋪滿（強制合成版、零 API）；沒圖就生一張 16:9
+  （`COVER_VISUAL_FULL_PROMPT_TEMPLATE`），標題壓左下（最多 3 行）。AI 整張版用 `COVER_AI_FULL_PROMPT_TEMPLATE`
+  （單張照片、單一標題、無斜線）。`model` 記 `ten-cover-full:<mode>[-asis]`。
+- 「AI 消化標題」對滿版送 `target="ten_cover_full"`，回單一 `title`（2–3 段）。
+- 前端同一組欄位：滿版隱藏右半標題／右半附圖（`.cover-split-only`），左標籤改「標題」。
+
+## 左右附圖位（TenCoverRequest.asis_left／asis_right，2026-09-07，雙切）
 
 - 使用者裁決：左右格各自一個上傳位（data URL），才不會分不清哪張是左、哪張是右。
 - **有圖的格直接上版，沒圖的格生底圖**：左有右無＝只生右格（`model` 記 `-asisL`／`-asisR`／`-asisLR`），

@@ -3057,7 +3057,9 @@ def news_image_generate(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
 
 class TenCoverRequest(BaseModel):
     title_left: str = Field(min_length=1, max_length=40)
-    title_right: str = Field(min_length=1, max_length=40)
+    # 2026-09-07：layout=full（滿版）只有一個標題，title_right 允許空；split（雙切）兩個都要
+    title_right: str = Field(default="", max_length=40)
+    layout: Literal["split", "full"] = "split"
     # 給生圖模型的視覺描述（畫什麼場景），不會出現在成品文字上。
     # 2026-09-03 起改選填：留空時由 resolve_cover_visuals 依標題請文字模型補。
     visual_left: str = Field(default="", max_length=500)
@@ -3188,16 +3190,24 @@ def _cover_panel_image(
 
 
 def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) -> bytes:
-    """純 prompt 版：整張封面由生圖模型畫，之後只補貼正版 Logo。"""
+    """純 prompt 版：整張封面由生圖模型畫，之後只補貼正版 Logo＋節目標籤。"""
     badge_text = compose.COVER_BADGES[req.badge][0]
-    prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE.format(
-        badge_text=badge_text,
-        date_text=date_text,
-        title_left=req.title_left.strip(),
-        title_right=req.title_right.strip(),
-        visual_left=visuals[0],
-        visual_right=visuals[1],
-    )
+    if req.layout == "full":
+        prompt = editor_formats.COVER_AI_FULL_PROMPT_TEMPLATE.format(
+            badge_text=badge_text,
+            date_text=date_text,
+            title_left=req.title_left.strip(),
+            visual_left=visuals[0],
+        )
+    else:
+        prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE.format(
+            badge_text=badge_text,
+            date_text=date_text,
+            title_left=req.title_left.strip(),
+            title_right=req.title_right.strip(),
+            visual_left=visuals[0],
+            visual_right=visuals[1],
+        )
     image_req = ImageGenerateRequest(
         prompt=prompt,
         provider=req.provider,
@@ -3211,6 +3221,40 @@ def _cover_ai(req: TenCoverRequest, date_text: str, visuals: tuple[str, str]) ->
         image_req = apply_user_references_to_image_request(image_req)
     result = generate_image_raw(image_req)
     return compose.paste_cover_logo(base64.b64decode(result.image_data_base64))
+
+
+def _cover_full_image(visual: str, provider: str, references: list[UserReferenceImage] | None = None) -> bytes:
+    """滿版：生一張 16:9 的無文字底圖。"""
+    image_req = ImageGenerateRequest(
+        prompt=editor_formats.COVER_VISUAL_FULL_PROMPT_TEMPLATE.format(visual=visual.strip()),
+        provider=provider,
+        aspect_ratio="16:9",
+        image_size="1K",
+        safe_frame=False,
+        reference_images=[ref for ref in (references or []) if ref.purpose != "asis"],
+    )
+    if image_req.reference_images:
+        image_req = apply_user_references_to_image_request(image_req)
+    result = generate_image_raw(image_req)
+    return base64.b64decode(result.image_data_base64)
+
+
+def _cover_full_composite(req: TenCoverRequest, date_text: str, visual: str) -> tuple[bytes, bool]:
+    """滿版合成：附圖（asis_left）有就直接鋪滿，沒有就生一張 16:9；單一標題壓左下。回 (PNG, 是否 AI 底圖)。"""
+    slot, _ = ten_cover_slot_images(req)
+    if slot is None:
+        legacy = ten_cover_asis_images(req)
+        slot = legacy[0] if legacy else None
+    is_ai = slot is None
+    if is_ai:
+        references = [ref for ref in req.reference_images if ref.purpose != "asis"]
+        slot = _cover_full_image(visual, req.provider, references)
+    cover = compose.compose_ten_cover(
+        slot, None,
+        title_left=req.title_left.strip(), title_right="",
+        date_text=date_text, badge=req.badge, left_is_ai=is_ai, right_is_ai=False,
+    )
+    return cover, is_ai
 
 
 def _cover_composite(
@@ -3262,7 +3306,7 @@ def _cover_composite(
 
 class CoverTitleDigestRequest(BaseModel):
     news_text: str = Field(min_length=10, max_length=20_000)
-    target: Literal["ten_cover", "yt_cover"] = "ten_cover"
+    target: Literal["ten_cover", "ten_cover_full", "yt_cover"] = "ten_cover"
 
 
 class CoverTitleDigestResponse(BaseModel):
@@ -3287,9 +3331,13 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
     2026-09-06 使用者裁決：封面類版型也要能自動消化，但回填後停下來讓編輯看過。
     """
     ten = req.target == "ten_cover"
-    system_prompt = (
-        editor_formats.COVER_TITLE_DIGEST_SYSTEM_TEN if ten else editor_formats.COVER_TITLE_DIGEST_SYSTEM_YT
-    ) + CONTENT_FIDELITY_RULES
+    if ten:
+        base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_TEN
+    elif req.target == "ten_cover_full":
+        base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_TEN_FULL
+    else:
+        base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_YT
+    system_prompt = base_prompt + CONTENT_FIDELITY_RULES
     schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_TEN if ten else editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT
     model = (
         os.getenv("DIGEST_MODEL")
@@ -3324,6 +3372,49 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
     return CoverTitleDigestResponse(title=title)
 
 
+def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse:
+    """十點不一樣（滿版）：一張圖、一個標題。附圖有就放、沒有就生一張。"""
+    has_asis = bool(req.asis_left.strip()) or any(ref.purpose == "asis" for ref in req.reference_images)
+    if has_asis and req.mode == editor_formats.COVER_MODE_AI:
+        print("[cover] 滿版附圖 → 改合成版（程式壓字）", flush=True)
+        req = req.model_copy(update={"mode": editor_formats.COVER_MODE_COMPOSITE})
+    if has_asis:
+        visual = req.visual_left.strip() or req.title_left.strip()
+    elif req.visual_left.strip():
+        visual = req.visual_left.strip()
+    else:
+        # 借雙切的補描述流程：右欄填成跟左欄一樣，只取左邊；一次文字模型
+        visual, _ = resolve_cover_visuals(req.model_copy(update={"title_right": req.title_left, "visual_right": ""}))
+    is_ai = True
+    try:
+        if req.mode == editor_formats.COVER_MODE_AI:
+            cover = _cover_ai(req, date_text, (visual, visual))
+        else:
+            cover, is_ai = _cover_full_composite(req, date_text, visual)
+    except compose.ComposeError as exc:
+        print(f"[compose] 封面失敗：{exc}", flush=True)
+        raise HTTPException(status_code=500, detail=f"封面生成失敗：{exc}") from exc
+    request_log.log_generation(
+        request_id=request_log.new_request_id(),
+        source="editor-cover-full",
+        news_text=req.title_left,
+        variable=req.title_left,
+        prompt=f"FULL: {visual}",
+        role="編輯",
+        provider=req.provider,
+    )
+    return TenCoverResponse(
+        image_data_base64=base64.b64encode(cover).decode("ascii"),
+        mime_type="image/png",
+        model=f"ten-cover-full:{req.mode}" + ("-asis" if has_asis else ""),
+        visual_left=visual,
+        visual_right="",
+        left_is_ai=is_ai,
+        right_is_ai=False,
+        mode=req.mode,
+    )
+
+
 @app.post(
     "/api/editor/cover",
     response_model=TenCoverResponse,
@@ -3336,6 +3427,10 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
             detail=f"未知的標籤：{req.badge}（可用：{list(compose.COVER_BADGES)}）",
         )
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
+    if req.layout == "full":
+        return _editor_cover_full(req, date_text)
+    if not req.title_right.strip():
+        raise HTTPException(status_code=400, detail="雙切版型左右標題都要填")
 
     slots = (bool(req.asis_left.strip()), bool(req.asis_right.strip()))
     if any(slots):

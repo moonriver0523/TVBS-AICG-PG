@@ -77,6 +77,18 @@ def _broadcast_rules(side: str, stamp: bool | None = None) -> str:
 
 # 十點不一樣封面：AI 只出**無文字**底圖，節目名／Logo／日期／標籤／兩邊標題全部
 # 由 compose.compose_ten_cover 畫。所以這裡完全不經過消化——使用者直接給兩個標題。
+COVER_VISUAL_FULL_PROMPT_TEMPLATE = """Generate a text-free broadcast news cover background photo.
+
+Subject:
+{visual}
+
+Requirements:
+- 16:9 horizontal, photographic, broadcast news quality, dramatic lighting.
+- ABSOLUTELY NO text, no numbers, no letters, no captions, no logos, no watermarks, no signage, no readable writing of any kind anywhere in the image.
+- No borders, no frames, no split-screen, no collage: one single continuous scene.
+- COMPOSITION FOR OVERLAYS: a thin header band covers the very top, and two or three lines of large headline type will be placed in the lower-left area afterwards. Keep the main subject in the upper-middle / right, keep the lower-left free of essential detail (a plain or darker area there is ideal).
+"""
+
 COVER_VISUAL_PROMPT_TEMPLATE = """Generate a text-free broadcast news cover background photo.
 
 Subject:
@@ -128,6 +140,37 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 - LEFT half photograph: {visual_left}
 - RIGHT half photograph: {visual_right}
 - Both are photographic, dramatically lit, news-documentary quality, filling their panel edge to edge behind the headline, meeting at the diagonal seam.
+
+=== HARD CONSTRAINTS ===
+- NO television channel logo, NO station identity mark, NO broadcaster wordmark, NO dot-pattern emblem, NO watermark of any kind, and do NOT write the programme name (十點不一樣) anywhere. The upper-LEFT corner of the header band — its entire LEFT HALF — must be left as clean empty navy background: the real channel logo and the official programme-name tag are pasted there afterwards, so keep that whole area free of text, graphics and busy detail. Only the date and the small red tag sit in the header band, at its right end.
+- No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles.
+- Keep every piece of text well inside the frame with clear breathing space; nothing may touch or be clipped by any edge.
+"""
+
+# 滿版（單張圖、單一標題）版本，2026-09-07 由雙切模板派生：只改畫布／文字／影像三段。
+COVER_AI_FULL_PROMPT_TEMPLATE = """Design a complete, broadcast-quality Chinese-language news programme cover image (YouTube thumbnail style) for a Taiwanese prime-time news show.
+
+=== CANVAS ===
+16:9 horizontal. ONE single photograph fills the ENTIRE frame edge to edge. No split, no seam, no panels, no collage, no borders, no gutters, no letterboxing. Across the very top runs a THIN deep-navy header band (about one tenth of the frame height) with a bright blue hairline along its bottom edge; along the very bottom runs a slim deep-navy strip with one thin glowing straight blue light line (no waves, no text). Everything else is photograph.
+
+=== TEXT TO RENDER (Traditional Chinese, Taiwan) ===
+Render EXACTLY these strings, character for character. Do not translate them, do not rewrite them, do not shorten them, and do not add any other words, letters or numbers anywhere in the image.
+- Small red rounded tag at the RIGHT end of the header band: {badge_text}
+- Date, in the header band immediately to the left of that tag: {date_text}
+- The headline, LEFT-aligned in the lower-left area of the frame, over the photograph: {title_left}
+- A small unobtrusive label just below the header band, at the top-left corner: AI示意圖
+
+=== TYPOGRAPHY (this is the point of the image) ===
+- The headline is the loudest thing in the frame: very heavy condensed Chinese display type, BROKEN INTO TWO OR THREE STACKED LINES (split it at a natural phrase boundary yourself), occupying roughly the left half of the frame, tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of the photograph darkens gently so the headline stays readable.
+- COLOUR EACH LINE DIFFERENTLY within the headline — that variation is required, not optional. Follow this order: the FIRST line solid white, the SECOND line bright golden yellow, the THIRD line (if any) vivid red with a white outline. Never render a whole headline in one flat colour.
+- The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
+- The date is a clean, light, small white sans-serif, no effects, inside the header band.
+- The AI示意圖 label is small, plain white, deliberately understated, on a faint dark plate so it stays readable.
+- Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
+
+=== IMAGERY ===
+- The photograph: {visual_left}
+- Photographic, dramatically lit, news-documentary quality, filling the whole frame edge to edge behind the headline; keep the main subject towards the upper-middle and right so the lower-left stays calm for the headline.
 
 === HARD CONSTRAINTS ===
 - NO television channel logo, NO station identity mark, NO broadcaster wordmark, NO dot-pattern emblem, NO watermark of any kind, and do NOT write the programme name (十點不一樣) anywhere. The upper-LEFT corner of the header band — its entire LEFT HALF — must be left as clean empty navy background: the real channel logo and the official programme-name tag are pasted there afterwards, so keep that whole area free of text, graphics and busy detail. Only the date and the small red tag sit in the header band, at its right end.
@@ -281,6 +324,16 @@ COVER_TITLE_DIGEST_SYSTEM_TEN = """You write the two headlines for a Taiwanese p
 Return JSON with "title_left" and "title_right".
 - Each is a punchy Traditional Chinese (Taiwan) headline for one facet of the story; the two must cover DIFFERENT facets (e.g. what happened / the impact, the scene / the numbers, the cause / the response). Never repeat the same facts in both.
 - Each headline is 2 or 3 segments separated by ONE half-width space; each segment 3–7 characters; whole headline at most 18 characters excluding spaces. Each segment becomes one printed line.
+- No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
+- Traditional Chinese only (Taiwan usage). Never Simplified forms.
+"""
+
+# 十點不一樣（滿版）：只有一個標題，2–3 段（每段一行）。
+COVER_TITLE_DIGEST_SYSTEM_TEN_FULL = """You write the single headline for a Taiwanese prime-time news programme cover (十點不一樣, full-bleed single-photo layout) from one news article.
+
+Return JSON with "title".
+- One punchy Traditional Chinese (Taiwan) headline for the core of the story.
+- 2 or 3 segments separated by ONE half-width space; each segment 3–7 characters; whole headline at most 18 characters excluding spaces. Each segment becomes one printed line.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
 """
@@ -469,10 +522,21 @@ EDITOR_FORMATS = {
     # 十點不一樣封面：ai／composite 兩種模式並存，由前端「標題由 AI 生成」勾選框切換
     # （2026-09-06 使用者裁決比照 YT 直播封面，不再拆成兩個下拉項目）。
     # cover_mode 是預設值；實際模式由 TenCoverRequest.mode 決定。
+    # 2026-09-07 使用者裁決：拆成兩個獨立版型。雙切＝左右兩格各自標題／附圖位；
+    # 滿版＝一張圖鋪滿、一個標題（附圖有就放、沒有就生一張 16:9）。
     "ten_cover": {
-        "label": "十點不一樣封面",
+        "label": "十點不一樣（雙切）",
         "pipeline": PIPELINE_COVER,
         "cover_mode": COVER_MODE_AI,
+        "cover_layout": "split",
+        "digest_rules": "",
+        "hole_side": None,
+    },
+    "ten_cover_full": {
+        "label": "十點不一樣（滿版）",
+        "pipeline": PIPELINE_COVER,
+        "cover_mode": COVER_MODE_AI,
+        "cover_layout": "full",
         "digest_rules": "",
         "hole_side": None,
     },
@@ -521,6 +585,11 @@ def digest_rules(key: str | None, role: str, stamp: bool | None = None) -> str:
     if stamp is False and fmt.get("hole_side"):
         return _broadcast_rules(fmt["hole_side"], stamp=False)
     return fmt["digest_rules"]
+
+
+def cover_layout(key: str | None) -> str:
+    """十點封面是雙切（split）還是滿版（full）；不是十點封面時回空字串。"""
+    return get(key).get("cover_layout", "")
 
 
 def cover_mode(key: str | None) -> str:

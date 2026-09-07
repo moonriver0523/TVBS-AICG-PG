@@ -366,7 +366,7 @@
 
                     <div id="coverInputs" class="hidden mt-3 mb-2 flex flex-col gap-2">
                         <div>
-                            <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">左半標題</label>
+                            <label id="coverTitleLeftLabel" class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">左半標題</label>
                             <input id="coverTitleLeft" type="text" maxlength="40"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                    placeholder="政府明年勞保撥補上看1300億" />
@@ -374,7 +374,7 @@
                                    class="w-full mt-1 bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-300 input-focus-ring"
                                    placeholder="左半畫面描述（選填）——留空由 AI 依標題自動產生" />
                             <div class="mt-1 flex items-center gap-2">
-                                <button type="button" onclick="document.getElementById('coverAsisLeftInput').click()"
+                                <button type="button" id="coverAsisLeftBtn" onclick="document.getElementById('coverAsisLeftInput').click()"
                                         class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">＋ 左半附圖（選填）</button>
                                 <input id="coverAsisLeftInput" type="file" accept="image/*" class="hidden" onchange="handleCoverAsisSelected('left', this)" />
                                 <div id="coverAsisLeftPreview" class="hidden items-center gap-2">
@@ -385,7 +385,7 @@
                                 <span id="coverAsisLeftHint" class="text-[9px] text-slate-600">沒圖＝這格由 AI 生底圖</span>
                             </div>
                         </div>
-                        <div>
+                        <div class="cover-split-only">
                             <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">右半標題</label>
                             <input id="coverTitleRight" type="text" maxlength="40"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
