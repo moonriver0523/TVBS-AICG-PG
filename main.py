@@ -3374,7 +3374,12 @@ def _cover_ai(
         # 「AI示意圖」小標改由程式壓（2026-09-07）：模板要模型自己畫時，只要使用者附了
         # 實景參考圖，apply_user_references_to_image_request 的「Do NOT render any 示意圖
         # label」就會把它壓掉。整張都是 AI 生的，這個標籤不能取決於模型聽不聽話。
-        return compose.paste_cover_ai_note(cover, split=req.layout != "full")
+        cover = compose.paste_cover_ai_note(cover, split=req.layout != "full")
+        # 精華圓章（2026-09-07 使用者回報 AI 版選精華沒反應）：合成版由 compose_ten_cover 貼，
+        # AI 版標頭刻意維持 ON AIR，圓章要在這裡補貼；追加修改回來的 overlay 路徑同一串。
+        if req.badge == "highlight":
+            cover = compose.paste_cover_highlight_stamp(cover)
+        return cover
 
     if req.background_image_base64:
         raw = base64.b64decode(req.background_image_base64)

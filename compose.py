@@ -378,6 +378,22 @@ def paste_cover_ai_note(image_bytes: bytes, *, split: bool) -> bytes:
     return buffer.getvalue()
 
 
+def paste_cover_highlight_stamp(image_bytes: bytes) -> bytes:
+    """在純 AI 版封面貼上「精華」圓章（2026-09-07 使用者回報：AI 整張版選精華沒反應）。
+
+    根因：合成版由 `compose_ten_cover` 在 `badge == "highlight"` 時貼圓章，AI 版只把
+    `COVER_BADGES[badge][0]`（兩種標籤都是 "ON AIR"，標頭刻意維持 ON AIR）塞進 prompt，
+    圓章從沒貼過。這裡重用 `_draw_cover_highlight_stamp`，位置與比例與合成版完全相同。
+    """
+    with Image.open(io.BytesIO(image_bytes)) as opened:
+        canvas = opened.convert("RGBA")
+    _draw_cover_highlight_stamp(canvas)
+
+    buffer = io.BytesIO()
+    canvas.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def _cover_panel(image_bytes: bytes, size: tuple[int, int]) -> Image.Image:
     """把一張 AI 底圖等比例填滿指定版位（COVER 裁切，不變形）。"""
     with Image.open(io.BytesIO(image_bytes)) as opened:
@@ -423,8 +439,12 @@ def _draw_cover_bottom_line(canvas: Image.Image) -> None:
 
 
 def _draw_cover_highlight_stamp(canvas: Image.Image) -> None:
-    """精華圓章：貼模板於畫面水平正中、中下方（跨在底部標題區上），照 0819 原版。"""
-    width, height = COVER_CANVAS
+    """精華圓章：貼模板於畫面水平正中、中下方（跨在底部標題區上），照 0819 原版。
+
+    幾何以**傳進來的畫布**的尺寸為準，不是 COVER_CANVAS：純 AI 版直接貼在模型回來的
+    原圖上，那張的解析度是模型決定的（2026-09-07 起 paste_cover_highlight_stamp 共用這支）。
+    """
+    width, height = canvas.size
     stamp_h = round(height * COVER_STAMP_HEIGHT_RATIO)
     with Image.open(TEN_HIGHLIGHT_STAMP) as tpl:
         stamp_w = round(tpl.width * stamp_h / tpl.height)
