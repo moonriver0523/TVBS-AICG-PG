@@ -163,7 +163,7 @@ hourly 另收 `time_text`。前端 `EDITOR_FORMATS[*].ytLayout` 帶到 `ytCoverF
 - 釘住現況的測試：`tests/test_yt_title_parity.py`（合成版逐像素相同、常數只有一處定義、
   兩個模板措辭相同）。以後任何一邊調字級都會被擋下來。
 
-## 2026-09-08：底部壓色框改成開關（預設 OFF，開的時候半透明）
+## 2026-09-08：底部壓色框改成開關（開的時候半透明；同日晚改預設 ON）
 
 使用者裁決：底帶不要一直壓在那裡，改成自己開；開了也要透得出照片。
 
@@ -180,6 +180,7 @@ hourly 另收 `time_text`。前端 `EDITOR_FORMATS[*].ytLayout` 帶到 `ytCoverF
   模板 format 不帶那兩個欄位，前端在該版型不顯示按鈕。
 - 前端：`state.ytBottomBand`（預設 false）＋ `#ytBottomBandBtn`（琥珀色，比照蓋章開關）。
   欄位加在 `ytCoverFields()`，所以生成與「只改文字」／追加修改回貼走的是同一個值。
+- **位置定版（2026-09-08 晚）**：使用者從三張位置樣張挑「第二行」並要求上緣漸層羽化。`YT_BAND_TOP_RATIO`＝0.778（第一行基線）起羽化、`YT_BAND_FADE_RATIO`＝0.0365，到 0.8145 全濃度（第二行墨水上緣 `_yt_title_ink_top_ratio(YT_LINE2_BASELINE_RATIO)` 之上），漸層用 smoothstep 讓兩端沒有硬邊；第一行之上的照片完全露出。測試在 `tests/test_yt_band_variants_and_overlay.py`（BandPlacementTests）。
 - 測試：`tests/test_yt_bottom_band.py`（OFF 時底帶區＝底圖原色、ON 時逐通道落在底圖色與帶色之間、
   兩種 prompt 措辭、hourly 不受影響、前端 state 與按鈕）。`test_yt_cover` 原本那題看底帶顏色的
   要自己 `bottom_band=True` 才看得到。
