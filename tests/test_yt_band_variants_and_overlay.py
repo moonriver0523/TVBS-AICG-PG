@@ -213,7 +213,10 @@ class VerticalLayoutTests(unittest.TestCase):
         self.assertAlmostEqual(strip_x0 / width, 19 / 718, delta=0.006)
         # 兩欄同寬之後整組比截圖（32+26+1）寬一點：19 + 32×2 = 83
         self.assertAlmostEqual(strip_x1 / width, 83 / 718, delta=0.006)
-        self.assertAlmostEqual(layout["main"][1] / height, 67 / 404, delta=0.006)
+        # 上緣：截圖 67/404 是貼著 LIVE 章的；2026-09-08 起要在章底下留空隙，所以只驗不高於截圖＋空隙
+        gap = compose.VSTRIP_TOP_GAP_RATIO
+        self.assertGreaterEqual(layout["main"][1] / height, 67 / 404 - 0.006)
+        self.assertLessEqual(layout["main"][1] / height, 67 / 404 + gap + 0.006)
         # 兩欄同格距之後 12 格撐到欄底上限（0.90），比截圖的 358/404 略長；上限本身不能破
         self.assertLessEqual(layout["main"][3] / height, compose.VSTRIP_BOTTOM_MAX_RATIO + 1e-9)
         self.assertGreaterEqual(layout["main"][3] / height, 358 / 404 - 0.006)
@@ -233,6 +236,18 @@ class VerticalLayoutTests(unittest.TestCase):
                 self.assertGreater(labelled["main"][1], plain["main"][1])
                 self.assertLess(labelled["live"][1], plain["live"][1])
                 self.assertGreater(labelled["label"][3], labelled["label"][1])
+
+    def test_the_box_keeps_a_gap_below_the_live_badge_and_the_label(self):
+        """2026-09-08 使用者：直標頂部跟 LIVE 章靠太近，頂上兩個字快被吃掉。
+        色框上緣要在 LIVE 章（有小標時是小標）底下留一段空隙。"""
+        height = compose.YT_CANVAS[1]
+        gap = round(height * compose.VSTRIP_TOP_GAP_RATIO)
+        for variant in compose.VSTRIP_VARIANTS:
+            with self.subTest(variant=variant):
+                layout = self._layout(variant=variant)
+                stack_bottom = layout["label"][3] if variant in compose.VSTRIP_VARIANT_LABELS                     else layout["live"][3]
+                self.assertGreaterEqual(layout["box"][1] - stack_bottom, gap)
+                self.assertGreaterEqual(gap, 10, "空隙小到看不出來")
 
     def test_the_plain_variant_has_no_label_box(self):
         layout = self._layout(variant="normal")

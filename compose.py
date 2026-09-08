@@ -1497,6 +1497,7 @@ VSTRIP_SUB_WIDTH_RATIO = VSTRIP_MAIN_WIDTH_RATIO
 VSTRIP_SEAM_RATIO = 0.0              # 兩欄之間不留縫：同一個色框
 VSTRIP_TOP_RATIO = 0.166             # 文字欄上緣，一般版（67/404）
 VSTRIP_TOP_WITH_LABEL_RATIO = 0.191  # 有原音呈現／AI即時翻譯小標時（77/404）
+VSTRIP_TOP_GAP_RATIO = 0.014         # 色框上緣與 LIVE 章／小標底之間至少留這麼多（2026-09-08 使用者：頂上的字快被吃掉）
 VSTRIP_BOTTOM_MAX_RATIO = 0.90       # 欄底最多到這裡，再長就縮字
 VSTRIP_MAIN_PITCH_RATIO = 0.080      # 格距上限（291/404/9），兩欄共用
 VSTRIP_SUB_PITCH_RATIO = VSTRIP_MAIN_PITCH_RATIO
@@ -1631,6 +1632,13 @@ def yt_vertical_layout(
 
     labelled = variant in VSTRIP_VARIANT_LABELS
     top = round(height * (VSTRIP_TOP_WITH_LABEL_RATIO if labelled else VSTRIP_TOP_RATIO))
+    # LIVE 章（與小標）先算高度：色框上緣不准貼到它們，至少隔 VSTRIP_TOP_GAP_RATIO
+    live_top = round(height * (VSTRIP_LIVE_TOP_WITH_LABEL_RATIO if labelled
+                               else VSTRIP_LIVE_TOP_RATIO))
+    with Image.open(LIVE_BADGE) as badge:
+        live_h = round(badge.height * round(width * VSTRIP_LIVE_WIDTH_RATIO) / badge.width)
+    stack_bottom = live_top + live_h + (round(height * VSTRIP_LABEL_HEIGHT_RATIO) if labelled else 0)
+    top = max(top, stack_bottom + round(height * VSTRIP_TOP_GAP_RATIO))
     # 兩欄同字級（2026-09-08 裁決）：格距由格數多的那欄決定，另一欄用同一個格距、
     # 字少就早點結束；欄高＝格數多的那欄的長度（色框是一整塊，高度取這個）。
     most = max(len(main_cells), len(sub_cells))
@@ -1660,11 +1668,7 @@ def yt_vertical_layout(
     strip_x1 = max(main[2], sub[2]) if sub_cells else main[2]
     box = (strip_x0, top, strip_x1, top + column_h)   # 一整塊色框
     live_w = round(width * VSTRIP_LIVE_WIDTH_RATIO)
-    live_top = round(height * (VSTRIP_LIVE_TOP_WITH_LABEL_RATIO if labelled
-                               else VSTRIP_LIVE_TOP_RATIO))
     live_x0 = strip_x0 if title_side == "left" else strip_x1 - live_w
-    with Image.open(LIVE_BADGE) as badge:
-        live_h = round(badge.height * live_w / badge.width)
     live = (live_x0, live_top, live_x0 + live_w, live_top + live_h)
 
     label_w = round(width * VSTRIP_LABEL_WIDTH_RATIO)
