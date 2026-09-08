@@ -25,7 +25,7 @@ layout=hourly）。兩者共用同一條端點、同一套底圖流程與前端�
 
 | 模式 | `title_mode` | 做法 | 追加修改 | 只改文字 |
 |---|---|---|---|---|
-| 標題由 AI 生成（預設、勾選框打開） | `ai` | 整張連兩行標題、底帶交給生圖模型（`YT_COVER_FULL_PROMPT_NEWS`／`_HOURLY`，左上右上留空），程式只後貼 LIVE 章／日期／原音呈現／AI即時翻譯／藍標籤／AI示意圖。附圖全當參考（asis 照主流程原圖放置）。一律標 AI示意圖。 | 一般 refine 規則（字要保留），改完帶 `background_image_base64` 回來只補貼固定元素 | 沒有這回事，改字＝整張重生 |
+| 標題由 AI 生成（預設、勾選框打開） | `ai` | 整張連兩行標題、底帶交給生圖模型（`YT_COVER_FULL_PROMPT_NEWS`／`_HOURLY`，左上右上留空；底帶畫不畫 2026-09-08 起由 `bottom_band` 決定，預設不畫），程式只後貼 LIVE 章／日期／原音呈現／AI即時翻譯／藍標籤／AI示意圖。附圖全當參考（asis 照主流程原圖放置）。一律標 AI示意圖。 | 一般 refine 規則（字要保留），改完帶 `background_image_base64` 回來只補貼固定元素 | 沒有這回事，改字＝整張重生 |
 | 程式壓字（勾選框關閉） | `composite` | 下面「底圖三條路」；零錯字、有附圖時零 API | `text_free` refine 改底圖再重疊 | 8 秒重疊 |
 
 試做紀錄：挪威國王／C 肝／美伊油價（含追加修改改夜景）／整點版車禍，5 張全對字，
@@ -47,8 +47,22 @@ AI 模式的字級行距每張略有差異，錯字率要累積更多樣本才�
 
 量自頻道 maxresdefault 1280×720，常數 `compose.py` `YT_*`：
 
-- 底部深藍科技底帶（0.60 起漸入，半透明，撒固定序列的淡藍方塊模擬電路紋）
-- 兩行標題**置中**壓在底帶上：第一行白、第二行黃，黑描邊，字級依寬度自動縮
+- 底部深藍科技底帶（0.60 起漸入，半透明，撒固定序列的淡藍方塊模擬電路紋）——**2026-09-08 起是開關且預設關**，見文末「底部壓色框改成開關」
+- 兩行標題**置中**壓在底帶上：第一行白、第二行黃，黑描邊，字級依寬度自動縮。
+  **2026-09-08 使用者回饋「字體再粗一點、行距略縮」**：加粗用同色描邊做假粗體
+  （`YT_TITLE_BOLD_RATIO`＝**1.5%**，台北黑體只有 Bold 一個字重，沒有更粗的檔可換；
+  同日第二輪回報 3.5% 太重——第二行黃字筆畫互相黏住、字腔被吃掉，「關閉社群媒體」糊成一團），
+  深色描邊先補上假粗體吃掉的寬度（`_draw_yt_title_line`），不然加粗完外框只剩一兩個像素、
+  底色框又預設關，字就立不住；行距 0.194→0.180（第二行貼底不動、第一行往下靠）。
+  同時補一層**陰影**（`YT_TITLE_SHADOW_RATIO`＝2%，比照十點封面的標題）：底色框預設關之後
+  字直接壓在照片上，光靠描邊在亮背景仍然糊；YT 封面以前沒有陰影，這是新加的。
+  今日熱搜共用同一組常數與同一支畫法，整點直播版面不同、這次不動。
+  AI 版兩個模板同步改成「heavy black weight ... TIGHT LEADING」，並明文要求字腔保持開著。
+  假粗體與陰影**刻意不設像素下限**：設了 `max(2, …)` 會讓 1.5% 與完全不加粗在常見字級（157px）下
+  畫出一模一樣的字，測不出差別；0 就整層不畫。
+  字腔用連通區域數（`tests/test_yt_title_weight.py` 的 `_enclosed_counters`，不必猜某個字的洞在哪）：
+  12 字的長行在最小字級下，1.5% 留 10 個封閉字腔（最大 419px），3.5% 只剩 6 個（最大 229px）。
+  測試：`tests/test_yt_title_weight.py`。
 - 左上 LIVE 章（`static/brand/live-badge.png`，生圖模型重製的高清去背版）；
   勾「原音呈現」時章往下讓位，上方壓白字紅邊「原音呈現」
 - LIVE 章下方白色日期條、紅字；勾「AI即時翻譯」時日期條下方小白字黑邊
@@ -118,6 +132,59 @@ hourly 另收 `time_text`。前端 `EDITOR_FORMATS[*].ytLayout` 帶到 `ytCoverF
 - 頂端一條紅色細條（上深下淺，3% 高）。
 - 左上「今日｜熱搜🔍」（2026-09-07 起貼模板 `static/brand/hot-search-tag.png`，gpt-image-2 依型錄原版重繪、透明底，高 13% 畫面等比縮放（依 YouTube 實際縮圖量測，型錄截圖偏大）；不再用程式畫方框與放大鏡）標籤：今日＝紅底白字、熱搜＝白底紅字、放大鏡由程式畫（`_draw_hot_magnifier`）。
 - 右上紅色 TVBS 斜標（`_draw_logo_tab` 加顏色參數，藍→紅）。
-- 底部深紅底帶（`_draw_title_band` 加顏色參數）＋兩行置中標題白／黃，幾何同新聞版。
+- 底部深紅底帶（`_draw_title_band` 加顏色參數）＋兩行置中標題白／黃，幾何同新聞版。底帶**2026-09-08 起是開關且預設關**（與新聞版同一個 `bottom_band`），見文末。
 - AI 標題模式用 `YT_COVER_FULL_PROMPT_HOT`；底圖／附圖／分切規則與新聞版完全相同。
 對照圖：`D:\Downloads\aicg_font_20260906\catalog_hot\hot_01~08.png`，樣張 `yt_hot.png`。
+
+## 2026-09-07 補充：成圖比例驗證
+
+`_yt_cover_background`（無文字底圖）與 `_yt_cover_full_image`（AI 標題整張）都直呼
+`generate_image_raw`，繞過 `finalize_image_result`，以前生成端間歇性降級（要 16:9 回 3:2）
+不會被發現，圖照樣合成上鏡。兩條線拿到 result 後都補 `verify_output_aspect_ratio`，
+降級當場變成 502 而不是一張裁壞的封面。既有底圖（`background_image_base64`）不驗——
+那張不是這次生的。
+
+## 2026-09-08：news 與 hot 標題字級的對齊調查（結論：本來就一致，不改碼）
+
+使用者回報「國內外新聞直播的標題字級比今日熱搜大」。查證結果：
+
+- **合成版本來就同一套。** `compose_yt_cover` 與 `compose_yt_hot_cover` 讀同一組
+  `YT_TITLE_SIZE_RATIO`（0.145）／`YT_TITLE_MIN_SIZE_RATIO`／`YT_LINE1_BASELINE_RATIO`／
+  `YT_LINE2_BASELINE_RATIO`，`max_w` 也都是 `width - margin * 2`。同一組標題丟進去，
+  兩張圖的標題像素外框逐點相同（實測 `(258, 690, 1658, 838)`）。hot 沒有自己的
+  `YT_HOT_TITLE_*` 覆寫。
+- **AI 版兩個模板描述字級的措辭一字不差**：`YT_COVER_FULL_PROMPT_NEWS` 與 `_HOT` 都寫
+  「huge and heavy Chinese display type filling almost the full width」、
+  「Line 1: solid white. Line 2: bright golden yellow.」。
+- 所以沒有可以對齊的差值，**不動任何常數與措辭**——硬造一個差異只會把現在對齊的兩條線弄歪。
+  唯一會出現差別的是 AI 標題模式：字級由模型決定，同一段措辭每張略有差異（見上面「試做紀錄」）。
+  真要讓 AI 模式的字級穩定，得改成「兩行都必須佔滿可用寬度的 N%」這種可量化的指令，
+  兩個版型一起改，屬另一件事。
+- 釘住現況的測試：`tests/test_yt_title_parity.py`（合成版逐像素相同、常數只有一處定義、
+  兩個模板措辭相同）。以後任何一邊調字級都會被擋下來。
+
+## 2026-09-08：底部壓色框改成開關（預設 OFF，開的時候半透明）
+
+使用者裁決：底帶不要一直壓在那裡，改成自己開；開了也要透得出照片。
+
+- `YtCoverRequest.bottom_band: bool = False`。合成版由 `compose_yt_cover`／`compose_yt_hot_cover`
+  的同名參數決定要不要呼叫 `_draw_title_band`（關＝**完全不畫**，標題靠自己的粗黑描邊立在照片上）。
+- `YT_BAND_ALPHA` 205 → **153**（60%）。原本 80% 幾乎把照片下半整片吃掉；「開」不是回到舊行為。
+- AI 標題模式只能靠 prompt，所以 `YT_COVER_FULL_PROMPT_NEWS`／`_HOT` 的 LAYOUT 第一條與 IMAGERY
+  結尾都換成佔位 `{band_clause}`／`{band_imagery_tail}`，由 `editor_formats.yt_cover_band_fields()` 給：
+  ON＝「semi-transparent (about 60% opaque) …band…」＋「filling the frame behind the band」；
+  OFF＝「There is NO solid colour band…readability comes from its thick outline and drop shadow alone」
+  ＋「filling the frame」。**IMAGERY 那句一定要一起改**：留著「behind the band」模型還是會畫一條出來。
+- **整點直播（hourly）不適用**：`compose_yt_hourly_cover` 本來就不畫底帶，AI 模板也明文
+  「No band behind them」。後端 `bottom_band = bool(req.bottom_band) and not hourly`、
+  模板 format 不帶那兩個欄位，前端在該版型不顯示按鈕。
+- 前端：`state.ytBottomBand`（預設 false）＋ `#ytBottomBandBtn`（琥珀色，比照蓋章開關）。
+  欄位加在 `ytCoverFields()`，所以生成與「只改文字」／追加修改回貼走的是同一個值。
+- 測試：`tests/test_yt_bottom_band.py`（OFF 時底帶區＝底圖原色、ON 時逐通道落在底圖色與帶色之間、
+  兩種 prompt 措辭、hourly 不受影響、前端 state 與按鈕）。`test_yt_cover` 原本那題看底帶顏色的
+  要自己 `bottom_band=True` 才看得到。
+
+## 2026-09-08：Logo 模板修正
+
+`static/brand/tvbs-logo-white.png` 抹掉 V 上方誤加的小點（使用者回饋 #2），備份在
+`D:\Downloadsicg_font_20260906\`。這個檔十點封面與 YT 封面共用（`compose.TVBS_LOGO_WHITE`）。
