@@ -311,14 +311,16 @@ COVER_SHADE_ALPHA = 190
 COVER_SHOW_NAME = "十點不一樣"
 COVER_AI_NOTE = "AI示意圖"
 # 2026-09-07：精華不再是標頭紅標；原版做法（0819／0805）是標頭照樣 ON AIR，
-# 另在畫面中下方貼一枚「十點不一樣 精華」圓章（模板 TEN_HIGHLIGHT_STAMP）。
+# 另貼一枚「十點不一樣 精華」圓章（模板 TEN_HIGHLIGHT_STAMP）；2026-09-08 起移到畫面頂端中央。
 COVER_BADGES = {
     "on_air": ("ON AIR", (206, 26, 32)),
     "highlight": ("ON AIR", (206, 26, 32)),
 }
 COVER_DEFAULT_BADGE = "on_air"
-COVER_STAMP_HEIGHT_RATIO = 0.23      # 精華圓章直徑佔畫布高（量自 0819：約 140/612）
-COVER_STAMP_TOP_RATIO = 0.67         # 圓章頂端位置（0819：底部文字帶上緣附近，跨在帶上）
+# 2026-09-08 使用者實測：0.67（跨在底部標題區上）會壓到標題。改成水平置中、頂端貼齊
+# 畫面上緣——標頭帶只有左半（Logo＋節目標籤）與右端（日期＋ON AIR）有東西，中段本來就空。
+COVER_STAMP_HEIGHT_RATIO = 0.21      # 精華圓章直徑佔畫布高
+COVER_STAMP_TOP_RATIO = 0.01         # 圓章頂端位置（貼齊畫面上緣，壓在標頭帶中段）
 COVER_MAX_TITLE_LINES = 3
 
 
@@ -442,7 +444,10 @@ def _draw_cover_bottom_line(canvas: Image.Image) -> None:
 
 
 def _draw_cover_highlight_stamp(canvas: Image.Image) -> None:
-    """精華圓章：貼模板於畫面水平正中、中下方（跨在底部標題區上），照 0819 原版。
+    """精華圓章：貼模板於畫面水平正中、頂端貼齊畫面上緣（壓在標頭帶中段）。
+
+    2026-09-08 使用者實測回報：原本照 0819 原版跨在底部標題區上（TOP_RATIO 0.67），
+    實際會壓到標題。標頭帶中段本來就是空的，圓章移上去兩邊都不打架。
 
     幾何以**傳進來的畫布**的尺寸為準，不是 COVER_CANVAS：純 AI 版直接貼在模型回來的
     原圖上，那張的解析度是模型決定的（2026-09-07 起 paste_cover_highlight_stamp 共用這支）。

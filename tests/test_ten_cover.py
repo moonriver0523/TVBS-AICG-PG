@@ -152,8 +152,11 @@ class ComposeTests(unittest.TestCase):
         # 右半帶（日期／ON AIR 由模型畫）不動
         self.assertEqual(count((w // 2, 0, w, band_h), lambda p: p != (12, 20, 60)), 0)
 
-    def test_highlight_badge_pastes_round_stamp_mid_bottom(self):
-        """精華：標頭仍 ON AIR，畫面中下方貼藍光圓章（模板），非精華時該區不出現亮藍環。"""
+    def test_highlight_badge_pastes_round_stamp_top_centre(self):
+        """精華：標頭仍 ON AIR，畫面頂端中央貼藍光圓章（模板），非精華時該區不出現亮藍環。
+
+        2026-09-08 使用者實測：原本在底部標題區上方（TOP_RATIO 0.67）會壓到標題，改到頂端中段。
+        """
         on_air = self._cover(badge="on_air")
         highlight = self._cover(badge="highlight")
         w, h = highlight.size
@@ -175,6 +178,24 @@ class ComposeTests(unittest.TestCase):
         head = highlight.crop((w - 300, 0, w, band_h)).tobytes()
         reds = sum(1 for r, g, b in zip(head[0::3], head[1::3], head[2::3]) if r > 180 and g < 60)
         self.assertGreater(reds, 500)
+
+    def test_highlight_stamp_clears_the_title_area_and_the_header_contents(self):
+        """圓章移到頂端中央（2026-09-08）後，標題區與標頭帶左右兩端都不能被動到。
+
+        使用者實測回報的正是「壓到標題」；標頭帶左半是 Logo＋節目標籤、右端是日期＋ON AIR，
+        圓章只能待在中段那塊空白。
+        """
+        on_air, highlight = self._cover(badge="on_air"), self._cover(badge="highlight")
+        w, h = highlight.size
+        band_h = round(h * compose.COVER_HEADER_RATIO)
+        stamp_h = round(h * compose.COVER_STAMP_HEIGHT_RATIO)
+        for name, box in (
+            ("標題區", (0, round(h * 0.55), w, h)),
+            ("標頭帶左半（Logo／節目標籤）", (0, 0, w // 2 - stamp_h, band_h)),
+            ("標頭帶右端（日期／ON AIR）", (w // 2 + stamp_h, 0, w, band_h)),
+        ):
+            with self.subTest(zone=name):
+                self.assertEqual(highlight.crop(box).tobytes(), on_air.crop(box).tobytes())
 
 
 class EndpointTests(unittest.TestCase):

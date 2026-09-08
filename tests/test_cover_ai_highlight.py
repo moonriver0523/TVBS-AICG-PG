@@ -26,7 +26,7 @@ GREY = (90, 90, 90)
 
 
 def _stamp_zone_ink(img: Image.Image) -> int:
-    """圓章區（水平正中、頂端 67% 高起）裡非底色的像素數。"""
+    """圓章區（水平正中、頂端貼齊畫面上緣）裡非底色的像素數。"""
     w, h = img.size
     d = round(h * compose.COVER_STAMP_HEIGHT_RATIO)
     top = round(h * compose.COVER_STAMP_TOP_RATIO)
@@ -36,7 +36,7 @@ def _stamp_zone_ink(img: Image.Image) -> int:
 
 
 class PasteStampTests(unittest.TestCase):
-    def test_paste_stamp_marks_mid_bottom_and_scales_to_canvas(self):
+    def test_paste_stamp_marks_top_centre_and_scales_to_canvas(self):
         for size in ((1920, 1080), (1536, 864)):
             base = _png_bytes(size=size, colour=GREY)
             before = Image.open(io.BytesIO(base))
