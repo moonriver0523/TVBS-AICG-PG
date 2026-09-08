@@ -1,8 +1,8 @@
-"""WP3（2026-09-08）：底色框位置三變體 ＋ YT 直播 PNG 壓標原型。
+"""WP3（2026-09-08）：底色框定版（第 3 位置＋上緣羽化） ＋ YT 直播 PNG 壓標原型。
 
 守的紅線：
-1. **預設一個像素都不能變。** 使用者還沒挑位置，band 起點只是多了可傳的參數，
-   不傳就要跟改動前 byte 完全一樣。
+1. **定版就是預設。** 使用者從三個位置樣張挑了「第二行」並要求上緣羽化，不傳參數
+   就要得到那個版本；覆寫參數只留給出樣張用。
 2. **漸入不准疊到字。** 帶子往下移之後漸入高度沒跟著縮，半透明的漸層會蓋在標題
    筆畫上把字糊掉。上界用**最大字級**的 ascent 算，不是拿某一句長標題 fit 完的字級
    ——短標題不縮字，ink 更高，用長標題量的上界會放行一個實際會糊字的設定。
@@ -60,7 +60,7 @@ def _vstrip(**kw) -> Image.Image:
 
 
 class BandDefaultTests(unittest.TestCase):
-    def test_not_passing_the_new_kwargs_is_byte_identical_to_passing_the_old_constants(self):
+    def test_not_passing_the_kwargs_is_byte_identical_to_passing_the_constants(self):
         for name, fn in (("news", _news), ("hot", _hot)):
             for band in (False, True):
                 with self.subTest(layout=name, bottom_band=band):
@@ -71,75 +71,59 @@ class BandDefaultTests(unittest.TestCase):
                            band_fade_ratio=compose.YT_BAND_FADE_RATIO),
                     )
 
-    def test_the_shipped_constants_are_still_the_ones_the_channel_signed_off(self):
-        self.assertEqual(compose.YT_BAND_TOP_RATIO, 0.60)
-        self.assertEqual(compose.YT_BAND_FADE_RATIO, 0.06)
+    def test_the_shipped_constants_are_the_ones_the_user_picked(self):
+        """2026-09-08 裁決：第 3 位置（第二行）＋上緣羽化。"""
+        self.assertEqual(compose.YT_BAND_TOP_RATIO, 0.778)
+        self.assertEqual(compose.YT_BAND_FADE_RATIO, 0.0365)
 
 
-class BandVariantTests(unittest.TestCase):
-    def test_there_are_exactly_the_three_variants_the_user_has_to_choose_between(self):
-        self.assertEqual(set(compose.YT_BAND_VARIANTS), {"line1_top", "between", "line2_top"})
+class BandPlacementTests(unittest.TestCase):
+    def test_the_band_starts_at_the_first_line_baseline_not_above_it(self):
+        """羽化從第一行字底開始：再往上就會蓋到第一行的筆畫。"""
+        self.assertGreaterEqual(compose.YT_BAND_TOP_RATIO, compose.YT_LINE1_BASELINE_RATIO)
 
-    def test_the_fade_never_reaches_the_title_ink_below_it(self):
-        line1_top = compose._yt_title_ink_top_ratio(compose.YT_LINE1_BASELINE_RATIO)
+    def test_the_fade_reaches_full_strength_before_the_second_line_ink(self):
+        """裁決原文：不超過第二行標題。羽化結尾要壓在第二行墨水上緣之上。"""
         line2_top = compose._yt_title_ink_top_ratio(compose.YT_LINE2_BASELINE_RATIO)
-        bounds = {"line1_top": line1_top, "between": line2_top, "line2_top": line2_top}
-        for name, (top, fade) in compose.YT_BAND_VARIANTS.items():
-            with self.subTest(variant=name):
-                self.assertLessEqual(
-                    top + fade, bounds[name],
-                    f"{name} 的漸入結尾 {top + fade:.4f} 蓋到 {bounds[name]:.4f} 的字",
-                )
+        end = compose.YT_BAND_TOP_RATIO + compose.YT_BAND_FADE_RATIO
+        self.assertLessEqual(end, line2_top, f"羽化結尾 {end:.4f} 蓋到 {line2_top:.4f} 的字")
 
-    def test_every_variant_starts_below_the_shipped_default(self):
-        """使用者要的是「再往下調」，往上跑的變體不是他要的東西。"""
-        for name, (top, _) in compose.YT_BAND_VARIANTS.items():
-            with self.subTest(variant=name):
-                self.assertGreater(top, compose.YT_BAND_TOP_RATIO)
-
-    def test_no_variant_starts_below_the_second_line(self):
-        """裁決原文：不超過第二行標題。起點掉到第二行墨水以下就違反了。"""
-        line2_top = compose._yt_title_ink_top_ratio(compose.YT_LINE2_BASELINE_RATIO)
-        for name, (top, _) in compose.YT_BAND_VARIANTS.items():
-            with self.subTest(variant=name):
-                self.assertLessEqual(top, line2_top)
-
-    def test_each_variant_paints_a_visibly_different_row_set(self):
-        """三張樣張要真的不一樣，不然使用者沒得挑。"""
+    def test_the_top_edge_is_feathered_not_a_hard_line(self):
+        """使用者要求「框上邊的邊緣界線要漸層羽化」：帶子上緣的 alpha 要單調漸增、
+        而且首尾都貼近 0／全濃度（smoothstep），不能一行就跳到全濃度。"""
         height = compose.YT_CANVAS[1]
-        painted = {}
-        for name, (top, fade) in compose.YT_BAND_VARIANTS.items():
-            img = Image.open(io.BytesIO(_news(bottom_band=True, band_top_ratio=top,
-                                              band_fade_ratio=fade))).convert("RGB")
-            painted[name] = frozenset(
-                y for y in range(round(height * 0.55), height)
-                if img.getpixel((PROBE_X, y)) != BASE
-            )
-        self.assertEqual(len(set(painted.values())), 3, "有兩個變體畫出同一條帶")
-        for name, rows in painted.items():
-            with self.subTest(variant=name):
-                self.assertTrue(rows, f"{name} 根本沒畫出帶")
+        top = round(height * compose.YT_BAND_TOP_RATIO)
+        fade = round(height * compose.YT_BAND_FADE_RATIO)
+        self.assertGreaterEqual(fade, 30, "羽化太薄，肉眼就是一條硬邊")
+        img = Image.open(io.BytesIO(_news(bottom_band=True))).convert("RGB")
+        base_r = BASE[0]
+        # 帶子是深藍，蓋上去 R 通道只會往下走；沿 x=PROBE_X 從帶子上緣往下量
+        reds = [img.getpixel((PROBE_X, y))[0] for y in range(top - 1, top + fade + 1)]
+        self.assertEqual(reds[0], base_r, "帶子上緣之上不該有顏色")
+        for earlier, later in zip(reds, reds[1:]):
+            self.assertGreaterEqual(earlier, later, "羽化不是單調漸變")
+        drop_total = reds[0] - reds[-1]
+        self.assertGreater(drop_total, 0)
+        # 前 20% 與後 20% 的變化都要平緩（各不到總落差的 15%）：這就是 smoothstep 跟直線的差別
+        fifth = max(1, len(reds) // 5)
+        self.assertLess(reds[0] - reds[fifth], drop_total * 0.15)
+        self.assertLess(reds[-1 - fifth] - reds[-1], drop_total * 0.15)
 
-    def test_a_variant_leaves_the_photo_alone_where_the_default_would_have_covered_it(self):
-        """「往下調」的意思就是原本被吃掉的那一段照片要露出來。"""
-        top, fade = compose.YT_BAND_VARIANTS["between"]
-        probe_y = round(compose.YT_CANVAS[1] * 0.70)   # 預設帶內、變體帶外
-        default = Image.open(io.BytesIO(_news(bottom_band=True))).convert("RGB")
-        moved = Image.open(io.BytesIO(_news(bottom_band=True, band_top_ratio=top,
-                                            band_fade_ratio=fade))).convert("RGB")
-        self.assertNotEqual(default.getpixel((PROBE_X, probe_y)), BASE)
-        self.assertEqual(moved.getpixel((PROBE_X, probe_y)), BASE)
+    def test_the_photo_above_the_first_line_is_left_alone(self):
+        """舊預設從 0.60 起就壓照片；定版後第一行之上一律露出原圖。"""
+        img = Image.open(io.BytesIO(_news(bottom_band=True))).convert("RGB")
+        for ratio in (0.60, 0.66, 0.72, 0.77):
+            with self.subTest(ratio=ratio):
+                self.assertEqual(img.getpixel((PROBE_X, round(compose.YT_CANVAS[1] * ratio))), BASE)
 
-    def test_both_colours_accept_the_variant(self):
+    def test_both_colours_are_semi_transparent_at_the_bottom(self):
         for name, fn, fill in (("news", _news, compose.YT_BAND_FILL),
                                ("hot", _hot, compose.YT_HOT_BAND_FILL)):
-            for variant, (top, fade) in compose.YT_BAND_VARIANTS.items():
-                with self.subTest(layout=name, variant=variant):
-                    img = Image.open(io.BytesIO(fn(bottom_band=True, band_top_ratio=top,
-                                                   band_fade_ratio=fade))).convert("RGB")
-                    pixel = img.getpixel((PROBE_X, compose.YT_CANVAS[1] - 6))
-                    self.assertNotEqual(pixel, BASE)
-                    self.assertNotEqual(pixel, fill, "半透明沒了")
+            with self.subTest(layout=name):
+                img = Image.open(io.BytesIO(fn(bottom_band=True))).convert("RGB")
+                pixel = img.getpixel((PROBE_X, compose.YT_CANVAS[1] - 6))
+                self.assertNotEqual(pixel, BASE)
+                self.assertNotEqual(pixel, fill, "半透明沒了")
 
 
 class VerticalCellTests(unittest.TestCase):

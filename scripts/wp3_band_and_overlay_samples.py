@@ -1,4 +1,4 @@
-"""WP3 樣張產生器（2026-09-08）：底色框三個位置 × 藍／紅，以及 PNG 壓標原型。
+"""WP3 樣張產生器（2026-09-08）：底色框定版（第 3 位置＋上緣羽化）藍／紅，以及 PNG 壓標原型。
 
 只出樣張給使用者挑，不接端點、不接 UI。跑法（在 worktree 根目錄）：
 
@@ -22,7 +22,6 @@ LINE1 = "澳洲擬立新法"
 LINE2 = "民眾可關閉社群媒體演算法"
 DATE = "2026/09/08"
 SOURCE = "畫面來源：路透社"
-VARIANT_LABELS = {"line1_top": "1上緣", "between": "2行間", "line2_top": "3第二行"}
 MAIN_TITLE = "週五變天北、東轉雨"
 SUB_TITLE = "明早晚涼「中午仍破30度」"
 # (檔名, kwargs)。四組是 lead 指定的；第五組多出來，是為了把「副標欄改深紅」跟
@@ -65,22 +64,15 @@ def _png(image: Image.Image) -> bytes:
 
 
 def band_samples() -> list[pathlib.Path]:
+    """定版底色框（不傳覆寫參數＝線上實際行為）。"""
     background = _png(neutral_backdrop())
     written = []
-    for name, (top, fade) in compose.YT_BAND_VARIANTS.items():
-        label = VARIANT_LABELS[name]
-        blue = compose.compose_yt_cover(
-            background, line1=LINE1, line2=LINE2, date_text=DATE, bottom_band=True,
-            band_top_ratio=top, band_fade_ratio=fade,
-        )
-        red = compose.compose_yt_hot_cover(
-            background, line1=LINE1, line2=LINE2, bottom_band=True,
-            band_top_ratio=top, band_fade_ratio=fade,
-        )
-        for colour, data in (("藍", blue), ("紅", red)):
-            path = OUT / f"20260908_底色框_{colour}_{label}.png"
-            path.write_bytes(data)
-            written.append(path)
+    blue = compose.compose_yt_cover(background, line1=LINE1, line2=LINE2, date_text=DATE, bottom_band=True)
+    red = compose.compose_yt_hot_cover(background, line1=LINE1, line2=LINE2, bottom_band=True)
+    for colour, data in (("藍", blue), ("紅", red)):
+        path = OUT / f"20260908_底色框_定版_{colour}.png"
+        path.write_bytes(data)
+        written.append(path)
     return written
 
 
@@ -119,8 +111,7 @@ def main() -> None:
     for path in band_samples() + vertical_samples():
         print(path)
     print()
-    for name, (top, fade) in compose.YT_BAND_VARIANTS.items():
-        print(f"{name}: top={top} fade={fade} 漸入結尾={top + fade:.4f}")
+    print(f"底色框: top={compose.YT_BAND_TOP_RATIO} fade={compose.YT_BAND_FADE_RATIO} 羽化結尾={compose.YT_BAND_TOP_RATIO + compose.YT_BAND_FADE_RATIO:.4f}")
     print(f"第一行墨水上緣={compose._yt_title_ink_top_ratio(compose.YT_LINE1_BASELINE_RATIO):.4f}")
     print(f"第二行墨水上緣={compose._yt_title_ink_top_ratio(compose.YT_LINE2_BASELINE_RATIO):.4f}")
     print()

@@ -856,8 +856,11 @@ YT_TOP_LINE_TOP = (27, 122, 222)
 YT_TOP_LINE_BOTTOM = (32, 165, 218)
 YT_LOGO_LEFT_RATIO = 0.844
 YT_LOGO_TOP_RATIO = 0.014
-YT_BAND_TOP_RATIO = 0.60             # 深藍科技底帶起點
-YT_BAND_FADE_RATIO = 0.06            # 頂端漸入高度
+# 2026-09-08 使用者定版（三個位置樣張挑第 3 個「第二行」）：底帶從第一行字底（基線）開始
+# 羽化，到第二行字的墨水上緣稍上（0.8145）才到全濃度——漸層剛好落在兩行標題之間的空隙，
+# 不糊第一行、也不把第二行切成兩截。原本 0.60／0.06 把照片下半整片吃掉。
+YT_BAND_TOP_RATIO = 0.778            # 底帶起點＝第一行基線（YT_LINE1_BASELINE_RATIO）
+YT_BAND_FADE_RATIO = 0.0365          # 上緣羽化高度：0.778 + 0.0365 = 0.8145 到全濃度
 YT_BAND_FILL = (8, 25, 70)
 # 2026-09-08 使用者裁決：底部壓色框改成開關（預設 OFF），開的時候要半透明——
 # 原本 205／255 ≈ 80% 幾乎把照片下半整片吃掉。153／255 = 60%。
@@ -883,10 +886,10 @@ YT_AI_NOTE_SIZE_RATIO = 0.032
 YT_AI_NOTE_TOP_RATIO = 0.20          # 藍標籤之下的右側空位
 YT_AI_NOTE_PLATE = (0, 0, 0, 120)
 
-# ---- 底色框位置變體（2026-09-08 WP3，只出樣張，預設值不動）----
-# 使用者裁決「紅／藍底色框位置再往下調，不超過第二行標題」語意有歧義，先出三個位置讓他挑。
-# 上界用**最大字級**的 ascent 算，不用某一句話 fit 完的字級：短標題不會縮字，ink 會比長標題
-# 更高，拿長標題量出來的上緣當上界，換一句短的就被漸入層蓋到。outline 是描邊往外撐的部分。
+# ---- 底色框上界（2026-09-08 WP3）----
+# 羽化結尾不准疊到第二行字：上界用**最大字級**的 ascent 算，不用某一句話 fit 完的字級：
+# 短標題不會縮字，ink 會比長標題更高，拿長標題量出來的上緣當上界，換一句短的就被漸入層蓋到。
+# outline 是描邊往外撐的部分。
 def _yt_title_ink_top_ratio(baseline_ratio: float) -> float:
     """該行標題在最大字級下、含描邊的墨水上緣（佔畫布高的比例）。"""
     _, height = YT_CANVAS
@@ -895,15 +898,6 @@ def _yt_title_ink_top_ratio(baseline_ratio: float) -> float:
     ascent, _ = font.getmetrics()
     outline = max(4, round(size * YT_TITLE_STROKE_RATIO)) + round(size * YT_TITLE_BOLD_RATIO)
     return (round(height * baseline_ratio) - ascent - outline) / height
-
-
-# (band 起點, 漸入高度)。漸入結尾一律壓在下一段字的墨水上緣之上，帶子才不會糊到字。
-# 變體 2 與 3 只差約 17px——行距就這麼寬，中間塞不下更多位置，這是版面的事實不是取值偷懶。
-YT_BAND_VARIANTS: dict[str, tuple[float, float]] = {
-    "line1_top": (0.622, 0.016),   # 第一行字上緣再往上一點點
-    "between": (0.799, 0.020),     # 兩行之間（第一行基線與第二行上緣中點）
-    "line2_top": (0.8145, 0.005),  # 第二行字上緣稍上
-}
 
 
 def _paste_live_badge(canvas: Image.Image, box: tuple[int, int], width: int) -> int:
@@ -1055,8 +1049,8 @@ def _draw_title_band(
     """底部科技底帶：頂端漸入，帶上撒幾塊半透明方塊模擬頻道的電路紋。
 
     預設深藍（新聞直播）；今日熱搜傳深紅。
-    top_ratio／fade_ratio 是 2026-09-08 出位置樣張用的覆寫，None＝沿用現行常數
-    （預設行為一個像素都不能變，使用者還沒挑位置）。
+    top_ratio／fade_ratio 是出樣張用的覆寫，None＝沿用定版常數（2026-09-08 使用者挑定：
+    第一行基線起羽化、第二行上緣到全濃度）。
     """
     width, height = YT_CANVAS
     top = round(height * (YT_BAND_TOP_RATIO if top_ratio is None else top_ratio))
@@ -1065,7 +1059,9 @@ def _draw_title_band(
     alpha = Image.new("L", band.size, YT_BAND_ALPHA)
     ad = ImageDraw.Draw(alpha)
     for y in range(fade):
-        ad.line(((0, y), (width, y)), fill=round(YT_BAND_ALPHA * y / fade))
+        # smoothstep 羽化：兩端切線水平，看不到「這裡開始有框」的硬邊
+        t = y / fade
+        ad.line(((0, y), (width, y)), fill=round(YT_BAND_ALPHA * t * t * (3 - 2 * t)))
     band.putalpha(alpha)
     blocks = Image.new("RGBA", band.size, (0, 0, 0, 0))
     bd = ImageDraw.Draw(blocks)
