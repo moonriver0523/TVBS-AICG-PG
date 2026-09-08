@@ -281,15 +281,29 @@ class DualEndpointTests(unittest.TestCase):
         self.assertEqual(seen["lines"], (FIRST, SECOND))
         self.assertEqual(res.json()["title_mode"], "ai", "雙則不再強制程式壓字")
 
-    def test_line_over_the_cap_returns_500_with_the_hint(self):
-        payload = _payload(title="一二三四五六七八九十一二三四五", reference_images=[
-            {"data_url": _data_url(_png()), "purpose": "asis"},
-            {"data_url": _data_url(_png(colour=(9, 9, 9))), "purpose": "asis"},
-        ])
+    def test_line_over_the_cap_returns_400_before_any_image_is_generated(self):
+        """審查必修（2026-09-08）：字數擋要在生底圖之前，不能燒完兩次生圖才回錯。"""
+        payload = _payload(title="一二三四五六七八九十一二三四五")
+        with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")),              patch.object(main, "yt_dual_panel_plan", side_effect=AssertionError("不該推導")):
+            res = client.post("/api/editor/yt-cover", json=payload, headers=_headers())
+        self.assertEqual(res.status_code, 400, res.text)
+        self.assertIn("第一標題超過 14 字", res.json()["detail"])
+        self.assertIn("請縮短這一行", res.json()["detail"])
+
+    def test_second_title_over_the_cap_names_the_second_line(self):
+        payload = _payload(title_second="一二三四五六七八九十一二三四五")
         with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")):
             res = client.post("/api/editor/yt-cover", json=payload, headers=_headers())
-        self.assertEqual(res.status_code, 500, res.text)
-        self.assertIn("請縮短這一行", res.json()["detail"])
+        self.assertEqual(res.status_code, 400, res.text)
+        self.assertIn("第二標題超過 14 字", res.json()["detail"])
+
+    def test_frontend_pre_checks_the_cap_before_sending(self):
+        js = (ROOT / "app.js").read_text(encoding="utf-8")
+        self.assertIn("const YT_HOURLY_LINE_MAX_CHARS = 14;", js)
+        self.assertRegex(js, r"function displayWidth\(text\)")
+        self.assertRegex(js, r"displayWidth\(t\) > YT_HOURLY_LINE_MAX_CHARS")
+        self.assertNotIn("async function handleAIDigestion", js)
+        self.assertRegex(js, r"state\.tenCoverBackground = null;[\s\S]{0,300}state\.refineSource = null;")
 
     def test_news_layout_ignores_the_second_title(self):
         payload = _payload(layout="news", title="新北診所爆C肝群聚 11人確診",

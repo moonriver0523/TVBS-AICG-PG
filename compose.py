@@ -1179,6 +1179,8 @@ def compose_yt_cover(
         (line1, YT_LINE1_FILL, YT_LINE1_BASELINE_RATIO),
         (line2, YT_LINE2_FILL, YT_LINE2_BASELINE_RATIO),
     ) if draw_titles else ():
+        if font.getbbox(text)[2] > max_w:
+            raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{text}」（請縮短這一行）")
         _draw_yt_title_line(draw, (width // 2, round(height * baseline_ratio)), text, font, fill)
 
     buffer = io.BytesIO()
@@ -1460,6 +1462,8 @@ def compose_yt_hot_cover(
         (line1, YT_LINE1_FILL, YT_LINE1_BASELINE_RATIO),
         (line2, YT_LINE2_FILL, YT_LINE2_BASELINE_RATIO),
     ) if draw_titles else ():
+        if font.getbbox(text)[2] > max_w:
+            raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{text}」（請縮短這一行）")
         _draw_yt_title_line(draw, (width // 2, round(height * baseline_ratio)), text, font, fill)
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")

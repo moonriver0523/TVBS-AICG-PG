@@ -70,7 +70,7 @@ class DownloadNameRuleTests(unittest.TestCase):
         self.assertIn("getDate()", stamp)
         self.assertIn("padStart(2, '0')", stamp)
 
-    def test_every_editor_format_has_a_short_name(self):
+    def test_each_format_family_has_a_short_name(self):
         names = _block("const DOWNLOAD_FORMAT_NAMES = {", "};")
         # yt_hourly_cover 2026-09-08 WP2 起是巢狀的（滿版／雙切），見下一題
         for key, short in (("default", "編輯CG"), ("yt_live_cover", "YT直播"),

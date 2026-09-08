@@ -485,6 +485,14 @@ function coverLayoutNow() {
 /* YT 整點直播這一刻是單則還是雙則（2026-09-08 WP2）。判定只有一條規則：
    第二標題有值＝雙則（同一張底圖上下兩行，上白＝第一則、下黃＝第二則）。
    國內外新聞直播與今日熱搜沒有這個版面，一律 single。 */
+const YT_HOURLY_LINE_MAX_CHARS = 14;
+// 顯示寬度：全形算 1、半形算 0.5，跟後端 compose.title_display_width 同一套
+function displayWidth(text) {
+    let w = 0;
+    for (const ch of (text || '').trim()) w += /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]/.test(ch) ? 1 : 0.5;
+    return w;
+}
+
 function ytLayoutNow() {
     if ((editorFormat().ytLayout || '') !== 'hourly') return 'single';
     return (document.getElementById('ytCoverTitleSecond')?.value || '').trim() ? 'dual' : 'single';
@@ -968,6 +976,10 @@ function setEditorFormat(key) {
     // 換版型就丟掉上一版的壓字前底圖：滿版的底圖送進雙切會被後端擋（400），留著只會誤導。
     // 只在這裡清——applyEditorFormatInputs 換角色也會走，放那邊會把還能用的底圖洗掉。
     state.tenCoverBackground = null;
+    // 換版型也丟掉上一版 YT 封面的 refine 來源：不清的話切到整點後「只改文字」會對著
+    // 一張國內外版的底圖亮起來（審查建議 2026-09-08）。
+    state.refineSource = null;
+    state.refineDisplay = null;
     const coverRecompose = document.getElementById('coverRecomposeBtn');
     if (coverRecompose) coverRecompose.disabled = true;
     renderEditorFormats();
@@ -2123,6 +2135,12 @@ function showYtCoverResult(data, fields) {
 async function handleYtCoverGenerate(recomposeOnly = false) {
     const fields = ytCoverFields();
     if (!fields.title) return showToast('請輸入直播標題');
+    // 雙則每行最多 14 個全形字寬（半形算半字），送出前先擋，別燒完兩次生圖才被後端退
+    if (fields.title_second && fields.title_mode !== 'ai') {
+        const tooLong = [['第一標題', fields.title], ['第二標題', fields.title_second]]
+            .find(([, t]) => displayWidth(t) > YT_HOURLY_LINE_MAX_CHARS);
+        if (tooLong) return showToast(`${tooLong[0]}超過 ${YT_HOURLY_LINE_MAX_CHARS} 字，請縮短這一行`);
+    }
     if (recomposeOnly && !state.refineSource) return showToast('還沒有底圖，請先生成一次');
     // AI 標題模式的成品沒有「只改文字」這回事——字是模型畫的，改字就是整張重生
     if (recomposeOnly && state.ytCoverTitleMode === 'ai') {
@@ -2260,79 +2278,6 @@ async function handleOneClickGenerate() {
         btnText.classList.remove("hidden");
         loading.classList.add("hidden");
         endGenerationProgress(completed);
-    }
-}
-
-async function handleAIDigestion() {
-    const input = document.getElementById('aiInput').value.trim();
-    if (!input) return showToast("請輸入欲消化整理的新聞內容");
-
-    const btnText = document.getElementById('aiBtnText');
-    const loading = document.getElementById('aiLoading');
-    const btn = document.getElementById('aiBtn');
-    btn.disabled = true; btnText.classList.add('hidden'); loading.classList.remove('hidden');
-
-    // 自動生成一律用第一頁自己的圖表類型（'auto' 時送 sentinel 交由 AI 選型）
-    const typeLabel = digestTypeLabelForApi();
-
-    try {
-        const response = await fetch(AI_BACKEND_URL, {
-            method: "POST",
-            headers: _apiHeaders(),
-            body: JSON.stringify({
-                news_text: input,
-                type_label: typeLabel,
-                role: state.currentRole,
-                density: state.digestDensity,
-                stamp: state.stamp,
-                tone: state.tone,
-                editor_format: state.editorFormat,
-                // 安全框 ON 時消化要出滿版版面，否則 STRUCTURE 的「縮小置中」
-                // 開頭句會跟最終 prompt 的 FULL-FRAME RULES 互相打架
-                safe_frame: state.safeFrame,
-                user_instruction: currentUserInstruction(),
-                // 已上傳幾張肖像照。後端據此判斷「維基查不到的人」是不是其實有照片：
-                // 沒有這個數字，後端會把使用者剛上傳照片的那個人排出版面（2026-08-18）
-                portrait_photo_count: uploadedPortraitCount(),
-                asis_reference_count: uploadedAsisCount()
-            })
-        });
-        if (!response.ok) {
-            throw new Error("HTTP " + response.status);
-        }
-        const data = await response.json();
-
-        const s = curSelected();
-        s.style = {}; s.structure = {};
-        document.getElementById('field-style').value = data.style || '';
-        document.getElementById('field-structure').value = data.structure || '';
-        document.getElementById('field-variable').value = (data.variable || '').replace(SYSTEM_DISCLAIMER, '').trim();
-        applyPortraitSubjects(data);
-
-        // 自動判斷模式：記下 AI 實際選了哪一類，供徽章與按鈕顯示
-        if (state.digestChartType === AUTO_TYPE_KEY) {
-            const resolvedKey = Object.keys(CHART_TYPES)
-                .find(k => CHART_TYPES[k].label === data.chart_type);
-            state.digestResolvedType = resolvedKey || null;
-            renderDigestTypes();
-        } else {
-            noteChartTypeOverride(data);
-        }
-
-        renderTags(); updateCounter();
-        // 剛做完自動生成＝以第一頁的類型為準（claimPromptType 內含 syncOutput）
-        claimPromptType('digest');
-        const portraitHint = state.portraitSubjects.length
-            ? `；具名真人：${state.portraitSubjects.join('、')}（生圖時查參考照）`
-            : '';
-        showToast(state.digestResolvedType
-            ? `AI 判斷為「${CHART_TYPES[state.digestResolvedType].label}」並完成佈局規劃${portraitHint}`
-            : `AI 已完成佈局規劃與視覺輔助設計${portraitHint}`);
-    } catch (err) {
-        console.error(err);
-        showToast("AI 服務連線失敗，請稍後再試");
-    } finally {
-        btn.disabled = false; btnText.classList.remove('hidden'); loading.classList.add('hidden');
     }
 }
 

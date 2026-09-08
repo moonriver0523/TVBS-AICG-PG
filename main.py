@@ -3696,7 +3696,7 @@ class CoverTitleDigestResponse(BaseModel):
     title_left: str = ""
     title_right: str = ""
     title: str = ""
-    # 整點雙切的第二標題（target=yt_hourly；單主題時空）
+    # 整點雙則的第二標題（target=yt_hourly；單主題時空）
     title_second: str = ""
     # 十點／整點：這篇內文被判定成幾個主題（1＝滿版、2＝雙切）。前端據此更新版面指示器。
     # 一致性以「第二標題有沒有值」為準：模型說 2 卻只給一個標題就退回 1，
@@ -3771,7 +3771,7 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
     if not title:
         raise HTTPException(status_code=502, detail="消化標題失敗：模型沒給標題")
     if hourly:
-        # 整點雙切（2026-09-08 WP2）：判定規則與十點同一套，只是欄位叫 title／title_second
+        # 整點雙則（2026-09-08 WP2）：判定規則與十點同一套，只是欄位叫 title／title_second
         second = _clip_title(data.get("title_second"), 60)
         if data.get("topics") == 1:
             second = ""
@@ -4313,8 +4313,8 @@ def yt_dual_panel_requests(req: "YtCoverRequest") -> tuple["YtCoverRequest", "Yt
 def yt_dual_panel_plan(panel_req: "YtCoverRequest") -> "YtCoverPlan":
     """雙則某一格的畫面描述（＋這一格的具名真人）。
 
-    刻意**不走** resolve_yt_cover_plan：那一支的工作有一半是「把標題拆成兩行」，
-    而雙則的行早就定了（一行一則），拆行只會白打一次文字模型。這裡只問畫面描述。
+    不走 resolve_yt_cover_plan（它會把拆行結果寫回請求），改直接呼叫 derive_yt_cover_plan
+    只取畫面描述與具名真人；模型順便回的分行結果在雙則裡沒有意義，直接丟掉。
     附圖那格不打——它的底圖就是那張照片。
     """
     if any(ref.purpose == "asis" for ref in panel_req.reference_images):
@@ -4393,6 +4393,15 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         req = req.model_copy(update={"title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE})
     hourly = req.layout == editor_formats.YT_COVER_LAYOUT_HOURLY
     hot = req.layout == editor_formats.YT_COVER_LAYOUT_HOT
+    if dual and req.title_mode == editor_formats.YT_COVER_TITLE_MODE_COMPOSITE:
+        # 雙則每行 14 個全形字寬的上限要在生底圖之前擋（審查必修 2026-09-08）：
+        # 放到 compose 才擋，等於燒完兩次生圖才回錯。AI 整張版不套字數擋（字是模型畫的）。
+        for label, text in (("第一標題", req.title), ("第二標題", req.title_second)):
+            if compose.title_display_width(text.strip()) > compose.YT_HOURLY_LINE_MAX_CHARS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{label}超過 {compose.YT_HOURLY_LINE_MAX_CHARS} 字：「{text.strip()}」（請縮短這一行）",
+                )
     # 整點直播與今日熱搜沒有原音呈現／AI即時翻譯（2026-09-06 使用者裁決），後端直接忽略
     original_audio = bool(req.original_audio) and not (hourly or hot)
     ai_translation = bool(req.ai_translation) and not (hourly or hot)
@@ -4415,7 +4424,6 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         visual = "｜".join(filter(None, (plans[0][1], plans[1][1])))
         subjects = list(plans[0][2]) + list(plans[1][2])
         english = list(plans[0][3]) + list(plans[1][3])
-        plan = None
         photos = {**yt_cover_plan_photos(plans[0]), **yt_cover_plan_photos(plans[1])}
         excluded = list(getattr(plans[0], "excluded", [])) + list(getattr(plans[1], "excluded", []))
     else:

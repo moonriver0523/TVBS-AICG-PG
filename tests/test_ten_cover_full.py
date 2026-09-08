@@ -29,7 +29,7 @@ def _decode(data) -> Image.Image:
 
 
 class FormatTableTests(unittest.TestCase):
-    def test_two_independent_formats(self):
+    def test_full_is_an_alias_of_the_merged_ten_cover(self):
         # 2026-09-08 WP1：兩個版型合併成一個 key，版面由第二標題自動判定（auto）。
         # 舊 key ten_cover_full 降為後端別名，仍然要解析得出「滿版」。
         self.assertEqual(editor_formats.cover_layout("ten_cover"), "auto")

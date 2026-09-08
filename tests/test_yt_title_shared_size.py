@@ -56,6 +56,14 @@ class SharedSizeTests(unittest.TestCase):
                 self.assertEqual(seen[SHORT], seen[LONG], "短行要跟著長行縮到同一字級")
                 self.assertLess(seen[LONG], round(1080 * compose.YT_TITLE_SIZE_RATIO))
 
+    def test_news_and_hot_refuse_a_line_that_cannot_fit_even_at_min_size(self):
+        """審查建議（2026-09-08）：只有整點擋了「縮到最小仍超出」，國內外／熱搜也要擋，不能靜靜裁掉。"""
+        too_long = "這是一行怎麼縮都塞不進一千九百二十像素寬度的超長標題文字內容再加幾個字"
+        for fn, kw in ((compose.compose_yt_cover, {"date_text": "2026/09/08"}), (compose.compose_yt_hot_cover, {})):
+            with self.subTest(fn=fn.__name__), self.assertRaises(compose.ComposeError) as cm:
+                fn(_png_bytes(size=(1920, 1080)), line1=SHORT, line2=too_long, **kw)
+            self.assertIn("請縮短這一行", str(cm.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
