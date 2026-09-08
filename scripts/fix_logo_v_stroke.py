@@ -3,6 +3,10 @@
 作法：量測既有筆畫左右緣的直線斜率，往上外插到 T 直劃的頂端列
 （原始 logo 兩者切齊），以 8 倍超取樣填成同斜率的平行四邊形，
 再與原圖 alpha 取 max，只加不減。
+
+用法：在 repo 根目錄跑 python -X utf8 scripts/fix_logo_v_stroke.py <輸出資料夾>
+（少了 -X utf8，Windows console 會把訊息印成亂碼。）
+
 """
 import sys
 import numpy as np
