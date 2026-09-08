@@ -850,11 +850,15 @@ YT_BAND_FILL = (8, 25, 70)
 # 原本 205／255 ≈ 80% 幾乎把照片下半整片吃掉。153／255 = 60%。
 YT_BAND_ALPHA = 153
 YT_BAND_BLOCK_FILL = (60, 130, 230)
-YT_LINE1_BASELINE_RATIO = 0.764      # 第一行字底
+# 2026-09-08 使用者回饋「字體再粗一點、行距略縮」（國內外新聞直播與今日熱搜共用這組）：
+# 行距 0.194 → 0.180（縮約 7%），第二行貼底不動、第一行往下靠；
+# 加粗用「同色描邊」做假粗體（字型檔只有台北黑體 Bold 一個字重，沒有更粗的可換）。
+YT_LINE1_BASELINE_RATIO = 0.778      # 第一行字底
 YT_LINE2_BASELINE_RATIO = 0.958      # 第二行字底
 YT_TITLE_SIZE_RATIO = 0.145          # 標題起始字級（字高約 100/720）
 YT_TITLE_MIN_SIZE_RATIO = 0.085
-YT_TITLE_STROKE_RATIO = 0.05         # 描邊佔字級比例
+YT_TITLE_STROKE_RATIO = 0.05         # 深色描邊佔字級比例（假粗體吃掉的部分另外補，見 _draw_yt_title_line）
+YT_TITLE_BOLD_RATIO = 0.035          # 假粗體：同色描邊佔字級比例
 YT_LINE1_FILL = (255, 255, 255)
 YT_LINE2_FILL = (250, 215, 0)
 YT_TITLE_STROKE = (8, 8, 8)
@@ -956,6 +960,22 @@ def _draw_logo_tab(
     layer.paste(gradient, (0, 0), mask)
     canvas.alpha_composite(layer)
     _paste_logo(canvas, (round(width * YT_LOGO_LEFT_RATIO), round(height * YT_LOGO_TOP_RATIO)), round(width * YT_LOGO_WIDTH_RATIO))
+
+
+def _draw_yt_title_line(
+    draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str,
+    font: ImageFont.FreeTypeFont, fill: tuple[int, int, int], anchor: str = "ms",
+) -> None:
+    """YT 封面的一行標題：深色描邊 → 同色描邊加粗（2026-09-08 使用者回饋「字體再粗一點」）。
+
+    台北黑體只有 Bold 一個字重，沒有更粗的檔可換，所以用同色描邊把字身撐開。
+    深色描邊要**先加上假粗體吃掉的寬度**，不然加粗完外框只剩一兩個像素，
+    字壓在照片上（底色框現在預設關）就立不住。
+    """
+    bold = max(2, round(font.size * YT_TITLE_BOLD_RATIO))
+    outline = max(4, round(font.size * YT_TITLE_STROKE_RATIO)) + bold
+    _draw_text(draw, xy, text, font, fill=fill, stroke=YT_TITLE_STROKE, stroke_width=outline, anchor=anchor)
+    _draw_text(draw, xy, text, font, fill=fill, stroke=fill, stroke_width=bold, anchor=anchor)
 
 
 def _draw_title_band(
@@ -1086,11 +1106,7 @@ def compose_yt_cover(
         (line2, YT_LINE2_FILL, YT_LINE2_BASELINE_RATIO),
     ) if draw_titles else ():
         font = _fit_font(text, max_w, start, smallest)
-        stroke = max(4, round(font.size * YT_TITLE_STROKE_RATIO))
-        _draw_text(
-            draw, (width // 2, round(height * baseline_ratio)), text, font,
-            fill=fill, stroke=YT_TITLE_STROKE, stroke_width=stroke, anchor="ms",
-        )
+        _draw_yt_title_line(draw, (width // 2, round(height * baseline_ratio)), text, font, fill)
 
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")
@@ -1282,11 +1298,7 @@ def compose_yt_hot_cover(
         (line2, YT_LINE2_FILL, YT_LINE2_BASELINE_RATIO),
     ) if draw_titles else ():
         font = _fit_font(text, max_w, start, smallest)
-        stroke = max(4, round(font.size * YT_TITLE_STROKE_RATIO))
-        _draw_text(
-            draw, (width // 2, round(height * baseline_ratio)), text, font,
-            fill=fill, stroke=YT_TITLE_STROKE, stroke_width=stroke, anchor="ms",
-        )
+        _draw_yt_title_line(draw, (width // 2, round(height * baseline_ratio)), text, font, fill)
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")
     return buffer.getvalue()

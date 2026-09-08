@@ -48,7 +48,14 @@ AI 模式的字級行距每張略有差異，錯字率要累積更多樣本才�
 量自頻道 maxresdefault 1280×720，常數 `compose.py` `YT_*`：
 
 - 底部深藍科技底帶（0.60 起漸入，半透明，撒固定序列的淡藍方塊模擬電路紋）——**2026-09-08 起是開關且預設關**，見文末「底部壓色框改成開關」
-- 兩行標題**置中**壓在底帶上：第一行白、第二行黃，黑描邊，字級依寬度自動縮
+- 兩行標題**置中**壓在底帶上：第一行白、第二行黃，黑描邊，字級依寬度自動縮。
+  **2026-09-08 使用者回饋「字體再粗一點、行距略縮」**：加粗用同色描邊做假粗體
+  （`YT_TITLE_BOLD_RATIO`＝3.5%，台北黑體只有 Bold 一個字重，沒有更粗的檔可換），
+  深色描邊先補上假粗體吃掉的寬度（`_draw_yt_title_line`），不然加粗完外框只剩一兩個像素、
+  底色框又預設關，字就立不住；行距 0.194→0.180（第二行貼底不動、第一行往下靠）。
+  今日熱搜共用同一組常數與同一支畫法，整點直播版面不同、這次不動。
+  AI 版兩個模板同步改成「ULTRA-HEAVY BLACK-WEIGHT ... TIGHT LEADING」。
+  測試：`tests/test_yt_title_weight.py`。
 - 左上 LIVE 章（`static/brand/live-badge.png`，生圖模型重製的高清去背版）；
   勾「原音呈現」時章往下讓位，上方壓白字紅邊「原音呈現」
 - LIVE 章下方白色日期條、紅字；勾「AI即時翻譯」時日期條下方小白字黑邊
@@ -169,3 +176,8 @@ hourly 另收 `time_text`。前端 `EDITOR_FORMATS[*].ytLayout` 帶到 `ytCoverF
 - 測試：`tests/test_yt_bottom_band.py`（OFF 時底帶區＝底圖原色、ON 時逐通道落在底圖色與帶色之間、
   兩種 prompt 措辭、hourly 不受影響、前端 state 與按鈕）。`test_yt_cover` 原本那題看底帶顏色的
   要自己 `bottom_band=True` 才看得到。
+
+## 2026-09-08：Logo 模板修正
+
+`static/brand/tvbs-logo-white.png` 抹掉 V 上方誤加的小點（使用者回饋 #2），備份在
+`D:\Downloadsicg_font_20260906\`。這個檔十點封面與 YT 封面共用（`compose.TVBS_LOGO_WHITE`）。

@@ -69,12 +69,18 @@ class CompositeParityTests(unittest.TestCase):
 
 
 class AiPromptParityTests(unittest.TestCase):
-    TYPE_CLAUSE = "huge and heavy Chinese display type filling almost the full width"
+    # 2026-09-08 使用者回饋「字體再粗一點、行距略縮」，兩個模板一起改
+    TYPE_CLAUSE = "ULTRA-HEAVY BLACK-WEIGHT Chinese display type filling almost the full width"
 
     def test_both_templates_describe_the_type_size_the_same_way(self):
         for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
             with self.subTest(template=name):
                 self.assertIn(self.TYPE_CLAUSE, getattr(editor_formats, name))
+
+    def test_both_templates_ask_for_tight_leading(self):
+        for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
+            with self.subTest(template=name):
+                self.assertIn("TIGHT LEADING", getattr(editor_formats, name))
 
     def test_both_templates_use_the_same_line_colours(self):
         for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
