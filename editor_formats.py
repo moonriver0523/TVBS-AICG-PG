@@ -131,7 +131,8 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 
 === TYPOGRAPHY (this is the point of the image) ===
 - The two headlines are the loudest thing in the frame: very heavy condensed Chinese display type, STACKED ON THE LINES GIVEN ABOVE (the split is already decided — never change it), tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of each photograph darkens gently so the headline stays readable.
-- COLOUR EACH LINE DIFFERENTLY within a headline — that variation is required, not optional. Follow this order: the FIRST line solid white, the SECOND line bright golden yellow, the THIRD line (if any) vivid red with a white outline. Never render a whole headline in one flat colour.
+- THE NUMBER OF LINES AND WHERE THEY BREAK ARE FIXED. Each headline lists its lines above with a count. Render EVERY listed line on its OWN separate row, in the listed order: never merge two listed lines onto one row, never break one listed line across two rows, never drop or reorder one. A headline listed as three lines must appear as three stacked rows.
+- COLOUR EACH LINE EXACTLY AS LABELLED in that list: (white) = solid white, (yellow) = bright golden yellow, (red) = vivid red with a white outline. Two or three consecutive lines may carry the same colour — that is intended and correct, so follow the labels literally and never recolour a line to make the block look more varied.
 - The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
 - The date is a clean, light, small white sans-serif, no effects, inside the header band.
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
@@ -163,7 +164,8 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 
 === TYPOGRAPHY (this is the point of the image) ===
 - The headline is the loudest thing in the frame: very heavy condensed Chinese display type, STACKED ON THE LINES GIVEN ABOVE (the split is already decided — never change it), occupying roughly the left half of the frame, tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of the photograph darkens gently so the headline stays readable.
-- COLOUR EACH LINE DIFFERENTLY within the headline — that variation is required, not optional. Follow this order: the FIRST line solid white, the SECOND line bright golden yellow, the THIRD line (if any) vivid red with a white outline. Never render a whole headline in one flat colour.
+- THE NUMBER OF LINES AND WHERE THEY BREAK ARE FIXED. The headline lists its lines above with a count. Render EVERY listed line on its OWN separate row, in the listed order: never merge two listed lines onto one row, never break one listed line across two rows, never drop or reorder one. A headline listed as three lines must appear as three stacked rows.
+- COLOUR EACH LINE EXACTLY AS LABELLED in that list: (white) = solid white, (yellow) = bright golden yellow, (red) = vivid red with a white outline. Two or three consecutive lines may carry the same colour — that is intended and correct, so follow the labels literally and never recolour a line to make the block look more varied.
 - The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
 - The date is a clean, light, small white sans-serif, no effects, inside the header band.
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
@@ -188,8 +190,8 @@ COVER_TITLE_STYLE_PLAIN = "plain"
 COVER_TITLE_STYLE_DESIGNED = "designed"
 COVER_TITLE_STYLES = (COVER_TITLE_STYLE_PLAIN, COVER_TITLE_STYLE_DESIGNED)
 
-COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE = """- DESIGNED TITLE: treat the headline as a show title card. Set it edge to edge so it FILLS THE FULL WIDTH of its panel, in extremely heavy black display type with tight leading so the lines stack as one solid block. MIX THE TYPE SIZES within the headline: the key figure, number or keyword is set noticeably LARGER than the rest and carries the yellow or red, while the supporting characters stay smaller — a deliberate, designed rhythm rather than one uniform size. Add a crisp white stroke around the characters plus a strong drop shadow so the block lifts off the photograph.
-- That styling changes only the SIZE, WEIGHT and PLACEMENT of the characters. Render exactly the lines given above, character for character, in the same order — never add, drop, reorder or re-split a single character to make the layout work.
+COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE = """- DESIGNED TITLE: treat the headline as a show title card. Set it edge to edge so it FILLS THE FULL WIDTH of its panel, in extremely heavy black display type with tight leading so the lines stack as one solid block. MIX THE TYPE SIZES within a line: the key figure, number or keyword is set noticeably LARGER than the characters around it — a deliberate, designed rhythm rather than one uniform size. Add a crisp white stroke around the characters plus a strong drop shadow so the block lifts off the photograph.
+- That styling changes only the SIZE, WEIGHT and PLACEMENT of the characters. It does NOT change the line count, the line breaks, the order or the colours: those stay exactly as listed above, one listed line per row, each in its labelled colour. Render the lines character for character — never add, drop, reorder or re-split a single character to make the layout work.
 """
 
 

@@ -287,15 +287,19 @@ COVER_HEADER_LINE = (40, 150, 245)  # 標頭帶底一條亮藍細線
 COVER_HEADER_LINE_RATIO = 0.004
 COVER_MARGIN = 26                    # 內容離左右畫框的距離
 COVER_ONAIR_FILL = (206, 26, 32)
-# 2026-09-07 使用者回報「字明顯太小」：起始字級 0.085 → 0.11，且雙切也改成逐行各自撐滿
-# （比照 AI 版：每行依自己的寬度決定字級，短行大、長行小），不再全格同字級。
-# 2026-09-08 使用者回報「雙切標題字太小、只有白黃兩行沒有紅字」：版位放寬到 0.90、
-# 短行放寬到 1.5 倍，並補「補到 3 行」規則（COVER_TITLE_FILL_MIN_CHARS，見 _fill_cover_title_lines）。
+# 2026-09-07 使用者回報「字明顯太小」：起始字級 0.085 → 0.11、版位 0.90。
+#
+# 2026-09-08 使用者看了正式站成品後再裁決（雙切）：**兩格同一字級**。逐行各自撐滿的做法
+# 讓「左格三行 6 字都最大、右格第三行 11 字被壓小」變成兩邊字大小差一截，看起來像兩張圖
+# 拼的。改成：每格先各自算出逐行都塞得進的字級，再取兩格的全域最小值當所有行的字級
+# （所以 COVER_TITLE_LINE_SIZE_SPREAD 退場）。配套是把行拆得夠短——只要一行超過
+# COVER_TITLE_FILL_MIN_CHARS 就再拆，雙切放寬到 4 行——不然共同字級會被最長那行拖垮。
+# 滿版是單一標題、沒有另一格可比，維持逐行各自撐滿。
 COVER_TITLE_SIZE_RATIO = 0.11        # 標題起始字級（佔畫面高）
-COVER_TITLE_LINE_SIZE_SPREAD = 1.5   # 雙切：短行最多比最寬行大這麼多倍，免得一行巨大一行極小
 COVER_TITLE_MIN_SIZE_RATIO = 0.045
 COVER_TITLE_WIDTH_RATIO = 0.90       # 標題最寬佔該格寬的比例
-COVER_TITLE_FILL_MIN_CHARS = 9       # 雙切：行數不足 3 行時，長度到這個字數的行再拆一次
+COVER_TITLE_FILL_MIN_CHARS = 7       # 雙切：長度超過這個字數的行就再拆（拆到夠短，共同字級才大）
+COVER_TITLE_TOP_CLEARANCE_RATIO = 0.01   # 標題最上一行的字頂與標頭帶之間留的空隙
 COVER_TITLE_LINE_GAP = 1.06          # 行距（字級倍數）
 COVER_TITLE_BOTTOM_RATIO = 0.085     # 最後一行字底離畫面底的距離
 # 滿版（單一標題，2026-09-07 使用者裁決）：比照今日熱搜，標題橫跨整個畫面寬、置中，
@@ -324,7 +328,8 @@ COVER_DEFAULT_BADGE = "on_air"
 # 幾何比照 paste_cover_logo／節目標籤：以標頭帶高為準，佔帶高 80%，水平與垂直都置中。
 # 標頭帶只有左半（Logo＋節目標籤）與右端（日期＋ON AIR）有東西，中段本來就空。
 COVER_STAMP_BAND_RATIO = 0.80        # 精華標籤高度佔標頭帶高的比例
-COVER_MAX_TITLE_LINES = 3
+COVER_MAX_TITLE_LINES = 3            # 滿版
+COVER_MAX_TITLE_LINES_SPLIT = 4      # 雙切（2026-09-08）：拆得夠短，兩格的共同字級才撐得起來
 
 
 # 純 prompt 版的後製：把正版白色 Logo＋「十點不一樣」節目標籤貼進模型留空的標頭帶左半。
@@ -550,44 +555,53 @@ def _split_line_near_middle(text: str) -> tuple[str, str]:
     return text[:mid], text[mid:]
 
 
-def wrap_cover_title_lines(lines: list[str], max_w: int, size: int, max_lines: int = COVER_MAX_TITLE_LINES) -> list[str]:
-    """超寬防呆（2026-09-07 使用者回報：太長的段落直接衝出版面）。
+def _wrap_pairs(pairs: list[tuple[str, int]], max_w: int, size: int, max_lines: int) -> list[tuple[str, int]]:
+    """超寬防呆（2026-09-07）：在起始字級塞不進格寬的行，從中間切成兩行（最長的先切）。
 
-    在**起始字級**下塞不進格寬的行，從中間切成兩行（最長的先切），總行數不超過 max_lines；
-    行數用完就不再切，交給後面的縮字。比照 AI 版：18 字的段落 AI 自己會拆成兩行，不會硬縮。
+    行帶著**段落索引**一起走：拆出來的兩行都繼承原本那一段的索引，配色才跟得上段落
+    （2026-09-08 使用者規則：第一個空格後是黃字、第二個空格後是紅字，不是「第幾行」）。
     """
-    lines = list(lines)
+    pairs = list(pairs)
     font = _font(size)
-    while len(lines) < max_lines:
-        widths = [font.getbbox(ln)[2] for ln in lines]
-        idx = max(range(len(lines)), key=widths.__getitem__)
-        if widths[idx] <= max_w or len(lines[idx]) < 4:
+    while len(pairs) < max_lines:
+        widths = [font.getbbox(text)[2] for text, _ in pairs]
+        idx = max(range(len(pairs)), key=widths.__getitem__)
+        text, seg = pairs[idx]
+        if widths[idx] <= max_w or len(text) < 4:
             break
-        head, tail = _split_line_near_middle(lines[idx])
-        lines[idx : idx + 1] = [head, tail]
-    return lines
+        head, tail = _split_line_near_middle(text)
+        pairs[idx : idx + 1] = [(head, seg), (tail, seg)]
+    return pairs
 
 
-def _fill_cover_title_lines(lines: list[str], max_lines: int = COVER_MAX_TITLE_LINES) -> list[str]:
-    """雙切專用「補到 3 行」（2026-09-08 使用者回報：只有白黃兩行、沒有紅字）。
+def _fill_pairs(pairs: list[tuple[str, int]], max_lines: int) -> list[tuple[str, int]]:
+    """雙切專用的字數拆行（2026-09-08）：只要一行超過 COVER_TITLE_FILL_MIN_CHARS 就再拆。
 
-    `wrap_cover_title_lines` 只在**塞不進格寬**時才拆，兩行都塞得進就維持兩行——第三行的
-    紅字永遠不出現，字級也被最寬的那一行壓著。這裡在寬度之外再補一條純字數規則：行數不足
-    max_lines 時，把最長的一行（≥ COVER_TITLE_FILL_MIN_CHARS 字）從中間再拆一次，重複到
-    湊滿行數或沒有夠長的行為止。短標題（「勞保撥補 上看1300億」）不受影響。
-
-    滿版（full_width）不套：它本來就整寬置中，一行塞得下就不該硬拆。
+    為什麼要在寬度規則之外再來一條：雙切改成**兩格同一字級**之後，共同字級由最長的那一行
+    決定。一格三行 6 字、另一格有一行 11 字，兩格就一起被壓到那個 11 字的字級。把行拆到
+    都夠短（≤ 7 字），共同字級才撐得起來。滿版不套——它沒有另一格要遷就。
     """
-    lines = list(lines)
-    while len(lines) < max_lines:
-        idx = max(range(len(lines)), key=lambda i: len(lines[i]))
-        if len(lines[idx]) < COVER_TITLE_FILL_MIN_CHARS:
+    pairs = list(pairs)
+    while len(pairs) < max_lines:
+        idx = max(range(len(pairs)), key=lambda i: len(pairs[i][0]))
+        text, seg = pairs[idx]
+        if len(text) <= COVER_TITLE_FILL_MIN_CHARS:
             break
-        head, tail = _split_line_near_middle(lines[idx])
+        head, tail = _split_line_near_middle(text)
         if not head.strip() or not tail.strip():
             break
-        lines[idx : idx + 1] = [head, tail]
-    return lines
+        pairs[idx : idx + 1] = [(head, seg), (tail, seg)]
+    return pairs
+
+
+def wrap_cover_title_lines(lines: list[str], max_w: int, size: int, max_lines: int = COVER_MAX_TITLE_LINES) -> list[str]:
+    """`_wrap_pairs` 的純文字版（不帶段落索引的呼叫端與測試用）。"""
+    return [text for text, _ in _wrap_pairs([(ln, 0) for ln in lines], max_w, size, max_lines)]
+
+
+def _fill_cover_title_lines(lines: list[str], max_lines: int = COVER_MAX_TITLE_LINES_SPLIT) -> list[str]:
+    """`_fill_pairs` 的純文字版。"""
+    return [text for text, _ in _fill_pairs([(ln, 0) for ln in lines], max_lines)]
 
 
 def _cover_title_metrics(panel_w: int, full_width: bool) -> tuple[int, int, int]:
@@ -596,6 +610,11 @@ def _cover_title_metrics(panel_w: int, full_width: bool) -> tuple[int, int, int]
     width_ratio = COVER_FULL_TITLE_WIDTH_RATIO if full_width else COVER_TITLE_WIDTH_RATIO
     size = round(height * (COVER_FULL_TITLE_SIZE_RATIO if full_width else COVER_TITLE_SIZE_RATIO))
     return round(panel_w * width_ratio), size, round(height * COVER_TITLE_MIN_SIZE_RATIO)
+
+
+def cover_max_title_lines(full_width: bool) -> int:
+    """滿版 3 行、雙切 4 行（2026-09-08）。"""
+    return COVER_MAX_TITLE_LINES if full_width else COVER_MAX_TITLE_LINES_SPLIT
 
 
 def cover_title_panel_width(full_width: bool) -> int:
@@ -607,48 +626,74 @@ def cover_title_panel_width(full_width: bool) -> int:
     return (width // 2 - slant // 2) - COVER_MARGIN
 
 
-def cover_title_lines(title: str, *, full_width: bool = False) -> list[str]:
-    """標題分行的單一來源：使用者自己分的行 → 超寬防呆拆行（2026-09-07）。
-
-    合成版由 `_draw_cover_title` 走同一套；純 AI 版在組 prompt 時先叫這支拆好，
-    模板只要模型照著印。以前 AI 版讓模型自己拆，同一個標題在兩種模式下的斷句不一樣，
-    使用者切模式比對時看到的是兩張不同版面的圖。
-    """
+def cover_title_segments(title: str) -> list[tuple[str, int]]:
+    """使用者用空白分出來的段落，配上段落索引（0＝白、1＝黃、2＝紅）。"""
     from editor_formats import split_cover_title
 
-    lines = [ln for ln in split_cover_title(title) if ln.strip()][:COVER_MAX_TITLE_LINES]
-    if not lines:
+    segments = [seg for seg in split_cover_title(title) if seg.strip()]
+    return [(seg, i) for i, seg in enumerate(segments)]
+
+
+def cover_title_line_pairs(title: str, *, full_width: bool = False) -> list[tuple[str, int]]:
+    """標題分行的單一來源，回 (行, 段落索引)。合成版與 AI 版共用，斷句與配色都不分歧。"""
+    pairs = cover_title_segments(title)
+    if not pairs:
         return []
+    max_lines = cover_max_title_lines(full_width)
     max_w, size, _ = _cover_title_metrics(cover_title_panel_width(full_width), full_width)
-    lines = wrap_cover_title_lines(lines, max_w, size)
-    return lines if full_width else _fill_cover_title_lines(lines)
+    pairs = _wrap_pairs(pairs, max_w, size, max_lines)
+    return pairs if full_width else _fill_pairs(pairs, max_lines)
+
+
+def cover_title_lines(title: str, *, full_width: bool = False) -> list[str]:
+    """`cover_title_line_pairs` 的純文字版（純 AI 版組 prompt、前端顯示用）。"""
+    return [text for text, _ in cover_title_line_pairs(title, full_width=full_width)]
+
+
+def _cover_title_vertical_cap(line_count: int, start_size: int) -> int:
+    """行數 × 行距要塞在標頭帶以下、底部標題基線以上，否則整體縮字（2026-09-08，雙切 4 行）。"""
+    height = COVER_CANVAS[1]
+    baseline = height - round(height * COVER_TITLE_BOTTOM_RATIO)
+    top_limit = round(height * COVER_HEADER_RATIO) + round(height * COVER_TITLE_TOP_CLEARANCE_RATIO)
+    span = 1 + (line_count - 1) * COVER_TITLE_LINE_GAP
+    return max(1, min(start_size, int((baseline - top_limit) / span)))
+
+
+def cover_panel_title_size(pairs: list[tuple[str, int]], panel_w: int) -> int | None:
+    """雙切一格的字級：所有行都塞得進格寬、且整疊塞得進版面高度的最大共同字級。
+
+    回 None＝這格沒有標題。兩格取全域最小值才是最終字級（見 compose_ten_cover）。
+    """
+    if not pairs:
+        return None
+    max_w, size, min_size = _cover_title_metrics(panel_w, False)
+    fitted = min(_fit_font(text, max_w, size, min_size).size for text, _ in pairs)
+    return min(fitted, _cover_title_vertical_cap(len(pairs), size))
 
 
 def _draw_cover_title(
-    canvas: Image.Image, lines: list[str], panel_x0: int, panel_x1: int, align_right: bool, *, full_width: bool = False
+    canvas: Image.Image, pairs: list[tuple[str, int]], panel_x0: int, panel_x1: int, align_right: bool,
+    *, full_width: bool = False, size_override: int | None = None,
 ) -> None:
-    """一格的標題：2–3 行由下往上堆，逐行各自撐滿格寬（短行大、長行小），逐行白／黃／紅。
+    """一格的標題：由下往上堆，配色**依段落**（第 1 段白、第 2 段黃、第 3 段紅白邊）。
 
-    full_width=True（滿版單一標題）：橫跨整個畫面、置中、字級起點再放大，比照今日熱搜。
-    超寬的行先由 wrap_cover_title_lines 拆行；拆完仍塞不進最小字級就整支失敗，不出超線的圖。
+    雙切：字級由 size_override 給（兩格同一個值，2026-09-08 使用者裁決「兩邊字不一樣大」不行）。
+    full_width=True（滿版單一標題）：橫跨整個畫面、置中、逐行各自撐滿，比照今日熱搜。
+    拆完縮到最小字級仍塞不進就整支失敗，不出超線的圖。
     """
     width, height = COVER_CANVAS
-    lines = [ln for ln in lines if ln.strip()][:COVER_MAX_TITLE_LINES]
-    if not lines:
+    pairs = [(text, seg) for text, seg in pairs if text.strip()][: cover_max_title_lines(full_width)]
+    if not pairs:
         return
     panel_w = panel_x1 - panel_x0
     max_w, size, min_size = _cover_title_metrics(panel_w, full_width)
-    lines = wrap_cover_title_lines(lines, max_w, size)
-    if not full_width:
-        lines = _fill_cover_title_lines(lines)
-    fonts = [_fit_font(ln, max_w, size, min_size) for ln in lines]
-    if not full_width:
-        # 雙切：短行不能比最寬行大太多（AI 版三行字級相近），滿版維持今日熱搜式逐行撐滿
-        cap = min(size, round(min(f.size for f in fonts) * COVER_TITLE_LINE_SIZE_SPREAD))
-        fonts = [_font(cap) if f.size > cap else f for f in fonts]
-    for ln, font in zip(lines, fonts):
-        if font.getbbox(ln)[2] > max_w:
-            raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{ln}」（請用半形空格分段或縮短）")
+    if size_override is not None:
+        fonts = [_font(size_override)] * len(pairs)
+    else:
+        fonts = [_fit_font(text, max_w, size, min_size) for text, _ in pairs]
+    for (text, _), font in zip(pairs, fonts):
+        if font.getbbox(text)[2] > max_w:
+            raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{text}」（請用半形空格分段或縮短）")
     baseline = height - round(height * COVER_TITLE_BOTTOM_RATIO)
     if full_width:
         x, anchor = panel_x0 + panel_w // 2, "ms"
@@ -657,22 +702,21 @@ def _draw_cover_title(
     else:
         x, anchor = panel_x0 + round(panel_w * (1 - COVER_TITLE_WIDTH_RATIO) / 2), "ls"
     draw = ImageDraw.Draw(canvas)
-    # 由最後一行往上畫，配色照行序（第 1 行白…）
-    for idx in range(len(lines) - 1, -1, -1):
+    # 由最後一行往上畫；顏色看**段落索引**，不是行序
+    for idx in range(len(pairs) - 1, -1, -1):
+        text, seg = pairs[idx]
         font = fonts[idx]
         stroke = max(3, round(font.size * COVER_TITLE_STROKE_RATIO))
-        colour = COVER_TITLE_LINE_COLOURS[min(idx, len(COVER_TITLE_LINE_COLOURS) - 1)]
+        colour = COVER_TITLE_LINE_COLOURS[min(seg, len(COVER_TITLE_LINE_COLOURS) - 1)]
         is_red = colour == COVER_TITLE_LINE_COLOURS[2]
         # 陰影一層再正字，字壓在照片上才立得住
-        _draw_text(draw, (x + 4, baseline + 4), lines[idx], font, fill=(0, 0, 0), stroke=(0, 0, 0), stroke_width=stroke, anchor=anchor)
+        _draw_text(draw, (x + 4, baseline + 4), text, font, fill=(0, 0, 0), stroke=(0, 0, 0), stroke_width=stroke, anchor=anchor)
         _draw_text(
-            draw, (x, baseline), lines[idx], font, fill=colour,
+            draw, (x, baseline), text, font, fill=colour,
             stroke=COVER_TITLE_STROKE_LIGHT if is_red else COVER_TITLE_STROKE_DARK,
             stroke_width=stroke, anchor=anchor,
         )
-        # 往上一行：行距要用**這一行**的字級算——這行的字從 baseline 往上長 size 高，
-        # 上一行的 baseline 必須高過這行的字頂。（2026-09-07 前用上一行字級，逐行不同字級時
-        # 大字行會壓到上面的小字行。）
+        # 往上一行：行距用**這一行**的字級算（滿版逐行不同字級時，大字行才不會壓到上面的小字行）
         baseline -= round(font.size * COVER_TITLE_LINE_GAP)
 
 
@@ -698,8 +742,6 @@ def compose_ten_cover(
     """
     if badge not in COVER_BADGES:
         raise ComposeError(f"未知的標籤：{badge!r}（可用：{list(COVER_BADGES)}）")
-    from editor_formats import split_cover_title
-
     width, height = COVER_CANVAS
     mid = width // 2
     if right_image is None:
@@ -727,11 +769,24 @@ def compose_ten_cover(
 
     _draw_cover_bottom_line(canvas)
     if right_image is None and not title_right.strip():
-        # 滿版單一標題：橫跨整寬、置中（2026-09-07）
-        _draw_cover_title(canvas, split_cover_title(title_left), 0, width, align_right=False, full_width=True)
+        # 滿版單一標題：橫跨整寬、置中、逐行各自撐滿（2026-09-07）
+        _draw_cover_title(canvas, cover_title_line_pairs(title_left, full_width=True), 0, width,
+                          align_right=False, full_width=True)
     else:
-        _draw_cover_title(canvas, split_cover_title(title_left), left_box[0] + COVER_MARGIN, left_box[2], align_right=False)
-        _draw_cover_title(canvas, split_cover_title(title_right), right_box[0], right_box[2] - COVER_MARGIN, align_right=True)
+        # 雙切：兩格同一字級（2026-09-08 使用者裁決「兩邊字不一樣大」不行）。
+        # 先各自算出這一格塞得下的最大字級，再取兩格的最小值當兩格所有行的字級。
+        left_pairs = cover_title_line_pairs(title_left)
+        right_pairs = cover_title_line_pairs(title_right)
+        left_x0, left_x1 = left_box[0] + COVER_MARGIN, left_box[2]
+        right_x0, right_x1 = right_box[0], right_box[2] - COVER_MARGIN
+        candidates = [
+            size for size in (cover_panel_title_size(left_pairs, left_x1 - left_x0),
+                              cover_panel_title_size(right_pairs, right_x1 - right_x0))
+            if size is not None
+        ]
+        shared = min(candidates) if candidates else None
+        _draw_cover_title(canvas, left_pairs, left_x0, left_x1, align_right=False, size_override=shared)
+        _draw_cover_title(canvas, right_pairs, right_x0, right_x1, align_right=True, size_override=shared)
     if badge == "highlight":
         _draw_cover_highlight_stamp(canvas)
 

@@ -346,11 +346,12 @@ class PromptSyncTests(unittest.TestCase):
         self.assertIn("THIN deep-navy header band", prompt)
         self.assertIn("glowing straight blue light line", prompt)
 
-    def test_prompt_colour_order_matches_composite_table(self):
+    def test_prompt_colour_names_match_the_composite_table(self):
+        """2026-09-08：顏色改成逐行標記（white／yellow／red），模板只講怎麼讀標記。"""
         prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE
-        self.assertIn("FIRST line solid white", prompt)
-        self.assertIn("SECOND line bright golden yellow", prompt)
-        self.assertIn("THIRD line (if any) vivid red", prompt)
+        self.assertIn("(white) = solid white", prompt)
+        self.assertIn("(yellow) = bright golden yellow", prompt)
+        self.assertIn("(red) = vivid red with a white outline", prompt)
         self.assertEqual(compose.COVER_TITLE_LINE_COLOURS[0], (255, 255, 255))
 
 

@@ -287,12 +287,18 @@ class CoverPromptTests(unittest.TestCase):
         self.assertNotIn("Programme name, as a SMALL blue rounded tag", prompt)
         self.assertNotIn("FLAT, SOLID WHITE", prompt)
 
-    def test_headlines_must_vary_colour_per_line(self):
-        # 範例圖的標題是分行、每行不同顏色（白／紅／金），不是整段一個顏色
+    def test_headlines_colour_and_line_count_follow_the_labels(self):
+        """2026-09-08：配色改成依**段落**標在每一行上，不再是「第 1 行白、第 2 行黃」。
+
+        根因是 AI 整張版把 3 行併成 2 行、只上白黃兩色（使用者回報）。行數與顏色現在
+        都逐行標在 {title_left_lines} 清單裡，模板只要求模型照標記印。
+        """
         prompt = self.render()
         self.assertIn("STACKED ON THE LINES GIVEN ABOVE", prompt)
-        self.assertIn("COLOUR EACH LINE DIFFERENTLY", prompt)
-        self.assertIn("Never render a whole headline in one flat colour", prompt)
+        self.assertIn("THE NUMBER OF LINES AND WHERE THEY BREAK ARE FIXED", prompt)
+        self.assertIn("never merge two listed lines onto one row", prompt)
+        self.assertIn("COLOUR EACH LINE EXACTLY AS LABELLED", prompt)
+        self.assertIn("may carry the same colour", prompt)
 
     def test_prompt_forbids_extra_text(self):
         self.assertIn("Do not translate them", self.render())

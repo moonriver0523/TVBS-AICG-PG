@@ -3456,9 +3456,21 @@ def _cover_ai(
 
     badge_text = compose.COVER_BADGES[req.badge][0]
 
+    # 2026-09-08 使用者回報 AI 整張版把 3 行併成 2 行、只上白黃兩色：行數與顏色改成
+    # 逐行標在清單上（Line 2 (yellow): …），並在前面先講死總行數。顏色照**段落**走
+    # （compose.cover_title_line_pairs），所以連續兩行同色是正常的，模板也明講了。
+    _LINE_COLOUR_NAMES = ("white", "yellow", "red, white outline")
+
     def _lines_block(title: str, *, full_width: bool) -> str:
-        lines = compose.cover_title_lines(title.strip(), full_width=full_width)
-        return "\n".join(f"  Line {i}: {line}" for i, line in enumerate(lines, start=1))
+        pairs = compose.cover_title_line_pairs(title.strip(), full_width=full_width)
+        if not pairs:
+            return ""
+        head = f"  (exactly {len(pairs)} lines — render each on its own row, in this order)"
+        body = [
+            f"  Line {i} ({_LINE_COLOUR_NAMES[min(seg, len(_LINE_COLOUR_NAMES) - 1)]}): {text}"
+            for i, (text, seg) in enumerate(pairs, start=1)
+        ]
+        return "\n".join([head, *body])
 
     # 設計標題（2026-09-08）：designed 才在 TYPOGRAPHY 段尾追加一段；plain 留空字串。
     style_clause = (

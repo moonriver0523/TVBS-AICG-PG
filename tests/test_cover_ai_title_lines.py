@@ -55,7 +55,8 @@ class SharedSplitTests(unittest.TestCase):
         long_title = "政府明年勞保撥補上看一千三百億元創歷年新高"
         lines = compose.cover_title_lines(long_title)
         self.assertGreater(len(lines), 1)
-        self.assertLessEqual(len(lines), compose.COVER_MAX_TITLE_LINES)
+        # 2026-09-08：雙切放寬到 4 行（拆得夠短，兩格的共同字級才撐得起來）
+        self.assertLessEqual(len(lines), compose.COVER_MAX_TITLE_LINES_SPLIT)
         # 只切不改字
         self.assertEqual("".join(lines), long_title)
 
@@ -88,9 +89,11 @@ class AiPromptTests(unittest.TestCase):
             "title_right": "台南易淹水 成氣候衝擊區",
             "layout": "split", "mode": "ai",
         })
+        # 2026-09-08：行數與顏色逐行標在清單上（顏色照段落，不是照行序）
         for expected in (
-            "Line 1: 尼泊爾災區", "Line 2: 無人機空拍", "Line 3: 滅村慘況",
-            "Line 1: 台南易淹水", "Line 2: 成氣候衝擊區",
+            "(exactly 3 lines", "(exactly 2 lines",
+            "Line 1 (white): 尼泊爾災區", "Line 2 (yellow): 無人機空拍", "Line 3 (red, white outline): 滅村慘況",
+            "Line 1 (white): 台南易淹水", "Line 2 (yellow): 成氣候衝擊區",
         ):
             self.assertIn(expected, prompt)
         # 未分行的整條標題不再出現在 prompt 裡
@@ -98,8 +101,8 @@ class AiPromptTests(unittest.TestCase):
 
     def test_full_ai_prompt_carries_the_pre_split_lines(self):
         prompt = self._prompt({"title_left": "全球3100條 躍動冰川", "layout": "full", "mode": "ai"})
-        self.assertIn("Line 1: 全球3100條", prompt)
-        self.assertIn("Line 2: 躍動冰川", prompt)
+        self.assertIn("Line 1 (white): 全球3100條", prompt)
+        self.assertIn("Line 2 (yellow): 躍動冰川", prompt)
 
 
 if __name__ == "__main__":

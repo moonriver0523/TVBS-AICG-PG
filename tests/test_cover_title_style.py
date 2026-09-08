@@ -44,7 +44,12 @@ class ClauseTests(unittest.TestCase):
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
         self.assertIn("FILLS THE FULL WIDTH", clause)
         self.assertIn("MIX THE TYPE SIZES", clause)
-        self.assertIn("yellow or red", clause)
+
+    def test_designed_clause_does_not_override_the_line_and_colour_rules(self):
+        """設計標題只能改字級／字重／位置——行數、斷行、顏色仍由清單標記說了算。"""
+        clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
+        self.assertIn("does NOT change the line count", clause)
+        self.assertIn("each in its labelled colour", clause)
 
     def test_designed_clause_repeats_the_verbatim_rule(self):
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
@@ -102,7 +107,7 @@ class PromptTests(unittest.TestCase):
     def test_designed_keeps_the_pre_split_lines(self):
         """設計標題不得取代逐行給定的機制——兩者要同時在 prompt 裡。"""
         prompt = self._prompt(self._split_body(title_style="designed"))
-        self.assertIn("Line 1: 尼泊爾災區", prompt)
+        self.assertIn("Line 1 (white): 尼泊爾災區", prompt)
         self.assertIn("do NOT re-split, merge or reorder", prompt)
 
 

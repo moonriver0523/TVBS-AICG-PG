@@ -37,13 +37,13 @@ class WrapTests(unittest.TestCase):
         lines = compose.wrap_cover_title_lines(split_cover_title(LONG_LEFT), PANEL_MAX_W, START)
         self.assertEqual(lines, ["韓法攜手5年", "各自投資影視產業184億元", "提升軟實力"])
 
-    def test_wrap_never_exceeds_three_lines_and_prefers_widest(self):
+    def test_wrap_never_exceeds_the_line_cap_and_prefers_widest(self):
         lines = compose.wrap_cover_title_lines(split_cover_title(LONG_RIGHT), PANEL_MAX_W, START)
         self.assertEqual(len(lines), 3)
         self.assertEqual(lines[0], "大型資料中心覓址難")
         self.assertEqual("".join(lines[1:]), "科技公司看上阿根廷巴塔哥尼亞")
         three = compose.wrap_cover_title_lines(["很長很長很長很長很長很長的一段", "第二段", "第三段"], PANEL_MAX_W, START)
-        self.assertEqual(len(three), 3, "已經 3 段就不再拆")
+        self.assertEqual(len(three), 3, "已經 3 段（預設上限）就不再拆")
 
     def test_short_lines_untouched(self):
         self.assertEqual(compose.wrap_cover_title_lines(["勞保撥補", "上看1300億"], PANEL_MAX_W, START), ["勞保撥補", "上看1300億"])
@@ -57,24 +57,38 @@ class FitTests(unittest.TestCase):
     def test_start_size_is_larger_than_before(self):
         self.assertGreaterEqual(compose.COVER_TITLE_SIZE_RATIO, 0.11)
 
-    def _fonts(self, lines):
-        lines = compose.wrap_cover_title_lines(lines, PANEL_MAX_W, START)
-        fonts = [compose._fit_font(ln, PANEL_MAX_W, START, MIN) for ln in lines]
-        cap = min(START, round(min(f.size for f in fonts) * compose.COVER_TITLE_LINE_SIZE_SPREAD))
-        return lines, [compose._font(cap) if f.size > cap else f for f in fonts]
+    def _fonts(self, title):
+        """2026-09-08：雙切改成整格同一字級，取這一格塞得下的最大共同值。"""
+        pairs = compose.cover_title_line_pairs(title)
+        size = compose.cover_panel_title_size(pairs, compose.cover_title_panel_width(False))
+        return [text for text, _ in pairs], [compose._font(size)] * len(pairs)
 
-    def test_every_line_fits_panel_and_spread_is_bounded(self):
+    def test_every_line_fits_panel_and_all_lines_share_one_size(self):
         for title in (LONG_LEFT, LONG_RIGHT, "勞保撥補 上看1300億"):
-            lines, fonts = self._fonts(split_cover_title(title))
-            for ln, f in zip(lines, fonts):
-                self.assertLessEqual(f.getbbox(ln)[2], PANEL_MAX_W, ln)
-            sizes = [f.size for f in fonts]
-            self.assertLessEqual(max(sizes) / min(sizes), compose.COVER_TITLE_LINE_SIZE_SPREAD + 0.05)
+            with self.subTest(title=title):
+                lines, fonts = self._fonts(title)
+                for ln, f in zip(lines, fonts):
+                    self.assertLessEqual(f.getbbox(ln)[2], PANEL_MAX_W, ln)
+                self.assertEqual(len({f.size for f in fonts}), 1, "同一格的所有行必須同字級")
+
+    def test_the_two_panels_share_one_size(self):
+        """使用者 2026-09-08 裁決：兩邊字不一樣大不行。"""
+        panel_w = compose.cover_title_panel_width(False)
+        left = compose.cover_panel_title_size(compose.cover_title_line_pairs(LONG_LEFT), panel_w)
+        right = compose.cover_panel_title_size(compose.cover_title_line_pairs(LONG_RIGHT), panel_w)
+        png = compose.compose_ten_cover(
+            _png_bytes(size=(1024, 1024)), _png_bytes(size=(1024, 1024)),
+            title_left=LONG_LEFT, title_right=LONG_RIGHT, date_text="2026/09/08",
+        )
+        self.assertTrue(png)                      # 兩格一起縮不會爆
+        self.assertGreater(min(left, right), MIN)  # 縮完仍在可讀範圍
 
     def test_rendered_title_has_three_colours_and_stays_inside_panel(self):
+        # 2026-09-08 起顏色依**段落**：要三色就要三段（LONG_LEFT／LONG_RIGHT 只有兩段）
         png = compose.compose_ten_cover(
             _png_bytes(size=(1024, 1024), colour=(40, 60, 90)), _png_bytes(size=(1024, 1024), colour=(60, 70, 80)),
-            title_left=LONG_LEFT, title_right=LONG_RIGHT, date_text="2026/09/07",
+            title_left="韓法攜手5年 各自投資影視產業184億元 提升軟實力",
+            title_right="大型資料中心覓址難 科技公司看上 阿根廷巴塔哥尼亞", date_text="2026/09/07",
         )
         img = Image.open(io.BytesIO(png)).convert("RGB")
         w, h = img.size
@@ -105,7 +119,7 @@ class FitTests(unittest.TestCase):
 
     def test_lines_do_not_overlap(self):
         # 行距用當前行字級：上一行 baseline 必須高於這一行的字頂
-        lines, fonts = self._fonts(split_cover_title(LONG_LEFT))
+        lines, fonts = self._fonts(LONG_LEFT)
         baseline = H
         prev_top = None
         for idx in range(len(lines) - 1, -1, -1):
@@ -119,9 +133,10 @@ class FitTests(unittest.TestCase):
 class TooLongTests(unittest.TestCase):
     def test_hopeless_title_returns_400_not_overflowing_image(self):
         body = {
-            # 2026-09-08 版位由 0.84 放寬到 0.90 後，原本那則 32 字的標題在最小字級下塞得進了
-            # （拆成 16／8／8，16 字 × 49px＝784 ≤ 797），改用更長的一則才仍是「真的塞不下」。
-            "title_left": "這是一段完全沒有空格也沒有數量詞可以拆的超級無敵長標題文字測試用途請勿縮短", "title_right": "右格 標題",
+            # 2026-09-08 兩次放寬（版位 0.90、雙切 4 行、字數拆行）後，塞不下的門檻高了很多：
+            # 40 字的欄位上限下，單段標題一定拆得到 4 行 × 10 字，一律塞得進。要踩到這條線
+            # 得靠「一個超長段落＋一個極短段落」——短段落佔掉一行，長段落只剩 3 行可拆。
+            "title_left": "這是一段完全沒有空格也沒有數量詞可以拆的超級無敵長標題文字測試用途請勿縮短 短", "title_right": "右格 標題",
             "mode": "composite", "layout": "split",
             "asis_left": _data_url(_png_bytes(size=(1024, 1024))), "asis_right": _data_url(_png_bytes(size=(1024, 1024))),
         }
