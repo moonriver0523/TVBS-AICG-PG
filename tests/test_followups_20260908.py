@@ -39,6 +39,19 @@ def _lookup_only_merz(subjects, english=None):
     return found, [n for n in subjects if n not in found]
 
 
+
+def _element_inner_html(html: str, element_id: str) -> str:
+    """取出某個 <div id="..."> 的內容——數 div 開關標籤，不用正規式硬猜。"""
+    start = html.index(f'<div id="{element_id}"')
+    cursor = html.index(">", start) + 1
+    depth, inner_start = 1, cursor
+    for match in re.finditer(r"</div>|<div[ >]", html[cursor:]):
+        depth += 1 if match.group(0) != "</div>" else -1
+        if depth == 0:
+            return html[inner_start:cursor + match.start()]
+    raise AssertionError(f"{element_id} 沒有收尾的 </div>")
+
+
 class ExcludedPeopleTests(unittest.TestCase):
     def test_keep_subjects_returns_dropped_names(self):
         with patch.object(main, "lookup_portrait_photos", side_effect=_lookup_only_merz):
@@ -108,8 +121,18 @@ class MapMissingTests(unittest.TestCase):
 class FrontendTests(unittest.TestCase):
     js = (ROOT / "app.js").read_text(encoding="utf-8")
 
-    def test_instruction_field_hidden_for_cover_formats(self):
-        self.assertIn("_hide(document.getElementById('aiInstruction'), format.inputs === 'cover' || format.inputs === 'yt_cover');", self.js)
+    def test_instruction_field_shown_for_cover_formats(self):
+        """2026-09-08 下午裁決推翻同日早上的隱藏：封面／YT 版型的指令欄要重新顯示。
+
+        兩件事都要驗：不再有隱藏那一行，而且指令欄那一組已經搬出 newsInputs——
+        封面版型會把整個 newsInputs 藏掉，留在裡面的話「顯示」了也還是看不到。
+        """
+        self.assertNotIn("_hide(document.getElementById('aiInstruction')", self.js)
+        self.assertIn("_hide(document.getElementById('instructionRow'), false);", self.js)
+        html = (ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertNotIn('id="instructionRow"', _element_inner_html(html, 'newsInputs'),
+                         "指令欄要住在 newsInputs 外面，否則封面版型藏 newsInputs 時它也跟著消失")
+        self.assertIn("instructionRow.previousElementSibling !== anchor", self.js)
 
     def test_map_missing_toast_wired(self):
         self.assertRegex(self.js, r"data\.map_missing[\s\S]{0,400}showToast")

@@ -476,7 +476,8 @@ class LockScopeTests(FrontendParityTests):
     """
 
     def test_broadcast_locks_only_the_chart_type(self):
-        for key in ("broadcast_left", "broadcast_right"):
+        # 2026-09-08 WP1：左切／右切合併成單一個 broadcast
+        for key in ("broadcast",):
             with self.subTest(key=key):
                 entry = self.js_entries()[key]
                 locks = re.search(r"locks:\s*\{([^}]*)\}", entry).group(1)
@@ -486,7 +487,7 @@ class LockScopeTests(FrontendParityTests):
 
     def test_broadcast_still_presets_the_recommended_values(self):
         # 解鎖不等於不幫忙：切過去仍要幫使用者調好，只是調完可以改
-        for key in ("broadcast_left", "broadcast_right"):
+        for key in ("broadcast",):
             with self.subTest(key=key):
                 presets = re.search(r"presets:\s*\{([^}]*)\}", self.js_entries()[key])
                 self.assertIsNotNone(presets, "播出鏡面應該還有預設值")

@@ -309,5 +309,77 @@ class InstructionFieldTests(unittest.TestCase):
         self.assertIn("夜景、廣角", seen["news_text"])
 
 
+class FrontendTests(unittest.TestCase):
+    """前端沒有 JS 測試環境，照本專案既有做法讀原始碼驗規則寫在哪。"""
+
+    js = (ROOT / "app.js").read_text(encoding="utf-8")
+    html = (ROOT / "index.html").read_text(encoding="utf-8")
+
+    def test_dropdown_no_longer_lists_the_old_keys(self):
+        block = self.js[self.js.index("const EDITOR_FORMATS = {"):self.js.index("const EDITOR_FORMAT_DEFAULT")]
+        for dead in ("broadcast_left:", "broadcast_right:", "ten_cover_full:"):
+            with self.subTest(dead=dead):
+                self.assertNotIn(dead, block)
+        self.assertIn("broadcast: {", block)
+        self.assertIn("coverLayout: 'auto'", block)
+
+    def test_layout_is_decided_by_the_second_title(self):
+        body = self.js[self.js.index("function coverLayoutNow()"):]
+        body = body[:body.index("\n}")]
+        self.assertIn("coverTitleRight", body)
+        self.assertIn("right ? 'split' : 'full'", body)
+
+    def test_no_stale_coverlayout_comparisons_remain(self):
+        """五處 editorFormat().coverLayout === 'full' 全部要換成 coverLayoutNow()。"""
+        self.assertNotIn("editorFormat().coverLayout === 'full'", self.js)
+
+    def test_layout_indicator_is_wired_to_the_second_title(self):
+        self.assertIn('oninput="updateCoverLayoutIndicator()"', self.html)
+        self.assertIn('id="coverLayoutIndicator"', self.html)
+        for label in (">滿版<", ">雙切<"):
+            with self.subTest(label=label):
+                self.assertIn(label, self.html)
+        # 指示器是判定結果不是輸入：兩顆都只把游標移到第二標題
+        self.assertEqual(self.html.count('onclick="focusCoverLayoutField()"'), 2)
+        focus = self.js[self.js.index("function focusCoverLayoutField()"):]
+        self.assertIn("coverTitleRight')?.focus()", focus[:focus.index("\n}")])
+
+    def test_second_title_is_always_visible(self):
+        """第二標題就是判定那一欄，被 cover-split-only 藏起來就永遠填不進去。"""
+        block = self.html[self.html.index('id="coverTitleRight"') - 400:self.html.index('id="coverTitleRight"')]
+        self.assertNotIn("cover-split-only", block)
+        # 右邊的附圖位仍然只有雙切才顯示
+        after = self.html[self.html.index('id="coverTitleRight"'):]
+        self.assertIn("cover-split-only", after[:after.index("coverAsisRightInput")])
+
+    def test_visual_description_fields_are_gone(self):
+        for dead in ("coverVisualLeft", "coverVisualRight"):
+            with self.subTest(dead=dead):
+                self.assertNotIn(dead, self.html)
+                self.assertNotIn(dead, self.js)
+
+    def test_instruction_is_sent_to_both_cover_endpoints(self):
+        self.assertEqual(self.js.count("instruction: coverInstructionForApi()"), 3)
+        helper = self.js[self.js.index("function coverInstructionForApi()"):]
+        self.assertIn("COVER_INSTRUCTION_MAX", helper[:helper.index("\n}")])
+        self.assertIn("const COVER_INSTRUCTION_MAX = 500;", self.js)
+
+    def test_hole_side_buttons_exist_and_drive_the_request(self):
+        self.assertIn('id="holeSideRow"', self.html)
+        self.assertIn('data-hole-side="left"', self.html)
+        self.assertIn('data-hole-side="right"', self.html)
+        self.assertIn(">左側挖空<", self.html)
+        self.assertIn(">右側挖空<", self.html)
+        self.assertRegex(self.js, r"(?m)^\s*holeSide: 'left',")
+        self.assertIn("hole_side: state.holeSide,", self.js)
+
+    def test_generate_button_says_the_merged_label(self):
+        self.assertIn("buttonText.innerText = `生成${editorFormat().label}`;", self.js)
+
+    def test_digest_no_longer_remaps_the_target(self):
+        self.assertNotIn("target = 'ten_cover_full'", self.js)
+        self.assertIn("updateCoverLayoutIndicator();", self.js)
+
+
 if __name__ == "__main__":
     unittest.main()

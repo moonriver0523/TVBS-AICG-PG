@@ -308,8 +308,11 @@ let state = {
     // 2026-09-07 起預設 OFF（使用者裁決）；指令欄若提到蓋章，後端以指令欄為準（見 main.py 的優先序規則）。
     stamp: false,
     // 播出鏡面白色壓框（2026-09-07 使用者裁決：預設 OFF）。OFF＝不蓋白框，底圖完整交給
-    // 後製自己放影片；ON＝置框後蓋白框給後製對位。只在播出鏡面兩個版型顯示這顆。
+    // 後製自己放影片；ON＝置框後蓋白框給後製對位。只在播出鏡面版型顯示這顆。
     hole: false,
+    // 播出鏡面挖空側（2026-09-08 WP1：左切／右切合併成一個版型後，方向改成版型內的
+    // 一組按鈕）。預設左，切版型時重置——換版型還記著上一次的方向只會讓人選錯邊。
+    holeSide: 'left',
     // 色調（2026-09-04）。預設暗色調＝維持既有畫面風格，改成亮色調是使用者的主動選擇。
     // 兩檔都會送給後端並注入 prompt（不是「預設不注入」），因為只寫亮不寫暗時，
     // 樣板裡本來就偏暗的措辭會跟亮色調各聽一半，出半亮半暗的圖。
@@ -402,42 +405,26 @@ const EDITOR_FORMATS = {
         locks: {},
         hole: null,
     },
-    broadcast_left: {
-        label: '播出鏡面（左側挖空）',
-        hint: '畫面左半、垂直置中留一塊 16:9 空位給後製合成影片，內容自動靠右編排。',
+    // 2026-09-08 WP1：左切／右切合併成一個版型，方向改由下方那組按鈕（state.holeSide）
+    // 決定，送 API 時當欄位帶過去。表裡的 hole 是預設方向，不是唯一方向。
+    broadcast: {
+        label: '播出鏡面',
+        hint: '畫面其中半邊、垂直置中留一塊 16:9 空位給後製合成影片，內容自動編排到另一半。方向用下方按鈕選。',
         inputs: 'news',
         // 2026-09-07：preset 不再碰蓋章——原本 stamp:true 會把使用者關掉的蓋章切回 ON
         presets: { safeFrame: true, density: 'simplified' },
         locks: { chartType: true },
         hole: 'left',
     },
-    broadcast_right: {
-        label: '播出鏡面（右側挖空）',
-        hint: '畫面右半、垂直置中留一塊 16:9 空位給後製合成影片，內容自動靠左編排。',
-        inputs: 'news',
-        presets: { safeFrame: true, density: 'simplified' },
-        locks: { chartType: true },
-        hole: 'right',
-    },
     // 十點不一樣封面：「標題由 AI 生成」勾選框切換 ai／composite（比照 YT 直播封面）。
     // 開＝整張由生圖模型畫（含節目名、標題、日期、標籤），只有 Logo 後製貼上；
     // 關＝AI 只生左右兩張無文字底圖，所有文字由程式壓字，零錯字。
+    // 2026-09-08 WP1：滿版／雙切合併成一個版型，版面由「第二標題有沒有填」自動判定
+    // （coverLayout: 'auto'，實際值一律問 coverLayoutNow()）。
     ten_cover: {
-        label: '十點不一樣（雙切）',
-        hint: '左右兩格各一個標題、各一個附圖位：有附圖的格直接上版，沒附圖的格 AI 生底圖。預設整張由生圖模型設計；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。Logo 與節目標籤一律由程式貼正版檔。',
-        coverLayout: 'split',
-        inputs: 'cover',
-        coverMode: 'ai',
-        // 封面沒有消化這道程序：/api/editor/cover 不收 density／stamp／safe_frame／tone，
-        // 留著只會是四顆按了沒反應的按鈕，所以收起來而不是鎖起來
-        locks: {},
-        hides: { digestControls: true, safeFrame: true, stamp: true },
-        hole: null,
-    },
-    ten_cover_full: {
-        label: '十點不一樣（滿版）',
-        hint: '一張圖鋪滿、一個標題：有附圖就直接上版，沒附圖就 AI 生一張。預設整張由生圖模型設計；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。Logo 與節目標籤一律由程式貼正版檔。',
-        coverLayout: 'full',
+        label: '十點不一樣',
+        hint: '只填第一標題＝滿版一張圖；再填第二標題＝左右雙切、兩格各一個標題與附圖位。有附圖的格直接上版，沒附圖的格 AI 生底圖。預設整張由生圖模型設計；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。Logo 與節目標籤一律由程式貼正版檔。',
+        coverLayout: 'auto',
         inputs: 'cover',
         coverMode: 'ai',
         // 封面沒有消化這道程序：/api/editor/cover 不收 density／stamp／safe_frame／tone，
@@ -486,17 +473,26 @@ function editorFormat() {
     return EDITOR_FORMATS[state.editorFormat] || EDITOR_FORMATS[EDITOR_FORMAT_DEFAULT];
 }
 
+/* 十點不一樣這一刻是滿版還是雙切（2026-09-08 WP1）。
+   判定只有一條規則：第二標題有值＝雙切、空＝滿版。版型表寫死的 coverLayout
+   只剩 'auto' 這個標記，實際值一律問這支——散在各處各自判斷，遲早會有一處忘了改。 */
+function coverLayoutNow() {
+    if (editorFormat().coverLayout !== 'auto') return editorFormat().coverLayout || '';
+    const right = (document.getElementById('coverTitleRight')?.value || '').trim();
+    return right ? 'split' : 'full';
+}
+
 /* ============================================================
    下載檔名（2026-09-08 使用者回饋 A）：全站所有版型共用一支。
    留空 → YYYYMMDD_<版型短名>_<標題前 8 字>；有填 → 使用者字串。
    檔名非法字元（Windows 不接受的那幾個）與換行一律去掉，收尾去空白。
    ============================================================ */
+// 2026-09-08 WP1：兩個版型合併後，短名不再是一個 key 一個字串——十點看判定出來的
+// 版面、播出鏡面看選的挖空側，所以那兩筆是巢狀的。
 const DOWNLOAD_FORMAT_NAMES = {
     default: '編輯CG',
-    broadcast_left: '播出鏡面左',
-    broadcast_right: '播出鏡面右',
-    ten_cover: '十點雙切',
-    ten_cover_full: '十點滿版',
+    broadcast: { left: '播出鏡面左', right: '播出鏡面右' },
+    ten_cover: { full: '十點滿版', split: '十點雙切' },
     yt_live_cover: 'YT直播',
     yt_hourly_cover: 'YT整點',
     yt_hot_cover: 'YT熱搜',
@@ -508,14 +504,17 @@ function downloadFormatName(kind) {
     const key = kind || state.editorFormat || EDITOR_FORMAT_DEFAULT;
     // 記者角色沒有版型下拉，一律 default——短名跟編輯的 default 要分得開
     if (key === EDITOR_FORMAT_DEFAULT && state.currentRole !== '編輯') return 'CG';
-    return DOWNLOAD_FORMAT_NAMES[key] || DOWNLOAD_FORMAT_NAMES[EDITOR_FORMAT_DEFAULT];
+    const name = DOWNLOAD_FORMAT_NAMES[key] || DOWNLOAD_FORMAT_NAMES[EDITOR_FORMAT_DEFAULT];
+    if (typeof name === 'string') return name;
+    // 巢狀：十點用判定後的版面、播出鏡面用挖空側
+    return name[key === 'ten_cover' ? coverLayoutNow() : state.holeSide] || name.left || name.full;
 }
 
 /* 標題來源：封面用左標題／YT 用標題欄／一般 CG 用消化出的 [標題] 行 */
 function downloadTitleSource(kind) {
     const key = kind || state.editorFormat || EDITOR_FORMAT_DEFAULT;
     const val = id => (document.getElementById(id)?.value || '').trim();
-    if (key === 'ten_cover' || key === 'ten_cover_full') return val('coverTitleLeft');
+    if (key === 'ten_cover') return val('coverTitleLeft');
     if (key === 'yt_live_cover' || key === 'yt_hourly_cover' || key === 'yt_hot_cover') {
         return val('ytCoverTitle');
     }
@@ -872,13 +871,15 @@ function applyEditorFormatLocks() {
     if (presets.density && state.digestDensity !== presets.density) switchDigestDensity(presets.density);
 
     _hide(document.getElementById('digestControlsRow'), !!hides.digestControls);
-    // 封面版型（十點／YT）的端點不收指令欄，欄位擺著只會讓人以為填了有用；
-    // 畫面描述欄就是給 AI 的全部指示（2026-09-08 使用者裁決：不合併、直接隱藏）。
-    _hide(document.getElementById('aiInstruction'), format.inputs === 'cover' || format.inputs === 'yt_cover');
+    // 指令欄全版型都顯示（2026-09-08 下午裁決，推翻同日早上的隱藏）：封面／YT 的
+    // 端點現在收 instruction，內容當畫面提示餵給推導步驟。畫面描述欄同時被移除，
+    // 指令欄因此是封面唯一的自由輸入。
+    _hide(document.getElementById('instructionRow'), false);
     _hide(document.getElementById('p1-btnSafeFrame'), !!hides.safeFrame);
     _hide(document.getElementById('p1-btnStamp'), !!hides.stamp);
-    // 壓框開關只對有挖空側的版型有意義
+    // 壓框開關與挖空方向都只對有挖空側的版型有意義
     _hide(document.getElementById('p1-btnHole'), !format.hole);
+    updateHoleSideButtons();
 
     // 唯一真的鎖著的：版面由挖空框決定，讓使用者再選一次只會互相打架
     _lock(document.getElementById('digestTypeRow'), !!locks.chartType);
@@ -906,19 +907,9 @@ function applyEditorFormatInputs() {
     const digestRow = document.getElementById('digestTypeRow');
     if (news) news.classList.toggle('hidden', wantsCover || wantsYt);
     if (cover) cover.classList.toggle('hidden', !wantsCover);
-    // 滿版／雙切（2026-09-07）：滿版只留一個標題與一個附圖位
-    const fullLayout = wantsCover && editorFormat().coverLayout === 'full';
-    document.querySelectorAll('.cover-split-only').forEach(el => el.classList.toggle('hidden', fullLayout));
-    const leftLabel = document.getElementById('coverTitleLeftLabel');
-    if (leftLabel) leftLabel.textContent = fullLayout ? '標題' : '左半標題';
-    const leftBtn = document.getElementById('coverAsisLeftBtn');
-    if (leftBtn) leftBtn.textContent = fullLayout ? '＋ 附圖（選填）' : '＋ 左半附圖（選填）';
-    const leftVisual = document.getElementById('coverVisualLeft');
-    if (leftVisual) leftVisual.placeholder = fullLayout ? '畫面描述（選填）——留空由 AI 依標題自動產生' : '左半畫面描述（選填）——留空由 AI 依標題自動產生';
-    // 「只改文字」只有滿版合成版有，雙切時整顆收起來，不留一顆永遠按不動的鈕。
-    // 這裡只管顯隱：換角色也會走這支，清底圖要放在真的換版型的 setEditorFormat。
-    const coverRecompose = document.getElementById('coverRecomposeBtn');
-    if (coverRecompose) coverRecompose.classList.toggle('hidden', !fullLayout);
+    // 滿版／雙切（2026-09-08 WP1）：不再是兩個版型，改由第二標題有沒有值即時判定。
+    // 右附圖位、「只改文字」鈕與指示器全部跟著跑，見 updateCoverLayoutIndicator。
+    updateCoverLayoutIndicator();
     updateCoverTitleStyleButton();
     updateYtBottomBandButton();
     if (yt) yt.classList.toggle('hidden', !wantsYt);
@@ -928,6 +919,15 @@ function applyEditorFormatInputs() {
         refBox.classList.remove('hidden');
         const host = wantsYt ? yt : (wantsCover ? cover : news);
         if (host && refBox.previousElementSibling !== host) host.insertAdjacentElement('afterend', refBox);
+    }
+    // 指令欄同理（2026-09-08 WP1）：它原本住在 newsInputs 裡面，而封面／YT 版型會把
+    // 整個 newsInputs 藏起來——不搬出來，欄位「顯示」了也還是看不到。
+    const instructionRow = document.getElementById('instructionRow');
+    if (instructionRow) {
+        const anchor = refBox || (wantsYt ? yt : (wantsCover ? cover : news));
+        if (anchor && instructionRow.previousElementSibling !== anchor) {
+            anchor.insertAdjacentElement('afterend', instructionRow);
+        }
     }
     // 整點直播：沒有原音呈現／AI即時翻譯、多一格整點時間；今日熱搜：連日期都沒有
     const ytLayout = wantsYt ? editorFormat().ytLayout : '';
@@ -949,6 +949,8 @@ function applyEditorFormatInputs() {
 
 function setEditorFormat(key) {
     state.editorFormat = EDITOR_FORMATS[key] ? key : EDITOR_FORMAT_DEFAULT;
+    // 換版型就把挖空方向重置回左：還記著上一個版型選的右切，只會讓人選錯邊
+    state.holeSide = 'left';
     // 換版型就丟掉上一版的壓字前底圖：滿版的底圖送進雙切會被後端擋（400），留著只會誤導。
     // 只在這裡清——applyEditorFormatInputs 換角色也會走，放那邊會把還能用的底圖洗掉。
     state.tenCoverBackground = null;
@@ -1005,12 +1007,8 @@ function updateAIBtnRoleHint() {
     // 生成中按鈕正顯示進度，切角色／密度不該把進度文字蓋掉
     if (_genTicker) return;
     if (!buttonText) return;
-    if (editorFormat().inputs === 'cover') {
-        buttonText.innerText = `生成 ${editorFormat().label}`;
-        return;
-    }
-    if (editorFormat().inputs === 'yt_cover') {
-        buttonText.innerText = `生成 ${editorFormat().label}`;
+    if (editorFormat().inputs === 'cover' || editorFormat().inputs === 'yt_cover') {
+        buttonText.innerText = `生成${editorFormat().label}`;
         return;
     }
     const densityLabel = DENSITY_LABELS[state.digestDensity] || state.digestDensity;
@@ -1172,6 +1170,47 @@ function toggleYtBottomBand() {
     showToast(state.ytBottomBand ? '底色框：開（半透明，照片透得出來）' : '底色框：關（標題靠描邊立在照片上）');
 }
 
+/* 十點的「滿版／雙切」指示器（2026-09-08 WP1）。
+   這是**判定結果**不是輸入：版面由第二標題有沒有值決定，所以點「雙切」不會切版面，
+   只是把游標移到第二標題——真正要做的就是去填那一欄。 */
+function updateCoverLayoutIndicator() {
+    const row = document.getElementById('coverLayoutIndicator');
+    const isCover = editorFormat().inputs === 'cover';
+    if (row) {
+        row.classList.toggle('hidden', !isCover);
+        const layout = coverLayoutNow();
+        row.querySelectorAll('[data-cover-layout]').forEach(btn => {
+            const active = btn.dataset.coverLayout === layout;
+            btn.className = 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
+                + (active ? 'border border-violet-600 bg-violet-600 text-white'
+                          : 'border border-violet-600 text-slate-500 hover:text-white');
+        });
+    }
+    if (isCover) applyCoverLayoutFields();
+}
+
+// 指示器不是開關，點「雙切」只是把游標帶去第二標題；點「滿版」要清空第二標題才會變，
+// 那是使用者自己的決定，不由按鈕代勞——所以兩顆都只做「把游標移過去」。
+function focusCoverLayoutField() {
+    document.getElementById('coverTitleRight')?.focus();
+}
+
+/* 版面一變，跟著版面走的三件事要同步：右附圖位、「只改文字」鈕、下載短名。
+   換版型會走 applyEditorFormatInputs，但打字改第二標題不會——所以獨立成一支，
+   coverTitleRight 的 oninput 也叫它。 */
+function applyCoverLayoutFields() {
+    const fullLayout = coverLayoutNow() === 'full';
+    document.querySelectorAll('.cover-split-only').forEach(el => el.classList.toggle('hidden', fullLayout));
+    const leftBtn = document.getElementById('coverAsisLeftBtn');
+    if (leftBtn) leftBtn.textContent = fullLayout ? '＋ 附圖（選填）' : '＋ 第一附圖（選填）';
+    // 「只改文字」只有滿版合成版有：雙切的成品是左右兩張底圖拼的，拼完分不回去。
+    const recompose = document.getElementById('coverRecomposeBtn');
+    if (recompose) {
+        recompose.classList.toggle('hidden', !fullLayout);
+        recompose.disabled = !(fullLayout && state.tenCoverBackground);
+    }
+}
+
 // 十點封面「設計標題」開關（2026-09-08）。紫色，與安全框（綠）／蓋章（琥珀）／壓框（青）區分。
 // 只有十點版型＋AI 整張模式看得到：合成版的字是程式用 Pillow 壓的，這個開關對它沒有意義。
 function updateCoverTitleStyleButton() {
@@ -1210,8 +1249,31 @@ function toggleHole() {
 }
 
 // 播出鏡面要送給後端的挖空側：版型有挖空側且壓框開著才送，否則後端不蓋框。
+// 方向來自使用者選的 state.holeSide（2026-09-08 WP1），不再是版型表寫死的那一側。
 function broadcastHoleForApi() {
-    return state.hole ? (editorFormat().hole || '') : '';
+    if (!state.hole || !editorFormat().hole) return '';
+    return state.holeSide;
+}
+
+/* 挖空方向（2026-09-08 WP1）：左切／右切從兩個版型變成同一個版型裡的一組按鈕。
+   消化與生圖兩端都吃這個值——消化要把內容趕到影片那半邊的對面，方向講錯等於重點被蓋掉。 */
+function updateHoleSideButtons() {
+    const row = document.getElementById('holeSideRow');
+    if (!row) return;
+    row.classList.toggle('hidden', !editorFormat().hole);
+    row.querySelectorAll('[data-hole-side]').forEach(btn => {
+        const active = btn.dataset.holeSide === state.holeSide;
+        btn.className = 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
+            + (active ? 'border border-cyan-600 bg-cyan-600 text-white'
+                      : 'border border-cyan-600 text-slate-400 hover:text-white');
+    });
+}
+
+function setHoleSide(side) {
+    if (side !== 'left' && side !== 'right') return;
+    state.holeSide = side;
+    updateHoleSideButtons();
+    showToast(side === 'left' ? '挖空：左側（內容自動靠右編排）' : '挖空：右側（內容自動靠左編排）');
 }
 
 // 色調切換（2026-09-04）。取代原本擺在這個位置的角色選擇——角色已移到最上方，
@@ -1680,6 +1742,9 @@ async function digestNewsText(input) {
             stamp: state.stamp,
             tone: state.tone,
             editor_format: state.editorFormat,
+            // 挖空側要在消化階段就講清楚（2026-09-08 WP1）：內容得趕到影片那半邊的
+            // 對面，只在生圖端決定的話，重點會剛好被影片蓋掉。
+            hole_side: state.holeSide,
             safe_frame: state.safeFrame,
             user_instruction: currentUserInstruction(),
             portrait_photo_count: uploadedPortraitCount(),
@@ -1738,13 +1803,13 @@ const COVER_BACKEND_URL = `${API_BASE}/api/editor/cover`;
 // 模型原圖，改完要再走一次後貼才是成品。欄位取現況，所以順便改標題也會生效。
 function tenCoverFields() {
     const val = id => (document.getElementById(id)?.value || '').trim();
-    const fullLayout = editorFormat().coverLayout === 'full';
+    const fullLayout = coverLayoutNow() === 'full';
     return {
         title_left: val('coverTitleLeft'),
         title_right: fullLayout ? '' : val('coverTitleRight'),
         layout: fullLayout ? 'full' : 'split',
-        visual_left: val('coverVisualLeft'),
-        visual_right: fullLayout ? '' : val('coverVisualRight'),
+        // 畫面描述欄已移除（2026-09-08 WP1），改送共用的指令欄當畫面提示
+        instruction: coverInstructionForApi(),
         date_text: val('coverDate'),
         badge: document.getElementById('coverBadge')?.value || 'on_air',
         title_style: state.coverTitleStyle,
@@ -1773,7 +1838,7 @@ async function recomposeTenCover(refined) {
 // 只改文字（2026-09-08，滿版合成版）：底圖不重生，用目前欄位重壓一次標題，零 API。
 // 底圖走 state.tenCoverBackground，不是 refineSource——見該欄位的註解。
 function setTenCoverBackground(data) {
-    const usable = editorFormat().coverLayout === 'full'
+    const usable = coverLayoutNow() === 'full'
         && data.mode === 'composite' && !!data.background_image_base64;
     state.tenCoverBackground = usable ? {
         base64: data.background_image_base64,
@@ -1810,10 +1875,8 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
     const val = id => (document.getElementById(id)?.value || '').trim();
     const titleLeft = val('coverTitleLeft');
     const titleRight = val('coverTitleRight');
-    const visualLeft = val('coverVisualLeft');
-    const visualRight = val('coverVisualRight');
-    const fullLayout = editorFormat().coverLayout === 'full';
-    if (fullLayout ? !titleLeft : (!titleLeft || !titleRight)) return showToast(fullLayout ? '標題要填' : '左右標題都要填');
+    const fullLayout = coverLayoutNow() === 'full';
+    if (!titleLeft) return showToast('第一標題要填');
     // 只改文字只做滿版合成版：AI 版的字是模型畫的、雙切拼完分不回去（後端也會回 400）
     if (recomposeOnly && !state.tenCoverBackground) return showToast('還沒有底圖，請先生成一次');
 
@@ -1834,7 +1897,7 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
             const asisCount = slotCount || uploadedAsisCount();
             // 有原圖放置一律程式壓字（後端也會強制），這裡只是把提示講對
             const composite = document.getElementById('coverAiTitle')?.checked === false || asisCount > 0;
-            const deriving = !visualLeft || !visualRight;
+            const deriving = true;   // 畫面描述欄移除後一律由 AI 推導（2026-09-08 WP1）
             showToast(fullLayout ? (slots.left ? '附圖鋪滿，合成中…' : (composite ? '生成底圖中，約 30–90 秒…' : '設計封面中，約 30–120 秒…'))
                 : slots.left && slots.right ? '兩格都用附圖，合成中…'
                 : slots.left ? '左格用附圖，右格生底圖中，約 30–90 秒…'
@@ -1852,8 +1915,7 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
                     title_left: titleLeft,
                     title_right: fullLayout ? '' : titleRight,
                     layout: fullLayout ? 'full' : 'split',
-                    visual_left: visualLeft,
-                    visual_right: fullLayout ? '' : visualRight,
+                    instruction: coverInstructionForApi(),
                     date_text: val('coverDate'),
                     badge: document.getElementById('coverBadge')?.value || 'on_air',
                     title_style: state.coverTitleStyle,
@@ -1882,13 +1944,6 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
         resetRefineState(tenCoverSource, tenCoverSource ? data : null);
         // 滿版合成版：把壓字前底圖記下來，「只改文字」才有東西可以帶回去（零 API 重壓）
         setTenCoverBackground(data);
-        // 回填實際採用的畫面描述（留空時是 AI 補的）。不填回去，使用者永遠不知道
-        // AI 幫他決定了什麼，也沒辦法在此基礎上微調重生。
-        [['coverVisualLeft', data.visual_left], ['coverVisualRight', data.visual_right]]
-            .forEach(([id, value]) => {
-                const field = document.getElementById(id);
-                if (field && value) field.value = value;
-            });
         document.getElementById('oneClickLabel').innerText = editorFormat().label;
         document.getElementById('oneClickMeta').innerText = fullLayout ? titleLeft : `${titleLeft}｜${titleRight}`;
         document.getElementById('oneClickEmpty').classList.add('hidden');
@@ -1909,10 +1964,10 @@ const COVER_TITLES_BACKEND_URL = `${API_BASE}/api/editor/cover-titles`;
 // 封面標題自動消化（2026-09-06）：貼新聞內文 → 文字模型出標題 → 回填欄位。
 // 刻意不接著生圖：使用者裁決要讓編輯看過標題再自己按「生成」。
 async function handleCoverTitleDigest(target) {
-    if (target === 'ten_cover' && editorFormat().coverLayout === 'full') target = 'ten_cover_full';
+    // 2026-09-08 WP1：不再依版型改 target——版面由消化結果決定，不是反過來。
+    // AI 判定內文是 1 個還是 2 個主題，單主題只回第一標題（回填後即為滿版）。
     const ten = target === 'ten_cover';
-    const tenFull = target === 'ten_cover_full';
-    const textarea = document.getElementById((ten || tenFull) ? 'coverNewsText' : 'ytCoverNewsText');
+    const textarea = document.getElementById(ten ? 'coverNewsText' : 'ytCoverNewsText');
     const newsText = (textarea?.value || '').trim();
     if (newsText.length < 10) return showToast('先貼新聞內文（至少 10 個字）');
     const btn = document.getElementById('aiBtn');
@@ -1929,12 +1984,14 @@ async function handleCoverTitleDigest(target) {
         if (ten) {
             document.getElementById('coverTitleLeft').value = data.title_left || '';
             document.getElementById('coverTitleRight').value = data.title_right || '';
-        } else if (tenFull) {
-            document.getElementById('coverTitleLeft').value = data.title || '';
+            // 回填完版面就跟著變（第二標題空＝滿版），指示器與右附圖位一起更新
+            updateCoverLayoutIndicator();
         } else {
             document.getElementById('ytCoverTitle').value = data.title || '';
         }
-        showToast('標題已回填，看過沒問題再按「生成」');
+        showToast(ten && !(data.title_right || '').trim()
+            ? '判定為單一主題（滿版），標題已回填，看過沒問題再按「生成」'
+            : '標題已回填，看過沒問題再按「生成」');
     } catch (err) {
         showToast(`消化標題失敗：${err.message}`);
     } finally {
@@ -1956,6 +2013,8 @@ function ytCoverFields() {
         date_text: val('ytCoverDate'),
         time_text: layout === 'hourly' ? val('ytCoverTime') : '',
         bottom_band: layout !== 'hourly' && state.ytBottomBand,
+        // 指令欄（2026-09-08 WP1）：餵給底圖推導當畫面提示
+        instruction: coverInstructionForApi(),
     };
 }
 
@@ -2336,6 +2395,14 @@ async function handleImageGeneration() {
 function currentUserInstruction() {
     const el = document.getElementById('aiInstruction');
     return el ? el.value.trim() : '';
+}
+
+// 封面／YT 端點的 instruction 上限是 500 字，指令欄本身放到 2000（主流程用得到），
+// 超過直接送會被 pydantic 擋成 422，所以在這裡先截斷（2026-09-08 WP1）。
+const COVER_INSTRUCTION_MAX = 500;
+
+function coverInstructionForApi() {
+    return currentUserInstruction().slice(0, COVER_INSTRUCTION_MAX);
 }
 
 // 指令欄的需求蓋過 UI 按鈕（2026-09-03 使用者裁決），後端已明文寫進優先序規則。

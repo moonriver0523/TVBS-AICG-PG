@@ -85,7 +85,10 @@ class FrontendSwitchTests(unittest.TestCase):
         for expr in payloads:
             self.assertIn("broadcastHoleForApi()", expr, expr)
         self.assertNotIn("broadcast_hole: editorFormat().hole", self.js)
-        self.assertIn("return state.hole ? (editorFormat().hole || '') : '';", self.js)
+        # 2026-09-08 WP1：方向改由使用者選的 state.holeSide 決定，版型表的 hole
+        # 只剩「這個版型有沒有挖空」這個判斷
+        self.assertIn("if (!state.hole || !editorFormat().hole) return '';", self.js)
+        self.assertIn("return state.holeSide;", self.js)
 
     def test_button_only_shown_for_hole_formats(self):
         self.assertIn("_hide(document.getElementById('p1-btnHole'), !format.hole);", self.js)
