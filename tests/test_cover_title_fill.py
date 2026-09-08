@@ -74,7 +74,7 @@ class SplitRuleTests(unittest.TestCase):
         self.assertEqual(len(compose._fill_pairs([("短", 0), (cut, 1)], 3)), 3)
 
     def test_split_lines_inherit_their_segment_colour_index(self):
-        """拆出來的兩行都繼承原段落的索引——顏色是段落的屬性，不是行的。"""
+        """拆出來的兩行都繼承原段落的索引——索引只記出處，顏色改依行序（2026-09-08 第二輪裁決）。"""
         pairs = compose._fill_pairs([("一二三四五六七八九十", 1)], 3)
         self.assertGreater(len(pairs), 1)
         self.assertTrue(all(seg == 1 for _, seg in pairs))
@@ -96,7 +96,7 @@ class SharedSizeTests(unittest.TestCase):
         long = compose.cover_panel_title_size([("菲律賓前眾議長涉貪被捕", 0)], panel_w)
         self.assertGreater(short, long)
 
-    def test_vertical_cap_keeps_four_lines_under_the_header_band(self):
+    def test_vertical_cap_keeps_three_lines_under_the_header_band(self):
         height = compose.COVER_CANVAS[1]
         size = compose._cover_title_vertical_cap(3, 10_000)
         top = (height - round(height * compose.COVER_TITLE_BOTTOM_RATIO)) - round(size * compose.COVER_TITLE_LINE_GAP) * 2 - size

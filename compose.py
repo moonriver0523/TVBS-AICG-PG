@@ -298,7 +298,8 @@ COVER_ONAIR_FILL = (206, 26, 32)
 # 讓「左格三行 6 字都最大、右格第三行 11 字被壓小」變成兩邊字大小差一截，看起來像兩張圖
 # 拼的。改成：每格先各自算出逐行都塞得進的字級，再取兩格的全域最小值當所有行的字級
 # （所以 COVER_TITLE_LINE_SIZE_SPREAD 退場）。配套是把行拆得夠短——只要一行超過
-# COVER_TITLE_FILL_MIN_CHARS 就再拆，雙切放寬到 4 行——不然共同字級會被最長那行拖垮。
+# COVER_TITLE_FILL_MIN_CHARS 就再拆，但總行數上限 3（白／黃／紅，使用者裁決不能四行）
+# ——不然共同字級會被最長那行拖垮。
 # 滿版是單一標題、沒有另一格可比，維持逐行各自撐滿。
 COVER_TITLE_SIZE_RATIO = 0.11        # 標題起始字級（佔畫面高）
 COVER_TITLE_MIN_SIZE_RATIO = 0.045
@@ -623,7 +624,7 @@ def _cover_title_metrics(panel_w: int, full_width: bool) -> tuple[int, int, int]
 
 
 def cover_max_title_lines(full_width: bool) -> int:
-    """滿版 3 行、雙切 4 行（2026-09-08）。"""
+    """滿版、雙切都最多 3 行（2026-09-08 裁決：白／黃／紅三行，不能四行）。"""
     return COVER_MAX_TITLE_LINES if full_width else COVER_MAX_TITLE_LINES_SPLIT
 
 
@@ -661,7 +662,7 @@ def cover_title_lines(title: str, *, full_width: bool = False) -> list[str]:
 
 
 def _cover_title_vertical_cap(line_count: int, start_size: int) -> int:
-    """行數 × 行距要塞在標頭帶以下、底部標題基線以上，否則整體縮字（2026-09-08，雙切 4 行）。"""
+    """行數 × 行距要塞在標頭帶以下、底部標題基線以上，否則整體縮字（2026-09-08，上限 3 行）。"""
     height = COVER_CANVAS[1]
     baseline = height - round(height * COVER_TITLE_BOTTOM_RATIO)
     top_limit = round(height * COVER_HEADER_RATIO) + round(height * COVER_TITLE_TOP_CLEARANCE_RATIO)
@@ -703,7 +704,8 @@ def _draw_cover_title(
         fonts = [_fit_font(text, max_w, size, min_size) for text, _ in pairs]
     for (text, _), font in zip(pairs, fonts):
         if font.getbbox(text)[2] > max_w:
-            raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{text}」（請用半形空格分段或縮短）")
+            hint = "請縮短這一段" if len(pairs) >= cover_max_title_lines(full_width) else "請用半形空格分段或縮短"
+            raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{text}」（{hint}；最多 {cover_max_title_lines(full_width)} 行）")
     baseline = height - round(height * COVER_TITLE_BOTTOM_RATIO)
     if full_width:
         x, anchor = panel_x0 + panel_w // 2, "ms"

@@ -148,3 +148,14 @@ class TooLongTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OverflowMessageTests(unittest.TestCase):
+    def test_three_segment_overflow_says_shorten_not_split(self):
+        import compose
+        title = "短 中等一點 這是一段非常非常長的第三段標題文字內容超過十八字"
+        with self.assertRaises(compose.ComposeError) as cm:
+            compose.compose_ten_cover(_png_bytes(size=(1024, 1024)), _png_bytes(size=(1024, 1024)),
+                                      title_left=title, title_right="右邊 標題 三段", date_text="9/8")
+        self.assertIn("請縮短這一段", str(cm.exception))
+        self.assertNotIn("分段", str(cm.exception))
