@@ -43,7 +43,8 @@ class ClauseTests(unittest.TestCase):
     def test_designed_clause_demands_full_width_and_mixed_sizes(self):
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
         self.assertIn("FILLS THE FULL WIDTH", clause)
-        self.assertIn("MIX THE TYPE SIZES", clause)
+        self.assertIn("EMPHASIS IS BY SIZE ONLY", clause)
+        self.assertIn("Do NOT add a highlight colour of your own", clause)
 
     def test_designed_clause_does_not_override_the_line_and_colour_rules(self):
         """設計標題只能改字級／字重／位置——行數、斷行、顏色仍由清單標記說了算。"""

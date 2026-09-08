@@ -259,6 +259,8 @@ logo」，一句「背景弄熱鬧一點」就能替沒提到的店家捏一個�
   TYPOGRAPHY 段尾多一個 `{title_style_clause}`。`designed` 填
   `COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE`，`plain` 填空字串——所以 plain 的 prompt 與 0907 版一字不差。
 - 那一段只寫「怎麼排」，並自己重申一次「照給定的行逐字印、不得增減／重排／重拆」。
+  **設計感只用字級表現**（使用者 2026-09-08 裁決）：關鍵數字／關鍵詞放大、緊密堆疊、粗描邊＋陰影；
+  明文禁止模型自己加黃紅強調色——顏色一律照逐行標記（依段落）走。
   逐行給定的機制（`{title_left_lines}`）不變，兩者同時在 prompt 裡。
 - 前端 `#coverTitleStyleBtn`（紫色，比照蓋章／壓框的寫法：state 布林式字串、按鈕、payload 欄位）。
   只有十點版型＋「標題由 AI 生成」勾著才顯示，預設 OFF；生成本體與 `tenCoverFields()`
