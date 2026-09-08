@@ -155,8 +155,11 @@ class FormatWiringTests(unittest.TestCase):
         entry = re.search(r"(?ms)^    yt_vstrip:\s*\{(.*?)^    \},", APP_JS).group(1)
         self.assertIn("inputs: 'yt_vstrip'", entry)
         hides = re.search(r"hides:\s*\{([^}]*)\}", entry).group(1)
-        for field in ("digestControls", "safeFrame", "stamp", "engine", "instruction", "refUpload"):
+        for field in ("digestControls", "safeFrame", "stamp", "engine", "instruction",
+                      "refUpload", "refine"):
             self.assertIn(field, hides, f"{field} 應該對直標收起來")
+        # 追加修改整區要真的收掉：只把按鈕 disabled 的話，輸入框還是在那裡等人打字
+        self.assertIn("_hide(document.getElementById('refineBox'), !!hides.refine);", APP_JS)
 
     def test_download_short_name(self):
         self.assertRegex(APP_JS, r"yt_vstrip:\s*'YT直標'")

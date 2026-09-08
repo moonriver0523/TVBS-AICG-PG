@@ -472,7 +472,7 @@ const EDITOR_FORMATS = {
         hint: '直播用的垂直標題條，透明底 PNG，直接疊在直播訊號上。第一標題最多 12 格、第二標題最多 14 格（連續英數字算一格）。不生圖、不打 AI。',
         inputs: 'yt_vstrip',
         locks: {},
-        hides: { digestControls: true, safeFrame: true, stamp: true, engine: true, instruction: true, refUpload: true },
+        hides: { digestControls: true, safeFrame: true, stamp: true, engine: true, instruction: true, refUpload: true, refine: true },
         hole: null,
     },
     // YT 今日熱搜（2026-09-06 型錄 H 類）：紅色系「今日熱搜」標籤＋紅色 Logo 斜標，
@@ -917,6 +917,9 @@ function applyEditorFormatLocks() {
     _hide(document.getElementById('instructionRow'), !!hides.instruction);
     // 引擎 GPT／Gemini 同理：直標沒有生圖這一步，選哪個引擎都一樣
     _hide(document.getElementById('p1EngineRow'), !!hides.engine);
+    // 追加修改整區：直標沒有底圖可改。別只靠 refineBtn.disabled——結果區一顯示，
+    // 那個輸入框就在那裡等人打字，打完按下去卻什麼都不會發生。
+    _hide(document.getElementById('refineBox'), !!hides.refine);
     _hide(document.getElementById('p1-btnSafeFrame'), !!hides.safeFrame);
     _hide(document.getElementById('p1-btnStamp'), !!hides.stamp);
     // 壓框開關與挖空方向都只對有挖空側的版型有意義
