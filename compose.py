@@ -882,6 +882,28 @@ YT_AI_NOTE_SIZE_RATIO = 0.032
 YT_AI_NOTE_TOP_RATIO = 0.20          # 藍標籤之下的右側空位
 YT_AI_NOTE_PLATE = (0, 0, 0, 120)
 
+# ---- 底色框位置變體（2026-09-08 WP3，只出樣張，預設值不動）----
+# 使用者裁決「紅／藍底色框位置再往下調，不超過第二行標題」語意有歧義，先出三個位置讓他挑。
+# 上界用**最大字級**的 ascent 算，不用某一句話 fit 完的字級：短標題不會縮字，ink 會比長標題
+# 更高，拿長標題量出來的上緣當上界，換一句短的就被漸入層蓋到。outline 是描邊往外撐的部分。
+def _yt_title_ink_top_ratio(baseline_ratio: float) -> float:
+    """該行標題在最大字級下、含描邊的墨水上緣（佔畫布高的比例）。"""
+    _, height = YT_CANVAS
+    size = round(height * YT_TITLE_SIZE_RATIO)
+    font = _font(size)
+    ascent, _ = font.getmetrics()
+    outline = max(4, round(size * YT_TITLE_STROKE_RATIO)) + round(size * YT_TITLE_BOLD_RATIO)
+    return (round(height * baseline_ratio) - ascent - outline) / height
+
+
+# (band 起點, 漸入高度)。漸入結尾一律壓在下一段字的墨水上緣之上，帶子才不會糊到字。
+# 變體 2 與 3 只差約 17px——行距就這麼寬，中間塞不下更多位置，這是版面的事實不是取值偷懶。
+YT_BAND_VARIANTS: dict[str, tuple[float, float]] = {
+    "line1_top": (0.622, 0.016),   # 第一行字上緣再往上一點點
+    "between": (0.799, 0.020),     # 兩行之間（第一行基線與第二行上緣中點）
+    "line2_top": (0.8145, 0.005),  # 第二行字上緣稍上
+}
+
 
 def _paste_live_badge(canvas: Image.Image, box: tuple[int, int], width: int) -> int:
     """貼 LIVE 章，回傳貼上後的高度（日期條要接在它正下方）。"""
@@ -925,14 +947,14 @@ def _draw_top_line(canvas: Image.Image) -> None:
     canvas.alpha_composite(line, (0, 0))
 
 
-def _draw_logo_tab(
-    canvas: Image.Image,
+def _logo_tab_layer(
     top_colour: tuple[int, int, int] = YT_LOGO_TAB_TOP,
     bottom_colour: tuple[int, int, int] = YT_LOGO_TAB_BOTTOM,
-) -> None:
-    """右上角漸層標籤（左邊斜切、左下圓角）＋白色 TVBS Logo，貼著畫面右上角。
+) -> Image.Image:
+    """右上角漸層標籤（左邊斜切、左下圓角）本身，畫在一張畫布大小的透明圖上。
 
-    預設藍色（新聞直播）；今日熱搜傳紅色。
+    跟貼 Logo 拆開，是為了 PNG 壓標要把標籤鏡射到另外三個角——鏡射整張會連 Logo
+    一起翻過去。預設藍色（新聞直播）；今日熱搜傳紅色。
     """
     width, height = YT_CANVAS
     tab_h = round(height * YT_LOGO_TAB_HEIGHT_RATIO)
@@ -971,9 +993,19 @@ def _draw_logo_tab(
         t = y / max(1, tab_h - 1)
         colour = tuple(round(top_colour[i] * (1 - t) + bottom_colour[i] * t) for i in range(3))
         gd.line(((0, y), (width, y)), fill=colour + (255,))
-    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     layer.paste(gradient, (0, 0), mask)
-    canvas.alpha_composite(layer)
+    return layer
+
+
+def _draw_logo_tab(
+    canvas: Image.Image,
+    top_colour: tuple[int, int, int] = YT_LOGO_TAB_TOP,
+    bottom_colour: tuple[int, int, int] = YT_LOGO_TAB_BOTTOM,
+) -> None:
+    """右上角漸層標籤＋白色 TVBS Logo，貼著畫面右上角。"""
+    width, height = YT_CANVAS
+    canvas.alpha_composite(_logo_tab_layer(top_colour, bottom_colour))
     _paste_logo(canvas, (round(width * YT_LOGO_LEFT_RATIO), round(height * YT_LOGO_TOP_RATIO)), round(width * YT_LOGO_WIDTH_RATIO))
 
 
@@ -1006,14 +1038,19 @@ def _draw_title_band(
     canvas: Image.Image,
     fill: tuple[int, int, int] = YT_BAND_FILL,
     block_fill: tuple[int, int, int] = YT_BAND_BLOCK_FILL,
+    *,
+    top_ratio: float | None = None,
+    fade_ratio: float | None = None,
 ) -> None:
     """底部科技底帶：頂端漸入，帶上撒幾塊半透明方塊模擬頻道的電路紋。
 
     預設深藍（新聞直播）；今日熱搜傳深紅。
+    top_ratio／fade_ratio 是 2026-09-08 出位置樣張用的覆寫，None＝沿用現行常數
+    （預設行為一個像素都不能變，使用者還沒挑位置）。
     """
     width, height = YT_CANVAS
-    top = round(height * YT_BAND_TOP_RATIO)
-    fade = round(height * YT_BAND_FADE_RATIO)
+    top = round(height * (YT_BAND_TOP_RATIO if top_ratio is None else top_ratio))
+    fade = round(height * (YT_BAND_FADE_RATIO if fade_ratio is None else fade_ratio))
     band = Image.new("RGBA", (width, height - top), fill + (0,))
     alpha = Image.new("L", band.size, YT_BAND_ALPHA)
     ad = ImageDraw.Draw(alpha)
@@ -1047,6 +1084,8 @@ def compose_yt_cover(
     ai_note: bool = False,
     draw_titles: bool = True,
     bottom_band: bool = False,
+    band_top_ratio: float | None = None,
+    band_fade_ratio: float | None = None,
 ) -> bytes:
     """合成 YT 國內外新聞直播封面（2026-09-06 依頻道實際版面）。
 
@@ -1073,7 +1112,7 @@ def compose_yt_cover(
 
     # ---- 底帶先鋪，章與標籤壓在上面（AI 標題模式：底帶與標題都是模型畫的）----
     if draw_titles and bottom_band:
-        _draw_title_band(canvas)
+        _draw_title_band(canvas, top_ratio=band_top_ratio, fade_ratio=band_fade_ratio)
     _draw_top_line(canvas)
     _draw_logo_tab(canvas)
     draw = ImageDraw.Draw(canvas)
@@ -1296,6 +1335,8 @@ def compose_yt_hot_cover(
     ai_note: bool = False,
     draw_titles: bool = True,
     bottom_band: bool = False,
+    band_top_ratio: float | None = None,
+    band_fade_ratio: float | None = None,
 ) -> bytes:
     """合成 YT「今日熱搜」封面：紅色系標頭、無日期無 LIVE，底部兩行標題。
 
@@ -1309,7 +1350,8 @@ def compose_yt_hot_cover(
     width, height = YT_CANVAS
     margin = round(width * YT_MARGIN_RATIO)
     if draw_titles and bottom_band:
-        _draw_title_band(canvas, YT_HOT_BAND_FILL, YT_HOT_BAND_BLOCK_FILL)
+        _draw_title_band(canvas, YT_HOT_BAND_FILL, YT_HOT_BAND_BLOCK_FILL,
+                         top_ratio=band_top_ratio, fade_ratio=band_fade_ratio)
     _draw_hot_header(canvas)
     if ai_note:
         _draw_ai_note(canvas, round(height * YT_AI_NOTE_TOP_RATIO))
@@ -1325,6 +1367,205 @@ def compose_yt_hot_cover(
         _draw_yt_title_line(draw, (width // 2, round(height * baseline_ratio)), text, font, fill)
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+# ============================================================
+# YT 直播 PNG 壓標（2026-09-08 WP3 原型，計畫書 E 段）
+#
+# 跟封面不同：這張是**透明底**，直接疊在直播訊號上，所以沒有底圖、沒有生圖。
+# 只有四個元素——半透明標題條（兩行白／黃標題）、TVBS 斜標籤＋Logo、
+# 「畫面來源：路透社」小字、LIVE 章。
+#
+# 兩個位置開關：Logo 四個角、標題條左右。標籤是右上角那塊斜切色塊鏡射過去的
+# （見 _logo_tab_layer），Logo 本身不跟著翻。來源句跟著 Logo 走：Logo 在上→句子在
+# 標籤下方，Logo 在下→句子在標籤上方（使用者的要求）。
+#
+# 八種組合裡有四種會「Logo 在下、標題條在同一側」，斜標籤跟標題條會疊在一起；
+# 這時標題條整塊往上讓，讓到標籤（含來源句）上緣之上。不是靠人選組合避開。
+# ============================================================
+
+YT_OVERLAY_BAR_WIDTH_RATIO = 0.55      # 標題條寬（計畫書 E-4：約畫面 55%）
+YT_OVERLAY_BAR_HEIGHT_RATIO = 0.26     # 標題條高（兩行標題＋上下留白）
+YT_OVERLAY_BAR_BOTTOM_RATIO = 0.93     # 標題條底（沒有讓位需求時）
+YT_OVERLAY_BAR_PAD_RATIO = 0.022       # 條內左右留白（佔畫布寬）
+YT_OVERLAY_BAR_RADIUS_RATIO = 0.012
+YT_OVERLAY_LINE1_RATIO = 0.44          # 第一行基線佔條高
+YT_OVERLAY_LINE2_RATIO = 0.88          # 第二行基線佔條高
+YT_OVERLAY_TITLE_SIZE_RATIO = 0.105    # 標題起始字級（條窄，比封面小一號）
+YT_OVERLAY_TITLE_MIN_SIZE_RATIO = 0.062
+YT_OVERLAY_SOURCE_SIZE_RATIO = 0.030   # 「畫面來源：…」字級
+YT_OVERLAY_SOURCE_GAP_RATIO = 0.020    # 來源句與斜標籤之間的距離
+YT_OVERLAY_CLEAR_GAP_RATIO = 0.020     # 標題條讓位時留的縫
+YT_OVERLAY_CORNERS = ("tr", "tl", "br", "bl")
+YT_OVERLAY_TITLE_SIDES = ("left", "right")
+
+
+def _overlay_tab_and_logo(canvas: Image.Image, corner: str) -> tuple[int, int, int, int]:
+    """把斜標籤鏡射到指定角、貼上 Logo，回傳標籤佔用的矩形 (x0, y0, x1, y1)。
+
+    標籤圖層整張鏡射，Logo 另外貼——Logo 跟著翻會變成反字。
+    """
+    width, height = YT_CANVAS
+    layer = _logo_tab_layer()
+    tab_h = round(height * YT_LOGO_TAB_HEIGHT_RATIO)
+    tab_x0 = round(width * YT_LOGO_TAB_LEFT_RATIO)
+    logo_w = round(width * YT_LOGO_WIDTH_RATIO)
+    logo_x = round(width * YT_LOGO_LEFT_RATIO)
+    logo_y = round(height * YT_LOGO_TOP_RATIO)
+    with Image.open(TVBS_LOGO_WHITE) as logo_file:
+        logo_h = round(logo_file.height * logo_w / logo_file.width)
+
+    if corner in ("tl", "bl"):
+        layer = layer.transpose(Image.FLIP_LEFT_RIGHT)
+        logo_x = width - logo_x - logo_w
+        rect_x = (0, width - tab_x0)
+    else:
+        rect_x = (tab_x0, width)
+    if corner in ("bl", "br"):
+        layer = layer.transpose(Image.FLIP_TOP_BOTTOM)
+        logo_y = height - logo_y - logo_h
+        rect_y = (height - tab_h, height)
+    else:
+        rect_y = (0, tab_h)
+
+    canvas.alpha_composite(layer)
+    _paste_logo(canvas, (logo_x, logo_y), logo_w)
+    return (rect_x[0], rect_y[0], rect_x[1], rect_y[1])
+
+
+def yt_overlay_layout(logo_corner: str, title_side: str, source_text: str = "") -> dict[str, tuple[int, int, int, int]]:
+    """算出壓標三塊元素的矩形：tab（斜標籤）、source（來源句）、bar（標題條）。
+
+    幾何跟畫圖拆開，測試才驗得到「標題條沒有壓到標籤」——靠像素回推半透明色塊
+    的邊界會被描邊與圓角糊掉。source 沒有時回 tab 的一條零高度線。
+    """
+    width, height = YT_CANVAS
+    margin = round(width * YT_MARGIN_RATIO)
+    tab_h = round(height * YT_LOGO_TAB_HEIGHT_RATIO)
+    tab_x0 = round(width * YT_LOGO_TAB_LEFT_RATIO)
+    if logo_corner in ("tl", "bl"):
+        tab = (0, 0, width - tab_x0, tab_h)
+    else:
+        tab = (tab_x0, 0, width, tab_h)
+    if logo_corner in ("bl", "br"):
+        tab = (tab[0], height - tab_h, tab[2], height)
+
+    gap = round(height * YT_OVERLAY_SOURCE_GAP_RATIO)
+    source_text = (source_text or "").strip()
+    if source_text:
+        source_font = _font(round(height * YT_OVERLAY_SOURCE_SIZE_RATIO))
+        source_w = source_font.getbbox(source_text)[2]
+        source_h = round(height * YT_OVERLAY_SOURCE_SIZE_RATIO * 1.3)
+        src_y = tab[3] + gap if logo_corner in ("tr", "tl") else tab[1] - gap - source_h
+        src_x1 = width - margin if logo_corner in ("tr", "br") else margin + source_w
+        source = (src_x1 - source_w, src_y, src_x1, src_y + source_h)
+    else:
+        source = (tab[0], tab[1], tab[2], tab[1])
+
+    reserved_top = min(tab[1], source[1])
+    reserved_bottom = max(tab[3], source[3])
+
+    bar_w = round(width * YT_OVERLAY_BAR_WIDTH_RATIO)
+    bar_h = round(height * YT_OVERLAY_BAR_HEIGHT_RATIO)
+    bar_x0 = margin if title_side == "left" else width - margin - bar_w
+    bar_x1 = bar_x0 + bar_w
+    default_bottom = round(height * YT_OVERLAY_BAR_BOTTOM_RATIO)
+    bar_y1 = default_bottom
+    clear = round(height * YT_OVERLAY_CLEAR_GAP_RATIO)
+    if bar_x0 < tab[2] and bar_x1 > tab[0] and bar_y1 > reserved_top:
+        # 水平上重疊，且會壓到標籤（含來源句）：底邊抬到讓位線之上
+        bar_y1 = min(bar_y1, reserved_top - clear)
+        if bar_y1 - bar_h < reserved_bottom and reserved_bottom < height:
+            # 標籤在上方時「往上讓」會讓進標籤裡，改成往下推到標籤下面
+            bar_y1 = max(default_bottom, reserved_bottom + clear + bar_h)
+    return {"tab": tab, "source": source, "bar": (bar_x0, bar_y1 - bar_h, bar_x1, bar_y1)}
+
+
+def compose_yt_overlay(
+    *,
+    line1: str,
+    line2: str,
+    source_text: str = "",
+    logo_corner: str = "tr",
+    title_side: str = "left",
+    band: bool = True,
+    live: bool = True,
+    size: tuple[int, int] = YT_CANVAS,
+) -> bytes:
+    """合成 YT 直播用的透明底 PNG 壓標，回傳 PNG bytes（RGBA，沒有底圖）。
+
+    line1／line2 是已分好的兩行標題（白／黃，沿用封面的描邊＋假粗體畫法）。
+    source_text 例如「畫面來源：路透社」，空字串＝不畫。
+    logo_corner 四選一（tr／tl／br／bl），title_side 二選一（left／right）。
+    band=False：標題不壓半透明底塊，直接靠描邊立在畫面上。
+    live=False：不貼 LIVE 章（非直播的訊號用）。
+
+    size 目前只支援 1920×1080——斜標籤與 Logo 的幾何全掛在 YT_CANVAS 上，4K
+    要不要支援是計畫書 E 段還沒裁的 TODO，先擋掉而不是默默畫錯。
+    """
+    line1, line2 = (line1 or "").strip(), (line2 or "").strip()
+    if not line1:
+        raise ComposeError("PNG 壓標至少要有第一行標題")
+    if logo_corner not in YT_OVERLAY_CORNERS:
+        raise ComposeError(f"logo_corner 只能是 {'／'.join(YT_OVERLAY_CORNERS)}，收到 {logo_corner!r}")
+    if title_side not in YT_OVERLAY_TITLE_SIDES:
+        raise ComposeError(f"title_side 只能是 left／right，收到 {title_side!r}")
+    if tuple(size) != YT_CANVAS:
+        raise ComposeError(f"PNG 壓標目前只支援 {YT_CANVAS[0]}×{YT_CANVAS[1]}，收到 {size}")
+
+    width, height = YT_CANVAS
+    margin = round(width * YT_MARGIN_RATIO)
+    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+
+    source_text = (source_text or "").strip()
+    layout = yt_overlay_layout(logo_corner, title_side, source_text)
+
+    # ---- 斜標籤＋Logo ----
+    _overlay_tab_and_logo(canvas, logo_corner)
+    draw = ImageDraw.Draw(canvas)
+
+    # ---- 來源句：跟著 Logo，上方角在標籤下、下方角在標籤上 ----
+    if source_text:
+        source_font = _font(round(height * YT_OVERLAY_SOURCE_SIZE_RATIO))
+        src = layout["source"]
+        _draw_text(draw, (src[0], src[1]), source_text, source_font,
+                   fill=(255, 255, 255), stroke=YT_TITLE_STROKE,
+                   stroke_width=max(3, round(height * 0.005)), anchor="la")
+
+    # ---- LIVE 章：預設左上；Logo 佔了左上就換到右上 ----
+    if live:
+        badge_w = round(width * YT_BADGE_WIDTH_RATIO)
+        badge_x = width - margin - badge_w if logo_corner == "tl" else margin
+        _paste_live_badge(canvas, (badge_x, round(height * YT_TOP_RATIO)), badge_w)
+        draw = ImageDraw.Draw(canvas)
+
+    # ---- 標題條：左／右靠邊，撞到同側的標籤就整塊讓位（位置在 yt_overlay_layout）----
+    bar_x0, bar_y0, bar_x1, bar_y1 = layout["bar"]
+    bar_w, bar_h = bar_x1 - bar_x0, bar_y1 - bar_y0
+
+    if band:
+        block = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+        ImageDraw.Draw(block).rounded_rectangle(
+            (bar_x0, bar_y0, bar_x1, bar_y1), radius=round(width * YT_OVERLAY_BAR_RADIUS_RATIO),
+            fill=YT_BAND_FILL + (YT_BAND_ALPHA,),
+        )
+        canvas.alpha_composite(block)
+        draw = ImageDraw.Draw(canvas)
+
+    inner = bar_w - 2 * round(width * YT_OVERLAY_BAR_PAD_RATIO)
+    start = round(height * YT_OVERLAY_TITLE_SIZE_RATIO)
+    smallest = round(height * YT_OVERLAY_TITLE_MIN_SIZE_RATIO)
+    centre = (bar_x0 + bar_x1) // 2
+    for text, fill, line_ratio in ((line1, YT_LINE1_FILL, YT_OVERLAY_LINE1_RATIO),
+                                   (line2, YT_LINE2_FILL, YT_OVERLAY_LINE2_RATIO)):
+        if not text:
+            continue
+        font = _fit_font(text, inner, start, smallest)
+        _draw_yt_title_line(draw, (centre, bar_y0 + round(bar_h * line_ratio)), text, font, fill)
+
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG")
     return buffer.getvalue()
 
 
