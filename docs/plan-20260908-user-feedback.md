@@ -97,3 +97,35 @@
 3. B（整點雙切）。
 4. E（PNG 壓標）規格確認後開工。
 5. C（非同步）視公司端 Cloudflare 能否調整再決定。
+
+---
+
+## F. 2026-09-08 下午使用者裁決：編輯格式精簡（🏗 進行中）
+
+裁決原文重點：
+1. 【播出鏡面】左切／右切改為同一個格式，格式內用按鈕選左／右。
+2. 【十點不一樣】滿版／雙切合併為一個格式；「左半標題」→「第一標題」、「右半標題」→「第二標題」；左右「畫面描述」欄刪除（跟其他版型對齊）；只填第一標題＝滿版，兩個都填＝雙切（自動判定）。
+3. 新聞內文自動消化：AI 判定內文是 1 個還是 2 個主題；1 個只填第一標題（滿版），2 個填兩個（雙切），左右順序依內文順序。
+4. 【YT整點直播】對齊十點的滿版／雙切新模式（填第二標題就雙切），不需要 ON AIR／精華。→ 取代原本 B「另開整點雙切版」。
+5. 紅／藍底色框（預設 OFF）位置往下調，不超過第二行標題。→ 先出三個位置樣張給使用者挑。
+6. YT 直播 PNG 壓標（E）：先做範例樣張（元素底圖、標題字、來源句，全部腳本壓）定版，再做端點與 UI。
+
+### WP1 格式精簡（editor_formats／main／app.js／index.html）
+- 新 key：`broadcast`（欄位 `hole_side` left/right，前端按鈕，預設 left）、`ten_cover`（layout 由 title_right 是否有值自動判定；請求若明示 layout 仍以請求為準）。舊 key `broadcast_left`／`broadcast_right`／`ten_cover_full` 後端保留為別名（LINE／WorkCord／舊紀錄／測試相容），前端下拉不再列出。
+- 十點欄位：第一標題／第二標題；`visual_left`／`visual_right` 請求欄位保留相容但 UI 移除；封面／YT 版型重新顯示「給 AI 的指令」欄（09-08 早上「隱藏」裁決作廢），內容餵給畫面推導當提示。
+- 消化：`/api/editor/cover-titles` target `ten_cover` 回 `title_left`／`title_right`（單主題時空）＋`topics`（1／2）；順序依內文。
+- 下載檔名版型短名改依判定後的 layout。
+- 前端十點的「滿版／雙切」按鈕是判定結果指示器，不是輸入（點「雙切」只把游標移到第二標題）。
+
+### WP2 YT整點雙切（等 WP1 消化契約進 exp 後開工）
+- `ytCoverInputs` 整點版多一格「第二標題」；有值→ `compose_yt_hourly_split_cover`：兩張底圖各半（附圖或 AI 各 1:1）、各自兩行標題落在各自半格底部；LIVE 章／整點時間／Logo 位置沿用整點版；日期紅條位置待樣張定；無 ON AIR／精華。
+- 消化 target `yt_hourly` 同樣回兩個標題＋topics。
+- 先出一張樣張給使用者看，再接 UI。
+
+### WP3 底色框位置樣張＋PNG 壓標原型（compose.py＋scratch，不接端點／UI）
+- `YT_BAND_TOP_RATIO` 三個變體（第一行上緣／兩行之間／第二行上緣）× 藍／紅，漸入高度同步縮小，落 `D:\Downloads\20260908_底色框_*.png`。
+- `compose_yt_overlay()` 原型：1920×1080 透明 RGBA、標題條元素（半透明底塊）、兩行標題（沿用 `_draw_yt_title_line`）、來源句跟著 Logo 位置、LIVE 章；每個變體各出透明 PNG＋疊在灰底樣板畫面的預覽。
+
+### 之後
+- 手冊（八種→六種、欄位改名、畫面描述列刪除、十點表重排）、`docs/ten-cover-spec.md`、`docs/yt-live-cover-spec.md` 在 WP1＋WP2 落地後一次更新。
+- 不部署，等使用者下令。
