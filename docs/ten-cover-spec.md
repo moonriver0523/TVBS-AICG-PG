@@ -273,3 +273,77 @@ logo」，一句「背景弄熱鬧一點」就能替沒提到的店家捏一個�
   （追加修改／只改文字）兩條 payload 都帶。
 - 測試：`tests/test_cover_title_style.py`。既有直接 `.format()` 兩個模板的測試要補
   `title_style_clause=""`（`test_editor_formats`、`test_ten_cover_full`）。
+
+## 2026-09-08 下午：格式合併與自動判定（WP1）
+
+使用者裁決把編輯的版型下拉從八種砍到六種。兩件事一起做：播出鏡面的左切／右切合併成
+一個版型，十點不一樣的滿版／雙切合併成一個版型。共通原則是「版型只回答**做哪一種圖**，
+方向與版面這種每一則都會變的東西，交給版型裡的欄位」。
+
+### 十點不一樣：版面由第二標題判定
+
+- `editor_formats.EDITOR_FORMATS["ten_cover"]` 一個 key，label「十點不一樣」，
+  `cover_layout` 從 `split` 改成 `auto`——那個值現在只是個標記，實際版面一律問
+  `editor_formats.resolve_cover_layout()`（後端）或 `coverLayoutNow()`（前端）。
+- `TenCoverRequest.layout` 改成可省略：沒帶時第二標題有值＝`split`、空＝`full`；
+  有帶就以請求為準（舊呼叫端與 `ten_cover_full` 別名靠這條保持原行為）。
+  版面在 `/api/editor/cover` 入口就 `model_copy` 正規化成 split／full 一次，
+  下游那一票 `req.layout == "full"` 完全不用動。
+- 「雙切左右標題都要填」的 400 只剩**明示** `layout="split"` 又沒有第二標題會踩到。
+- 前端欄位改名「第一標題」「第二標題」。第二標題**永遠顯示**：它就是判定那一欄，
+  被 `.cover-split-only` 藏起來就永遠填不進去，版面也就永遠切不到雙切。
+  跟著判定顯隱的是第二附圖位與「只改文字」鈕（只有滿版合成版有）。
+- 「滿版／雙切」那兩顆是**判定結果指示器**，不是輸入。點「雙切」只把游標移到第二標題——
+  真正要做的就是去填那一欄；點「滿版」也不會幫使用者清掉第二標題，那是他自己的決定。
+
+### 播出鏡面：方向由請求欄位決定
+
+- `EDITOR_FORMATS["broadcast"]`，label「播出鏡面」。表裡的 `hole_side` 是**預設值**（左），
+  `hole_side_from_request: True` 才是「這個版型允許請求覆寫方向」的開關。
+- 請求欄位 `hole_side`（left／right）加在 `NewsImageGenerateRequest` **與** `GenerateRequest`
+  兩處。後者是必要的：消化階段就要知道方向，內容得趕到影片那半邊的對面，只在生圖端
+  決定的話，圖的重點會剛好被後製的影片蓋掉。
+- 同一側算出來的消化規則與舊 key 逐字元相同（`test_format_consolidation` 有守）。
+
+### 舊 key 留成別名
+
+`broadcast_left`／`broadcast_right`／`ten_cover_full` 移到 `EDITOR_FORMAT_ALIASES`，
+`editor_formats.get()` 兩層查得到，前端下拉不再列出。LINE／WorkCord、舊請求紀錄與既有
+測試照樣打得進來。**別名刻意不吃請求的 `hole_side`**：舊呼叫端不會帶這個欄位，而欄位
+預設是 left，別名若吃它，`broadcast_right` 會被默默翻成左切。
+
+### 消化自動判定主題數
+
+`/api/editor/cover-titles` 的 `ten_cover`：system prompt 先要模型判定內文是 1 個還是 2 個
+主題（不同事件＝2；同一事件的兩個面向＝1），1 個只回 `title_left`、`title_right` 留空，
+2 個依內文出現順序填左右。每個標題仍固定 3 段。回應加 `topics`（1／2）。
+一致性以「`title_right` 實際有沒有值」為準：模型說 1 卻多給右標就清掉、說 2 卻只給一個
+就退回 1——回一組自相矛盾的值，前端的版面指示器會跟欄位打架。
+`ten_cover_full` 這個 target 仍然收，走原本的單標題 prompt，回應 `topics=1`。
+
+### 指令欄
+
+09-08 早上「封面／YT 隱藏指令欄」的裁決作廢。指令欄那一組（`#instructionRow`）搬出
+`newsInputs`——封面版型會把整個 `newsInputs` 藏掉，留在裡面的話欄位再怎麼「顯示」都
+看不到；`applyEditorFormatInputs` 會把它搬到當前那組欄位底下。
+
+內容送 `TenCoverRequest.instruction`／`YtCoverRequest.instruction`（≤500 字，前端先截斷，
+指令欄本身允許 2000 字，直接送會被擋成 422）。兩條線都餵**畫面推導那一步**
+（`resolve_cover_visuals`／`derive_yt_cover_plan`）當提示，不直接拼進生圖 prompt：
+底圖那條線明令一個字都不准畫，指令直餵過去會被模型畫在圖上。
+所以走附圖直接上版、追加修改後重貼、只改文字這三條沒有推導的路徑時，指令不生效。
+
+同時移除左右「畫面描述」欄（`visual_left`／`visual_right` 請求欄位保留相容，前端不再送），
+`/api/editor/cover` 裡「有附圖那格用標題預填畫面描述」的回填也一併拿掉——那是為了回填
+一個已經不存在的欄位。
+
+### 下載檔名
+
+`DOWNLOAD_FORMAT_NAMES` 的十點與播出鏡面兩筆改成巢狀：十點依判定後的版面（十點滿版／
+十點雙切），播出鏡面依挖空側（播出鏡面左／播出鏡面右）。
+
+### 測試
+
+`tests/test_format_consolidation.py`（新增）：方向覆寫、別名不吃覆寫、版面自動判定與
+明示優先、消化 1／2 主題、指令欄餵入位置，以及前端字串（指示器、挖空側按鈕、指令欄
+搬家、短名巢狀）。
