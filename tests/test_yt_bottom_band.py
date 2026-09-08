@@ -1,7 +1,7 @@
-"""YT 封面底部壓色框改成開關、預設關、開的時候半透明（2026-09-08 使用者裁決）。
+"""YT 封面底部壓色框改成開關、開的時候半透明（2026-09-08 使用者裁決；同日晚改預設開）。
 
 守的紅線：
-1. **預設關。** 不帶 `bottom_band` 時底帶區的像素＝底圖原色（避開標題筆畫取樣）。
+1. **預設開。** 不帶 `bottom_band` 時底帶區要看得到半透明的帶；明確傳 False 才是底圖原色。
 2. **開的時候不是不透明。** 帶色壓上去後介於底圖色與帶色之間，照片仍透得出來。
 3. **AI 版兩種措辭都要有。** 合成版靠 compose，AI 版只能靠 prompt——OFF 時模板必須明文
    「沒有色框」，否則模型看到「filling the frame behind the band」還是會畫一條出來。
@@ -52,10 +52,13 @@ def _hot(**kw) -> Image.Image:
 
 
 class CompositeBandTests(unittest.TestCase):
-    def test_off_is_the_default_and_leaves_the_photo_untouched(self):
-        for name, img in (("news", _news()), ("hot", _hot())):
+    def test_on_is_the_default_and_off_leaves_the_photo_untouched(self):
+        """2026-09-08 晚使用者：所有藍紅底套色預設改 ON。"""
+        for name, fn in (("news", _news), ("hot", _hot)):
             with self.subTest(layout=name):
-                self.assertEqual(img.getpixel(PROBE), BASE)
+                self.assertNotEqual(fn().getpixel(PROBE), BASE, "預設沒畫帶")
+                self.assertEqual(fn(bottom_band=False).getpixel(PROBE), BASE)
+                self.assertEqual(fn(), fn(bottom_band=True))
 
     def test_on_is_semi_transparent_not_a_flat_colour(self):
         for name, img, fill in (("news", _news(bottom_band=True), compose.YT_BAND_FILL),
@@ -97,9 +100,10 @@ class AiPromptTests(unittest.TestCase):
         return body
 
     def test_off_tells_the_model_there_is_no_band(self):
+        """2026-09-08 晚預設改 ON，所以「關」要明確傳 False。"""
         for layout in ("news", "hot"):
             with self.subTest(layout=layout):
-                prompt = self._prompt(self._body(layout=layout))
+                prompt = self._prompt(self._body(layout=layout, bottom_band=False))
                 self.assertIn("There is NO solid colour band", prompt)
                 self.assertNotIn("behind the band", prompt)
 
@@ -126,8 +130,8 @@ class HourlyCompositeTests(unittest.TestCase):
 
 
 class FrontendTests(unittest.TestCase):
-    def test_state_defaults_to_off(self):
-        self.assertRegex(APP_JS, r"ytBottomBand:\s*false")
+    def test_state_defaults_to_on(self):
+        self.assertRegex(APP_JS, r"ytBottomBand:\s*true")
 
     def test_field_is_sent_once_and_covers_the_recompose_path(self):
         # ytCoverFields() 同時餵生成與 recomposeYtCover，所以一處就夠

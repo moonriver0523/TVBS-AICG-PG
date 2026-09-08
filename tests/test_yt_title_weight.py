@@ -217,7 +217,7 @@ class AiPromptTests(unittest.TestCase):
 class HourlyUntouchedTests(unittest.TestCase):
     def test_hourly_keeps_its_own_baselines(self):
         """整點直播版面不同（靠左貼邊、無底帶），這次的粗細與行距只動 news／hot。"""
-        self.assertEqual(compose.YT_HOURLY_LINE1_BASELINE_RATIO, 0.80)
+        self.assertEqual(compose.YT_HOURLY_LINE1_BASELINE_RATIO, 0.815)   # 2026-09-08 晚行距略縮
         self.assertEqual(compose.YT_HOURLY_LINE2_BASELINE_RATIO, 0.965)
 
 

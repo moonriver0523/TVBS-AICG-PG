@@ -137,6 +137,11 @@
 - YT 國內外／熱搜「太粗、複雜字分不出來」、整點「太細」：描邊 `YT_TITLE_STROKE_RATIO` 0.05→0.04、假粗體 `YT_TITLE_BOLD_RATIO` 0.015→0.008，整點改走同一支 `_draw_yt_title_line`（原本無假粗體無陰影），三種封面字重對齊。
 - 整點雙則每行上限 14→18（`YT_HOURLY_LINE_MAX_CHARS`、前端常數、消化 prompt、手冊）。其他版型沒有硬性字數上限（只有塞不進版面才報錯）。
 
+### I. 第四輪（2026-09-08 晚）✅
+- 整點兩行行距略縮：`YT_HOURLY_LINE1_BASELINE_RATIO` 0.80→0.815。
+- 十點雙切字再粗一點點：`COVER_TITLE_BOLD_RATIO`＝1.2% 假粗體（做法同 YT，描邊先加回吃掉的寬）。
+- 藍／紅底色框預設改 **ON**（`YtCoverRequest.bottom_band`、`state.ytBottomBand`、compose 兩函式預設值；手冊已改）。
+
 ### G. 標題各行同字級（2026-09-08 晚）
 - ✅ YT 三種封面（國內外／整點／熱搜）：兩行標題取全域最小字級，短行跟著長行縮（`_yt_shared_title_font`）。
 - 📋 TODO（使用者保留）：十點滿版目前逐行各自撐滿、每行字級可不同；要不要改成同字級牽涉「設計標題」AI 版的排法，待使用者決定後再動。十點雙切已是同字級。

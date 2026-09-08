@@ -370,9 +370,9 @@ let state = {
     // 十點 AI 整張版的標題設計感（2026-09-08）：plain＝現行排版、designed＝滿框放大關鍵字。
     // 預設 plain——designed 讓模型大改版面，錯字與版面走鐘的風險比較高，要使用者自己開。
     coverTitleStyle: 'plain',
-    // YT 封面底部壓色框（2026-09-08）：預設關——原本 80% 不透明的帶子把照片下半整片吃掉。
-    // 開的時候只有 60%（後端 compose.YT_BAND_ALPHA）。整點直播的版面沒有底帶，按鈕不顯示。
-    ytBottomBand: false,
+    // YT 封面底部壓色框：2026-09-08 晚使用者裁決預設**開**（60% 半透明、第二行上緣起羽化，見 compose）。
+    // 整點直播的版面沒有底帶，按鈕不顯示。
+    ytBottomBand: true,
     refineStack: []
 };
 

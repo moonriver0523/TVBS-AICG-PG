@@ -316,6 +316,7 @@ COVER_TITLE_BOTTOM_RATIO = 0.085     # 最後一行字底離畫面底的距離
 COVER_FULL_TITLE_SIZE_RATIO = 0.15    # 每行各自撐滿寬（比照今日熱搜逐行 fit），此為字級上限
 COVER_FULL_TITLE_WIDTH_RATIO = 0.90
 COVER_TITLE_STROKE_RATIO = 0.055
+COVER_TITLE_BOLD_RATIO = 0.012       # 假粗體（2026-09-08 晚使用者「十點雙切字還可再粗一點點」），做法同 YT
 # 逐行配色：第 1 行白、第 2 行黃、第 3 行紅（紅字用白描邊，其餘深色描邊）。
 # 這張表同時是 editor_formats.COVER_AI_PROMPT_TEMPLATE 對模型描述的配色規則，改要一起改。
 COVER_TITLE_LINE_COLOURS = ((255, 255, 255), (250, 215, 0), (228, 28, 40))
@@ -721,7 +722,9 @@ def _draw_cover_title(
     for idx in range(len(pairs) - 1, -1, -1):
         text, _ = pairs[idx]
         font = fonts[idx]
-        stroke = max(3, round(font.size * COVER_TITLE_STROKE_RATIO))
+        bold = round(font.size * COVER_TITLE_BOLD_RATIO)
+        # 描邊先加上假粗體會吃掉的寬度，加粗完外框才不會只剩一兩個像素（同 _draw_yt_title_line）
+        stroke = max(3, round(font.size * COVER_TITLE_STROKE_RATIO)) + bold
         colour = COVER_TITLE_LINE_COLOURS[min(idx, len(COVER_TITLE_LINE_COLOURS) - 1)]
         is_red = colour == COVER_TITLE_LINE_COLOURS[2]
         # 陰影一層再正字，字壓在照片上才立得住
@@ -731,6 +734,8 @@ def _draw_cover_title(
             stroke=COVER_TITLE_STROKE_LIGHT if is_red else COVER_TITLE_STROKE_DARK,
             stroke_width=stroke, anchor=anchor,
         )
+        if bold > 0:
+            _draw_text(draw, (x, baseline), text, font, fill=colour, stroke=colour, stroke_width=bold, anchor=anchor)
         # 往上一行：行距用**這一行**的字級算（滿版逐行不同字級時，大字行才不會壓到上面的小字行）
         baseline -= round(font.size * COVER_TITLE_LINE_GAP)
 
@@ -1093,13 +1098,13 @@ def compose_yt_cover(
     ai_translation: bool = False,
     ai_note: bool = False,
     draw_titles: bool = True,
-    bottom_band: bool = False,
+    bottom_band: bool = True,
     band_top_ratio: float | None = None,
     band_fade_ratio: float | None = None,
 ) -> bytes:
     """合成 YT 國內外新聞直播封面（2026-09-06 依頻道實際版面）。
 
-    bottom_band（2026-09-08 使用者裁決，預設關）：底部深藍壓色框。關＝完全不畫，
+    bottom_band（2026-09-08 晚使用者裁決改預設**開**）：底部深藍壓色框。關＝完全不畫，
     標題靠描邊自己立在照片上；開＝畫，且只有 YT_BAND_ALPHA（60%）不透明，照片透得出來。
 
     draw_titles=False（標題由 AI 生成模式）：background 已經是模型畫好含標題與底帶的
@@ -1204,7 +1209,7 @@ YT_HOURLY_DATE_TAB_HEIGHT_RATIO = 0.095
 YT_HOURLY_DATE_TOP_RATIO = 0.52         # 日期紅條上緣（114/220）
 YT_HOURLY_DATE_FILL = (214, 22, 32)
 YT_HOURLY_DATE_TEXT = (255, 255, 255)
-YT_HOURLY_LINE1_BASELINE_RATIO = 0.80
+YT_HOURLY_LINE1_BASELINE_RATIO = 0.815   # 2026-09-08 晚使用者「行距可略縮」：0.80→0.815（第二行不動）
 YT_HOURLY_LINE2_BASELINE_RATIO = 0.965
 YT_HOURLY_TITLE_SIZE_RATIO = 0.15       # 字高 32/220
 YT_HOURLY_AI_NOTE_TOP_RATIO = 0.34      # LIVE 章（含時間帶）之下的右側空位
@@ -1429,7 +1434,7 @@ def compose_yt_hot_cover(
     line2: str,
     ai_note: bool = False,
     draw_titles: bool = True,
-    bottom_band: bool = False,
+    bottom_band: bool = True,
     band_top_ratio: float | None = None,
     band_fade_ratio: float | None = None,
 ) -> bytes:

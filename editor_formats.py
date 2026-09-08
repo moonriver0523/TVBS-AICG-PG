@@ -525,7 +525,7 @@ YT_COVER_TITLE_MODE_AI = "ai"
 YT_COVER_TITLE_MODE_COMPOSITE = "composite"
 YT_COVER_TITLE_MODES = (YT_COVER_TITLE_MODE_AI, YT_COVER_TITLE_MODE_COMPOSITE)
 
-# 底部壓色框開關（2026-09-08 使用者裁決，預設 OFF）。合成版由 compose 的 bottom_band
+# 底部壓色框開關（2026-09-08 使用者裁決；同日晚改預設 ON）。合成版由 compose 的 bottom_band
 # 決定畫不畫，AI 版只能靠 prompt——所以 LAYOUT 的第一條與 IMAGERY 的結尾都要換句話說，
 # 不然模型看到「filling the frame behind the band」還是會自己畫一條帶子出來。
 # 開的時候明講「半透明約六成」，與合成版的 compose.YT_BAND_ALPHA=153 對齊。

@@ -4037,7 +4037,7 @@ class YtCoverRequest(BaseModel):
     ai_translation: bool = False     # 日期下方「AI即時翻譯」
     # 底部壓色框（2026-09-08 使用者裁決，預設 OFF）：關＝完全不畫，標題靠描邊立在照片上；
     # 開＝畫，且只有 60% 不透明（compose.YT_BAND_ALPHA）。整點直播沒有底帶，後端直接忽略。
-    bottom_band: bool = False
+    bottom_band: bool = True     # 2026-09-08 晚使用者：藍／紅底色框預設改 ON
     date_text: str = Field(default="", max_length=20)
     # 整點直播專用：整點時間（如 20:00），選填，有填才掛在 LIVE 章下
     time_text: str = Field(default="", max_length=10)
