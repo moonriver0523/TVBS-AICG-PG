@@ -434,7 +434,7 @@ Render EXACTLY these strings, character for character, nothing else:
 
 === LAYOUT ===
 {band_clause}
-- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in ULTRA-HEAVY BLACK-WEIGHT Chinese display type filling almost the full width, with TIGHT LEADING so the two lines sit close together as one block.
+- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in heavy black weight Chinese display type filling almost the full width, with TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean and separated — the counters (the enclosed white spaces inside characters) must stay open; do not thicken the type until the strokes merge.
 - Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
 - Keep the UPPER-LEFT corner (a block about 24% wide and 40% tall) completely free of text or busy detail: a red LIVE badge and a date tab are pasted there afterwards.
 - Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a channel logo tab is pasted there afterwards.
@@ -482,7 +482,7 @@ Render EXACTLY these strings, character for character, nothing else:
 
 === LAYOUT ===
 {band_clause}
-- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in ULTRA-HEAVY BLACK-WEIGHT Chinese display type filling almost the full width, with TIGHT LEADING so the two lines sit close together as one block.
+- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in heavy black weight Chinese display type filling almost the full width, with TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean and separated — the counters (the enclosed white spaces inside characters) must stay open; do not thicken the type until the strokes merge.
 - Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
 - Keep the UPPER-LEFT corner (a block about 30% wide and 16% tall) completely free of text or busy detail: a red-and-white "trending" tag is pasted there afterwards.
 - Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a red channel logo tab is pasted there afterwards.

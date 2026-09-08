@@ -13,9 +13,10 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from collections import deque
 from unittest.mock import patch
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
@@ -67,6 +68,75 @@ def _rows(img: Image.Image, colour, tolerance=25) -> list[int]:
     return out
 
 
+# 使用者實測糊掉的那一行（12 字，會縮到接近最小字級）
+LONG_LINE = "民眾可關閉社群媒體演算法"
+PROBE_BG = (0, 200, 0)
+
+
+def _enclosed_counters(bold_ratio: float) -> list[int]:
+    """把 LONG_LINE 畫在純色底上，回傳每個「封閉字腔」（不接觸畫布邊界的底色區塊）的面積。
+
+    字腔＝口、日、國這些字裡被筆畫圍起來的內白。假粗體太重時筆畫會黏起來把字腔填掉，
+    這裡用連通區域數出來，就不必猜某個字的某個洞在哪個座標。
+    """
+    with patch.object(compose, "YT_TITLE_BOLD_RATIO", bold_ratio):
+        size = round(1080 * compose.YT_TITLE_MIN_SIZE_RATIO)   # 最小字級：最擠的情況
+        font = compose._font(size)
+        width = font.getbbox(LONG_LINE)[2] + 200
+        img = Image.new("RGB", (width, size * 2), PROBE_BG)
+        compose._draw_yt_title_line(
+            ImageDraw.Draw(img), (width // 2, round(size * 1.4)), LONG_LINE, font, compose.YT_LINE2_FILL
+        )
+    px, (w, h) = img.load(), img.size
+    seen = [[False] * w for _ in range(h)]
+
+    def is_bg(x, y):
+        r, g, b = px[x, y]
+        return abs(r - PROBE_BG[0]) + abs(g - PROBE_BG[1]) + abs(b - PROBE_BG[2]) < 40
+
+    areas = []
+    for y0 in range(h):
+        for x0 in range(w):
+            if seen[y0][x0] or not is_bg(x0, y0):
+                continue
+            queue, cells, touches_edge = deque([(x0, y0)]), 0, False
+            seen[y0][x0] = True
+            while queue:
+                x, y = queue.popleft()
+                cells += 1
+                if x in (0, w - 1) or y in (0, h - 1):
+                    touches_edge = True
+                for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                    if 0 <= nx < w and 0 <= ny < h and not seen[ny][nx] and is_bg(nx, ny):
+                        seen[ny][nx] = True
+                        queue.append((nx, ny))
+            if not touches_edge and cells >= 6:
+                areas.append(cells)
+    return sorted(areas, reverse=True)
+
+
+class CounterTests(unittest.TestCase):
+    """使用者 2026-09-08 第二輪回報：3.5% 太重，黃字筆畫黏住、字腔被吃掉。"""
+
+    def test_long_line_keeps_its_counters_open_at_the_smallest_size(self):
+        areas = _enclosed_counters(compose.YT_TITLE_BOLD_RATIO)
+        self.assertGreaterEqual(len(areas), 8, f"封閉字腔只剩 {len(areas)} 個，筆畫黏住了")
+        self.assertGreaterEqual(max(areas), 300, "最大的字腔被填得太小")
+
+    def test_the_rejected_ratio_would_have_failed_this_check(self):
+        """證明上面那條真的擋得住：3.5% 只剩 6 個字腔、最大 229。"""
+        rejected = _enclosed_counters(0.035)
+        current = _enclosed_counters(compose.YT_TITLE_BOLD_RATIO)
+        self.assertLess(len(rejected), len(current))
+        self.assertLess(max(rejected), max(current))
+
+    def test_bold_ratio_is_the_value_the_user_asked_for(self):
+        self.assertEqual(compose.YT_TITLE_BOLD_RATIO, 0.015)
+
+    def test_shadow_offset_was_reduced_too(self):
+        self.assertEqual(compose.YT_TITLE_SHADOW_RATIO, 0.02)
+
+
 class WeightTests(unittest.TestCase):
     def test_faux_bold_adds_ink_on_both_layouts(self):
         for name, render in (("news", _news), ("hot", _hot)):
@@ -82,9 +152,13 @@ class WeightTests(unittest.TestCase):
     def test_dark_outline_survives_the_bold_pass(self):
         """假粗體會吃掉外框寬度，深色描邊要先補回來，字才立得住（底色框預設關）。"""
         font = compose._font(100)
-        bold = max(2, round(font.size * compose.YT_TITLE_BOLD_RATIO))
+        bold = round(font.size * compose.YT_TITLE_BOLD_RATIO)
         outline = max(4, round(font.size * compose.YT_TITLE_STROKE_RATIO)) + bold
         self.assertGreaterEqual(outline - bold, max(4, round(font.size * compose.YT_TITLE_STROKE_RATIO)))
+
+    def test_bold_has_no_artificial_floor(self):
+        """設 max(2, …) 會讓 1.5% 與完全不加粗在常見字級下畫出一模一樣的字。"""
+        self.assertEqual(round(157 * compose.YT_TITLE_BOLD_RATIO), 2)
 
 
 class ShadowTests(unittest.TestCase):
@@ -131,8 +205,10 @@ class AiPromptTests(unittest.TestCase):
         for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
             with self.subTest(template=name):
                 text = getattr(editor_formats, name)
-                self.assertIn("ULTRA-HEAVY BLACK-WEIGHT", text)
+                self.assertIn("heavy black weight", text)
                 self.assertIn("TIGHT LEADING", text)
+                self.assertIn("counters", text)              # 明文要模型別把字腔畫糊
+                self.assertNotIn("ULTRA-HEAVY", text)        # 太重的措辭已撤（使用者第二輪回報）
                 self.assertNotIn("huge and heavy Chinese display type", text)
 
 

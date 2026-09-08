@@ -858,8 +858,10 @@ YT_LINE2_BASELINE_RATIO = 0.958      # 第二行字底
 YT_TITLE_SIZE_RATIO = 0.145          # 標題起始字級（字高約 100/720）
 YT_TITLE_MIN_SIZE_RATIO = 0.085
 YT_TITLE_STROKE_RATIO = 0.05         # 深色描邊佔字級比例（假粗體吃掉的部分另外補，見 _draw_yt_title_line）
-YT_TITLE_BOLD_RATIO = 0.035          # 假粗體：同色描邊佔字級比例
-YT_TITLE_SHADOW_RATIO = 0.03         # 陰影位移佔字級比例（底色框預設關之後才補的）
+# 2026-09-08 第二輪：3.5% 太重，第二行黃字筆畫互相黏住、字腔（口、日的內白）被吃掉，
+# 「關閉社群媒體」糊成一團。降到 1.5%——12 字的長行在最小字級下字腔仍然清楚。
+YT_TITLE_BOLD_RATIO = 0.015          # 假粗體：同色描邊佔字級比例
+YT_TITLE_SHADOW_RATIO = 0.02         # 陰影位移佔字級比例（底色框預設關之後才補的）
 YT_LINE1_FILL = (255, 255, 255)
 YT_LINE2_FILL = (250, 215, 0)
 YT_TITLE_STROKE = (8, 8, 8)
@@ -973,15 +975,19 @@ def _draw_yt_title_line(
     深色描邊要**先加上假粗體吃掉的寬度**，不然加粗完外框只剩一兩個像素，
     字壓在照片上（底色框現在預設關）就立不住。
     """
-    bold = max(2, round(font.size * YT_TITLE_BOLD_RATIO))
+    # 不設下限：假粗體是「加多少」不是「至少多少」，設了 max(2, …) 會讓 1.5% 與完全不加粗
+    # 在常見字級下畫出一模一樣的字（round(157 × 0.015)=2，撞到下限）。
+    bold = round(font.size * YT_TITLE_BOLD_RATIO)
     outline = max(4, round(font.size * YT_TITLE_STROKE_RATIO)) + bold
     # 陰影一層再正字（比照十點封面的標題）：底色框 2026-09-08 起預設關，字直接壓在照片上，
     # 光靠描邊在亮背景仍然糊。位移用字級的比例算，字級縮了陰影跟著縮。
-    shadow = max(2, round(font.size * YT_TITLE_SHADOW_RATIO))
-    _draw_text(draw, (xy[0] + shadow, xy[1] + shadow), text, font, fill=(0, 0, 0),
-               stroke=(0, 0, 0), stroke_width=outline, anchor=anchor)
+    shadow = round(font.size * YT_TITLE_SHADOW_RATIO)
+    if shadow > 0:
+        _draw_text(draw, (xy[0] + shadow, xy[1] + shadow), text, font, fill=(0, 0, 0),
+                   stroke=(0, 0, 0), stroke_width=outline, anchor=anchor)
     _draw_text(draw, xy, text, font, fill=fill, stroke=YT_TITLE_STROKE, stroke_width=outline, anchor=anchor)
-    _draw_text(draw, xy, text, font, fill=fill, stroke=fill, stroke_width=bold, anchor=anchor)
+    if bold > 0:
+        _draw_text(draw, xy, text, font, fill=fill, stroke=fill, stroke_width=bold, anchor=anchor)
 
 
 def _draw_title_band(
