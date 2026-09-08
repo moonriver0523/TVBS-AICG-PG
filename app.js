@@ -866,8 +866,7 @@ function renderEditorFormats() {
         });
     }
     select.value = state.editorFormat;
-    const hint = document.getElementById('editorFormatHint');
-    if (hint) hint.innerText = editorFormat().hint || '';
+    // 2026-09-08 使用者裁決：下拉底下的斜體版型說明拿掉（手冊有寫），欄位內的短提示留著
 }
 
 // 鎖住的開關要看得出來是「這個版型規定的」而不是壞掉。淡化＋擋點擊是外觀，

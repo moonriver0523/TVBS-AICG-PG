@@ -366,7 +366,6 @@
                         <label class="block text-[9px] font-black text-amber-500/80 uppercase tracking-[0.16em] mb-1">編輯格式</label>
                         <select id="editorFormatSelect" onchange="setEditorFormat(this.value)"
                                 class="w-full rounded-lg px-2.5 py-2 text-[11px] font-black transition-all input-focus-ring"></select>
-                        <p id="editorFormatHint" class="text-[10px] text-slate-500 italic mt-1"></p>
                     </div>
 
                     <div id="digestTypeRow" class="mt-3 mb-2">
@@ -456,7 +455,6 @@
                                     title="開：標題撐滿整格、關鍵字放大、緊密堆疊，像節目片頭字卡，顏色不變；關：維持現行排版"
                                     class="hidden px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">設計標題 OFF</button>
                         </div>
-                        <p class="text-[9px] text-slate-600 leading-relaxed">只填<span class="text-amber-500/90">第一標題</span>＝滿版，兩個標題都填＝雙切（自動判定，指示器只顯示結果）；想交代畫面寫在下方「給 AI 的指令」。標題用空白分行（最多 3 行，白／黃／紅逐行變色）。左右各有自己的<span class="text-amber-500/90">附圖位</span>：有圖的那格直接上版（不生圖、自動改程式壓字），沒圖的那格由 AI 依標題生底圖，左有右無就只生右格。上方「附參考圖」的實景／肖像／地圖用途仍當生圖參考。Logo 與節目標籤一律由程式貼正版檔。</p>
                     </div>
 
                     <!-- YT 直播封面（國內外新聞／整點兩版型共用）：一句標題（半形空格分段）＋副標或整點時間＋日期；
@@ -522,7 +520,6 @@
                                     title="開：底部加半透明色框（照片透得出來）；關：不畫框，標題靠描邊立在照片上"
                                     class="hidden px-2.5 py-1 rounded text-[9px] font-black transition-all border border-amber-600 text-slate-400 hover:text-white">底色框 OFF</button>
                         </div>
-                        <p class="text-[9px] text-slate-600 leading-relaxed">附圖選「<span class="text-amber-500/90">原圖放置</span>」就直接當底圖不生圖：1 張單圖、2 張左右雙切、3 張三切（分切時標題一律程式壓字）；其他用途當生圖參考。沒附圖由 AI 依標題生底圖並標「AI示意圖」。LIVE 章、日期、Logo、兩行標題全由程式疊，零錯字；版面依 TVBS NEWS 頻道實際直播封面。</p>
                     </div>
 
                     <div id="digestControlsRow" class="grid grid-cols-2 gap-2 mb-2">
