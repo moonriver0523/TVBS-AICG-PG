@@ -3458,18 +3458,18 @@ def _cover_ai(
     badge_text = compose.COVER_BADGES[req.badge][0]
 
     # 2026-09-08 使用者回報 AI 整張版把 3 行併成 2 行、只上白黃兩色：行數與顏色改成
-    # 逐行標在清單上（Line 2 (yellow): …），並在前面先講死總行數。顏色照**段落**走
-    # （compose.cover_title_line_pairs），所以連續兩行同色是正常的，模板也明講了。
+    # 逐行標在清單上（Line 2 (yellow): …），並在前面先講死總行數。顏色照**行序**走
+    # （同日第二輪裁決：白黃紅三行是固定的視覺），與合成版 _draw_cover_title 同一套。
     _LINE_COLOUR_NAMES = ("white", "yellow", "red, white outline")
 
     def _lines_block(title: str, *, full_width: bool) -> str:
-        pairs = compose.cover_title_line_pairs(title.strip(), full_width=full_width)
-        if not pairs:
+        lines = compose.cover_title_lines(title.strip(), full_width=full_width)
+        if not lines:
             return ""
-        head = f"  (exactly {len(pairs)} lines — render each on its own row, in this order)"
+        head = f"  (exactly {len(lines)} lines — render each on its own row, in this order)"
         body = [
-            f"  Line {i} ({_LINE_COLOUR_NAMES[min(seg, len(_LINE_COLOUR_NAMES) - 1)]}): {text}"
-            for i, (text, seg) in enumerate(pairs, start=1)
+            f"  Line {i} ({_LINE_COLOUR_NAMES[min(i - 1, len(_LINE_COLOUR_NAMES) - 1)]}): {text}"
+            for i, text in enumerate(lines, start=1)
         ]
         return "\n".join([head, *body])
 

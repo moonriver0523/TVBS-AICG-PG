@@ -298,7 +298,7 @@ class CoverPromptTests(unittest.TestCase):
         self.assertIn("THE NUMBER OF LINES AND WHERE THEY BREAK ARE FIXED", prompt)
         self.assertIn("never merge two listed lines onto one row", prompt)
         self.assertIn("COLOUR EACH LINE EXACTLY AS LABELLED", prompt)
-        self.assertIn("may carry the same colour", prompt)
+        self.assertIn("never recolour a line", prompt)
 
     def test_prompt_forbids_extra_text(self):
         self.assertIn("Do not translate them", self.render())

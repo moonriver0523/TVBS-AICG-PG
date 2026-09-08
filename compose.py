@@ -289,6 +289,11 @@ COVER_MARGIN = 26                    # 內容離左右畫框的距離
 COVER_ONAIR_FILL = (206, 26, 32)
 # 2026-09-07 使用者回報「字明顯太小」：起始字級 0.085 → 0.11、版位 0.90。
 #
+# 顏色一律**依行序**：第 1 行白、第 2 行黃、第 3 行紅（`COVER_TITLE_LINE_COLOURS`）。
+# 2026-09-08 一度改成依段落（空格分段），同日使用者看了樣張後改回依行——要的是
+# 「白黃紅三行」的固定視覺，兩段標題被拆成 3 行時第 3 行也要紅。段索引仍跟著行走
+# （`cover_title_line_pairs` 的第二個元素），但**只記錄出處，不決定顏色**。
+#
 # 2026-09-08 使用者看了正式站成品後再裁決（雙切）：**兩格同一字級**。逐行各自撐滿的做法
 # 讓「左格三行 6 字都最大、右格第三行 11 字被壓小」變成兩邊字大小差一截，看起來像兩張圖
 # 拼的。改成：每格先各自算出逐行都塞得進的字級，再取兩格的全域最小值當所有行的字級
@@ -329,7 +334,9 @@ COVER_DEFAULT_BADGE = "on_air"
 # 標頭帶只有左半（Logo＋節目標籤）與右端（日期＋ON AIR）有東西，中段本來就空。
 COVER_STAMP_BAND_RATIO = 0.80        # 精華標籤高度佔標頭帶高的比例
 COVER_MAX_TITLE_LINES = 3            # 滿版
-COVER_MAX_TITLE_LINES_SPLIT = 4      # 雙切（2026-09-08）：拆得夠短，兩格的共同字級才撐得起來
+# 2026-09-08 第二輪裁決：雙切一度放寬到 4 行，使用者看了樣張後改回 3 行——
+# 「白黃紅三行」是固定的視覺，第四行沒有顏色可配。拆行規則不變，只是到 3 行就停。
+COVER_MAX_TITLE_LINES_SPLIT = 3      # 雙切
 
 
 # 純 prompt 版的後製：把正版白色 Logo＋「十點不一樣」節目標籤貼進模型留空的標頭帶左半。
@@ -558,8 +565,8 @@ def _split_line_near_middle(text: str) -> tuple[str, str]:
 def _wrap_pairs(pairs: list[tuple[str, int]], max_w: int, size: int, max_lines: int) -> list[tuple[str, int]]:
     """超寬防呆（2026-09-07）：在起始字級塞不進格寬的行，從中間切成兩行（最長的先切）。
 
-    行帶著**段落索引**一起走：拆出來的兩行都繼承原本那一段的索引，配色才跟得上段落
-    （2026-09-08 使用者規則：第一個空格後是黃字、第二個空格後是紅字，不是「第幾行」）。
+    行帶著段落索引一起走（拆出來的兩行都繼承原本那一段的索引），只是那個索引現在
+    **只記錄出處、不決定顏色**——2026-09-08 同日第二輪裁決把配色改回依行序。
     """
     pairs = list(pairs)
     font = _font(size)
@@ -675,7 +682,7 @@ def _draw_cover_title(
     canvas: Image.Image, pairs: list[tuple[str, int]], panel_x0: int, panel_x1: int, align_right: bool,
     *, full_width: bool = False, size_override: int | None = None,
 ) -> None:
-    """一格的標題：由下往上堆，配色**依段落**（第 1 段白、第 2 段黃、第 3 段紅白邊）。
+    """一格的標題：由下往上堆，配色**依行序**（第 1 行白、第 2 行黃、第 3 行紅白邊）。
 
     雙切：字級由 size_override 給（兩格同一個值，2026-09-08 使用者裁決「兩邊字不一樣大」不行）。
     full_width=True（滿版單一標題）：橫跨整個畫面、置中、逐行各自撐滿，比照今日熱搜。
@@ -702,12 +709,12 @@ def _draw_cover_title(
     else:
         x, anchor = panel_x0 + round(panel_w * (1 - COVER_TITLE_WIDTH_RATIO) / 2), "ls"
     draw = ImageDraw.Draw(canvas)
-    # 由最後一行往上畫；顏色看**段落索引**，不是行序
+    # 由最後一行往上畫；顏色看**行序**（第 1 行白、第 2 行黃、第 3 行紅），不是段落索引
     for idx in range(len(pairs) - 1, -1, -1):
-        text, seg = pairs[idx]
+        text, _ = pairs[idx]
         font = fonts[idx]
         stroke = max(3, round(font.size * COVER_TITLE_STROKE_RATIO))
-        colour = COVER_TITLE_LINE_COLOURS[min(seg, len(COVER_TITLE_LINE_COLOURS) - 1)]
+        colour = COVER_TITLE_LINE_COLOURS[min(idx, len(COVER_TITLE_LINE_COLOURS) - 1)]
         is_red = colour == COVER_TITLE_LINE_COLOURS[2]
         # 陰影一層再正字，字壓在照片上才立得住
         _draw_text(draw, (x + 4, baseline + 4), text, font, fill=(0, 0, 0), stroke=(0, 0, 0), stroke_width=stroke, anchor=anchor)
