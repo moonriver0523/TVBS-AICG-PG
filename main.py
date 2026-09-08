@@ -3460,7 +3460,9 @@ def _cover_ai(
     # 2026-09-08 使用者回報 AI 整張版把 3 行併成 2 行、只上白黃兩色：行數與顏色改成
     # 逐行標在清單上（Line 2 (yellow): …），並在前面先講死總行數。顏色照**行序**走
     # （同日第二輪裁決：白黃紅三行是固定的視覺），與合成版 _draw_cover_title 同一套。
-    _LINE_COLOUR_NAMES = ("white", "yellow", "red, white outline")
+    # 這三個字要跟模板圖例的 (white)／(yellow)／(red) 完全一樣——標記與圖例對不起來，
+    # 模型就得自己猜 "red, white outline" 是不是圖例裡那個 (red)。
+    _LINE_COLOUR_NAMES = ("white", "yellow", "red")
 
     def _lines_block(title: str, *, full_width: bool) -> str:
         lines = compose.cover_title_lines(title.strip(), full_width=full_width)

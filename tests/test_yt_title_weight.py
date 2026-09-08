@@ -205,7 +205,7 @@ class AiPromptTests(unittest.TestCase):
         for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
             with self.subTest(template=name):
                 text = getattr(editor_formats, name)
-                self.assertIn("heavy black weight", text)
+                self.assertIn("heavy black-weight (weight, not colour)", text)
                 self.assertIn("TIGHT LEADING", text)
                 self.assertIn("counters", text)              # 明文要模型別把字腔畫糊
                 self.assertNotIn("ULTRA-HEAVY", text)        # 太重的措辭已撤（使用者第二輪回報）

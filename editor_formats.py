@@ -203,7 +203,7 @@ COVER_TITLE_STYLE_PLAIN = "plain"
 COVER_TITLE_STYLE_DESIGNED = "designed"
 COVER_TITLE_STYLES = (COVER_TITLE_STYLE_PLAIN, COVER_TITLE_STYLE_DESIGNED)
 
-COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE = """- DESIGNED TITLE: treat the headline as a show title card. Set it edge to edge so it FILLS THE FULL WIDTH of its panel, in extremely heavy black display type with tight leading so the lines stack as one solid block. EMPHASIS IS BY SIZE ONLY: mix the type sizes within a line so the key figure, number or keyword is set noticeably LARGER than the characters around it — a deliberate, designed rhythm rather than one uniform size. Do NOT add a highlight colour of your own to pick that word out; colours stay exactly as assigned per line above. Add a crisp white stroke around the characters plus a strong drop shadow so the block lifts off the photograph.
+COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE = """- DESIGNED TITLE: treat the headline as a show title card. Set it edge to edge so it FILLS THE FULL WIDTH of its panel, in heavy black-weight (weight, not colour) display type with tight leading so the lines stack as one solid block. EMPHASIS IS BY SIZE ONLY: mix the type sizes within a line so the key figure, number or keyword is set noticeably LARGER than the characters around it — a deliberate, designed rhythm rather than one uniform size. Do NOT add a highlight colour of your own to pick that word out; colours stay exactly as assigned per line above. Keep each line's outline exactly as specified above, and add a strong drop shadow so the block lifts off the photograph.
 - That styling changes only the SIZE, WEIGHT and PLACEMENT of the characters. It does NOT change the line count, the line breaks, the order or the colours: those stay exactly as listed above, one listed line per row, each in its labelled colour. Render the lines character for character — never add, drop, reorder or re-split a single character to make the layout work.
 """
 
@@ -447,7 +447,7 @@ Render EXACTLY these strings, character for character, nothing else:
 
 === LAYOUT ===
 {band_clause}
-- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in heavy black weight Chinese display type filling almost the full width, with TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean and separated — the counters (the enclosed white spaces inside characters) must stay open; do not thicken the type until the strokes merge.
+- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in heavy black-weight (weight, not colour) Chinese display type filling almost the full width, with TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean and separated — the counters (the enclosed white spaces inside characters) must stay open; do not thicken the type until the strokes merge.
 - Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
 - Keep the UPPER-LEFT corner (a block about 24% wide and 40% tall) completely free of text or busy detail: a red LIVE badge and a date tab are pasted there afterwards.
 - Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a channel logo tab is pasted there afterwards.
@@ -495,7 +495,7 @@ Render EXACTLY these strings, character for character, nothing else:
 
 === LAYOUT ===
 {band_clause}
-- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in heavy black weight Chinese display type filling almost the full width, with TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean and separated — the counters (the enclosed white spaces inside characters) must stay open; do not thicken the type until the strokes merge.
+- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in heavy black-weight (weight, not colour) Chinese display type filling almost the full width, with TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean and separated — the counters (the enclosed white spaces inside characters) must stay open; do not thicken the type until the strokes merge.
 - Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
 - Keep the UPPER-LEFT corner (a block about 30% wide and 16% tall) completely free of text or busy detail: a red-and-white "trending" tag is pasted there afterwards.
 - Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a red channel logo tab is pasted there afterwards.

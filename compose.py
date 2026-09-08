@@ -472,10 +472,13 @@ def _draw_cover_highlight_stamp(canvas: Image.Image) -> None:
     """
     width, height = canvas.size
     band_h = round(height * COVER_HEADER_RATIO)
+    # 垂直置中要扣掉帶底那條亮藍細線，才跟 Logo 與節目標籤同一條中線
+    # （`_draw_cover_header` 兩者都是 (band_h - line_h - h) // 2）。
+    line_h = max(2, round(height * COVER_HEADER_LINE_RATIO))
     tag_h = round(band_h * COVER_STAMP_BAND_RATIO)
     with Image.open(TEN_HIGHLIGHT_TAG) as tpl:
         tag_w = round(tpl.width * tag_h / tpl.height)
-    _paste_template(canvas, TEN_HIGHLIGHT_TAG, ((width - tag_w) // 2, (band_h - tag_h) // 2), tag_h)
+    _paste_template(canvas, TEN_HIGHLIGHT_TAG, ((width - tag_w) // 2, (band_h - line_h - tag_h) // 2), tag_h)
 
 
 def _draw_cover_header(draw: ImageDraw.ImageDraw, canvas: Image.Image, date_text: str, badge: str) -> int:

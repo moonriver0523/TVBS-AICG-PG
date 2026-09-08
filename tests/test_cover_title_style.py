@@ -47,10 +47,22 @@ class ClauseTests(unittest.TestCase):
         self.assertIn("Do NOT add a highlight colour of your own", clause)
 
     def test_designed_clause_does_not_override_the_line_and_colour_rules(self):
-        """設計標題只能改字級／字重／位置——行數、斷行、顏色仍由清單標記說了算。"""
+        """設計標題只能改字級／字重／位置——行數、斷行、顏色、描邊仍由前面的規則說了算。"""
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
         self.assertIn("does NOT change the line count", clause)
         self.assertIn("each in its labelled colour", clause)
+        self.assertIn("Keep each line's outline exactly as specified above", clause)
+        # 這一段不得自己指定描邊或配色：基礎規則是白／黃行深色描邊、只有紅行白描邊，
+        # 一句「加白色描邊」就把三行全變成白描邊了。
+        for banned in ("white stroke", "crisp white", "outline in white", "yellow or red"):
+            with self.subTest(banned=banned):
+                self.assertNotIn(banned, clause)
+
+    def test_designed_clause_says_black_is_a_weight_not_a_colour(self):
+        """「extremely heavy black display type」的 black 會被讀成填色。"""
+        clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
+        self.assertIn("heavy black-weight (weight, not colour)", clause)
+        self.assertNotIn("heavy black display type", clause)
 
     def test_designed_clause_repeats_the_verbatim_rule(self):
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE

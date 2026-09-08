@@ -43,10 +43,11 @@ def _data_url(raw: bytes) -> str:
 def _highlight_tag_box(w: int, h: int) -> tuple[int, int, int, int]:
     """「精華」紅刷筆標籤在畫布上的方框（與 compose._draw_cover_highlight_stamp 同一套推導）。"""
     band_h = round(h * compose.COVER_HEADER_RATIO)
+    line_h = max(2, round(h * compose.COVER_HEADER_LINE_RATIO))
     tag_h = round(band_h * compose.COVER_STAMP_BAND_RATIO)
     with Image.open(compose.TEN_HIGHLIGHT_TAG) as tpl:
         tag_w = round(tpl.width * tag_h / tpl.height)
-    y0 = (band_h - tag_h) // 2
+    y0 = (band_h - line_h - tag_h) // 2
     return ((w - tag_w) // 2, y0, (w - tag_w) // 2 + tag_w, y0 + tag_h)
 
 

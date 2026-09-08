@@ -71,7 +71,7 @@ class CompositeParityTests(unittest.TestCase):
 class AiPromptParityTests(unittest.TestCase):
     # 2026-09-08 使用者回饋「字體再粗一點、行距略縮」，兩個模板一起改；
     # 同日第二輪回報 ULTRA-HEAVY 太重（字腔糊掉），改成 heavy black weight。
-    TYPE_CLAUSE = "heavy black weight Chinese display type filling almost the full width"
+    TYPE_CLAUSE = "heavy black-weight (weight, not colour) Chinese display type filling almost the full width"
 
     def test_both_templates_describe_the_type_size_the_same_way(self):
         for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
