@@ -1514,6 +1514,7 @@ def _vertical_column_layer(size: tuple[int, int], fill: tuple[int, int, int], ou
 def yt_vertical_layout(
     *, main_title: str, sub_title: str = "", title_side: str = "left",
     variant: str = "normal", logo_corner: str = "tr", source_text: str = "",
+    source_follow_logo: bool = False,
 ) -> dict:
     """算出直標每一塊的矩形，不畫任何東西。
 
@@ -1586,7 +1587,10 @@ def yt_vertical_layout(
         src_w = font.getbbox(source_text)[2]
         src_h = round(height * VSTRIP_SOURCE_SIZE_RATIO * 1.3)
         gap = round(height * VSTRIP_SOURCE_GAP_RATIO)
-        source = _vstrip_source_box(live, logo, logo_corner, title_side, src_w, src_h, gap)
+        if source_follow_logo:
+            source = _vstrip_source_box_follow_logo(logo, logo_corner, src_w, src_h, gap)
+        else:
+            source = _vstrip_source_box(live, logo, logo_corner, title_side, src_w, src_h, gap)
 
     return {"live": live, "label": label, "main": main, "sub": sub, "source": source,
             "logo": logo, "main_cells": main_cells, "sub_cells": sub_cells,
@@ -1654,7 +1658,8 @@ def compose_yt_overlay(
     width, height = YT_CANVAS
     layout = yt_vertical_layout(main_title=main_title, sub_title=sub_title,
                                title_side=title_side, variant=variant,
-                               logo_corner=logo_corner, source_text=source_text)
+                               logo_corner=logo_corner, source_text=source_text,
+                               source_follow_logo=source_follow_logo)
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
 
     # ---- 兩欄底色（外側欄先畫，內側欄壓在上面）----
@@ -1707,10 +1712,6 @@ def compose_yt_overlay(
     if source_text:
         font = _font(round(height * VSTRIP_SOURCE_SIZE_RATIO))
         box = layout["source"]
-        if source_follow_logo:
-            box = _vstrip_source_box_follow_logo(
-                logo, logo_corner, box[2] - box[0], box[3] - box[1],
-                round(height * VSTRIP_SOURCE_GAP_RATIO))
         _draw_text(ImageDraw.Draw(canvas), (box[0], box[1]), source_text, font,
                    fill=(255, 255, 255), stroke=YT_TITLE_STROKE,
                    stroke_width=max(3, round(height * 0.004)), anchor="la")

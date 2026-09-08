@@ -8,8 +8,9 @@
    ——短標題不縮字，ink 更高，用長標題量的上界會放行一個實際會糊字的設定。
 3. **直標是透明底。** 疊在直播訊號上的東西，畫布不透明就等於把訊號整片蓋掉。
 4. **主標在內側、副標在外側。** 兩欄都是深藍，像素分不出誰是誰，只能驗幾何。
-5. **直排不是把整行轉 90°。** 標點要換直排字形（「→﹁、、→︑），而且 ﹁ 與 ︑ 要待在
-   格子的角落——拿 getbbox 把墨水置中就會把它們拖到正中間，直排標點就白換了。
+5. **直排不是把整行轉 90°。** 標點要換直排字形（「→﹁、、→︑）。字級照格距算，em 框
+   比格距高一點，相鄰的字會些微溢出格子，所以「裁一格出來量墨水位置」會量到隔壁的
+   筆畫——字形這件事改用整張比對驗：清掉對照表重畫，兩張圖必須不一樣。
 6. **連續英數字是一格（縱中橫）。** 「30度」的 30 併成一格橫著寫，字數上限照格數算。
 7. **兩欄等長。** 參考截圖量出來就是同一個上緣同一個下緣，格數多的那欄字自動縮小。
 """
@@ -390,21 +391,35 @@ class VerticalSourceTextTests(unittest.TestCase):
         self.assertLess(abs((box[1] + box[3]) / 2 - (live[1] + live[3]) / 2),
                         (live[3] - live[1]) / 2 + 8)
 
+    def _layout(self, **kw):
+        return compose.yt_vertical_layout(main_title=MAIN, sub_title=SUB,
+                                          source_text=SOURCE, **kw)
+
     def test_following_a_top_logo_puts_it_under_the_logo(self):
         for corner, side in (("tr", "left"), ("tl", "right")):
             with self.subTest(corner=corner):
-                box = self._box(logo_corner=corner, title_side=side, source_follow_logo=True)
-                logo = compose.yt_vertical_layout(main_title=MAIN, sub_title=SUB,
-                                                  logo_corner=corner, title_side=side)["logo"]
-                self.assertGreaterEqual(box[1], logo[3])
+                drawn = self._box(logo_corner=corner, title_side=side, source_follow_logo=True)
+                layout = self._layout(logo_corner=corner, title_side=side,
+                                      source_follow_logo=True)
+                self.assertGreaterEqual(drawn[1], layout["logo"][3])
+                # 幾何跟畫出來的要對得上，不能一個算一套
+                self.assertAlmostEqual(drawn[1], layout["source"][1], delta=8)
 
     def test_following_a_bottom_logo_puts_it_above_the_logo(self):
         for corner, side in (("br", "left"), ("bl", "right")):
             with self.subTest(corner=corner):
-                box = self._box(logo_corner=corner, title_side=side, source_follow_logo=True)
-                logo = compose.yt_vertical_layout(main_title=MAIN, sub_title=SUB,
-                                                  logo_corner=corner, title_side=side)["logo"]
-                self.assertLessEqual(box[3], logo[1])
+                drawn = self._box(logo_corner=corner, title_side=side, source_follow_logo=True)
+                layout = self._layout(logo_corner=corner, title_side=side,
+                                      source_follow_logo=True)
+                self.assertLessEqual(drawn[3], layout["logo"][1])
+                self.assertAlmostEqual(drawn[1], layout["source"][1], delta=8)
+
+    def test_the_two_modes_put_the_line_in_different_places(self):
+        """兩種模式要真的不一樣，不然「跟著 Logo」這個開關等於沒接。"""
+        beside = self._layout(logo_corner="br", title_side="left")["source"]
+        follow = self._layout(logo_corner="br", title_side="left",
+                              source_follow_logo=True)["source"]
+        self.assertNotEqual(beside, follow)
 
     def test_blank_source_text_draws_nothing(self):
         self.assertEqual(_vstrip(source_text="   ").tobytes(), _vstrip().tobytes())
