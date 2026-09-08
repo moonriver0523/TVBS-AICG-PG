@@ -257,3 +257,13 @@ hourly 另收 `time_text`。前端 `EDITOR_FORMATS[*].ytLayout` 帶到 `ytCoverF
 
 測試：`tests/test_yt_hourly_dual.py`（38 題：羽化無硬邊、字數上限、附圖分格、端點、消化、
 前端接線）。樣張 `D:\Downloads\20260908_YT整點雙則_sample.png`。
+
+## 2026-09-08：兩行標題一律同字級（G）
+
+三種 YT 封面（`compose_yt_cover`／`compose_yt_hourly_cover`／`compose_yt_hot_cover`）的兩行
+標題改由 `compose._yt_shared_title_font` 統一決定字級：先算出每一行各自撐得下的最大字級，
+取兩者之中**最小**的那個一起用，短的那行跟著長的那行縮。
+
+以前每行各自撐滿，短行會排得比長行大一截，兩行看起來不齊。同字級之後上下兩行等高，
+與頻道實際封面一致。十點不一樣的滿版仍是逐行各自撐滿（牽涉「設計標題」AI 版的排法，
+使用者保留未裁）；十點雙切本來就已經是同字級。
