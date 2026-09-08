@@ -2043,7 +2043,7 @@ async function handleCoverTitleDigest(target) {
         const single = ten ? !(data.title_right || '').trim()
             : ytHourly ? !(data.title_second || '').trim() : false;
         showToast((ten || ytHourly) && single
-            ? '判定為單一主題（滿版），標題已回填，看過沒問題再按「生成」'
+            ? `判定為單一主題（${ten ? '滿版' : '單則'}），標題已回填，看過沒問題再按「生成」`
             : '標題已回填，看過沒問題再按「生成」');
     } catch (err) {
         showToast(`消化標題失敗：${err.message}`);

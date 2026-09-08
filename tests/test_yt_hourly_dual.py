@@ -379,6 +379,10 @@ class FrontendWiringTests(unittest.TestCase):
     def test_fields_carry_the_second_title_only_for_hourly(self):
         self.assertIn("title_second: layout === 'hourly' ? val('ytCoverTitleSecond') : ''", APP_JS)
 
+    def test_single_topic_toast_uses_the_hourly_wording(self):
+        """整點的單一主題是「單則」，不是十點那個「滿版」。"""
+        self.assertIn("${ten ? '滿版' : '單則'}", APP_JS)
+
     def test_no_leftover_split_wiring(self):
         for dead in ("ytSplitBackgrounds", "background_second_base64", "data.split", "second_line1"):
             with self.subTest(dead=dead):
