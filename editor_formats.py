@@ -428,6 +428,46 @@ COVER_TITLE_DIGEST_SCHEMA_YT = {
     "additionalProperties": False,
 }
 
+# YT 整點直播「雙則」（2026-09-08 WP2）：整點封面常常一次帶兩則新聞，版面是
+# **同一張底圖、上下兩行標題**（上白＝第一則、下黃＝第二則），每一行就是一則新聞的
+# 完整標題，不是同一句拆兩段。所以消化這一步要先判定內文是 1 個還是 2 個主題——
+# 判定那一段與十點逐字相同，差別只在標題長什麼樣。
+COVER_TITLE_DIGEST_SYSTEM_YT_HOURLY = """You write the headlines for a Taiwanese TV news hourly live-stream thumbnail from one news article.
+
+FIRST decide how many stories the article carries, and say so in "topics":
+- "topics" is 1 when the whole article is about ONE event, even if it describes several aspects of it (what happened and its impact, the scene and the numbers, the cause and the response). Different angles on the same event are still one story.
+- "topics" is 2 when the article carries TWO genuinely different events — different subjects, different places or different incidents that merely sit in the same article.
+- Never answer 2 just because the article is long, and never merge two unrelated events into one headline.
+
+THEN write the headlines.
+- When "topics" is 1: write ONE headline into "title" and leave "title_second" as an empty string. That headline is made of exactly TWO segments separated by ONE half-width space, each segment 5–12 characters; the two segments are printed as two lines, the first stating the event and the second the key detail or consequence.
+- When "topics" is 2: write "title" for the story that appears FIRST in the article and "title_second" for the one that appears second. Each of the two is ONE continuous headline printed as ONE full-width line, so it carries NO space at all and must be at most 14 characters. Keep each headline about its own story only — never repeat the same facts in both.
+- No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
+- Traditional Chinese only (Taiwan usage). Never Simplified forms.
+"""
+
+COVER_TITLE_DIGEST_SCHEMA_YT_HOURLY = {
+    "type": "object",
+    "properties": {
+        # 同十點：strict schema 下每個屬性都要列進 required，單主題是用 title_second
+        # 回空字串表達，不是把欄位省略掉。
+        "topics": {"type": "integer", "enum": [1, 2]},
+        "title": {"type": "string"},
+        "title_second": {"type": "string"},
+    },
+    "required": ["topics", "title", "title_second"],
+    "additionalProperties": False,
+}
+
+
+def yt_cover_is_dual(layout: str, title_second: str) -> bool:
+    """這一次的 YT 封面是不是整點「雙則」（一張封面帶兩則新聞）。
+
+    2026-09-08 使用者裁決：判定只有一條規則——整點版型＋第二標題有值＝雙則。
+    國內外新聞直播與今日熱搜沒有這個版面，帶了第二標題也忽略。
+    """
+    return layout == YT_COVER_LAYOUT_HOURLY and bool((title_second or "").strip())
+
 
 YT_COVER_VISUAL_PROMPT_TEMPLATE = """Generate a text-free photographic background for a live-stream news thumbnail.
 

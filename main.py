@@ -3687,16 +3687,20 @@ def _cover_composite(
 
 class CoverTitleDigestRequest(BaseModel):
     news_text: str = Field(min_length=10, max_length=20_000)
-    target: Literal["ten_cover", "ten_cover_full", "yt_cover"] = "ten_cover"
+    # yt_hourly（2026-09-08 WP2）＝整點直播，與十點同款「先判 1／2 主題」；
+    # yt_cover＝國內外新聞直播與今日熱搜，維持單標題。
+    target: Literal["ten_cover", "ten_cover_full", "yt_cover", "yt_hourly"] = "ten_cover"
 
 
 class CoverTitleDigestResponse(BaseModel):
     title_left: str = ""
     title_right: str = ""
     title: str = ""
-    # 十點：這篇內文被判定成幾個主題（1＝滿版、2＝雙切）。前端據此更新版面指示器。
-    # 一致性以「title_right 有沒有值」為準：模型說 2 卻只給一個標題就退回 1，
-    # 說 1 卻多給了右標就把右標清掉——回一組自相矛盾的值，前端的指示器會跟欄位打架。
+    # 整點雙切的第二標題（target=yt_hourly；單主題時空）
+    title_second: str = ""
+    # 十點／整點：這篇內文被判定成幾個主題（1＝滿版、2＝雙切）。前端據此更新版面指示器。
+    # 一致性以「第二標題有沒有值」為準：模型說 2 卻只給一個標題就退回 1，
+    # 說 1 卻多給了第二標題就清掉——回一組自相矛盾的值，前端的指示器會跟欄位打架。
     topics: int = 1
 
 
@@ -3716,14 +3720,20 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
     2026-09-06 使用者裁決：封面類版型也要能自動消化，但回填後停下來讓編輯看過。
     """
     ten = req.target == "ten_cover"
+    hourly = req.target == "yt_hourly"
     if ten:
         base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_TEN
+        schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_TEN
     elif req.target == "ten_cover_full":
         base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_TEN_FULL
+        schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT
+    elif hourly:
+        base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_YT_HOURLY
+        schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT_HOURLY
     else:
         base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_YT
+        schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT
     system_prompt = base_prompt + CONTENT_FIDELITY_RULES
-    schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_TEN if ten else editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT
     model = (
         os.getenv("DIGEST_MODEL")
         or os.getenv("OPENAI_DIGEST_MODEL")
@@ -3760,6 +3770,12 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
     title = _clip_title(data.get("title"), 60)
     if not title:
         raise HTTPException(status_code=502, detail="消化標題失敗：模型沒給標題")
+    if hourly:
+        # 整點雙切（2026-09-08 WP2）：判定規則與十點同一套，只是欄位叫 title／title_second
+        second = _clip_title(data.get("title_second"), 60)
+        if data.get("topics") == 1:
+            second = ""
+        return CoverTitleDigestResponse(title=title, title_second=second, topics=2 if second else 1)
     return CoverTitleDigestResponse(title=title)
 
 
@@ -3991,6 +4007,11 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
 
 class YtCoverRequest(BaseModel):
     title: str = Field(min_length=1, max_length=60)
+    # 第二則新聞的標題（2026-09-08 WP2）。整點直播＋這一欄有值＝「雙則」：第一行（白）
+    # ＝title 整句不拆、第二行（黃）＝title_second，底圖由左右兩張羽化拼成一張。
+    # 空＝現行單則流程（title 用半形空格拆兩行）一字不變。國內外新聞直播與今日熱搜
+    # 沒有雙則版面，帶了也忽略。判定在 editor_formats.yt_cover_is_dual。
+    title_second: str = Field(default="", max_length=60)
     # news＝國內外新聞直播；hourly＝整點直播；hot＝今日熱搜（見 editor_formats.YT_COVER_LAYOUTS）
     layout: Literal["news", "hourly", "hot"] = "news"
     # ai＝整張連標題字交給生圖模型畫，程式只後貼固定元素（2026-09-06 使用者裁決預設）；
@@ -4026,12 +4047,15 @@ class YtCoverRequest(BaseModel):
 
 class YtCoverResponse(ImageGenerateResponse):
     # source_image_base64（繼承欄位）＝追加修改的源圖：composite 模式是無文字底圖，
-    # ai 模式是模型畫好含標題、但還沒貼固定元素的整張圖。
+    # ai 模式是模型畫好含標題、但還沒貼固定元素的整張圖。雙則的底圖是拼好的那一張，
+    # 所以追加修改與「只改文字」跟單則走同一條路，不需要多餘欄位。
     line1: str = ""
     line2: str = ""
     visual: str = ""
     background_is_ai: bool = False
     title_mode: str = "ai"
+    # 整點雙則（2026-09-08 WP2）：前端據此顯示版面與對應的下載短名
+    dual: bool = False
 
 
 def derive_yt_cover_plan(
@@ -4253,12 +4277,114 @@ def yt_cover_asis_count(req: "YtCoverRequest") -> int:
     return sum(1 for ref in req.reference_images if ref.purpose == "asis")
 
 
+# ---- 整點「雙則」（2026-09-08 WP2）----
+#
+# 兩則新聞一張封面：上白＝第一則、下黃＝第二則，兩行各是一則的完整標題（不拆段）。
+# 底圖是左右兩張羽化拼成的**一張**——標題橫跨全寬，中間若有硬邊會從字中間穿過去。
+# 拼完就是一張普通底圖，所以追加修改與「只改文字」照舊走既有那條路。
+
+
+def yt_dual_panel_requests(req: "YtCoverRequest") -> tuple["YtCoverRequest", "YtCoverRequest"]:
+    """把雙則請求拆成左右兩個單格請求：標題與原圖放置附圖各歸各格。
+
+    原圖放置 1 張＝左格（第一則）、2 張＝左右各一（超過只取前 2 張）。非 asis 的附圖
+    （實景／肖像／地圖）兩格共用，那是生圖參考不是版位。
+
+    **附圖一定要先拆**：resolve_yt_cover_plan 的 has_asis 看的是整份清單，
+    不拆的話左格附了一張圖會讓右格也以為自己有底圖，右格的畫面推導就被跳過。
+    """
+    asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
+    others = [ref for ref in req.reference_images if ref.purpose != "asis"]
+    if len(asis) > 2:
+        print(f"[yt-cover:dual] 原圖放置附圖 {len(asis)} 張，雙則只有兩格，只取前 2 張", flush=True)
+    left = req.model_copy(update={
+        "title": req.title.strip(), "title_second": "",
+        "reference_images": others + asis[:1],
+        "background_image_base64": "",
+    })
+    right = req.model_copy(update={
+        "title": req.title_second.strip(), "title_second": "",
+        "reference_images": others + asis[1:2],
+        "background_image_base64": "",
+    })
+    return left, right
+
+
+def yt_dual_panel_plan(panel_req: "YtCoverRequest") -> "YtCoverPlan":
+    """雙則某一格的畫面描述（＋這一格的具名真人）。
+
+    刻意**不走** resolve_yt_cover_plan：那一支的工作有一半是「把標題拆成兩行」，
+    而雙則的行早就定了（一行一則），拆行只會白打一次文字模型。這裡只問畫面描述。
+    附圖那格不打——它的底圖就是那張照片。
+    """
+    if any(ref.purpose == "asis" for ref in panel_req.reference_images):
+        return YtCoverPlan(("", ""), "", [], [])
+    title = panel_req.title.strip()
+    data = derive_yt_cover_plan(title, None, panel_req.instruction)
+    visual = str(data.get("visual") or "").strip() or title
+    subjects = clean_portrait_subjects(data.get("portrait_subjects"))
+    english = align_english_names(
+        subjects,
+        [str(x) for x in (data.get("portrait_subjects_en") or [])],
+        [str(x) for x in (data.get("portrait_subjects") or [])],
+    )
+    uploaded = sum(1 for ref in panel_req.reference_images if ref.purpose == "portrait")
+    subjects, english, photos, dropped = keep_subjects_with_photos(
+        subjects, english, uploaded_portraits=uploaded, tag="yt-cover:dual"
+    )
+    return YtCoverPlan(("", ""), visual, subjects, english, photos, dropped)
+
+
+def yt_dual_background(
+    panel_reqs: tuple["YtCoverRequest", "YtCoverRequest"], plans: list
+) -> tuple[bytes, bool, str]:
+    """雙則的底圖：左右兩格各自取得後羽化拼成一張，回 (PNG bytes, 有沒有 AI 生的格, 模型名)。
+
+    沒附圖的格生 **1:1** 方圖（走十點那條 `_cover_panel_image`）：一格只佔半個畫面多一點，
+    生 16:9 塞進去會被裁掉左右兩側。要生的格平行生——序列跑等待時間直接加倍。
+    附圖那格**不先裁 16:9**：裁過再交給拼接又裁一次，同一張圖被裁兩次主體會被切掉。
+    """
+    panels: list[bytes | None] = [None, None]
+    models: list[str] = []
+    todo: list[int] = []
+    for i, panel_req in enumerate(panel_reqs):
+        asis = [ref for ref in panel_req.reference_images if ref.purpose == "asis"]
+        if not asis:
+            todo.append(i)
+            continue
+        _, _, encoded = _split_data_url(asis[0].data_url)
+        if not encoded:
+            raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
+        panels[i] = base64.b64decode(encoded)
+        if "yt-cover:asis" not in models:
+            models.append("yt-cover:asis")
+    if todo:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {
+                i: pool.submit(
+                    _cover_panel_image,
+                    plans[i][1] or panel_reqs[i].title.strip(),
+                    panel_reqs[i].provider,
+                    [ref for ref in panel_reqs[i].reference_images if ref.purpose != "asis"],
+                    plans[i][2], plans[i][3],
+                    getattr(plans[i], "excluded", []),
+                )
+                for i in todo
+            }
+            for i, future in futures.items():
+                panels[i], model = future.result()
+                if model not in models:
+                    models.append(model)
+    return compose.blend_backgrounds_lr(panels[0], panels[1]), bool(todo), "、".join(models)
+
+
 @app.post(
     "/api/editor/yt-cover",
     response_model=YtCoverResponse,
     dependencies=[Depends(verify_internal_api_key)],
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
+    dual = editor_formats.yt_cover_is_dual(req.layout, req.title_second)
     if yt_cover_asis_count(req) >= 1 and req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI:
         # 有原圖放置一律程式壓字（2026-09-07 使用者裁決，與十點封面同一原則）：
         # 原圖放置＝真實新聞照直接上版，交給模型重畫會走樣；原本只在 ≥2 張時強制，
@@ -4275,18 +4401,39 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     bottom_band = bool(req.bottom_band) and not hourly
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
 
-    plan = resolve_yt_cover_plan(req)
-    lines, visual, subjects, english = plan
-    photos = yt_cover_plan_photos(plan)
+    if dual:
+        # 雙則：兩行各是一則新聞的完整標題，**不拆段**——所以不走 split_live_title，
+        # 也不問文字模型怎麼分行。畫面描述仍要一則一個（兩格底圖各畫各的），
+        # 所以拆成兩個單格請求各推導一次；帶了現成底圖（追加修改／只改文字）時一次都不打。
+        panel_reqs = yt_dual_panel_requests(req)
+        need_panels = not req.background_image_base64
+        plans = [
+            yt_dual_panel_plan(panel_req) if need_panels else YtCoverPlan(("", ""), "", [], [])
+            for panel_req in panel_reqs
+        ]
+        lines = (req.title.strip(), req.title_second.strip())
+        visual = "｜".join(filter(None, (plans[0][1], plans[1][1])))
+        subjects = list(plans[0][2]) + list(plans[1][2])
+        english = list(plans[0][3]) + list(plans[1][3])
+        plan = None
+        photos = {**yt_cover_plan_photos(plans[0]), **yt_cover_plan_photos(plans[1])}
+        excluded = list(getattr(plans[0], "excluded", [])) + list(getattr(plans[1], "excluded", []))
+    else:
+        plan = resolve_yt_cover_plan(req)
+        lines, visual, subjects, english = plan
+        photos = yt_cover_plan_photos(plan)
+        excluded = list(getattr(plan, "excluded", []))
     request_id = request_log.new_request_id()
-    log_source = f"editor-yt-cover-{req.layout}-{req.title_mode}"
+    log_source = f"editor-yt-cover-{req.layout}{'-dual' if dual else ''}-{req.title_mode}"
     log_prompt = visual or "（附圖／既有底圖）"
+    # 雙則的兩則標題都要記，只記第一則的話事後查不出是哪一組組合出的問題
+    log_title = f"{req.title.strip()}／{req.title_second.strip()}" if dual else req.title
 
     def _log_failure(exc: Exception) -> None:
         # 生圖與合成的失敗以前只會 print，事後查不到是哪一則標題觸發的。
         # 比照 /api/images/generate：記一筆再原樣往外丟。
         request_log.log_failure(
-            request_id=request_id, source=log_source, news_text=req.title,
+            request_id=request_id, source=log_source, news_text=log_title,
             error=str(exc), prompt=log_prompt, role="編輯", provider=req.provider,
         )
 
@@ -4297,13 +4444,17 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             background = base64.b64decode(req.background_image_base64)
             bg_mime, is_ai, image_model = req.background_mime_type or "image/png", req.background_is_ai, "yt-cover:overlay"
         elif ai_title:
+            # 雙則的 AI 整張版照走同一條：兩行標題原樣進模板，模型自己畫底圖與字
             background, bg_mime, image_model = _yt_cover_full_image(
-                req, lines, visual, subjects, english, excluded=getattr(plan, "excluded", [])
+                req, lines, visual, subjects, english, excluded=excluded
             )
             is_ai = True
+        elif dual and not req.background_image_base64:
+            background, is_ai, image_model = yt_dual_background(panel_reqs, plans)
+            bg_mime = "image/png"
         else:
             background, bg_mime, is_ai, image_model = _yt_cover_background(
-                req, visual, subjects, english, excluded=getattr(plan, "excluded", [])
+                req, visual, subjects, english, excluded=excluded
             )
     except Exception as exc:
         _log_failure(exc)
@@ -4327,6 +4478,9 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 time_text=req.time_text.strip(),
                 ai_note=is_ai,
                 draw_titles=not ai_title,
+                # 雙則的每一行是一則新聞的完整標題，長度沒有天然上限，要有一條硬線；
+                # 單則是同一句拆兩段，長度受原標題限制，不套用（維持原行為）。
+                line_max_chars=compose.YT_HOURLY_LINE_MAX_CHARS if dual else None,
             )
         else:
             cover = compose.compose_yt_cover(
@@ -4348,7 +4502,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     request_log.log_generation(
         request_id=request_id,
         source=log_source,
-        news_text=req.title,
+        news_text=log_title,
         variable="\n".join(filter(None, [
             lines[0], lines[1],
             editor_formats.YT_COVER_ORIGINAL_AUDIO_LABEL if original_audio else "",
@@ -4376,6 +4530,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         visual=visual,
         background_is_ai=is_ai,
         title_mode=req.title_mode,
+        dual=dual,
     )
 
 

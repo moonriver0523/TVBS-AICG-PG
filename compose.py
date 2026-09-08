@@ -22,6 +22,7 @@
 import functools
 import io
 import pathlib
+import unicodedata
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -1205,6 +1206,19 @@ YT_HOURLY_LINE1_BASELINE_RATIO = 0.80
 YT_HOURLY_LINE2_BASELINE_RATIO = 0.965
 YT_HOURLY_TITLE_SIZE_RATIO = 0.15       # 字高 32/220
 YT_HOURLY_AI_NOTE_TOP_RATIO = 0.34      # LIVE 章（含時間帶）之下的右側空位
+# 「雙則」每行字數上限（2026-09-08 使用者裁決）：兩行各是一則新聞的完整標題，
+# 不是同一句拆兩段，長度沒有天然上限，所以要有一條硬線。單則模式不套用。
+YT_HOURLY_LINE_MAX_CHARS = 14
+
+
+def title_display_width(text: str) -> float:
+    """標題長度（全形字算 1、半形字算 0.5）。
+
+    直接數 len() 會把「1380」這種半形數字當 4 個字——使用者自己給的樣張標題
+    「尼泊爾洪災逾1380死家屬抗議」len() 是 15、實際排出來只有 13 個全形字寬。
+    上限本來就是為了「排不排得下」，所以照顯示寬度算才對得上。
+    """
+    return sum(0.5 if unicodedata.east_asian_width(ch) in ("Na", "H") else 1.0 for ch in text)
 
 
 def compose_yt_hourly_cover(
@@ -1216,10 +1230,15 @@ def compose_yt_hourly_cover(
     time_text: str = "",
     ai_note: bool = False,
     draw_titles: bool = True,
+    line_max_chars: int | None = None,
 ) -> bytes:
     """合成 YT 整點直播封面。time_text（如 20:00）選填，有填才在 LIVE 章下掛時間帶。
 
     draw_titles=False：標題已由模型畫在 background 上，這裡只貼固定元素。
+
+    line_max_chars（2026-09-08 WP2）：每行字數上限，超過就報錯。給「雙則」用——
+    那個模式的兩行各是一則新聞的完整標題，不是同一句拆兩段，長度沒有天然上限。
+    單則模式不帶這個參數，維持原行為。
     """
     line1, line2 = (line1 or "").strip(), (line2 or "").strip()
     if not line1 or not line2:
@@ -1286,6 +1305,11 @@ def compose_yt_hourly_cover(
         (line1, YT_LINE1_FILL, YT_HOURLY_LINE1_BASELINE_RATIO),
         (line2, YT_LINE2_FILL, YT_HOURLY_LINE2_BASELINE_RATIO),
     ) if draw_titles else ():
+        if line_max_chars and title_display_width(text) > line_max_chars:
+            raise ComposeError(f"標題超過 {line_max_chars} 字：「{text}」（請縮短這一行）")
+        # 共用字級縮到最小仍塞不下時放著不管就是字被畫框裁掉
+        if font.getbbox(text)[2] > max_w:
+            raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{text}」（請縮短這一行）")
         stroke = max(4, round(font.size * YT_TITLE_STROKE_RATIO))
         _draw_text(
             draw, (margin, round(height * baseline_ratio)), text, font,
@@ -1294,6 +1318,69 @@ def compose_yt_hourly_cover(
 
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+# ---- 左右兩張底圖的羽化拼接（2026-09-08 WP2）----
+#
+# 整點「雙則」的底圖是兩則新聞各一張，但標題是橫跨全寬的兩整行——中間若有 split_canvas
+# 那種白色硬邊（或斜切），線會從標題字中間穿過去，兩者互相打架。使用者給的真實封面上
+# 兩張圖是「柔和的深色漸層帶」接起來的，看不到任何直線，所以這裡走 alpha 漸融：
+# 中線兩側各一段寬羽化，接縫再疊一層很淡的深色暈讓過渡自然。
+YT_SEAM_FEATHER_RATIO = 0.07     # 羽化半寬佔畫面寬（中線兩側各 7%，使用者說 6–8%）
+YT_SEAM_SHADE_ALPHA = 56         # 接縫深色暈的最深值（56/255 ≈ 22%，使用者上限 25%）
+YT_SEAM_CENTRE_RATIO = 0.5       # 接縫中心，預設正中
+
+
+def blend_backgrounds_lr(
+    left: bytes,
+    right: bytes,
+    size: tuple[int, int] = YT_CANVAS,
+    *,
+    feather_ratio: float = YT_SEAM_FEATHER_RATIO,
+    seam_ratio: float = YT_SEAM_CENTRE_RATIO,
+    shade_alpha: int = YT_SEAM_SHADE_ALPHA,
+) -> bytes:
+    """左右兩張底圖羽化拼成一張，回 PNG bytes。沒有分隔線、沒有硬邊。
+
+    seam_ratio＝接縫中心佔畫面寬，預設正中（0.5），限 0.35–0.65。使用者範例裡接縫偏左
+    是因為右圖主體剛好擋到才挪的，屬個案微調，所以留成參數但 API／UI 先不暴露。
+
+    每一格各自 COVER 裁切到「自己那半再加上羽化帶」的尺寸（不變形）；羽化用 smoothstep
+    而不是線性，線性的兩端會留下看得出來的折線。
+    """
+    if not 0.35 <= seam_ratio <= 0.65:
+        raise ComposeError(f"接縫位置要在 0.35–0.65 之間：{seam_ratio}")
+    width, height = size
+    seam = round(width * seam_ratio)
+    band = max(2, round(width * feather_ratio))
+    x0 = max(0, seam - band)          # 羽化帶左緣：這裡右圖完全透明
+    x1 = min(width, seam + band)      # 羽化帶右緣：這裡右圖完全不透明
+
+    canvas = Image.new("RGB", size, (0, 0, 0))
+    canvas.paste(_cover_panel(left, (x1, height)), (0, 0))
+    right_panel = _cover_panel(right, (width - x0, height))
+
+    mask = Image.new("L", (width - x0, height), 255)
+    md = ImageDraw.Draw(mask)
+    span = max(1, x1 - x0)
+    for i in range(span):
+        t = i / span
+        md.line(((i, 0), (i, height)), fill=round(255 * t * t * (3 - 2 * t)))  # smoothstep
+    canvas.paste(right_panel, (x0, 0), mask)
+
+    # 接縫深色暈：中心最深、往兩側以同一條 smoothstep 收掉，讓兩張圖的亮度差不刺眼
+    if shade_alpha > 0:
+        shade = Image.new("RGBA", size, (0, 0, 0, 0))
+        sd = ImageDraw.Draw(shade)
+        for x in range(x0, x1):
+            d = abs(x - seam) / max(1, band)
+            t = max(0.0, 1.0 - d)
+            sd.line(((x, 0), (x, height)), fill=(0, 0, 0, round(shade_alpha * t * t * (3 - 2 * t))))
+        canvas = Image.alpha_composite(canvas.convert("RGBA"), shade).convert("RGB")
+
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG")
     return buffer.getvalue()
 
 

@@ -72,8 +72,9 @@ class DownloadNameRuleTests(unittest.TestCase):
 
     def test_every_editor_format_has_a_short_name(self):
         names = _block("const DOWNLOAD_FORMAT_NAMES = {", "};")
+        # yt_hourly_cover 2026-09-08 WP2 起是巢狀的（滿版／雙切），見下一題
         for key, short in (("default", "編輯CG"), ("yt_live_cover", "YT直播"),
-                           ("yt_hourly_cover", "YT整點"), ("yt_hot_cover", "YT熱搜")):
+                           ("yt_hot_cover", "YT熱搜")):
             with self.subTest(key=key):
                 self.assertIn(f"{key}: '{short}'", names)
 
@@ -82,6 +83,8 @@ class DownloadNameRuleTests(unittest.TestCase):
         names = _block("const DOWNLOAD_FORMAT_NAMES = {", "};")
         self.assertIn("broadcast: { left: '播出鏡面左', right: '播出鏡面右' }", names)
         self.assertIn("ten_cover: { full: '十點滿版', split: '十點雙切' }", names)
+        # WP2：YT 整點的短名依第二標題判定出來的版面（單則／雙則）
+        self.assertIn("yt_hourly_cover: { single: 'YT整點', dual: 'YT整點雙則' }", names)
         for dead in ("broadcast_left:", "broadcast_right:", "ten_cover_full:"):
             with self.subTest(dead=dead):
                 self.assertNotIn(dead, names)
