@@ -83,8 +83,8 @@ class DownloadNameRuleTests(unittest.TestCase):
         names = _block("const DOWNLOAD_FORMAT_NAMES = {", "};")
         self.assertIn("broadcast: { left: '播出鏡面左', right: '播出鏡面右' }", names)
         self.assertIn("ten_cover: { full: '十點滿版', split: '十點雙切' }", names)
-        # WP2：YT 整點也合併成一個版型，短名依第二標題判定出來的版面
-        self.assertIn("yt_hourly_cover: { full: 'YT整點', split: 'YT整點雙切' }", names)
+        # WP2：YT 整點的短名依第二標題判定出來的版面（單則／雙則）
+        self.assertIn("yt_hourly_cover: { single: 'YT整點', dual: 'YT整點雙則' }", names)
         for dead in ("broadcast_left:", "broadcast_right:", "ten_cover_full:"):
             with self.subTest(dead=dead):
                 self.assertNotIn(dead, names)

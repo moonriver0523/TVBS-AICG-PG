@@ -1,8 +1,9 @@
-"""出一張「YT 整點雙切」樣張給使用者看版面（WP2 第一階段）。
+"""出一張「YT 整點雙則」樣張給使用者看版面（WP2，2026-09-08）。
 
-不打生圖 API：兩格底圖用中性色（灰藍／灰棕）加一點漸層在本機畫，重點是版面不是照片。
+雙則＝同一張底圖上下兩行標題（上白＝第一則、下黃＝第二則），底圖由左右兩張羽化拼成。
+不打生圖 API：兩格底圖用中性色（灰藍／灰棕）在本機畫，重點是接縫與標題不是照片。
 
-    python -X utf8 scripts/make_yt_hourly_split_sample.py
+    python -X utf8 scripts/make_yt_hourly_dual_sample.py
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 import compose  # noqa: E402
 
-OUT = pathlib.Path(r"D:\Downloads\20260908_YT整點雙切_sample.png")
+OUT = pathlib.Path(r"D:\Downloads\20260908_YT整點雙則_sample.png")
 
 
 def neutral_panel(top: tuple[int, int, int], bottom: tuple[int, int, int]) -> bytes:
@@ -37,17 +38,18 @@ def neutral_panel(top: tuple[int, int, int], bottom: tuple[int, int, int]) -> by
 
 
 def main() -> None:
-    png = compose.compose_yt_hourly_split_cover(
-        neutral_panel((122, 140, 166), (48, 60, 78)),      # 灰藍
-        neutral_panel((160, 140, 120), (78, 64, 52)),      # 灰棕
-        left_line1="尼泊爾洪災逾1380死",
-        left_line2="家屬赴總理府抗議",
-        right_line1="直播帶貨美國爆紅",
-        right_line2="砸數十億美元",
+    background = compose.blend_backgrounds_lr(
+        neutral_panel((122, 140, 166), (48, 60, 78)),      # 灰藍：第一則
+        neutral_panel((166, 142, 116), (82, 66, 50)),      # 灰棕：第二則
+    )
+    png = compose.compose_yt_hourly_cover(
+        background,
+        line1="尼泊爾洪災逾1380死家屬抗議",
+        line2="直播帶貨美國爆紅砸數十億",
         date_text="2026/09/08",
         time_text="20:00",
-        left_ai_note=True,
-        right_ai_note=True,
+        ai_note=True,
+        line_max_chars=compose.YT_HOURLY_LINE_MAX_CHARS,
     )
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_bytes(png)

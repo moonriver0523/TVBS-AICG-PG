@@ -22,6 +22,7 @@
 import functools
 import io
 import pathlib
+import unicodedata
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -895,19 +896,14 @@ def _paste_live_badge(canvas: Image.Image, box: tuple[int, int], width: int) -> 
     return height
 
 
-def _draw_ai_note(canvas: Image.Image, y0: int, x1: int | None = None) -> None:
-    """右側「AI示意圖」小標（半透明黑底、白字），y0 為標籤頂。
-
-    x1 是小標的右緣，省略＝貼畫面右側（原行為）。雙切版兩格各自可能是 AI 底圖，
-    左格那一個要收在左半格內，所以才開這個參數。
-    """
+def _draw_ai_note(canvas: Image.Image, y0: int) -> None:
+    """右側「AI示意圖」小標（半透明黑底、白字），y0 為標籤頂。"""
     width, height = YT_CANVAS
     margin = round(width * YT_MARGIN_RATIO)
     note_font = _font(round(height * YT_AI_NOTE_SIZE_RATIO))
     note_w = note_font.getbbox(YT_AI_NOTE)[2]
     note_h = round(height * YT_AI_NOTE_SIZE_RATIO * 1.5)
-    if x1 is None:
-        x1 = width - margin - 12
+    x1 = width - margin - 12
     plate = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     ImageDraw.Draw(plate).rounded_rectangle(
         (x1 - note_w - 24, y0, x1, y0 + note_h), radius=8, fill=YT_AI_NOTE_PLATE
@@ -1162,6 +1158,19 @@ YT_HOURLY_LINE1_BASELINE_RATIO = 0.80
 YT_HOURLY_LINE2_BASELINE_RATIO = 0.965
 YT_HOURLY_TITLE_SIZE_RATIO = 0.15       # 字高 32/220
 YT_HOURLY_AI_NOTE_TOP_RATIO = 0.34      # LIVE 章（含時間帶）之下的右側空位
+# 「雙則」每行字數上限（2026-09-08 使用者裁決）：兩行各是一則新聞的完整標題，
+# 不是同一句拆兩段，長度沒有天然上限，所以要有一條硬線。單則模式不套用。
+YT_HOURLY_LINE_MAX_CHARS = 14
+
+
+def title_display_width(text: str) -> float:
+    """標題長度（全形字算 1、半形字算 0.5）。
+
+    直接數 len() 會把「1380」這種半形數字當 4 個字——使用者自己給的樣張標題
+    「尼泊爾洪災逾1380死家屬抗議」len() 是 15、實際排出來只有 13 個全形字寬。
+    上限本來就是為了「排不排得下」，所以照顯示寬度算才對得上。
+    """
+    return sum(0.5 if unicodedata.east_asian_width(ch) in ("Na", "H") else 1.0 for ch in text)
 
 
 def compose_yt_hourly_cover(
@@ -1173,10 +1182,15 @@ def compose_yt_hourly_cover(
     time_text: str = "",
     ai_note: bool = False,
     draw_titles: bool = True,
+    line_max_chars: int | None = None,
 ) -> bytes:
     """合成 YT 整點直播封面。time_text（如 20:00）選填，有填才在 LIVE 章下掛時間帶。
 
     draw_titles=False：標題已由模型畫在 background 上，這裡只貼固定元素。
+
+    line_max_chars（2026-09-08 WP2）：每行字數上限，超過就報錯。給「雙則」用——
+    那個模式的兩行各是一則新聞的完整標題，不是同一句拆兩段，長度沒有天然上限。
+    單則模式不帶這個參數，維持原行為。
     """
     line1, line2 = (line1 or "").strip(), (line2 or "").strip()
     if not line1 or not line2:
@@ -1242,7 +1256,12 @@ def compose_yt_hourly_cover(
         (line1, YT_LINE1_FILL, YT_HOURLY_LINE1_BASELINE_RATIO),
         (line2, YT_LINE2_FILL, YT_HOURLY_LINE2_BASELINE_RATIO),
     ) if draw_titles else ():
+        if line_max_chars and title_display_width(text) > line_max_chars:
+            raise ComposeError(f"標題超過 {line_max_chars} 字：「{text}」（請縮短這一行）")
         font = _fit_font(text, max_w, start, smallest)
+        # _fit_font 縮到最小字級仍塞不下時照樣回最小字級，放著不管就是字被畫框裁掉
+        if font.getbbox(text)[2] > max_w:
+            raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{text}」（請縮短這一行）")
         stroke = max(4, round(font.size * YT_TITLE_STROKE_RATIO))
         _draw_text(
             draw, (margin, round(height * baseline_ratio)), text, font,
@@ -1254,149 +1273,66 @@ def compose_yt_hourly_cover(
     return buffer.getvalue()
 
 
-# ---- YT 整點直播「雙切」（2026-09-08 使用者裁決：對齊十點的滿版／雙切）----
-# 兩則新聞合成一張：左右各一格底圖、各自兩行標題落在自己那半格底部。
-# LIVE 章（含整點時間帶）與左上 Logo 沿用整點滿版；日期紅條只畫一次、擺左半格。
-# 分隔用**直切**（不是十點／多圖分切那種斜切）：兩則不同新聞的界線要一眼看得出來，
-# 斜線在標題那一帶會壓到某一格的字。
-YT_HOURLY_SPLIT_GAP_RATIO = 0.015       # 標題離中線的內縮（要大於描邊＋陰影，字才不碰到白線）
-YT_HOURLY_SPLIT_DATE_GAP_RATIO = 0.02   # 日期紅條底緣離第一行標題頂的距離
-# 雙切的四行共用同一個字級，而且只有半格寬可用，滿版的下限（0.085）會讓 11 字以上的
-# 標題直接報錯。使用者裁決放寬到 0.075（＝81px），滿版仍維持 0.085。
-YT_HOURLY_SPLIT_MIN_SIZE_RATIO = 0.075
-# 行距：滿版整點的兩行是兩個固定基線（0.80／0.965，相差 0.165 畫面高）。雙切的字級小很多
-# （半格寬＋四行共用），照抄絕對比例會讓兩行看起來散開，所以改成**跟著字級走**。
-# 倍數取自 2026-09-08 國內外新聞直播調過的行距：0.180 畫面高 ÷ 0.145 起始字級 ≈ 1.24。
-# 直接把 0.180 這個絕對值搬過來反而比現況更寬（0.165 → 0.180），不是使用者要的「略縮」。
-YT_HOURLY_SPLIT_LINE_GAP = 1.24
+# ---- 左右兩張底圖的羽化拼接（2026-09-08 WP2）----
+#
+# 整點「雙則」的底圖是兩則新聞各一張，但標題是橫跨全寬的兩整行——中間若有 split_canvas
+# 那種白色硬邊（或斜切），線會從標題字中間穿過去，兩者互相打架。使用者給的真實封面上
+# 兩張圖是「柔和的深色漸層帶」接起來的，看不到任何直線，所以這裡走 alpha 漸融：
+# 中線兩側各一段寬羽化，接縫再疊一層很淡的深色暈讓過渡自然。
+YT_SEAM_FEATHER_RATIO = 0.07     # 羽化半寬佔畫面寬（中線兩側各 7%，使用者說 6–8%）
+YT_SEAM_SHADE_ALPHA = 56         # 接縫深色暈的最深值（56/255 ≈ 22%，使用者上限 25%）
+YT_SEAM_CENTRE_RATIO = 0.5       # 接縫中心，預設正中
 
 
-def compose_yt_hourly_split_cover(
-    left_bg: bytes,
-    right_bg: bytes,
+def blend_backgrounds_lr(
+    left: bytes,
+    right: bytes,
+    size: tuple[int, int] = YT_CANVAS,
     *,
-    left_line1: str,
-    left_line2: str,
-    right_line1: str,
-    right_line2: str,
-    date_text: str,
-    time_text: str = "",
-    left_ai_note: bool = False,
-    right_ai_note: bool = False,
+    feather_ratio: float = YT_SEAM_FEATHER_RATIO,
+    seam_ratio: float = YT_SEAM_CENTRE_RATIO,
+    shade_alpha: int = YT_SEAM_SHADE_ALPHA,
 ) -> bytes:
-    """合成 YT 整點直播「雙切」封面（1920×1080）。
+    """左右兩張底圖羽化拼成一張，回 PNG bytes。沒有分隔線、沒有硬邊。
 
-    兩張底圖各佔左右半格（各自 COVER 裁切、不變形），中線一條白色細線。
-    四行標題（每格白／黃兩行）**同一字級**：先各自算出塞得下的最大字級，再取四行的
-    最小值當共用字級——使用者對「兩邊字不一樣大」零容忍（同十點雙切的裁決）。
-    日期紅條只畫一次，貼在左半格第一行標題正上方；哪一格是 AI 底圖，哪一格才印「AI示意圖」。
+    seam_ratio＝接縫中心佔畫面寬，預設正中（0.5），限 0.35–0.65。使用者範例裡接縫偏左
+    是因為右圖主體剛好擋到才挪的，屬個案微調，所以留成參數但 API／UI 先不暴露。
+
+    每一格各自 COVER 裁切到「自己那半再加上羽化帶」的尺寸（不變形）；羽化用 smoothstep
+    而不是線性，線性的兩端會留下看得出來的折線。
     """
-    lines = {
-        "left_line1": (left_line1 or "").strip(),
-        "left_line2": (left_line2 or "").strip(),
-        "right_line1": (right_line1 or "").strip(),
-        "right_line2": (right_line2 or "").strip(),
-    }
-    missing = [key for key, text in lines.items() if not text]
-    if missing:
-        raise ComposeError(f"YT 整點雙切封面兩格各需要兩行標題，缺一不可（缺：{'、'.join(missing)}）")
-    if not date_text.strip():
-        raise ComposeError("YT 整點雙切封面需要日期")
-    time_text = (time_text or "").strip()
+    if not 0.35 <= seam_ratio <= 0.65:
+        raise ComposeError(f"接縫位置要在 0.35–0.65 之間：{seam_ratio}")
+    width, height = size
+    seam = round(width * seam_ratio)
+    band = max(2, round(width * feather_ratio))
+    x0 = max(0, seam - band)          # 羽化帶左緣：這裡右圖完全透明
+    x1 = min(width, seam + band)      # 羽化帶右緣：這裡右圖完全不透明
 
-    width, height = YT_CANVAS
-    mid = width // 2
-    margin = round(width * YT_MARGIN_RATIO)
-    gap = round(width * YT_HOURLY_SPLIT_GAP_RATIO)
+    canvas = Image.new("RGB", size, (0, 0, 0))
+    canvas.paste(_cover_panel(left, (x1, height)), (0, 0))
+    right_panel = _cover_panel(right, (width - x0, height))
 
-    # ---- 底圖：左右各半，中線一條白色細線 ----
-    canvas = Image.new("RGB", YT_CANVAS, (0, 0, 0))
-    canvas.paste(_cover_panel(left_bg, (mid, height)), (0, 0))
-    canvas.paste(_cover_panel(right_bg, (width - mid, height)), (mid, 0))
-    canvas = canvas.convert("RGBA")
-    line_w = max(2, round(height * YT_SPLIT_LINE_RATIO))
-    ImageDraw.Draw(canvas).rectangle(
-        (mid - line_w // 2, 0, mid - line_w // 2 + line_w - 1, height), fill=YT_SPLIT_LINE_FILL
-    )
+    mask = Image.new("L", (width - x0, height), 255)
+    md = ImageDraw.Draw(mask)
+    span = max(1, x1 - x0)
+    for i in range(span):
+        t = i / span
+        md.line(((i, 0), (i, height)), fill=round(255 * t * t * (3 - 2 * t)))  # smoothstep
+    canvas.paste(right_panel, (x0, 0), mask)
 
-    # ---- 左上小 Logo、右上 LIVE 章（＋整點時間帶）：位置沿用整點滿版 ----
-    _paste_logo(
-        canvas, (margin, round(height * YT_HOURLY_LOGO_TOP_RATIO)), round(width * YT_HOURLY_LOGO_WIDTH_RATIO)
-    )
-    badge_w = round(width * YT_HOURLY_BADGE_WIDTH_RATIO)
-    badge_x0 = width - margin - badge_w
-    badge_top = round(height * YT_HOURLY_BADGE_TOP_RATIO)
-    badge_h = _paste_live_badge(canvas, (badge_x0, badge_top), badge_w)
-    block_bottom = badge_top + badge_h
-    if time_text:
-        band_h = round(height * YT_HOURLY_TIME_BAND_HEIGHT_RATIO)
-        band_y0 = block_bottom - 6
-        inset = round(badge_w * 0.04)
-        band = (badge_x0 + inset, band_y0, badge_x0 + badge_w - inset, band_y0 + band_h)
-        layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-        ImageDraw.Draw(layer).rounded_rectangle(band, radius=12, fill=YT_HOURLY_TIME_BAND_FILL)
-        canvas.alpha_composite(layer)
-        time_font = _fit_font(time_text, band[2] - band[0] - 24, round(band_h * 0.8), round(band_h * 0.4))
-        _draw_text(
-            ImageDraw.Draw(canvas), ((band[0] + band[2]) // 2, (band[1] + band[3]) // 2 + 2),
-            time_text, time_font, fill=YT_HOURLY_TIME_BAND_TEXT, stroke_width=0, anchor="mm",
-        )
-        block_bottom = band[3]
-
-    # ---- 兩格各自的「AI示意圖」小標 ----
-    note_y = round(height * YT_HOURLY_AI_NOTE_TOP_RATIO)
-    if left_ai_note:
-        _draw_ai_note(canvas, note_y, x1=mid - gap)
-    if right_ai_note:
-        _draw_ai_note(canvas, max(note_y, block_bottom + 16))
-
-    # ---- 四行標題共用字級 ----
-    left_x0, left_x1 = margin, mid - gap
-    right_x0, right_x1 = mid + gap, width - margin
-    start = round(height * YT_HOURLY_TITLE_SIZE_RATIO)
-    smallest = round(height * YT_HOURLY_SPLIT_MIN_SIZE_RATIO)
-    # 第二行貼底不動，第一行往下靠——行距跟著字級算（見 YT_HOURLY_SPLIT_LINE_GAP）
-    line2_baseline = round(height * YT_HOURLY_LINE2_BASELINE_RATIO)
-    plan_texts = [
-        (lines["left_line1"], YT_LINE1_FILL, 0, left_x0, left_x1),
-        (lines["left_line2"], YT_LINE2_FILL, 1, left_x0, left_x1),
-        (lines["right_line1"], YT_LINE1_FILL, 0, right_x0, right_x1),
-        (lines["right_line2"], YT_LINE2_FILL, 1, right_x0, right_x1),
-    ]
-    shared = min(_fit_font(text, x1 - x0, start, smallest).size for text, _, _, x0, x1 in plan_texts)
-    font = _font(shared)
-    # _fit_font 縮到最小字級仍塞不下時會照樣回最小字級，放著不管就是某一行伸進另一格。
-    for text, _, _, x0, x1 in plan_texts:
-        if font.getbbox(text)[2] > x1 - x0:
-            raise ComposeError(f"標題太長，縮到最小字級仍超出半格版面：「{text}」（請縮短這一段）")
-    line1_baseline = line2_baseline - round(font.size * YT_HOURLY_SPLIT_LINE_GAP)
-    plan = [
-        (text, fill, line1_baseline if row == 0 else line2_baseline, x0, x1)
-        for text, fill, row, x0, x1 in plan_texts
-    ]
-
-    # ---- 日期紅條：只畫一次，貼在左半格第一行標題正上方 ----
-    tab_w = round(width * YT_HOURLY_DATE_TAB_WIDTH_RATIO)
-    tab_h = round(height * YT_HOURLY_DATE_TAB_HEIGHT_RATIO)
-    # 整點滿版的 0.52 是照著它自己那個字級量的；雙切字級小很多，沿用會讓紅條浮在半空中，
-    # 所以改成跟著第一行標題的字頂走（使用者要的是「第一行標題正上方」）。
-    line1_top = line1_baseline - font.getmetrics()[0]
-    tab_y1 = line1_top - round(height * YT_HOURLY_SPLIT_DATE_GAP_RATIO)
-    tab_y0 = tab_y1 - tab_h
-    draw = ImageDraw.Draw(canvas)
-    draw.rounded_rectangle((margin, tab_y0, margin + tab_w, tab_y1), radius=10, fill=YT_HOURLY_DATE_FILL)
-    date_font = _fit_font(date_text, tab_w - 28, round(tab_h * 0.78), round(tab_h * 0.4))
-    _draw_text(
-        draw, (margin + tab_w // 2, (tab_y0 + tab_y1) // 2 + 2),
-        date_text, date_font, fill=YT_HOURLY_DATE_TEXT, stroke_width=0, anchor="mm",
-    )
-
-    # ---- 四行標題：各自靠自己半格的左緣 ----
-    for text, fill, baseline, x0, _ in plan:
-        _draw_yt_title_line(draw, (x0, baseline), text, font, fill, anchor="ls")
+    # 接縫深色暈：中心最深、往兩側以同一條 smoothstep 收掉，讓兩張圖的亮度差不刺眼
+    if shade_alpha > 0:
+        shade = Image.new("RGBA", size, (0, 0, 0, 0))
+        sd = ImageDraw.Draw(shade)
+        for x in range(x0, x1):
+            d = abs(x - seam) / max(1, band)
+            t = max(0.0, 1.0 - d)
+            sd.line(((x, 0), (x, height)), fill=(0, 0, 0, round(shade_alpha * t * t * (3 - 2 * t))))
+        canvas = Image.alpha_composite(canvas.convert("RGBA"), shade).convert("RGB")
 
     buffer = io.BytesIO()
-    canvas.convert("RGB").save(buffer, format="PNG")
+    canvas.save(buffer, format="PNG")
     return buffer.getvalue()
 
 
