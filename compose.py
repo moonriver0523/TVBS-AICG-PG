@@ -1034,6 +1034,15 @@ def _draw_yt_title_line(
         _draw_text(draw, xy, text, font, fill=fill, stroke=fill, stroke_width=bold, anchor=anchor)
 
 
+def _yt_shared_title_font(lines: list[str], max_w: int, start: int, smallest: int):
+    """YT 封面兩行標題共用一個字級（2026-09-08 使用者裁決：同一組標題各行一律同字級）。
+
+    每行各自算出塞得進寬度的字級，取全域最小；兩行都短時就是起始字級。
+    """
+    sizes = [_fit_font(text, max_w, start, smallest).size for text in lines if text]
+    return _font(min(sizes)) if sizes else _font(start)
+
+
 def _draw_title_band(
     canvas: Image.Image,
     fill: tuple[int, int, int] = YT_BAND_FILL,
@@ -1164,11 +1173,11 @@ def compose_yt_cover(
     max_w = width - margin * 2
     start = round(height * YT_TITLE_SIZE_RATIO)
     smallest = round(height * YT_TITLE_MIN_SIZE_RATIO)
+    font = _yt_shared_title_font([line1, line2], max_w, start, smallest)
     for text, fill, baseline_ratio in (
         (line1, YT_LINE1_FILL, YT_LINE1_BASELINE_RATIO),
         (line2, YT_LINE2_FILL, YT_LINE2_BASELINE_RATIO),
     ) if draw_titles else ():
-        font = _fit_font(text, max_w, start, smallest)
         _draw_yt_title_line(draw, (width // 2, round(height * baseline_ratio)), text, font, fill)
 
     buffer = io.BytesIO()
@@ -1272,11 +1281,11 @@ def compose_yt_hourly_cover(
     max_w = width - margin * 2
     start = round(height * YT_HOURLY_TITLE_SIZE_RATIO)
     smallest = round(height * YT_TITLE_MIN_SIZE_RATIO)
+    font = _yt_shared_title_font([line1, line2], max_w, start, smallest)
     for text, fill, baseline_ratio in (
         (line1, YT_LINE1_FILL, YT_HOURLY_LINE1_BASELINE_RATIO),
         (line2, YT_LINE2_FILL, YT_HOURLY_LINE2_BASELINE_RATIO),
     ) if draw_titles else ():
-        font = _fit_font(text, max_w, start, smallest)
         stroke = max(4, round(font.size * YT_TITLE_STROKE_RATIO))
         _draw_text(
             draw, (margin, round(height * baseline_ratio)), text, font,
@@ -1359,11 +1368,11 @@ def compose_yt_hot_cover(
     max_w = width - margin * 2
     start = round(height * YT_TITLE_SIZE_RATIO)
     smallest = round(height * YT_TITLE_MIN_SIZE_RATIO)
+    font = _yt_shared_title_font([line1, line2], max_w, start, smallest)
     for text, fill, baseline_ratio in (
         (line1, YT_LINE1_FILL, YT_LINE1_BASELINE_RATIO),
         (line2, YT_LINE2_FILL, YT_LINE2_BASELINE_RATIO),
     ) if draw_titles else ():
-        font = _fit_font(text, max_w, start, smallest)
         _draw_yt_title_line(draw, (width // 2, round(height * baseline_ratio)), text, font, fill)
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")
