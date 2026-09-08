@@ -1371,202 +1371,354 @@ def compose_yt_hot_cover(
 
 
 # ============================================================
-# YT 直播 PNG 壓標（2026-09-08 WP3 原型，計畫書 E 段）
+# YT 直播「直標」PNG 壓標（2026-09-08 WP3 第二版，計畫書 E 段）
 #
-# 跟封面不同：這張是**透明底**，直接疊在直播訊號上，所以沒有底圖、沒有生圖。
-# 只有四個元素——半透明標題條（兩行白／黃標題）、TVBS 斜標籤＋Logo、
-# 「畫面來源：路透社」小字、LIVE 章。
+# 第一版做成底部橫向標題條，是誤讀規格：使用者說的「直標」是**垂直**的標題條。
+# 這一版全部依兩張真實播出截圖重量：
+#   D:\Downloads\20260908_直標參考_一般國內直播.png（718×404）
+#   D:\Downloads\20260908_直標參考_原音呈現.png（721×404）
 #
-# 兩個位置開關：Logo 四個角、標題條左右。標籤是右上角那塊斜切色塊鏡射過去的
-# （見 _logo_tab_layer），Logo 本身不跟著翻。來源句跟著 Logo 走：Logo 在上→句子在
-# 標籤下方，Logo 在下→句子在標籤上方（使用者的要求）。
+# 版面（左緣版，右緣版整組鏡射）：
+#   LIVE 章（＋原音呈現／AI即時翻譯白底小標）壓在最上面，底下接兩欄直排文字。
+#   內側欄＝主標，字大、欄寬；外側欄＝副標，字小、欄窄。兩欄**同一個上緣、同一個
+#   下緣**，各自的字距＝共用欄高 ÷ 自己的格數——所以格數多的那欄字自動變小。
+#   這是量出來的：ref1 兩欄都是 y 67→358，主標 9 格、副標 12 格，格距 8.0%／6.0%。
 #
-# 八種組合裡有四種會「Logo 在下、標題條在同一側」，斜標籤跟標題條會疊在一起；
-# 這時標題條整塊往上讓，讓到標籤（含來源句）上緣之上。不是靠人選組合避開。
+# 兩件跟直覺不一樣、但截圖就是這樣的事：
+#   1. 兩欄都是深藍，沒有紅欄。ref1／ref2 取色都是外側 (28,53,99)、內側 (27,41,74)。
+#   2. 右上角是白色 TVBS NEWS 字標，不是 YT 封面那塊藍色斜標籤。
+# 兩者都留成參數（sub_fill／logo_tab），要改一行就好。
+#
+# 直排是逐字疊放，不是把整行轉 90°：標點要換成直排相容字元（「→﹁、。→︒），
+# 連續的英數字（AI／AMD／30）併成一格橫著寫（縱中橫），截圖裡就是這樣排的。
 # ============================================================
 
-YT_OVERLAY_BAR_WIDTH_RATIO = 0.55      # 標題條寬（計畫書 E-4：約畫面 55%）
-YT_OVERLAY_BAR_HEIGHT_RATIO = 0.26     # 標題條高（兩行標題＋上下留白）
-YT_OVERLAY_BAR_BOTTOM_RATIO = 0.93     # 標題條底（沒有讓位需求時）
-YT_OVERLAY_BAR_PAD_RATIO = 0.022       # 條內左右留白（佔畫布寬）
-YT_OVERLAY_BAR_RADIUS_RATIO = 0.012
-YT_OVERLAY_LINE1_RATIO = 0.44          # 第一行基線佔條高
-YT_OVERLAY_LINE2_RATIO = 0.88          # 第二行基線佔條高
-YT_OVERLAY_TITLE_SIZE_RATIO = 0.105    # 標題起始字級（條窄，比封面小一號）
-YT_OVERLAY_TITLE_MIN_SIZE_RATIO = 0.062
-YT_OVERLAY_SOURCE_SIZE_RATIO = 0.030   # 「畫面來源：…」字級
-YT_OVERLAY_SOURCE_GAP_RATIO = 0.020    # 來源句與斜標籤之間的距離
-YT_OVERLAY_CLEAR_GAP_RATIO = 0.020     # 標題條讓位時留的縫
-YT_OVERLAY_CORNERS = ("tr", "tl", "br", "bl")
-YT_OVERLAY_TITLE_SIDES = ("left", "right")
+VSTRIP_LEFT_RATIO = 0.0265           # 整組直標離畫面外緣（19/718）
+VSTRIP_MAIN_WIDTH_RATIO = 0.0445     # 主標欄寬（32/718）
+VSTRIP_SUB_WIDTH_RATIO = 0.0362      # 副標欄寬（26/718）
+VSTRIP_SEAM_RATIO = 0.0014           # 兩欄之間的細縫
+VSTRIP_TOP_RATIO = 0.166             # 文字欄上緣，一般版（67/404）
+VSTRIP_TOP_WITH_LABEL_RATIO = 0.191  # 有原音呈現／AI即時翻譯小標時（77/404）
+VSTRIP_BOTTOM_MAX_RATIO = 0.90       # 欄底最多到這裡，再長就縮字
+VSTRIP_MAIN_PITCH_RATIO = 0.080      # 主標格距上限（291/404/9）
+VSTRIP_SUB_PITCH_RATIO = 0.060       # 副標格距上限（291/404/12）
+VSTRIP_MIN_PITCH_RATIO = 0.045       # 縮到這裡還放不下就丟 ComposeError
+VSTRIP_CELL_TIGHT = 0.92             # 字級佔格距（字距約 0.08em）
+VSTRIP_MAIN_FILL = (27, 41, 74)      # 內側欄：深藏青（截圖取色）
+VSTRIP_SUB_FILL = (28, 53, 99)       # 外側欄：略亮的藍（截圖取色）
+VSTRIP_FILL_SHADE = 0.78             # 欄內由外而內的漸層，模擬截圖的漸層感
+VSTRIP_LIVE_TOP_RATIO = 0.104        # LIVE 章上緣，一般版（42/404）
+VSTRIP_LIVE_TOP_WITH_LABEL_RATIO = 0.057   # 有小標時 LIVE 往上讓（23/404）
+VSTRIP_LIVE_WIDTH_RATIO = 0.0877     # LIVE 章寬（63/718）
+VSTRIP_LABEL_HEIGHT_RATIO = 0.069    # 白底小標高（28/404）
+VSTRIP_LABEL_WIDTH_RATIO = 0.0905    # 白底小標寬（65/718）
+VSTRIP_LABEL_FILL = (255, 255, 255)
+VSTRIP_LABEL_TEXT = (208, 20, 30)
+VSTRIP_LABEL_BORDER = (208, 20, 30)
+VSTRIP_SOURCE_SIZE_RATIO = 0.030     # 來源句字級
+VSTRIP_SOURCE_GAP_RATIO = 0.014      # 來源句與 LIVE 章／Logo 的距離
+VSTRIP_LOGO_WIDTH_RATIO = 0.105      # 白色字標寬
+VSTRIP_LOGO_MARGIN_RATIO = 0.018
+VSTRIP_VARIANTS = ("normal", "original_audio", "ai_translation")
+VSTRIP_VARIANT_LABELS = {"original_audio": "原音呈現", "ai_translation": "AI即時翻譯"}
+VSTRIP_CORNERS = ("tr", "tl", "br", "bl")
+VSTRIP_SIDES = ("left", "right")
+VSTRIP_MAIN_MAX_CELLS = 12           # 主標格數上限（規格）
+VSTRIP_SUB_MAX_CELLS = 14            # 副標格數上限（規格）
+
+# 直排相容標點（U+FE1x／FE3x／FE4x）。台北黑體 Bold 這些字都有真字形，逐字render
+# 驗過不是豆腐；沒有的字才退回旋轉 90°，所以 _VERTICAL_ROTATE_FALLBACK 平常不會用到。
+VERTICAL_PUNCTUATION = {
+    "「": "﹁", "」": "﹂", "『": "﹃", "』": "﹄",
+    "（": "︵", "）": "︶", "(": "︵", ")": "︶",
+    "〔": "︹", "〕": "︺", "【": "︻", "】": "︼",
+    "，": "︐", "、": "︑", "。": "︒", "：": "︓", "；": "︔",
+    "！": "︕", "？": "︖", "…": "︙", "—": "︱", "─": "︱", "－": "︱",
+}
 
 
-def _overlay_tab_and_logo(canvas: Image.Image, corner: str) -> tuple[int, int, int, int]:
-    """把斜標籤鏡射到指定角、貼上 Logo，回傳標籤佔用的矩形 (x0, y0, x1, y1)。
+def _vertical_cells(text: str) -> list[str]:
+    """把一行字拆成直排的格子。連續英數字併成一格（縱中橫），標點換直排字形。
 
-    標籤圖層整張鏡射，Logo 另外貼——Logo 跟著翻會變成反字。
+    「明早晚涼「中午仍破30度」」→ 明 早 晚 涼 ﹁ 中 午 仍 破 30 度 ﹂ ＝ 12 格。
+    30 是一格不是兩格，字數上限要照格數算，不是照字元數。
+    """
+    cells: list[str] = []
+    run = ""
+    for ch in text:
+        if ch.isascii() and ch.isalnum():
+            run += ch
+            continue
+        if run:
+            cells.append(run)
+            run = ""
+        if ch.isspace():
+            continue
+        cells.append(VERTICAL_PUNCTUATION.get(ch, ch))
+    if run:
+        cells.append(run)
+    return cells
+
+
+def _draw_vertical_cell(
+    canvas: Image.Image, cell: str, box: tuple[int, int, int, int],
+    font: ImageFont.FreeTypeFont, fill: tuple[int, int, int],
+) -> None:
+    """畫一格直排文字。box 是格子的 (x0, y0, x1, y1)。
+
+    單字用 anchor="ma" 貼在格子頂端置中——**不能**拿 getbbox 把墨水置中，
+    那會把 ﹁ 從它該待的右上角拖到格子正中間，直排標點就白換了。
+    英數字串（縱中橫）橫著寫，寬度超過格寬就縮字級。
+    """
+    x0, y0, x1, _ = box
+    centre = (x0 + x1) // 2
+    if len(cell) > 1 or (cell.isascii() and cell.isalnum()):
+        # 縱中橫：整串橫排塞進格寬
+        size = font.size
+        small = _font(size)
+        while size > 8 and small.getbbox(cell)[2] > (x1 - x0):
+            size -= 2
+            small = _font(size)
+        ImageDraw.Draw(canvas).text((centre, y0 + (font.size - small.size) // 2), cell,
+                                    font=small, fill=fill, anchor="ma")
+        return
+    if cell not in VERTICAL_PUNCTUATION.values() and _is_tofu(cell, font):
+        # 沒有直排字形才退回旋轉（台北黑體目前不會走到這條）
+        patch = Image.new("RGBA", (font.size * 2, font.size * 2), (0, 0, 0, 0))
+        ImageDraw.Draw(patch).text((font.size, font.size), cell, font=font, fill=fill + (255,), anchor="mm")
+        patch = patch.rotate(-90, resample=Image.BICUBIC)
+        canvas.alpha_composite(patch, (centre - font.size, y0))
+        return
+    ImageDraw.Draw(canvas).text((centre, y0), cell, font=font, fill=fill, anchor="ma")
+
+
+def _is_tofu(ch: str, font: ImageFont.FreeTypeFont) -> bool:
+    probe = Image.new("L", (font.size * 2, font.size * 2), 0)
+    ImageDraw.Draw(probe).text((font.size // 4, font.size // 4), ch, font=font, fill=255)
+    return probe.getbbox() is None
+
+
+def _vertical_column_layer(size: tuple[int, int], fill: tuple[int, int, int], outward: bool) -> Image.Image:
+    """一欄的底色：由外緣往內做一道很淡的漸層，貼近截圖的漸層感。"""
+    width, height = size
+    column = Image.new("RGBA", size)
+    draw = ImageDraw.Draw(column)
+    dark = tuple(round(c * VSTRIP_FILL_SHADE) for c in fill)
+    for x in range(width):
+        t = (x / max(1, width - 1)) if outward else (1 - x / max(1, width - 1))
+        colour = tuple(round(fill[i] + (dark[i] - fill[i]) * t) for i in range(3))
+        draw.line(((x, 0), (x, height)), fill=colour + (255,))
+    return column
+
+
+def yt_vertical_layout(
+    *, main_title: str, sub_title: str = "", title_side: str = "left",
+    variant: str = "normal", logo_corner: str = "tr", source_text: str = "",
+) -> dict:
+    """算出直標每一塊的矩形，不畫任何東西。
+
+    幾何跟畫圖拆開才驗得到「主標在內側」——兩欄都是深藍，用像素分不出誰是誰。
+    回傳 live／label／main／sub／source／logo 的 (x0, y0, x1, y1)，以及兩欄的格數與格距。
     """
     width, height = YT_CANVAS
-    layer = _logo_tab_layer()
-    tab_h = round(height * YT_LOGO_TAB_HEIGHT_RATIO)
-    tab_x0 = round(width * YT_LOGO_TAB_LEFT_RATIO)
-    logo_w = round(width * YT_LOGO_WIDTH_RATIO)
-    logo_x = round(width * YT_LOGO_LEFT_RATIO)
-    logo_y = round(height * YT_LOGO_TOP_RATIO)
+    main_cells = _vertical_cells(main_title)
+    sub_cells = _vertical_cells(sub_title)
+    if not main_cells:
+        raise ComposeError("直標至少要有第一標題")
+    if len(main_cells) > VSTRIP_MAIN_MAX_CELLS:
+        raise ComposeError(f"第一標題 {len(main_cells)} 格，超過上限 {VSTRIP_MAIN_MAX_CELLS} 格")
+    if len(sub_cells) > VSTRIP_SUB_MAX_CELLS:
+        raise ComposeError(f"第二標題 {len(sub_cells)} 格，超過上限 {VSTRIP_SUB_MAX_CELLS} 格")
+
+    labelled = variant in VSTRIP_VARIANT_LABELS
+    top = round(height * (VSTRIP_TOP_WITH_LABEL_RATIO if labelled else VSTRIP_TOP_RATIO))
+    # 兩欄同高：先讓各自用上限格距算出想要的長度，取比較長的那個當共用欄高
+    wanted = max(len(main_cells) * height * VSTRIP_MAIN_PITCH_RATIO,
+                 len(sub_cells) * height * VSTRIP_SUB_PITCH_RATIO)
+    column_h = round(min(wanted, height * VSTRIP_BOTTOM_MAX_RATIO - top))
+    floor = height * VSTRIP_MIN_PITCH_RATIO
+    for name, cells in (("第一標題", main_cells), ("第二標題", sub_cells)):
+        if cells and column_h / len(cells) < floor:
+            raise ComposeError(
+                f"{name} {len(cells)} 格，縮到最小字級仍放不進直標（欄高 {column_h}px）"
+            )
+
+    main_w = round(width * VSTRIP_MAIN_WIDTH_RATIO)
+    sub_w = round(width * VSTRIP_SUB_WIDTH_RATIO)
+    seam = round(width * VSTRIP_SEAM_RATIO)
+    outer = round(width * VSTRIP_LEFT_RATIO)
+    if title_side == "left":
+        sub_x0 = outer
+        main_x0 = sub_x0 + sub_w + seam
+    else:
+        sub_x0 = width - outer - sub_w
+        main_x0 = sub_x0 - seam - main_w
+    main = (main_x0, top, main_x0 + main_w, top + column_h)
+    sub = (sub_x0, top, sub_x0 + sub_w, top + column_h) if sub_cells else (sub_x0, top, sub_x0, top)
+
+    strip_x0 = min(main[0], sub[0]) if sub_cells else main[0]
+    strip_x1 = max(main[2], sub[2]) if sub_cells else main[2]
+    live_w = round(width * VSTRIP_LIVE_WIDTH_RATIO)
+    live_top = round(height * (VSTRIP_LIVE_TOP_WITH_LABEL_RATIO if labelled
+                               else VSTRIP_LIVE_TOP_RATIO))
+    live_x0 = strip_x0 if title_side == "left" else strip_x1 - live_w
+    with Image.open(LIVE_BADGE) as badge:
+        live_h = round(badge.height * live_w / badge.width)
+    live = (live_x0, live_top, live_x0 + live_w, live_top + live_h)
+
+    label_w = round(width * VSTRIP_LABEL_WIDTH_RATIO)
+    label_h = round(height * VSTRIP_LABEL_HEIGHT_RATIO)
+    label_x0 = strip_x0 if title_side == "left" else strip_x1 - label_w
+    label = (label_x0, live[3], label_x0 + label_w, live[3] + label_h) if labelled else (0, 0, 0, 0)
+
+    logo_w = round(width * VSTRIP_LOGO_WIDTH_RATIO)
+    logo_margin = round(width * VSTRIP_LOGO_MARGIN_RATIO)
     with Image.open(TVBS_LOGO_WHITE) as logo_file:
         logo_h = round(logo_file.height * logo_w / logo_file.width)
+    logo_x0 = width - logo_margin - logo_w if logo_corner in ("tr", "br") else logo_margin
+    logo_y0 = logo_margin if logo_corner in ("tr", "tl") else height - logo_margin - logo_h
+    logo = (logo_x0, logo_y0, logo_x0 + logo_w, logo_y0 + logo_h)
 
-    if corner in ("tl", "bl"):
-        layer = layer.transpose(Image.FLIP_LEFT_RIGHT)
-        logo_x = width - logo_x - logo_w
-        rect_x = (0, width - tab_x0)
-    else:
-        rect_x = (tab_x0, width)
-    if corner in ("bl", "br"):
-        layer = layer.transpose(Image.FLIP_TOP_BOTTOM)
-        logo_y = height - logo_y - logo_h
-        rect_y = (height - tab_h, height)
-    else:
-        rect_y = (0, tab_h)
-
-    canvas.alpha_composite(layer)
-    _paste_logo(canvas, (logo_x, logo_y), logo_w)
-    return (rect_x[0], rect_y[0], rect_x[1], rect_y[1])
-
-
-def yt_overlay_layout(logo_corner: str, title_side: str, source_text: str = "") -> dict[str, tuple[int, int, int, int]]:
-    """算出壓標三塊元素的矩形：tab（斜標籤）、source（來源句）、bar（標題條）。
-
-    幾何跟畫圖拆開，測試才驗得到「標題條沒有壓到標籤」——靠像素回推半透明色塊
-    的邊界會被描邊與圓角糊掉。source 沒有時回 tab 的一條零高度線。
-    """
-    width, height = YT_CANVAS
-    margin = round(width * YT_MARGIN_RATIO)
-    tab_h = round(height * YT_LOGO_TAB_HEIGHT_RATIO)
-    tab_x0 = round(width * YT_LOGO_TAB_LEFT_RATIO)
-    if logo_corner in ("tl", "bl"):
-        tab = (0, 0, width - tab_x0, tab_h)
-    else:
-        tab = (tab_x0, 0, width, tab_h)
-    if logo_corner in ("bl", "br"):
-        tab = (tab[0], height - tab_h, tab[2], height)
-
-    gap = round(height * YT_OVERLAY_SOURCE_GAP_RATIO)
+    source = (0, 0, 0, 0)
     source_text = (source_text or "").strip()
     if source_text:
-        source_font = _font(round(height * YT_OVERLAY_SOURCE_SIZE_RATIO))
-        source_w = source_font.getbbox(source_text)[2]
-        source_h = round(height * YT_OVERLAY_SOURCE_SIZE_RATIO * 1.3)
-        src_y = tab[3] + gap if logo_corner in ("tr", "tl") else tab[1] - gap - source_h
-        src_x1 = width - margin if logo_corner in ("tr", "br") else margin + source_w
-        source = (src_x1 - source_w, src_y, src_x1, src_y + source_h)
+        font = _font(round(height * VSTRIP_SOURCE_SIZE_RATIO))
+        src_w = font.getbbox(source_text)[2]
+        src_h = round(height * VSTRIP_SOURCE_SIZE_RATIO * 1.3)
+        gap = round(height * VSTRIP_SOURCE_GAP_RATIO)
+        source = _vstrip_source_box(live, logo, logo_corner, title_side, src_w, src_h, gap)
+
+    return {"live": live, "label": label, "main": main, "sub": sub, "source": source,
+            "logo": logo, "main_cells": main_cells, "sub_cells": sub_cells,
+            "column_height": column_h}
+
+
+def _vstrip_source_box(live, logo, logo_corner, title_side, src_w, src_h, gap):
+    """來源句預設貼在 LIVE 章右側同一列（截圖就是這樣）；跟 Logo 模式另算。"""
+    width, _ = YT_CANVAS
+    if title_side == "left":
+        x0 = live[2] + gap
     else:
-        source = (tab[0], tab[1], tab[2], tab[1])
+        x0 = live[0] - gap - src_w
+    y0 = live[1] + (live[3] - live[1] - src_h) // 2
+    return (x0, y0, x0 + src_w, y0 + src_h)
 
-    reserved_top = min(tab[1], source[1])
-    reserved_bottom = max(tab[3], source[3])
 
-    bar_w = round(width * YT_OVERLAY_BAR_WIDTH_RATIO)
-    bar_h = round(height * YT_OVERLAY_BAR_HEIGHT_RATIO)
-    bar_x0 = margin if title_side == "left" else width - margin - bar_w
-    bar_x1 = bar_x0 + bar_w
-    default_bottom = round(height * YT_OVERLAY_BAR_BOTTOM_RATIO)
-    bar_y1 = default_bottom
-    clear = round(height * YT_OVERLAY_CLEAR_GAP_RATIO)
-    if bar_x0 < tab[2] and bar_x1 > tab[0] and bar_y1 > reserved_top:
-        # 水平上重疊，且會壓到標籤（含來源句）：底邊抬到讓位線之上
-        bar_y1 = min(bar_y1, reserved_top - clear)
-        if bar_y1 - bar_h < reserved_bottom and reserved_bottom < height:
-            # 標籤在上方時「往上讓」會讓進標籤裡，改成往下推到標籤下面
-            bar_y1 = max(default_bottom, reserved_bottom + clear + bar_h)
-    return {"tab": tab, "source": source, "bar": (bar_x0, bar_y1 - bar_h, bar_x1, bar_y1)}
+def _vstrip_source_box_follow_logo(logo, logo_corner, src_w, src_h, gap):
+    """source_follow_logo=True：Logo 在上→句子在 Logo 下方，在下→在上方。"""
+    x1 = logo[2] if logo_corner in ("tr", "br") else logo[0] + src_w
+    y0 = logo[3] + gap if logo_corner in ("tr", "tl") else logo[1] - gap - src_h
+    return (x1 - src_w, y0, x1, y0 + src_h)
 
 
 def compose_yt_overlay(
     *,
-    line1: str,
-    line2: str,
+    main_title: str,
+    sub_title: str = "",
     source_text: str = "",
+    variant: str = "normal",
     logo_corner: str = "tr",
     title_side: str = "left",
-    band: bool = True,
+    source_follow_logo: bool = False,
+    logo_tab: bool = False,
     live: bool = True,
+    main_fill: tuple[int, int, int] = VSTRIP_MAIN_FILL,
+    sub_fill: tuple[int, int, int] = VSTRIP_SUB_FILL,
     size: tuple[int, int] = YT_CANVAS,
 ) -> bytes:
-    """合成 YT 直播用的透明底 PNG 壓標，回傳 PNG bytes（RGBA，沒有底圖）。
+    """合成 YT 直播用的「直標」透明底 PNG，回傳 PNG bytes（RGBA，沒有底圖）。
 
-    line1／line2 是已分好的兩行標題（白／黃，沿用封面的描邊＋假粗體畫法）。
-    source_text 例如「畫面來源：路透社」，空字串＝不畫。
-    logo_corner 四選一（tr／tl／br／bl），title_side 二選一（left／right）。
-    band=False：標題不壓半透明底塊，直接靠描邊立在畫面上。
-    live=False：不貼 LIVE 章（非直播的訊號用）。
+    main_title 是主標（內側欄、字大），sub_title 是副標（外側欄、字小），兩欄同長。
+    variant：normal／original_audio／ai_translation，後兩者在 LIVE 章下方多一枚白底小標。
+    source_text 例「畫面來源：路透社」，預設橫排貼在 LIVE 章旁邊；source_follow_logo=True
+    改成跟著 Logo 走（Logo 在上→下方，在下→上方）。
+    logo_tab=True 才畫 YT 封面那塊藍色斜標籤；預設是截圖裡的白色字標。
 
-    size 目前只支援 1920×1080——斜標籤與 Logo 的幾何全掛在 YT_CANVAS 上，4K
-    要不要支援是計畫書 E 段還沒裁的 TODO，先擋掉而不是默默畫錯。
+    size 目前只支援 1920×1080，其他尺寸直接擋掉而不是默默畫錯。
     """
-    line1, line2 = (line1 or "").strip(), (line2 or "").strip()
-    if not line1:
-        raise ComposeError("PNG 壓標至少要有第一行標題")
-    if logo_corner not in YT_OVERLAY_CORNERS:
-        raise ComposeError(f"logo_corner 只能是 {'／'.join(YT_OVERLAY_CORNERS)}，收到 {logo_corner!r}")
-    if title_side not in YT_OVERLAY_TITLE_SIDES:
+    if variant not in VSTRIP_VARIANTS:
+        raise ComposeError(f"variant 只能是 {'／'.join(VSTRIP_VARIANTS)}，收到 {variant!r}")
+    if logo_corner not in VSTRIP_CORNERS:
+        raise ComposeError(f"logo_corner 只能是 {'／'.join(VSTRIP_CORNERS)}，收到 {logo_corner!r}")
+    if title_side not in VSTRIP_SIDES:
         raise ComposeError(f"title_side 只能是 left／right，收到 {title_side!r}")
     if tuple(size) != YT_CANVAS:
-        raise ComposeError(f"PNG 壓標目前只支援 {YT_CANVAS[0]}×{YT_CANVAS[1]}，收到 {size}")
+        raise ComposeError(f"直標目前只支援 {YT_CANVAS[0]}×{YT_CANVAS[1]}，收到 {size}")
+    same_side = (title_side == "left" and logo_corner in ("tl", "bl")) or \
+                (title_side == "right" and logo_corner in ("tr", "br"))
+    if same_side:
+        raise ComposeError(
+            f"Logo 放 {logo_corner} 會壓在 {title_side} 側的直標上，請把 Logo 換到另一邊"
+        )
 
     width, height = YT_CANVAS
-    margin = round(width * YT_MARGIN_RATIO)
+    layout = yt_vertical_layout(main_title=main_title, sub_title=sub_title,
+                               title_side=title_side, variant=variant,
+                               logo_corner=logo_corner, source_text=source_text)
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
 
-    source_text = (source_text or "").strip()
-    layout = yt_overlay_layout(logo_corner, title_side, source_text)
-
-    # ---- 斜標籤＋Logo ----
-    _overlay_tab_and_logo(canvas, logo_corner)
-    draw = ImageDraw.Draw(canvas)
-
-    # ---- 來源句：跟著 Logo，上方角在標籤下、下方角在標籤上 ----
-    if source_text:
-        source_font = _font(round(height * YT_OVERLAY_SOURCE_SIZE_RATIO))
-        src = layout["source"]
-        _draw_text(draw, (src[0], src[1]), source_text, source_font,
-                   fill=(255, 255, 255), stroke=YT_TITLE_STROKE,
-                   stroke_width=max(3, round(height * 0.005)), anchor="la")
-
-    # ---- LIVE 章：預設左上；Logo 佔了左上就換到右上 ----
-    if live:
-        badge_w = round(width * YT_BADGE_WIDTH_RATIO)
-        badge_x = width - margin - badge_w if logo_corner == "tl" else margin
-        _paste_live_badge(canvas, (badge_x, round(height * YT_TOP_RATIO)), badge_w)
-        draw = ImageDraw.Draw(canvas)
-
-    # ---- 標題條：左／右靠邊，撞到同側的標籤就整塊讓位（位置在 yt_overlay_layout）----
-    bar_x0, bar_y0, bar_x1, bar_y1 = layout["bar"]
-    bar_w, bar_h = bar_x1 - bar_x0, bar_y1 - bar_y0
-
-    if band:
-        block = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-        ImageDraw.Draw(block).rounded_rectangle(
-            (bar_x0, bar_y0, bar_x1, bar_y1), radius=round(width * YT_OVERLAY_BAR_RADIUS_RATIO),
-            fill=YT_BAND_FILL + (YT_BAND_ALPHA,),
-        )
-        canvas.alpha_composite(block)
-        draw = ImageDraw.Draw(canvas)
-
-    inner = bar_w - 2 * round(width * YT_OVERLAY_BAR_PAD_RATIO)
-    start = round(height * YT_OVERLAY_TITLE_SIZE_RATIO)
-    smallest = round(height * YT_OVERLAY_TITLE_MIN_SIZE_RATIO)
-    centre = (bar_x0 + bar_x1) // 2
-    for text, fill, line_ratio in ((line1, YT_LINE1_FILL, YT_OVERLAY_LINE1_RATIO),
-                                   (line2, YT_LINE2_FILL, YT_OVERLAY_LINE2_RATIO)):
-        if not text:
+    # ---- 兩欄底色（外側欄先畫，內側欄壓在上面）----
+    for key, fill in (("sub", sub_fill), ("main", main_fill)):
+        x0, y0, x1, y1 = layout[key]
+        if x1 <= x0:
             continue
-        font = _fit_font(text, inner, start, smallest)
-        _draw_yt_title_line(draw, (centre, bar_y0 + round(bar_h * line_ratio)), text, font, fill)
+        outward = (key == "sub") == (title_side == "left")
+        canvas.alpha_composite(_vertical_column_layer((x1 - x0, y1 - y0), fill, outward), (x0, y0))
+
+    # ---- 兩欄文字：白字，不用封面那套重描邊＋陰影（那是壓照片用的，壓深藍會糊）----
+    column_h = layout["column_height"]
+    for key, cells in (("main", layout["main_cells"]), ("sub", layout["sub_cells"])):
+        if not cells:
+            continue
+        x0, y0, x1, _ = layout[key]
+        pitch = column_h / len(cells)
+        size_px = min(round(pitch * VSTRIP_CELL_TIGHT), round((x1 - x0) * 0.94))
+        font = _font(size_px)
+        for index, cell in enumerate(cells):
+            cell_y0 = y0 + round(index * pitch)
+            _draw_vertical_cell(canvas, cell, (x0, cell_y0, x1, cell_y0 + round(pitch)),
+                                font, (255, 255, 255))
+
+    # ---- LIVE 章 ----
+    if live:
+        box = layout["live"]
+        _paste_live_badge(canvas, (box[0], box[1]), box[2] - box[0])
+
+    # ---- 原音呈現／AI即時翻譯：白底、紅框、紅字 ----
+    if variant in VSTRIP_VARIANT_LABELS:
+        box = layout["label"]
+        draw = ImageDraw.Draw(canvas)
+        draw.rounded_rectangle(box, radius=round(height * 0.008), fill=VSTRIP_LABEL_FILL,
+                               outline=VSTRIP_LABEL_BORDER, width=max(2, round(height * 0.004)))
+        text = VSTRIP_VARIANT_LABELS[variant]
+        font = _fit_font(text, (box[2] - box[0]) - round(width * 0.008),
+                         round((box[3] - box[1]) * 0.72), round((box[3] - box[1]) * 0.4))
+        _draw_text(draw, ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2), text, font,
+                   fill=VSTRIP_LABEL_TEXT, stroke_width=0, anchor="mm")
+
+    # ---- Logo ----
+    if logo_tab:
+        canvas.alpha_composite(_logo_tab_layer())
+    logo = layout["logo"]
+    _paste_logo(canvas, (logo[0], logo[1]), logo[2] - logo[0])
+
+    # ---- 來源句 ----
+    source_text = (source_text or "").strip()
+    if source_text:
+        font = _font(round(height * VSTRIP_SOURCE_SIZE_RATIO))
+        box = layout["source"]
+        if source_follow_logo:
+            box = _vstrip_source_box_follow_logo(
+                logo, logo_corner, box[2] - box[0], box[3] - box[1],
+                round(height * VSTRIP_SOURCE_GAP_RATIO))
+        _draw_text(ImageDraw.Draw(canvas), (box[0], box[1]), source_text, font,
+                   fill=(255, 255, 255), stroke=YT_TITLE_STROKE,
+                   stroke_width=max(3, round(height * 0.004)), anchor="la")
 
     buffer = io.BytesIO()
     canvas.save(buffer, format="PNG")
     return buffer.getvalue()
+
 
 
 # 多圖分切底圖（2026-09-06 使用者裁決：「原圖放置」附圖 2 張＝左右雙切、3 張＝三切，
