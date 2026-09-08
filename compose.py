@@ -859,6 +859,7 @@ YT_TITLE_SIZE_RATIO = 0.145          # 標題起始字級（字高約 100/720）
 YT_TITLE_MIN_SIZE_RATIO = 0.085
 YT_TITLE_STROKE_RATIO = 0.05         # 深色描邊佔字級比例（假粗體吃掉的部分另外補，見 _draw_yt_title_line）
 YT_TITLE_BOLD_RATIO = 0.035          # 假粗體：同色描邊佔字級比例
+YT_TITLE_SHADOW_RATIO = 0.03         # 陰影位移佔字級比例（底色框預設關之後才補的）
 YT_LINE1_FILL = (255, 255, 255)
 YT_LINE2_FILL = (250, 215, 0)
 YT_TITLE_STROKE = (8, 8, 8)
@@ -974,6 +975,11 @@ def _draw_yt_title_line(
     """
     bold = max(2, round(font.size * YT_TITLE_BOLD_RATIO))
     outline = max(4, round(font.size * YT_TITLE_STROKE_RATIO)) + bold
+    # 陰影一層再正字（比照十點封面的標題）：底色框 2026-09-08 起預設關，字直接壓在照片上，
+    # 光靠描邊在亮背景仍然糊。位移用字級的比例算，字級縮了陰影跟著縮。
+    shadow = max(2, round(font.size * YT_TITLE_SHADOW_RATIO))
+    _draw_text(draw, (xy[0] + shadow, xy[1] + shadow), text, font, fill=(0, 0, 0),
+               stroke=(0, 0, 0), stroke_width=outline, anchor=anchor)
     _draw_text(draw, xy, text, font, fill=fill, stroke=YT_TITLE_STROKE, stroke_width=outline, anchor=anchor)
     _draw_text(draw, xy, text, font, fill=fill, stroke=fill, stroke_width=bold, anchor=anchor)
 

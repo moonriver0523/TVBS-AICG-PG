@@ -87,6 +87,26 @@ class WeightTests(unittest.TestCase):
         self.assertGreaterEqual(outline - bold, max(4, round(font.size * compose.YT_TITLE_STROKE_RATIO)))
 
 
+class ShadowTests(unittest.TestCase):
+    """底色框 2026-09-08 起預設關，字直接壓在照片上，補一層陰影（比照十點封面的標題）。"""
+
+    def test_shadow_darkens_the_area_just_below_the_glyphs(self):
+        light = (215, 215, 215)
+        buffer = io.BytesIO()
+        Image.new("RGB", (1920, 1080), light).save(buffer, format="PNG")
+        bright = buffer.getvalue()
+        out = compose.compose_yt_cover(bright, line1=LINE1, line2=LINE2, date_text="2026/09/08")
+        img = Image.open(io.BytesIO(out)).convert("RGB")
+        raw = img.crop((0, round(img.height * 0.6), img.width, img.height)).tobytes()
+        dark = sum(1 for r, g, b in zip(raw[0::3], raw[1::3], raw[2::3]) if r < 60 and g < 60 and b < 60)
+        with patch.object(compose, "YT_TITLE_SHADOW_RATIO", 0.0):
+            out2 = compose.compose_yt_cover(bright, line1=LINE1, line2=LINE2, date_text="2026/09/08")
+        img2 = Image.open(io.BytesIO(out2)).convert("RGB")
+        raw2 = img2.crop((0, round(img2.height * 0.6), img2.width, img2.height)).tobytes()
+        dark2 = sum(1 for r, g, b in zip(raw2[0::3], raw2[1::3], raw2[2::3]) if r < 60 and g < 60 and b < 60)
+        self.assertGreater(dark, dark2, "陰影應該讓標題周圍多出深色像素")
+
+
 class LeadingTests(unittest.TestCase):
     def test_leading_is_tighter_than_before(self):
         leading = compose.YT_LINE2_BASELINE_RATIO - compose.YT_LINE1_BASELINE_RATIO
