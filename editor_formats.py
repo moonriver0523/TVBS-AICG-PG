@@ -135,7 +135,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 - The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
 - The date is a clean, light, small white sans-serif, no effects, inside the header band.
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
-
+{title_style_clause}
 === IMAGERY ===
 - LEFT half photograph: {visual_left}
 - RIGHT half photograph: {visual_right}
@@ -167,7 +167,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 - The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
 - The date is a clean, light, small white sans-serif, no effects, inside the header band.
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
-
+{title_style_clause}
 === IMAGERY ===
 - The photograph: {visual_left}
 - Photographic, dramatically lit, news-documentary quality, filling the whole frame edge to edge behind the headline; keep the main subject towards the upper-middle and right so the lower-left stays calm for the headline.
@@ -177,6 +177,19 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 - Do NOT draw any 示意圖 label, AI示意圖 label or similar disclaimer anywhere in the image. Software adds that label afterwards, at the outer top corner below the header band — keep that small area free of text and busy detail.
 - No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles.
 - Keep every piece of text well inside the frame with clear breathing space; nothing may touch or be clipped by any edge.
+"""
+
+
+# 標題設計感開關（2026-09-08 使用者要求：AI 整張版的標題要「設計感＋滿框」，像節目片頭字卡）。
+# 預設 plain＝維持現行排版；designed 才追加下面這段。兩個 AI 模板（雙切／滿版）共用同一段，
+# 措辭只寫「怎麼排」，不碰「印哪幾行、印哪些字」——那由 {title_left_lines} 逐行給定，
+# 這段裡再明文重申一次不得增減字，免得模型為了版面好看自己加字或砍字。
+COVER_TITLE_STYLE_PLAIN = "plain"
+COVER_TITLE_STYLE_DESIGNED = "designed"
+COVER_TITLE_STYLES = (COVER_TITLE_STYLE_PLAIN, COVER_TITLE_STYLE_DESIGNED)
+
+COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE = """- DESIGNED TITLE: treat the headline as a show title card. Set it edge to edge so it FILLS THE FULL WIDTH of its panel, in extremely heavy black display type with tight leading so the lines stack as one solid block. MIX THE TYPE SIZES within the headline: the key figure, number or keyword is set noticeably LARGER than the rest and carries the yellow or red, while the supporting characters stay smaller — a deliberate, designed rhythm rather than one uniform size. Add a crisp white stroke around the characters plus a strong drop shadow so the block lifts off the photograph.
+- That styling changes only the SIZE, WEIGHT and PLACEMENT of the characters. Render exactly the lines given above, character for character, in the same order — never add, drop, reorder or re-split a single character to make the layout work.
 """
 
 

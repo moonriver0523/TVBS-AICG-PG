@@ -232,3 +232,22 @@ logo」，一句「背景弄熱鬧一點」就能替沒提到的店家捏一個�
 - 前端：`handleTenCoverGenerate` 只在 `data.mode === 'ai'` 時設 refine 源；refine 送出
   時十點封面比照 YT（16:9、不置框、不挖洞、`text_free:false`），回來再走
   `recomposeTenCover`。欄位取現況，所以順便改標題也會生效。
+
+## 設計標題開關（2026-09-08，只有 AI 整張版）
+
+使用者要求 AI 整張版的標題要「設計感＋滿框」（範例：兩行極粗黑體撐滿格寬、關鍵字放大並改黃／紅、
+緊密堆疊、白描邊＋陰影，像節目片頭字卡）。做成開關而不是直接改，因為 designed 讓模型大改版面，
+錯字與版面走鐘的風險比較高。
+
+- `TenCoverRequest.title_style`：`plain`（預設）／`designed`。只影響 `mode=ai`；合成版的字是
+  Pillow 畫的，排版由 compose 的常數決定，這個欄位用不到。
+- 兩個 AI 模板（雙切 `COVER_AI_PROMPT_TEMPLATE`、滿版 `COVER_AI_FULL_PROMPT_TEMPLATE`）的
+  TYPOGRAPHY 段尾多一個 `{title_style_clause}`。`designed` 填
+  `COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE`，`plain` 填空字串——所以 plain 的 prompt 與 0907 版一字不差。
+- 那一段只寫「怎麼排」，並自己重申一次「照給定的行逐字印、不得增減／重排／重拆」。
+  逐行給定的機制（`{title_left_lines}`）不變，兩者同時在 prompt 裡。
+- 前端 `#coverTitleStyleBtn`（紫色，比照蓋章／壓框的寫法：state 布林式字串、按鈕、payload 欄位）。
+  只有十點版型＋「標題由 AI 生成」勾著才顯示，預設 OFF；生成本體與 `tenCoverFields()`
+  （追加修改／只改文字）兩條 payload 都帶。
+- 測試：`tests/test_cover_title_style.py`。既有直接 `.format()` 兩個模板的測試要補
+  `title_style_clause=""`（`test_editor_formats`、`test_ten_cover_full`）。

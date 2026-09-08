@@ -430,11 +430,17 @@
                                     title="滿版程式壓字版專用：底圖不重生，只用新的標題／日期／標籤重壓文字"
                                     class="hidden px-2.5 py-1.5 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all disabled:opacity-40">只改文字</button>
                         </div>
-                        <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-300 cursor-pointer"
-                               title="開：整張連標題字交給 AI 畫（美術字有設計感，但可能出錯字）；關：AI 只生左右底圖、所有文字由程式壓字，零錯字">
-                            <input id="coverAiTitle" type="checkbox" class="accent-red-600" checked />標題由 AI 生成
-                            <span class="text-[9px] font-normal text-slate-500">（關閉＝程式壓字，零錯字）</span>
-                        </label>
+                        <div class="flex items-center gap-2">
+                            <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-300 cursor-pointer"
+                                   title="開：整張連標題字交給 AI 畫（美術字有設計感，但可能出錯字）；關：AI 只生左右底圖、所有文字由程式壓字，零錯字">
+                                <input id="coverAiTitle" type="checkbox" class="accent-red-600" checked onchange="updateCoverTitleStyleButton()" />標題由 AI 生成
+                                <span class="text-[9px] font-normal text-slate-500">（關閉＝程式壓字，零錯字）</span>
+                            </label>
+                            <!-- 設計標題（2026-09-08）：只有 AI 整張版有意義，合成版的字是程式壓的 -->
+                            <button id="coverTitleStyleBtn" type="button" onclick="toggleCoverTitleStyle()"
+                                    title="開：標題撐滿整格、關鍵字放大變黃／紅，像節目片頭字卡；關：維持現行排版"
+                                    class="hidden px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">設計標題 OFF</button>
+                        </div>
                         <p class="text-[9px] text-slate-600 leading-relaxed">畫面描述<span class="text-amber-500/90">選填</span>：留空時由 AI 讀標題自動補，生成後會填回欄位讓你微調重生。標題用空白分行（最多 3 行，白／黃／紅逐行變色）。左右各有自己的<span class="text-amber-500/90">附圖位</span>：有圖的那格直接上版（不生圖、自動改程式壓字），沒圖的那格由 AI 依標題生底圖，左有右無就只生右格。上方「附參考圖」的實景／肖像／地圖用途仍當生圖參考。Logo 與節目標籤一律由程式貼正版檔。</p>
                     </div>
 

@@ -3106,6 +3106,10 @@ class TenCoverRequest(BaseModel):
     # ai＝整張交給生圖模型畫（預設，2026-09-03 使用者裁決要設計感）
     # composite＝AI 只出兩張無文字底圖、文字由 Pillow 畫（零錯字但沒設計感，留作備援）
     mode: Literal["ai", "composite"] = editor_formats.COVER_MODE_AI
+    # 2026-09-08 使用者要求：AI 整張版的標題要有「設計感＋滿框」的選項（像節目片頭字卡）。
+    # plain＝現行排版（預設）；designed＝在 TYPOGRAPHY 段追加 COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE。
+    # 只影響 mode=ai：合成版的字是 Pillow 畫的，排版由 compose 的常數決定，這個欄位用不到。
+    title_style: Literal["plain", "designed"] = editor_formats.COVER_TITLE_STYLE_PLAIN
     # 2026-09-06：十點也收附圖。用途 asis（原圖放置）1 張＝整版鋪滿（使用者裁決，不切格）、
     # 2 張＝左格、右格；有任何 asis 就強制 composite（真照不進生圖模型），也不再生任何底圖。
     # 其他用途（實景／肖像／地圖）當兩格 AI 底圖的生圖參考。
@@ -3456,12 +3460,18 @@ def _cover_ai(
         lines = compose.cover_title_lines(title.strip(), full_width=full_width)
         return "\n".join(f"  Line {i}: {line}" for i, line in enumerate(lines, start=1))
 
+    # 設計標題（2026-09-08）：designed 才在 TYPOGRAPHY 段尾追加一段；plain 留空字串。
+    style_clause = (
+        editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
+        if req.title_style == editor_formats.COVER_TITLE_STYLE_DESIGNED else ""
+    )
     if req.layout == "full":
         prompt = editor_formats.COVER_AI_FULL_PROMPT_TEMPLATE.format(
             badge_text=badge_text,
             date_text=date_text,
             title_left_lines=_lines_block(req.title_left, full_width=True),
             visual_left=visuals[0],
+            title_style_clause=style_clause,
         )
     else:
         prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE.format(
@@ -3471,6 +3481,7 @@ def _cover_ai(
             title_right_lines=_lines_block(req.title_right, full_width=False),
             visual_left=visuals[0],
             visual_right=visuals[1],
+            title_style_clause=style_clause,
         )
     # 整張一起生：兩格的具名真人合成一份名單（去重、保持順序）
     subjects, english = [], []

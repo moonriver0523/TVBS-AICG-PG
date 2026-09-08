@@ -364,6 +364,9 @@ let state = {
     // 刻意不共用 refineSource——那格的語意是「餵回 /api/images/refine 的原圖」，合成版
     // 沒有那種東西；混用會讓「修改」鈕誤以為合成版可以 refine（見 handleRefine）。
     tenCoverBackground: null,
+    // 十點 AI 整張版的標題設計感（2026-09-08）：plain＝現行排版、designed＝滿框放大關鍵字。
+    // 預設 plain——designed 讓模型大改版面，錯字與版面走鐘的風險比較高，要使用者自己開。
+    coverTitleStyle: 'plain',
     refineStack: []
 };
 
@@ -837,6 +840,7 @@ function applyEditorFormatInputs() {
     // 這裡只管顯隱：換角色也會走這支，清底圖要放在真的換版型的 setEditorFormat。
     const coverRecompose = document.getElementById('coverRecomposeBtn');
     if (coverRecompose) coverRecompose.classList.toggle('hidden', !fullLayout);
+    updateCoverTitleStyleButton();
     if (yt) yt.classList.toggle('hidden', !wantsYt);
     // 附圖上傳區：主流程、YT 直播封面、十點不一樣（2026-09-06 起收原圖放置）都用。
     // 封面版型時把它搬到該組欄位下面——留在原位會跑到角色鈕正下方，看起來像消失了。
@@ -1065,6 +1069,28 @@ function toggleStamp() {
     updateStampButton();
     updateInstructionOverrideHint();
     showToast(state.stamp ? '蓋章：開（最後一行加結論條）' : '蓋章：關（不放結論條）');
+}
+
+// 十點封面「設計標題」開關（2026-09-08）。紫色，與安全框（綠）／蓋章（琥珀）／壓框（青）區分。
+// 只有十點版型＋AI 整張模式看得到：合成版的字是程式用 Pillow 壓的，這個開關對它沒有意義。
+function updateCoverTitleStyleButton() {
+    const btn = document.getElementById('coverTitleStyleBtn');
+    if (!btn) return;
+    const aiMode = document.getElementById('coverAiTitle')?.checked !== false;
+    btn.classList.toggle('hidden', editorFormat().inputs !== 'cover' || !aiMode);
+    const on = state.coverTitleStyle === 'designed';
+    btn.className = (btn.classList.contains('hidden') ? 'hidden ' : '')
+        + 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
+        + (on ? 'border border-violet-600 bg-violet-600 text-white' : 'border border-violet-600 text-slate-400 hover:text-white');
+    btn.innerText = on ? '設計標題 ON' : '設計標題 OFF';
+}
+
+function toggleCoverTitleStyle() {
+    state.coverTitleStyle = state.coverTitleStyle === 'designed' ? 'plain' : 'designed';
+    updateCoverTitleStyleButton();
+    showToast(state.coverTitleStyle === 'designed'
+        ? '設計標題：開（標題撐滿整格、關鍵字放大）'
+        : '設計標題：關（維持現行排版）');
 }
 
 // 播出鏡面白色壓框開關（2026-09-07）。青色，與安全框（綠）／蓋章（琥珀）區分。
@@ -1620,6 +1646,7 @@ function tenCoverFields() {
         visual_right: fullLayout ? '' : val('coverVisualRight'),
         date_text: val('coverDate'),
         badge: document.getElementById('coverBadge')?.value || 'on_air',
+        title_style: state.coverTitleStyle,
         provider: effectiveImageProvider(),
     };
 }
@@ -1728,6 +1755,7 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
                     visual_right: fullLayout ? '' : visualRight,
                     date_text: val('coverDate'),
                     badge: document.getElementById('coverBadge')?.value || 'on_air',
+                    title_style: state.coverTitleStyle,
                     mode: composite ? 'composite' : 'ai',
                     provider: effectiveImageProvider(),
                     reference_images: userRefImagesPayload(),

@@ -258,6 +258,8 @@ class CoverPromptTests(unittest.TestCase):
             "title_right_lines": "  Line 1: 病理醫師月薪65萬\n  Line 2: 仍缺工",
             "visual_left": "政府大樓與金幣",
             "visual_right": "病理科實驗室",
+            # 2026-09-08 設計標題開關：預設 plain＝不追加任何一段
+            "title_style_clause": "",
         }
         fields.update(overrides)
         return editor_formats.COVER_AI_PROMPT_TEMPLATE.format(**fields)
