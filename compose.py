@@ -882,6 +882,28 @@ YT_AI_NOTE_SIZE_RATIO = 0.032
 YT_AI_NOTE_TOP_RATIO = 0.20          # 藍標籤之下的右側空位
 YT_AI_NOTE_PLATE = (0, 0, 0, 120)
 
+# ---- 底色框位置變體（2026-09-08 WP3，只出樣張，預設值不動）----
+# 使用者裁決「紅／藍底色框位置再往下調，不超過第二行標題」語意有歧義，先出三個位置讓他挑。
+# 上界用**最大字級**的 ascent 算，不用某一句話 fit 完的字級：短標題不會縮字，ink 會比長標題
+# 更高，拿長標題量出來的上緣當上界，換一句短的就被漸入層蓋到。outline 是描邊往外撐的部分。
+def _yt_title_ink_top_ratio(baseline_ratio: float) -> float:
+    """該行標題在最大字級下、含描邊的墨水上緣（佔畫布高的比例）。"""
+    _, height = YT_CANVAS
+    size = round(height * YT_TITLE_SIZE_RATIO)
+    font = _font(size)
+    ascent, _ = font.getmetrics()
+    outline = max(4, round(size * YT_TITLE_STROKE_RATIO)) + round(size * YT_TITLE_BOLD_RATIO)
+    return (round(height * baseline_ratio) - ascent - outline) / height
+
+
+# (band 起點, 漸入高度)。漸入結尾一律壓在下一段字的墨水上緣之上，帶子才不會糊到字。
+# 變體 2 與 3 只差約 17px——行距就這麼寬，中間塞不下更多位置，這是版面的事實不是取值偷懶。
+YT_BAND_VARIANTS: dict[str, tuple[float, float]] = {
+    "line1_top": (0.622, 0.016),   # 第一行字上緣再往上一點點
+    "between": (0.799, 0.020),     # 兩行之間（第一行基線與第二行上緣中點）
+    "line2_top": (0.8145, 0.005),  # 第二行字上緣稍上
+}
+
 
 def _paste_live_badge(canvas: Image.Image, box: tuple[int, int], width: int) -> int:
     """貼 LIVE 章，回傳貼上後的高度（日期條要接在它正下方）。"""
@@ -925,14 +947,14 @@ def _draw_top_line(canvas: Image.Image) -> None:
     canvas.alpha_composite(line, (0, 0))
 
 
-def _draw_logo_tab(
-    canvas: Image.Image,
+def _logo_tab_layer(
     top_colour: tuple[int, int, int] = YT_LOGO_TAB_TOP,
     bottom_colour: tuple[int, int, int] = YT_LOGO_TAB_BOTTOM,
-) -> None:
-    """右上角漸層標籤（左邊斜切、左下圓角）＋白色 TVBS Logo，貼著畫面右上角。
+) -> Image.Image:
+    """右上角漸層標籤（左邊斜切、左下圓角）本身，畫在一張畫布大小的透明圖上。
 
-    預設藍色（新聞直播）；今日熱搜傳紅色。
+    跟貼 Logo 拆開，是為了 PNG 壓標要把標籤鏡射到另外三個角——鏡射整張會連 Logo
+    一起翻過去。預設藍色（新聞直播）；今日熱搜傳紅色。
     """
     width, height = YT_CANVAS
     tab_h = round(height * YT_LOGO_TAB_HEIGHT_RATIO)
@@ -971,9 +993,19 @@ def _draw_logo_tab(
         t = y / max(1, tab_h - 1)
         colour = tuple(round(top_colour[i] * (1 - t) + bottom_colour[i] * t) for i in range(3))
         gd.line(((0, y), (width, y)), fill=colour + (255,))
-    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     layer.paste(gradient, (0, 0), mask)
-    canvas.alpha_composite(layer)
+    return layer
+
+
+def _draw_logo_tab(
+    canvas: Image.Image,
+    top_colour: tuple[int, int, int] = YT_LOGO_TAB_TOP,
+    bottom_colour: tuple[int, int, int] = YT_LOGO_TAB_BOTTOM,
+) -> None:
+    """右上角漸層標籤＋白色 TVBS Logo，貼著畫面右上角。"""
+    width, height = YT_CANVAS
+    canvas.alpha_composite(_logo_tab_layer(top_colour, bottom_colour))
     _paste_logo(canvas, (round(width * YT_LOGO_LEFT_RATIO), round(height * YT_LOGO_TOP_RATIO)), round(width * YT_LOGO_WIDTH_RATIO))
 
 
@@ -1006,14 +1038,19 @@ def _draw_title_band(
     canvas: Image.Image,
     fill: tuple[int, int, int] = YT_BAND_FILL,
     block_fill: tuple[int, int, int] = YT_BAND_BLOCK_FILL,
+    *,
+    top_ratio: float | None = None,
+    fade_ratio: float | None = None,
 ) -> None:
     """底部科技底帶：頂端漸入，帶上撒幾塊半透明方塊模擬頻道的電路紋。
 
     預設深藍（新聞直播）；今日熱搜傳深紅。
+    top_ratio／fade_ratio 是 2026-09-08 出位置樣張用的覆寫，None＝沿用現行常數
+    （預設行為一個像素都不能變，使用者還沒挑位置）。
     """
     width, height = YT_CANVAS
-    top = round(height * YT_BAND_TOP_RATIO)
-    fade = round(height * YT_BAND_FADE_RATIO)
+    top = round(height * (YT_BAND_TOP_RATIO if top_ratio is None else top_ratio))
+    fade = round(height * (YT_BAND_FADE_RATIO if fade_ratio is None else fade_ratio))
     band = Image.new("RGBA", (width, height - top), fill + (0,))
     alpha = Image.new("L", band.size, YT_BAND_ALPHA)
     ad = ImageDraw.Draw(alpha)
@@ -1047,6 +1084,8 @@ def compose_yt_cover(
     ai_note: bool = False,
     draw_titles: bool = True,
     bottom_band: bool = False,
+    band_top_ratio: float | None = None,
+    band_fade_ratio: float | None = None,
 ) -> bytes:
     """合成 YT 國內外新聞直播封面（2026-09-06 依頻道實際版面）。
 
@@ -1073,7 +1112,7 @@ def compose_yt_cover(
 
     # ---- 底帶先鋪，章與標籤壓在上面（AI 標題模式：底帶與標題都是模型畫的）----
     if draw_titles and bottom_band:
-        _draw_title_band(canvas)
+        _draw_title_band(canvas, top_ratio=band_top_ratio, fade_ratio=band_fade_ratio)
     _draw_top_line(canvas)
     _draw_logo_tab(canvas)
     draw = ImageDraw.Draw(canvas)
@@ -1296,6 +1335,8 @@ def compose_yt_hot_cover(
     ai_note: bool = False,
     draw_titles: bool = True,
     bottom_band: bool = False,
+    band_top_ratio: float | None = None,
+    band_fade_ratio: float | None = None,
 ) -> bytes:
     """合成 YT「今日熱搜」封面：紅色系標頭、無日期無 LIVE，底部兩行標題。
 
@@ -1309,7 +1350,8 @@ def compose_yt_hot_cover(
     width, height = YT_CANVAS
     margin = round(width * YT_MARGIN_RATIO)
     if draw_titles and bottom_band:
-        _draw_title_band(canvas, YT_HOT_BAND_FILL, YT_HOT_BAND_BLOCK_FILL)
+        _draw_title_band(canvas, YT_HOT_BAND_FILL, YT_HOT_BAND_BLOCK_FILL,
+                         top_ratio=band_top_ratio, fade_ratio=band_fade_ratio)
     _draw_hot_header(canvas)
     if ai_note:
         _draw_ai_note(canvas, round(height * YT_AI_NOTE_TOP_RATIO))
@@ -1326,6 +1368,358 @@ def compose_yt_hot_cover(
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+# ============================================================
+# YT 直播「直標」PNG 壓標（2026-09-08 WP3 第二版，計畫書 E 段）
+#
+# 第一版做成底部橫向標題條，是誤讀規格：使用者說的「直標」是**垂直**的標題條。
+# 這一版全部依兩張真實播出截圖重量：
+#   D:\Downloads\20260908_直標參考_一般國內直播.png（718×404）
+#   D:\Downloads\20260908_直標參考_原音呈現.png（721×404）
+#
+# 版面（左緣版，右緣版整組鏡射）：
+#   LIVE 章（＋原音呈現／AI即時翻譯白底小標）壓在最上面，底下接兩欄直排文字。
+#   內側欄＝主標，字大、欄寬；外側欄＝副標，字小、欄窄。兩欄**同一個上緣、同一個
+#   下緣**，各自的字距＝共用欄高 ÷ 自己的格數——所以格數多的那欄字自動變小。
+#   這是量出來的：ref1 兩欄都是 y 67→358，主標 9 格、副標 12 格，格距 8.0%／6.0%。
+#
+# 兩件跟直覺不一樣、但截圖就是這樣的事：
+#   1. 兩欄都是深藍，沒有紅欄。ref1／ref2 取色都是外側 (28,53,99)、內側 (27,41,74)。
+#   2. 右上角是白色 TVBS NEWS 字標，不是 YT 封面那塊藍色斜標籤。
+# 兩者都留成參數（sub_fill／logo_tab），要改一行就好。
+#
+# 直排是逐字疊放，不是把整行轉 90°：標點要換成直排相容字元（「→﹁、。→︒），
+# 連續的英數字（AI／AMD／30）併成一格橫著寫（縱中橫），截圖裡就是這樣排的。
+# ============================================================
+
+VSTRIP_LEFT_RATIO = 0.0265           # 整組直標離畫面外緣（19/718）
+VSTRIP_MAIN_WIDTH_RATIO = 0.0445     # 主標欄寬（32/718）
+VSTRIP_SUB_WIDTH_RATIO = 0.0362      # 副標欄寬（26/718）
+VSTRIP_SEAM_RATIO = 0.0014           # 兩欄之間的細縫
+VSTRIP_TOP_RATIO = 0.166             # 文字欄上緣，一般版（67/404）
+VSTRIP_TOP_WITH_LABEL_RATIO = 0.191  # 有原音呈現／AI即時翻譯小標時（77/404）
+VSTRIP_BOTTOM_MAX_RATIO = 0.90       # 欄底最多到這裡，再長就縮字
+VSTRIP_MAIN_PITCH_RATIO = 0.080      # 主標格距上限（291/404/9）
+VSTRIP_SUB_PITCH_RATIO = 0.060       # 副標格距上限（291/404/12）
+VSTRIP_MIN_PITCH_RATIO = 0.045       # 縮到這裡還放不下就丟 ComposeError
+VSTRIP_CELL_TIGHT = 0.92             # 字級佔格距（字距約 0.08em）
+VSTRIP_MAIN_FILL = (27, 41, 74)      # 內側欄：深藏青（截圖取色）
+VSTRIP_SUB_FILL = (28, 53, 99)       # 外側欄：略亮的藍（截圖取色）
+VSTRIP_FILL_SHADE = 0.78             # 欄內由外而內的漸層，模擬截圖的漸層感
+VSTRIP_LIVE_TOP_RATIO = 0.104        # LIVE 章上緣，一般版（42/404）
+VSTRIP_LIVE_TOP_WITH_LABEL_RATIO = 0.057   # 有小標時 LIVE 往上讓（23/404）
+VSTRIP_LIVE_WIDTH_RATIO = 0.0877     # LIVE 章寬（63/718）
+VSTRIP_LABEL_HEIGHT_RATIO = 0.069    # 白底小標高（28/404）
+VSTRIP_LABEL_WIDTH_RATIO = 0.0905    # 白底小標寬（65/718）
+VSTRIP_LABEL_FILL = (255, 255, 255)
+VSTRIP_LABEL_TEXT = (208, 20, 30)
+VSTRIP_LABEL_BORDER = (208, 20, 30)
+VSTRIP_SOURCE_SIZE_RATIO = 0.030     # 來源句字級
+VSTRIP_SOURCE_GAP_RATIO = 0.014      # 來源句與 LIVE 章／Logo 的距離
+VSTRIP_LOGO_WIDTH_RATIO = 0.105      # 白色字標寬
+VSTRIP_LOGO_MARGIN_RATIO = 0.018
+VSTRIP_VARIANTS = ("normal", "original_audio", "ai_translation")
+VSTRIP_VARIANT_LABELS = {"original_audio": "原音呈現", "ai_translation": "AI即時翻譯"}
+VSTRIP_CORNERS = ("tr", "tl", "br", "bl")
+VSTRIP_SIDES = ("left", "right")
+VSTRIP_MAIN_MAX_CELLS = 12           # 主標格數上限（規格）
+VSTRIP_SUB_MAX_CELLS = 14            # 副標格數上限（規格）
+
+# 直排相容標點（U+FE1x／FE3x／FE4x）。台北黑體 Bold 這些字都有真字形，逐字render
+# 驗過不是豆腐；沒有的字才退回旋轉 90°，所以 _VERTICAL_ROTATE_FALLBACK 平常不會用到。
+VERTICAL_PUNCTUATION = {
+    "「": "﹁", "」": "﹂", "『": "﹃", "』": "﹄",
+    "（": "︵", "）": "︶", "(": "︵", ")": "︶",
+    "〔": "︹", "〕": "︺", "【": "︻", "】": "︼",
+    "，": "︐", "、": "︑", "。": "︒", "：": "︓", "；": "︔",
+    "！": "︕", "？": "︖", "…": "︙", "—": "︱", "─": "︱", "－": "︱",
+}
+
+
+def _vertical_cells(text: str) -> list[str]:
+    """把一行字拆成直排的格子。連續英數字併成一格（縱中橫），標點換直排字形。
+
+    「明早晚涼「中午仍破30度」」→ 明 早 晚 涼 ﹁ 中 午 仍 破 30 度 ﹂ ＝ 12 格。
+    30 是一格不是兩格，字數上限要照格數算，不是照字元數。
+    """
+    cells: list[str] = []
+    run = ""
+    for ch in text:
+        if ch.isascii() and ch.isalnum():
+            run += ch
+            continue
+        if run:
+            cells.append(run)
+            run = ""
+        if ch.isspace():
+            continue
+        cells.append(VERTICAL_PUNCTUATION.get(ch, ch))
+    if run:
+        cells.append(run)
+    return cells
+
+
+def _draw_vertical_cell(
+    canvas: Image.Image, cell: str, box: tuple[int, int, int, int],
+    font: ImageFont.FreeTypeFont, fill: tuple[int, int, int],
+) -> None:
+    """畫一格直排文字。box 是格子的 (x0, y0, x1, y1)。
+
+    單字用 anchor="ma" 貼在格子頂端置中——**不能**拿 getbbox 把墨水置中，
+    那會把 ﹁ 從它該待的右上角拖到格子正中間，直排標點就白換了。
+    英數字串（縱中橫）橫著寫，寬度超過格寬就縮字級。
+    """
+    x0, y0, x1, _ = box
+    centre = (x0 + x1) // 2
+    if len(cell) > 1 or (cell.isascii() and cell.isalnum()):
+        # 縱中橫：整串橫排塞進格寬
+        size = font.size
+        small = _font(size)
+        while size > 8 and small.getbbox(cell)[2] > (x1 - x0):
+            size -= 2
+            small = _font(size)
+        ImageDraw.Draw(canvas).text((centre, y0 + (font.size - small.size) // 2), cell,
+                                    font=small, fill=fill, anchor="ma")
+        return
+    if cell not in VERTICAL_PUNCTUATION.values() and _is_tofu(cell, font):
+        # 沒有直排字形才退回旋轉（台北黑體目前不會走到這條）
+        patch = Image.new("RGBA", (font.size * 2, font.size * 2), (0, 0, 0, 0))
+        ImageDraw.Draw(patch).text((font.size, font.size), cell, font=font, fill=fill + (255,), anchor="mm")
+        patch = patch.rotate(-90, resample=Image.BICUBIC)
+        canvas.alpha_composite(patch, (centre - font.size, y0))
+        return
+    ImageDraw.Draw(canvas).text((centre, y0), cell, font=font, fill=fill, anchor="ma")
+
+
+def _is_tofu(ch: str, font: ImageFont.FreeTypeFont) -> bool:
+    probe = Image.new("L", (font.size * 2, font.size * 2), 0)
+    ImageDraw.Draw(probe).text((font.size // 4, font.size // 4), ch, font=font, fill=255)
+    return probe.getbbox() is None
+
+
+def _vertical_column_layer(size: tuple[int, int], fill: tuple[int, int, int], outward: bool) -> Image.Image:
+    """一欄的底色：由外緣往內做一道很淡的漸層，貼近截圖的漸層感。"""
+    width, height = size
+    column = Image.new("RGBA", size)
+    draw = ImageDraw.Draw(column)
+    dark = tuple(round(c * VSTRIP_FILL_SHADE) for c in fill)
+    for x in range(width):
+        t = (x / max(1, width - 1)) if outward else (1 - x / max(1, width - 1))
+        colour = tuple(round(fill[i] + (dark[i] - fill[i]) * t) for i in range(3))
+        draw.line(((x, 0), (x, height)), fill=colour + (255,))
+    return column
+
+
+def yt_vertical_layout(
+    *, main_title: str, sub_title: str = "", title_side: str = "left",
+    variant: str = "normal", logo_corner: str = "tr", source_text: str = "",
+    source_follow_logo: bool = False,
+) -> dict:
+    """算出直標每一塊的矩形，不畫任何東西。
+
+    幾何跟畫圖拆開才驗得到「主標在內側」——兩欄都是深藍，用像素分不出誰是誰。
+    回傳 live／label／main／sub／source／logo 的 (x0, y0, x1, y1)，以及兩欄的格數與格距。
+    """
+    width, height = YT_CANVAS
+    main_cells = _vertical_cells(main_title)
+    sub_cells = _vertical_cells(sub_title)
+    if not main_cells:
+        raise ComposeError("直標至少要有第一標題")
+    if len(main_cells) > VSTRIP_MAIN_MAX_CELLS:
+        raise ComposeError(f"第一標題 {len(main_cells)} 格，超過上限 {VSTRIP_MAIN_MAX_CELLS} 格")
+    if len(sub_cells) > VSTRIP_SUB_MAX_CELLS:
+        raise ComposeError(f"第二標題 {len(sub_cells)} 格，超過上限 {VSTRIP_SUB_MAX_CELLS} 格")
+
+    labelled = variant in VSTRIP_VARIANT_LABELS
+    top = round(height * (VSTRIP_TOP_WITH_LABEL_RATIO if labelled else VSTRIP_TOP_RATIO))
+    # 兩欄同高：先讓各自用上限格距算出想要的長度，取比較長的那個當共用欄高
+    wanted = max(len(main_cells) * height * VSTRIP_MAIN_PITCH_RATIO,
+                 len(sub_cells) * height * VSTRIP_SUB_PITCH_RATIO)
+    column_h = round(min(wanted, height * VSTRIP_BOTTOM_MAX_RATIO - top))
+    floor = height * VSTRIP_MIN_PITCH_RATIO
+    for name, cells in (("第一標題", main_cells), ("第二標題", sub_cells)):
+        if cells and column_h / len(cells) < floor:
+            raise ComposeError(
+                f"{name} {len(cells)} 格，縮到最小字級仍放不進直標（欄高 {column_h}px）"
+            )
+
+    main_w = round(width * VSTRIP_MAIN_WIDTH_RATIO)
+    sub_w = round(width * VSTRIP_SUB_WIDTH_RATIO)
+    seam = round(width * VSTRIP_SEAM_RATIO)
+    outer = round(width * VSTRIP_LEFT_RATIO)
+    if title_side == "left":
+        sub_x0 = outer
+        main_x0 = sub_x0 + sub_w + seam
+    else:
+        sub_x0 = width - outer - sub_w
+        main_x0 = sub_x0 - seam - main_w
+    main = (main_x0, top, main_x0 + main_w, top + column_h)
+    sub = (sub_x0, top, sub_x0 + sub_w, top + column_h) if sub_cells else (sub_x0, top, sub_x0, top)
+
+    strip_x0 = min(main[0], sub[0]) if sub_cells else main[0]
+    strip_x1 = max(main[2], sub[2]) if sub_cells else main[2]
+    live_w = round(width * VSTRIP_LIVE_WIDTH_RATIO)
+    live_top = round(height * (VSTRIP_LIVE_TOP_WITH_LABEL_RATIO if labelled
+                               else VSTRIP_LIVE_TOP_RATIO))
+    live_x0 = strip_x0 if title_side == "left" else strip_x1 - live_w
+    with Image.open(LIVE_BADGE) as badge:
+        live_h = round(badge.height * live_w / badge.width)
+    live = (live_x0, live_top, live_x0 + live_w, live_top + live_h)
+
+    label_w = round(width * VSTRIP_LABEL_WIDTH_RATIO)
+    label_h = round(height * VSTRIP_LABEL_HEIGHT_RATIO)
+    label_x0 = strip_x0 if title_side == "left" else strip_x1 - label_w
+    label = (label_x0, live[3], label_x0 + label_w, live[3] + label_h) if labelled else (0, 0, 0, 0)
+
+    logo_w = round(width * VSTRIP_LOGO_WIDTH_RATIO)
+    logo_margin = round(width * VSTRIP_LOGO_MARGIN_RATIO)
+    with Image.open(TVBS_LOGO_WHITE) as logo_file:
+        logo_h = round(logo_file.height * logo_w / logo_file.width)
+    logo_x0 = width - logo_margin - logo_w if logo_corner in ("tr", "br") else logo_margin
+    logo_y0 = logo_margin if logo_corner in ("tr", "tl") else height - logo_margin - logo_h
+    logo = (logo_x0, logo_y0, logo_x0 + logo_w, logo_y0 + logo_h)
+
+    source = (0, 0, 0, 0)
+    source_text = (source_text or "").strip()
+    if source_text:
+        font = _font(round(height * VSTRIP_SOURCE_SIZE_RATIO))
+        src_w = font.getbbox(source_text)[2]
+        src_h = round(height * VSTRIP_SOURCE_SIZE_RATIO * 1.3)
+        gap = round(height * VSTRIP_SOURCE_GAP_RATIO)
+        if source_follow_logo:
+            source = _vstrip_source_box_follow_logo(logo, logo_corner, src_w, src_h, gap)
+        else:
+            source = _vstrip_source_box(live, logo, logo_corner, title_side, src_w, src_h, gap)
+
+    return {"live": live, "label": label, "main": main, "sub": sub, "source": source,
+            "logo": logo, "main_cells": main_cells, "sub_cells": sub_cells,
+            "column_height": column_h}
+
+
+def _vstrip_source_box(live, logo, logo_corner, title_side, src_w, src_h, gap):
+    """來源句預設貼在 LIVE 章右側同一列（截圖就是這樣）；跟 Logo 模式另算。"""
+    width, _ = YT_CANVAS
+    if title_side == "left":
+        x0 = live[2] + gap
+    else:
+        x0 = live[0] - gap - src_w
+    y0 = live[1] + (live[3] - live[1] - src_h) // 2
+    return (x0, y0, x0 + src_w, y0 + src_h)
+
+
+def _vstrip_source_box_follow_logo(logo, logo_corner, src_w, src_h, gap):
+    """source_follow_logo=True：Logo 在上→句子在 Logo 下方，在下→在上方。"""
+    x1 = logo[2] if logo_corner in ("tr", "br") else logo[0] + src_w
+    y0 = logo[3] + gap if logo_corner in ("tr", "tl") else logo[1] - gap - src_h
+    return (x1 - src_w, y0, x1, y0 + src_h)
+
+
+def compose_yt_overlay(
+    *,
+    main_title: str,
+    sub_title: str = "",
+    source_text: str = "",
+    variant: str = "normal",
+    logo_corner: str = "tr",
+    title_side: str = "left",
+    source_follow_logo: bool = False,
+    logo_tab: bool = False,
+    live: bool = True,
+    main_fill: tuple[int, int, int] = VSTRIP_MAIN_FILL,
+    sub_fill: tuple[int, int, int] = VSTRIP_SUB_FILL,
+    size: tuple[int, int] = YT_CANVAS,
+) -> bytes:
+    """合成 YT 直播用的「直標」透明底 PNG，回傳 PNG bytes（RGBA，沒有底圖）。
+
+    main_title 是主標（內側欄、字大），sub_title 是副標（外側欄、字小），兩欄同長。
+    variant：normal／original_audio／ai_translation，後兩者在 LIVE 章下方多一枚白底小標。
+    source_text 例「畫面來源：路透社」，預設橫排貼在 LIVE 章旁邊；source_follow_logo=True
+    改成跟著 Logo 走（Logo 在上→下方，在下→上方）。
+    logo_tab=True 才畫 YT 封面那塊藍色斜標籤；預設是截圖裡的白色字標。
+
+    size 目前只支援 1920×1080，其他尺寸直接擋掉而不是默默畫錯。
+    """
+    if variant not in VSTRIP_VARIANTS:
+        raise ComposeError(f"variant 只能是 {'／'.join(VSTRIP_VARIANTS)}，收到 {variant!r}")
+    if logo_corner not in VSTRIP_CORNERS:
+        raise ComposeError(f"logo_corner 只能是 {'／'.join(VSTRIP_CORNERS)}，收到 {logo_corner!r}")
+    if title_side not in VSTRIP_SIDES:
+        raise ComposeError(f"title_side 只能是 left／right，收到 {title_side!r}")
+    if tuple(size) != YT_CANVAS:
+        raise ComposeError(f"直標目前只支援 {YT_CANVAS[0]}×{YT_CANVAS[1]}，收到 {size}")
+    same_side = (title_side == "left" and logo_corner in ("tl", "bl")) or \
+                (title_side == "right" and logo_corner in ("tr", "br"))
+    if same_side:
+        raise ComposeError(
+            f"Logo 放 {logo_corner} 會壓在 {title_side} 側的直標上，請把 Logo 換到另一邊"
+        )
+
+    width, height = YT_CANVAS
+    layout = yt_vertical_layout(main_title=main_title, sub_title=sub_title,
+                               title_side=title_side, variant=variant,
+                               logo_corner=logo_corner, source_text=source_text,
+                               source_follow_logo=source_follow_logo)
+    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+
+    # ---- 兩欄底色（外側欄先畫，內側欄壓在上面）----
+    for key, fill in (("sub", sub_fill), ("main", main_fill)):
+        x0, y0, x1, y1 = layout[key]
+        if x1 <= x0:
+            continue
+        outward = (key == "sub") == (title_side == "left")
+        canvas.alpha_composite(_vertical_column_layer((x1 - x0, y1 - y0), fill, outward), (x0, y0))
+
+    # ---- 兩欄文字：白字，不用封面那套重描邊＋陰影（那是壓照片用的，壓深藍會糊）----
+    column_h = layout["column_height"]
+    for key, cells in (("main", layout["main_cells"]), ("sub", layout["sub_cells"])):
+        if not cells:
+            continue
+        x0, y0, x1, _ = layout[key]
+        pitch = column_h / len(cells)
+        size_px = min(round(pitch * VSTRIP_CELL_TIGHT), round((x1 - x0) * 0.94))
+        font = _font(size_px)
+        for index, cell in enumerate(cells):
+            cell_y0 = y0 + round(index * pitch)
+            _draw_vertical_cell(canvas, cell, (x0, cell_y0, x1, cell_y0 + round(pitch)),
+                                font, (255, 255, 255))
+
+    # ---- LIVE 章 ----
+    if live:
+        box = layout["live"]
+        _paste_live_badge(canvas, (box[0], box[1]), box[2] - box[0])
+
+    # ---- 原音呈現／AI即時翻譯：白底、紅框、紅字 ----
+    if variant in VSTRIP_VARIANT_LABELS:
+        box = layout["label"]
+        draw = ImageDraw.Draw(canvas)
+        draw.rounded_rectangle(box, radius=round(height * 0.008), fill=VSTRIP_LABEL_FILL,
+                               outline=VSTRIP_LABEL_BORDER, width=max(2, round(height * 0.004)))
+        text = VSTRIP_VARIANT_LABELS[variant]
+        font = _fit_font(text, (box[2] - box[0]) - round(width * 0.008),
+                         round((box[3] - box[1]) * 0.72), round((box[3] - box[1]) * 0.4))
+        _draw_text(draw, ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2), text, font,
+                   fill=VSTRIP_LABEL_TEXT, stroke_width=0, anchor="mm")
+
+    # ---- Logo ----
+    if logo_tab:
+        canvas.alpha_composite(_logo_tab_layer())
+    logo = layout["logo"]
+    _paste_logo(canvas, (logo[0], logo[1]), logo[2] - logo[0])
+
+    # ---- 來源句 ----
+    source_text = (source_text or "").strip()
+    if source_text:
+        font = _font(round(height * VSTRIP_SOURCE_SIZE_RATIO))
+        box = layout["source"]
+        _draw_text(ImageDraw.Draw(canvas), (box[0], box[1]), source_text, font,
+                   fill=(255, 255, 255), stroke=YT_TITLE_STROKE,
+                   stroke_width=max(3, round(height * 0.004)), anchor="la")
+
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG")
+    return buffer.getvalue()
+
 
 
 # 多圖分切底圖（2026-09-06 使用者裁決：「原圖放置」附圖 2 張＝左右雙切、3 張＝三切，
