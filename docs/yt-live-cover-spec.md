@@ -129,3 +129,22 @@ hourly 另收 `time_text`。前端 `EDITOR_FORMATS[*].ytLayout` 帶到 `ytCoverF
 不會被發現，圖照樣合成上鏡。兩條線拿到 result 後都補 `verify_output_aspect_ratio`，
 降級當場變成 502 而不是一張裁壞的封面。既有底圖（`background_image_base64`）不驗——
 那張不是這次生的。
+
+## 2026-09-08：news 與 hot 標題字級的對齊調查（結論：本來就一致，不改碼）
+
+使用者回報「國內外新聞直播的標題字級比今日熱搜大」。查證結果：
+
+- **合成版本來就同一套。** `compose_yt_cover` 與 `compose_yt_hot_cover` 讀同一組
+  `YT_TITLE_SIZE_RATIO`（0.145）／`YT_TITLE_MIN_SIZE_RATIO`／`YT_LINE1_BASELINE_RATIO`／
+  `YT_LINE2_BASELINE_RATIO`，`max_w` 也都是 `width - margin * 2`。同一組標題丟進去，
+  兩張圖的標題像素外框逐點相同（實測 `(258, 690, 1658, 838)`）。hot 沒有自己的
+  `YT_HOT_TITLE_*` 覆寫。
+- **AI 版兩個模板描述字級的措辭一字不差**：`YT_COVER_FULL_PROMPT_NEWS` 與 `_HOT` 都寫
+  「huge and heavy Chinese display type filling almost the full width」、
+  「Line 1: solid white. Line 2: bright golden yellow.」。
+- 所以沒有可以對齊的差值，**不動任何常數與措辭**——硬造一個差異只會把現在對齊的兩條線弄歪。
+  唯一會出現差別的是 AI 標題模式：字級由模型決定，同一段措辭每張略有差異（見上面「試做紀錄」）。
+  真要讓 AI 模式的字級穩定，得改成「兩行都必須佔滿可用寬度的 N%」這種可量化的指令，
+  兩個版型一起改，屬另一件事。
+- 釘住現況的測試：`tests/test_yt_title_parity.py`（合成版逐像素相同、常數只有一處定義、
+  兩個模板措辭相同）。以後任何一邊調字級都會被擋下來。
