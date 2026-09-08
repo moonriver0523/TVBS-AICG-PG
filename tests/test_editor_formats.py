@@ -28,16 +28,19 @@ APP_JS = pathlib.Path(__file__).resolve().parent.parent / "app.js"
 BROADCAST_MARKER = "BROADCAST INSERT LAYOUT"
 
 
+ALL_KEYS = editor_formats.EDITOR_FORMAT_KEYS + editor_formats.EDITOR_FORMAT_ALIAS_KEYS
+
+
 class RoleGuardTests(unittest.TestCase):
     def test_reporter_never_gets_editor_rules(self):
-        for key in editor_formats.EDITOR_FORMAT_KEYS:
+        for key in ALL_KEYS:
             with self.subTest(key=key):
                 self.assertEqual(editor_formats.digest_rules(key, "記者"), "")
                 self.assertIsNone(editor_formats.hole_side(key, "記者"))
 
     def test_reporter_digest_prompt_is_untouched(self):
         plain = build_digest_instructions("記者", "standard", "資料圖表")
-        for key in editor_formats.EDITOR_FORMAT_KEYS:
+        for key in ALL_KEYS:
             with self.subTest(key=key):
                 self.assertEqual(
                     build_digest_instructions("記者", "standard", "資料圖表", editor_format=key),
@@ -60,10 +63,10 @@ class RoleGuardTests(unittest.TestCase):
 
 class BroadcastDigestRulesTests(unittest.TestCase):
     def test_only_broadcast_formats_inject_the_block(self):
-        for key in editor_formats.EDITOR_FORMAT_KEYS:
+        for key in ALL_KEYS:
             with self.subTest(key=key):
                 text = build_digest_instructions("編輯", "simplified", "資料圖表", editor_format=key)
-                self.assertEqual(BROADCAST_MARKER in text, key.startswith("broadcast_"))
+                self.assertEqual(BROADCAST_MARKER in text, key.startswith("broadcast"))
 
     def test_each_side_talks_about_its_own_side(self):
         left = build_digest_instructions("編輯", "simplified", "資料圖表", editor_format="broadcast_left")
@@ -473,7 +476,8 @@ class LockScopeTests(FrontendParityTests):
     """
 
     def test_broadcast_locks_only_the_chart_type(self):
-        for key in ("broadcast_left", "broadcast_right"):
+        # 2026-09-08 WP1：左切／右切合併成單一個 broadcast
+        for key in ("broadcast",):
             with self.subTest(key=key):
                 entry = self.js_entries()[key]
                 locks = re.search(r"locks:\s*\{([^}]*)\}", entry).group(1)
@@ -483,7 +487,7 @@ class LockScopeTests(FrontendParityTests):
 
     def test_broadcast_still_presets_the_recommended_values(self):
         # 解鎖不等於不幫忙：切過去仍要幫使用者調好，只是調完可以改
-        for key in ("broadcast_left", "broadcast_right"):
+        for key in ("broadcast",):
             with self.subTest(key=key):
                 presets = re.search(r"presets:\s*\{([^}]*)\}", self.js_entries()[key])
                 self.assertIsNotNone(presets, "播出鏡面應該還有預設值")

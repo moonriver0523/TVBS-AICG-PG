@@ -72,12 +72,25 @@ class DownloadNameRuleTests(unittest.TestCase):
 
     def test_every_editor_format_has_a_short_name(self):
         names = _block("const DOWNLOAD_FORMAT_NAMES = {", "};")
-        for key, short in (("default", "編輯CG"), ("broadcast_left", "播出鏡面左"),
-                           ("broadcast_right", "播出鏡面右"), ("ten_cover", "十點雙切"),
-                           ("ten_cover_full", "十點滿版"), ("yt_live_cover", "YT直播"),
+        for key, short in (("default", "編輯CG"), ("yt_live_cover", "YT直播"),
                            ("yt_hourly_cover", "YT整點"), ("yt_hot_cover", "YT熱搜")):
             with self.subTest(key=key):
                 self.assertIn(f"{key}: '{short}'", names)
+
+    def test_merged_formats_have_one_short_name_per_variant(self):
+        """2026-09-08 WP1：十點依判定後的版面、播出鏡面依挖空側取短名。"""
+        names = _block("const DOWNLOAD_FORMAT_NAMES = {", "};")
+        self.assertIn("broadcast: { left: '播出鏡面左', right: '播出鏡面右' }", names)
+        self.assertIn("ten_cover: { full: '十點滿版', split: '十點雙切' }", names)
+        for dead in ("broadcast_left:", "broadcast_right:", "ten_cover_full:"):
+            with self.subTest(dead=dead):
+                self.assertNotIn(dead, names)
+
+    def test_short_name_resolves_the_variant_at_download_time(self):
+        body = _function_body("downloadFormatName")
+        # 十點看 coverLayoutNow()（第二標題有沒有值），播出鏡面看 state.holeSide
+        self.assertIn("coverLayoutNow()", body)
+        self.assertIn("state.holeSide", body)
 
     def test_reporter_default_format_is_plain_cg(self):
         body = _function_body("downloadFormatName")

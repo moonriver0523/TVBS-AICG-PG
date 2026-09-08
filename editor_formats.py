@@ -32,6 +32,16 @@ PIPELINE_YT_COVER = "yt_cover"
 COVER_MODE_AI = "ai"
 COVER_MODE_COMPOSITE = "composite"
 
+# 十點不一樣的版面。auto＝合併後的版型（依第二標題自動判定，見 resolve_cover_layout）；
+# split／full 是實際生成時只會是這兩個之一的結果值，也是舊呼叫端會明示的值。
+COVER_LAYOUT_SPLIT = "split"
+COVER_LAYOUT_FULL = "full"
+COVER_LAYOUT_AUTO = "auto"
+COVER_LAYOUTS = (COVER_LAYOUT_SPLIT, COVER_LAYOUT_FULL)
+
+# 播出鏡面的兩側。挖空方向 2026-09-08 起由請求欄位決定（見 resolve_hole_side）。
+HOLE_SIDES = ("left", "right")
+
 
 # 播出鏡面：畫面裡要留一塊給後製合成影片。那塊由 compose.apply_broadcast_hole
 # 在置框後**數學貼上**，不靠模型自律（五輪實驗證實模型做不到，見 compose.py 開頭）。
@@ -366,10 +376,16 @@ def split_cover_title(title: str) -> list[str]:
 # 分成 **3 段**（每段就是封面上的一行，白／黃／紅；2026-09-08 使用者回報只出 2 段就沒有紅字、
 # 或生圖階段瞎掰第三段，改成一律 3 段）。YT 直播：一句標題用一個半形空格分兩段（版型固定兩行）。
 # 忠實度規則由 main.CONTENT_FIDELITY_RULES 接在後面（同主流程），標題只能用原文有的事實。
-COVER_TITLE_DIGEST_SYSTEM_TEN = """You write the two headlines for a Taiwanese prime-time news programme cover (十點不一樣) from one news article.
+COVER_TITLE_DIGEST_SYSTEM_TEN = """You write the headlines for a Taiwanese prime-time news programme cover (十點不一樣) from one news article.
 
-Return JSON with "title_left" and "title_right".
-- Each is a punchy Traditional Chinese (Taiwan) headline for one facet of the story; the two must cover DIFFERENT facets (e.g. what happened / the impact, the scene / the numbers, the cause / the response). Never repeat the same facts in both.
+FIRST decide how many stories the article carries, and say so in "topics":
+- "topics" is 1 when the whole article is about ONE event, even if it describes several aspects of it (what happened and its impact, the scene and the numbers, the cause and the response). Different angles on the same event are still one story.
+- "topics" is 2 when the article carries TWO genuinely different events — different subjects, different places or different incidents that merely sit in the same article.
+- Never answer 2 just because the article is long, and never merge two unrelated events into one headline.
+
+THEN write the headlines.
+- When "topics" is 1: write ONE headline into "title_left" for the core of that story, and leave "title_right" as an empty string.
+- When "topics" is 2: write "title_left" for the story that appears FIRST in the article and "title_right" for the one that appears second. Keep the two headlines about their own story only — never repeat the same facts in both.
 - Each headline is EXACTLY 3 segments separated by ONE half-width space (two spaces in total, never one, never three); each segment 3–7 characters; whole headline at most 18 characters excluding spaces. Each segment becomes one printed line, coloured white / yellow / red in order, so a headline with only two segments loses its red line — that is a defect.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
@@ -395,8 +411,14 @@ Return JSON with "title".
 
 COVER_TITLE_DIGEST_SCHEMA_TEN = {
     "type": "object",
-    "properties": {"title_left": {"type": "string"}, "title_right": {"type": "string"}},
-    "required": ["title_left", "title_right"],
+    "properties": {
+        # strict schema 下每個屬性都得列進 required，所以「單主題」是用 title_right
+        # 回空字串表達，不是把欄位省略掉。
+        "topics": {"type": "integer", "enum": [1, 2]},
+        "title_left": {"type": "string"},
+        "title_right": {"type": "string"},
+    },
+    "required": ["topics", "title_left", "title_right"],
     "additionalProperties": False,
 }
 COVER_TITLE_DIGEST_SCHEMA_YT = {
@@ -573,36 +595,28 @@ EDITOR_FORMATS = {
         "digest_rules": "",
         "hole_side": None,
     },
-    "broadcast_left": {
-        "label": "播出鏡面（左側挖空）",
+    # 2026-09-08 使用者裁決（WP1）：左切／右切合併成一個版型，挖空方向改由請求欄位
+    # hole_side 決定（前端是版型下方一組按鈕）。表裡的 hole_side 是**預設值**，
+    # hole_side_from_request 才是「這個版型允許請求覆寫方向」的開關——舊別名沒有這個
+    # 旗標，所以 LINE／WorkCord 送 broadcast_right 而不帶欄位時方向不會被翻成左。
+    "broadcast": {
+        "label": "播出鏡面",
         "pipeline": PIPELINE_GENERATE,
         "digest_rules": _broadcast_rules("left"),
         "hole_side": "left",
-    },
-    "broadcast_right": {
-        "label": "播出鏡面（右側挖空）",
-        "pipeline": PIPELINE_GENERATE,
-        "digest_rules": _broadcast_rules("right"),
-        "hole_side": "right",
+        "hole_side_from_request": True,
     },
     # 十點不一樣封面：ai／composite 兩種模式並存，由前端「標題由 AI 生成」勾選框切換
     # （2026-09-06 使用者裁決比照 YT 直播封面，不再拆成兩個下拉項目）。
     # cover_mode 是預設值；實際模式由 TenCoverRequest.mode 決定。
-    # 2026-09-07 使用者裁決：拆成兩個獨立版型。雙切＝左右兩格各自標題／附圖位；
-    # 滿版＝一張圖鋪滿、一個標題（附圖有就放、沒有就生一張 16:9）。
+    # 2026-09-08 使用者裁決（WP1）：滿版／雙切也合併成一個版型，版面由「第二標題有沒有
+    # 值」自動判定（TenCoverRequest.layout 留空時；明示 layout 仍以請求為準），
+    # 所以這裡的 cover_layout 是 "auto"，不再是固定的 split／full。
     "ten_cover": {
-        "label": "十點不一樣（雙切）",
+        "label": "十點不一樣",
         "pipeline": PIPELINE_COVER,
         "cover_mode": COVER_MODE_AI,
-        "cover_layout": "split",
-        "digest_rules": "",
-        "hole_side": None,
-    },
-    "ten_cover_full": {
-        "label": "十點不一樣（滿版）",
-        "pipeline": PIPELINE_COVER,
-        "cover_mode": COVER_MODE_AI,
-        "cover_layout": "full",
+        "cover_layout": COVER_LAYOUT_AUTO,
         "digest_rules": "",
         "hole_side": None,
     },
@@ -635,9 +649,61 @@ EDITOR_FORMATS = {
 EDITOR_FORMAT_KEYS = tuple(EDITOR_FORMATS)
 
 
+# 舊 key 的別名（2026-09-08 WP1 合併留下的相容層）。前端下拉不再列出這三個，但
+# LINE／WorkCord、舊的請求紀錄與既有測試仍會送過來，所以後端照舊解析得出來、行為
+# 逐字元不變：兩個播出鏡面別名各自釘死一側（不吃請求的 hole_side），
+# ten_cover_full 等同 ten_cover＋layout=full。
+EDITOR_FORMAT_ALIASES = {
+    "broadcast_left": {
+        "label": "播出鏡面（左側挖空）",
+        "pipeline": PIPELINE_GENERATE,
+        "digest_rules": _broadcast_rules("left"),
+        "hole_side": "left",
+    },
+    "broadcast_right": {
+        "label": "播出鏡面（右側挖空）",
+        "pipeline": PIPELINE_GENERATE,
+        "digest_rules": _broadcast_rules("right"),
+        "hole_side": "right",
+    },
+    "ten_cover_full": {
+        "label": "十點不一樣（滿版）",
+        "pipeline": PIPELINE_COVER,
+        "cover_mode": COVER_MODE_AI,
+        "cover_layout": COVER_LAYOUT_FULL,
+        "digest_rules": "",
+        "hole_side": None,
+    },
+}
+
+EDITOR_FORMAT_ALIAS_KEYS = tuple(EDITOR_FORMAT_ALIASES)
+
+
 def get(key: str | None) -> dict:
-    """取版型定義；未知或空值一律退回 default（呼叫端不用自己判空）。"""
-    return EDITOR_FORMATS.get(key or DEFAULT_FORMAT, EDITOR_FORMATS[DEFAULT_FORMAT])
+    """取版型定義；未知或空值一律退回 default（呼叫端不用自己判空）。
+
+    先查正式表，再查別名表——別名是完整的一筆定義，不是薄指標，所以
+    `get("broadcast_left")["digest_rules"]` 這種既有寫法照樣拿得到東西。
+    """
+    name = key or DEFAULT_FORMAT
+    if name in EDITOR_FORMATS:
+        return EDITOR_FORMATS[name]
+    return EDITOR_FORMAT_ALIASES.get(name, EDITOR_FORMATS[DEFAULT_FORMAT])
+
+
+def resolve_hole_side(key: str | None, side: str | None = None) -> str | None:
+    """這一次生成實際要挖哪一側。
+
+    沒有挖空側的版型一律 None。有的版型：允許請求覆寫（新的 broadcast）時才看
+    `side`，且只認 left／right；別名與其他情況一律用表裡釘死的那一側。
+    """
+    fmt = get(key)
+    base = fmt.get("hole_side")
+    if not base:
+        return None
+    if fmt.get("hole_side_from_request") and side in HOLE_SIDES:
+        return side
+    return base
 
 
 def digest_rules(
@@ -645,24 +711,38 @@ def digest_rules(
     role: str,
     stamp: bool | None = None,
     density: str | None = None,
+    side: str | None = None,
 ) -> str:
     """消化階段要注入的規則。非編輯角色一律空字串——第三層防呆。
 
     stamp 與 density 都只影響播出鏡面：stamp False 時第 5／6 條換成「沒有蓋章」版本；
     density "standard"（字多）時第 6 條加一段「每卡兩行」。其餘版型兩者都不看。
+    side 同樣只有播出鏡面在看，而且只有新的 broadcast 版型吃得到（見 resolve_hole_side）：
+    消化端要把內容趕到挖空側的另外半邊，方向講錯的話整張圖的重點會被影片蓋掉。
     播出鏡面一律現算——stamp 沒表態且非字多時，算出來跟預先算好的那份逐字元相同。
     """
     if role != "編輯":
         return ""
-    fmt = get(key)
-    if fmt.get("hole_side"):
-        return _broadcast_rules(fmt["hole_side"], stamp=stamp, density=density)
-    return fmt["digest_rules"]
+    resolved = resolve_hole_side(key, side)
+    if resolved:
+        return _broadcast_rules(resolved, stamp=stamp, density=density)
+    return get(key)["digest_rules"]
 
 
 def cover_layout(key: str | None) -> str:
-    """十點封面是雙切（split）還是滿版（full）；不是十點封面時回空字串。"""
+    """十點封面的版面：auto＝依第二標題自動判定、full＝滿版；不是十點封面時回空字串。"""
     return get(key).get("cover_layout", "")
+
+
+def resolve_cover_layout(layout: str | None, title_right: str) -> str:
+    """十點封面這一次是滿版還是雙切。
+
+    2026-09-08 使用者裁決：兩個版型合併，改由「第二標題有沒有值」判定——有＝雙切、
+    空＝滿版。請求明示 layout（舊呼叫端、ten_cover_full 別名）時仍以請求為準。
+    """
+    if layout in COVER_LAYOUTS:
+        return layout
+    return COVER_LAYOUT_SPLIT if (title_right or "").strip() else COVER_LAYOUT_FULL
 
 
 def cover_mode(key: str | None) -> str:
@@ -670,7 +750,7 @@ def cover_mode(key: str | None) -> str:
     return get(key).get("cover_mode", "")
 
 
-def hole_side(key: str | None, role: str) -> str | None:
+def hole_side(key: str | None, role: str, side: str | None = None) -> str | None:
     if role != "編輯":
         return None
-    return get(key)["hole_side"]
+    return resolve_hole_side(key, side)

@@ -262,6 +262,10 @@ class GenerateRequest(BaseModel):
     tone: DigestTone | None = None
     # 編輯專屬版型（2026-09-03）。記者角色帶了也會被忽略，見 editor_formats。
     editor_format: str = editor_formats.DEFAULT_FORMAT
+    # 播出鏡面的挖空側（2026-09-08 WP1：左切／右切合併成一個版型後改由請求決定）。
+    # 消化階段就要知道方向——內容要趕到影片那半邊的對面，方向講錯等於重點被蓋掉。
+    # 只有 editor_format="broadcast" 吃得到；舊別名一律用自己釘死的那一側。
+    hole_side: Literal["left", "right"] = "left"
 
 
 class MapPoint(BaseModel):
@@ -973,6 +977,7 @@ def build_digest_instructions(
     editor_format: str | None = None,
     tone: DigestTone | None = None,
     map_scope_guard: bool = False,
+    hole_side: str | None = None,
 ) -> str:
     is_editor = role == "編輯"
     template = EDITOR_SYSTEM_PROMPT_TEMPLATE if is_editor else SYSTEM_PROMPT_TEMPLATE
@@ -1018,7 +1023,10 @@ def build_digest_instructions(
     # 編輯專屬版型（播出鏡面）。editor_formats.digest_rules 對非編輯角色一律回空字串，
     # 這是「記者不可能誤用」的第三層防呆（前兩層在前端）。
     # density 一併傳進去：字多檔位在播出鏡面要把每張卡從一行改成兩行（2026-09-08 回饋 D）
-    instructions += editor_formats.digest_rules(editor_format, role, stamp, density)
+    # hole_side 同理：合併後的播出鏡面靠請求決定挖哪一側（2026-09-08 WP1）
+    instructions += editor_formats.digest_rules(
+        editor_format, role, stamp, density, side=hole_side
+    )
     # 沒有 asis 附圖時完全不注入，消化 prompt 逐字元不變。
     if asis_reference_count:
         instructions += USER_REFERENCE_ASIS_DIGEST_RULES
@@ -1443,6 +1451,7 @@ def generate(req: GenerateRequest):
         stamp=req.stamp,
         tone=req.tone,
         editor_format=req.editor_format,
+        hole_side=req.hole_side,
     )
 
     # 上游（OpenRouter 多 provider 輪替）偶發 502、輸出截斷或不合 schema 的回傳是常態，
@@ -2049,7 +2058,7 @@ def broadcast_hole_for(req: "NewsImageGenerateRequest") -> str:
     """/api/news-image 要不要蓋播出鏡面的白色壓框：版型有挖空側**且**使用者開了壓框。"""
     if not req.hole:
         return ""
-    return editor_formats.hole_side(req.editor_format, req.role) or ""
+    return editor_formats.hole_side(req.editor_format, req.role, side=req.hole_side) or ""
 
 
 def apply_broadcast_hole_response(
@@ -2381,6 +2390,9 @@ class NewsImageGenerateRequest(BaseModel):
     # 底圖完整交給後製自己決定影片位置；True＝置框後蓋白框給後製對位。
     # 消化規則不受此開關影響：不管蓋不蓋框，內容都要避開影片那半邊。
     hole: bool = False
+    # 挖空側（2026-09-08 WP1），語意同 GenerateRequest.hole_side：只有合併後的
+    # editor_format="broadcast" 吃得到，舊別名 broadcast_left／right 一律用自己那側。
+    hole_side: Literal["left", "right"] = "left"
 
 
 class NewsImageGenerateResponse(BaseModel):
@@ -2907,6 +2919,7 @@ def resolve_digest_portraits(
             stamp=req.stamp,
             tone=req.tone,
             editor_format=req.editor_format,
+            hole_side=req.hole_side,
             exclude_people=missing,
         )
     )
@@ -2949,6 +2962,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 stamp=req.stamp,
                 tone=req.tone,
                 editor_format=req.editor_format,
+                hole_side=req.hole_side,
             )
         )
         digest, portrait_photos = resolve_digest_portraits(digest, req, provider)
@@ -3096,11 +3110,19 @@ class TenCoverRequest(BaseModel):
     title_left: str = Field(min_length=1, max_length=40)
     # 2026-09-07：layout=full（滿版）只有一個標題，title_right 允許空；split（雙切）兩個都要
     title_right: str = Field(default="", max_length=40)
-    layout: Literal["split", "full"] = "split"
+    # 2026-09-08 WP1：可省略。沒帶時由 editor_formats.resolve_cover_layout 依第二標題
+    # 自動判定（有值＝雙切、空＝滿版）；有帶就以請求為準（舊呼叫端與 ten_cover_full 別名）。
+    layout: Literal["split", "full"] | None = None
     # 給生圖模型的視覺描述（畫什麼場景），不會出現在成品文字上。
     # 2026-09-03 起改選填：留空時由 resolve_cover_visuals 依標題請文字模型補。
+    # 2026-09-08 WP1 起前端不再有這兩個輸入欄（改用下面的 instruction），欄位保留給
+    # 舊呼叫端與回填相容；resolve_cover_visuals 仍會把有值的那欄原樣沿用。
     visual_left: str = Field(default="", max_length=500)
     visual_right: str = Field(default="", max_length=500)
+    # 給 AI 的指令（2026-09-08 WP1：封面／YT 版型重新顯示這一欄）。餵給
+    # resolve_cover_visuals 的推導步驟當畫面提示，兩格共用——不直接拼進生圖 prompt，
+    # 那條線的規則明令底圖不得出現任何文字，指令裡的字會被模型畫上去。
+    instruction: str = Field(default="", max_length=500)
     date_text: str = Field(default="", max_length=20)
     badge: str = compose.COVER_DEFAULT_BADGE
     provider: Literal["gemini", "gpt"] = "gpt"
@@ -3313,6 +3335,15 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
         req.title_right.strip(),
         right or "(none — write one)",
     )
+    # 使用者的指令欄（2026-09-08 WP1）：兩格共用，只當畫面提示。放在最後、明講它
+    # 管的是「畫面長什麼樣」——不然模型會把它讀成「標題要改成這樣」。
+    instruction = (getattr(req, "instruction", "") or "").strip()
+    if instruction:
+        material += (
+            "\\n\\nExtra instruction from the editor about how the photographs should look "
+            "(applies to both sides; it is guidance for the scene, never text to render): "
+            + instruction
+        )
     model = (
         os.getenv("DIGEST_MODEL")
         or os.getenv("OPENAI_DIGEST_MODEL")
@@ -3663,6 +3694,10 @@ class CoverTitleDigestResponse(BaseModel):
     title_left: str = ""
     title_right: str = ""
     title: str = ""
+    # 十點：這篇內文被判定成幾個主題（1＝滿版、2＝雙切）。前端據此更新版面指示器。
+    # 一致性以「title_right 有沒有值」為準：模型說 2 卻只給一個標題就退回 1，
+    # 說 1 卻多給了右標就把右標清掉——回一組自相矛盾的值，前端的指示器會跟欄位打架。
+    topics: int = 1
 
 
 def _clip_title(text: str, limit: int) -> str:
@@ -3713,9 +3748,15 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
     if ten:
         left = _clip_title(data.get("title_left"), 40)
         right = _clip_title(data.get("title_right"), 40)
-        if not left or not right:
-            raise HTTPException(status_code=502, detail="消化標題失敗：模型沒給齊兩個標題")
-        return CoverTitleDigestResponse(title_left=left, title_right=right)
+        if not left:
+            raise HTTPException(status_code=502, detail="消化標題失敗：模型沒給第一標題")
+        # 2026-09-08 WP1：單主題是合法結果（回填後前端判定成滿版），所以只驗左標。
+        # topics 一律由實際有沒有第二標題決定，模型自己說的只當參考。
+        if data.get("topics") == 1:
+            right = ""
+        return CoverTitleDigestResponse(
+            title_left=left, title_right=right, topics=2 if right else 1
+        )
     title = _clip_title(data.get("title"), 60)
     if not title:
         raise HTTPException(status_code=502, detail="消化標題失敗：模型沒給標題")
@@ -3836,6 +3877,11 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
             detail=f"未知的標籤：{req.badge}（可用：{list(compose.COVER_BADGES)}）",
         )
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
+    # 版面在入口就正規化成 split／full 一次（2026-09-08 WP1）：下游那一票
+    # `req.layout == "full"` 的判斷因此完全不用動，也不會有人再看到 None。
+    req = req.model_copy(
+        update={"layout": editor_formats.resolve_cover_layout(req.layout, req.title_right)}
+    )
     if req.layout == "full":
         return _editor_cover_full(req, date_text)
     if not req.title_right.strip():
@@ -3868,13 +3914,10 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         # 兩格都有圖：什麼都不生，一次文字模型都不打
         visuals = (req.visual_left.strip() or req.title_left.strip(), req.visual_right.strip() or req.title_right.strip())
     elif any(slots):
-        # 有圖的格不生圖，畫面描述用標題佔位；只有要生的那格留空時才打一次文字模型補
-        prefill = {}
-        if slots[0] and not req.visual_left.strip():
-            prefill["visual_left"] = req.title_left.strip()
-        if slots[1] and not req.visual_right.strip():
-            prefill["visual_right"] = req.title_right.strip()
-        visuals = resolve_cover_visuals(req.model_copy(update=prefill) if prefill else req)
+        # 有一格要生底圖，所以照樣打一次文字模型補描述。
+        # 2026-09-08 WP1：原本這裡會把「有附圖那格」的描述先用標題填好回填給前端，
+        # 但畫面描述欄已從 UI 移除（改成共用的指令欄），回填無處可去，所以拿掉。
+        visuals = resolve_cover_visuals(req)
     elif asis_count >= 1:
         # 舊路徑：有原圖放置（1 張全版或 2 張雙格）就不需要畫面描述，一次文字模型都不打
         visuals = (req.visual_left.strip() or req.title_left.strip(), req.visual_right.strip() or req.title_right.strip())
@@ -3962,6 +4005,11 @@ class YtCoverRequest(BaseModel):
     date_text: str = Field(default="", max_length=20)
     # 整點直播專用：整點時間（如 20:00），選填，有填才掛在 LIVE 章下
     time_text: str = Field(default="", max_length=10)
+    # 給 AI 的指令（2026-09-08 WP1：封面／YT 版型重新顯示這一欄）。餵給
+    # derive_yt_cover_plan 的推導步驟當畫面提示，底圖 prompt 因此照著它走。
+    # 不直接拼進生圖 prompt：那條線一個字都不准畫，指令會被模型畫上去。
+    # 有 asis 附圖或帶了現成底圖時根本不打推導，指令自然不生效。
+    instruction: str = Field(default="", max_length=500)
     provider: Literal["gemini", "gpt"] = "gpt"
     image_size: str = "1K"
     # 與主流程共用同一組附圖欄位與用途：asis＝直接當底圖（不生圖）；
@@ -3986,8 +4034,14 @@ class YtCoverResponse(ImageGenerateResponse):
     title_mode: str = "ai"
 
 
-def derive_yt_cover_plan(title: str, preset_lines: tuple[str, str] | None) -> dict:
-    """請文字模型補畫面描述（＋分段、＋具名真人）。失敗回空 dict，呼叫端自己退路。"""
+def derive_yt_cover_plan(
+    title: str, preset_lines: tuple[str, str] | None, instruction: str = ""
+) -> dict:
+    """請文字模型補畫面描述（＋分段、＋具名真人）。失敗回空 dict，呼叫端自己退路。
+
+    instruction＝使用者指令欄（2026-09-08 WP1），只當畫面提示：底圖 prompt 用的是
+    這一步推導出來的 visual，所以指令走這裡才不會變成畫在圖上的字。
+    """
     if preset_lines:
         split_note = (
             "The split is ALREADY DECIDED — copy these two lines back exactly:\n"
@@ -3996,6 +4050,11 @@ def derive_yt_cover_plan(title: str, preset_lines: tuple[str, str] | None) -> di
     else:
         split_note = "The split is NOT decided — split the headline into two lines yourself."
     material = f"Headline: {title.strip()}\n\n{split_note}"
+    if instruction.strip():
+        material += (
+            "\n\nExtra instruction from the editor about how the photograph should look "
+            "(guidance for the scene, never text to render): " + instruction.strip()
+        )
     model = (
         os.getenv("DIGEST_MODEL")
         or os.getenv("OPENAI_DIGEST_MODEL")
@@ -4057,7 +4116,7 @@ def resolve_yt_cover_plan(
     if lines and not need_visual:
         return lines, "", [], []
 
-    data = derive_yt_cover_plan(title, lines)
+    data = derive_yt_cover_plan(title, lines, req.instruction)
     if not lines:
         line1 = str(data.get("line1") or "").strip()
         line2 = str(data.get("line2") or "").strip()
