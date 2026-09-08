@@ -373,6 +373,15 @@ let state = {
     // YT 封面底部壓色框：2026-09-08 晚使用者裁決預設**開**（60% 半透明、第二行上緣起羽化，見 compose）。
     // 整點直播的版面沒有底帶，按鈕不顯示。
     ytBottomBand: true,
+    // YT 直播直標（2026-09-08 WP3）的五組開關。刻意**不**在 setEditorFormat 重置：
+    // 直標是同一位導播一整場重複用的東西，換版型回來還要再選一次靠左／Logo 右上很煩。
+    vstrip: {
+        variant: 'normal',        // normal／original_audio／ai_translation
+        titleSide: 'left',        // 直標貼哪一側
+        logoCorner: 'tr',         // Logo 角落，不能跟直標同側
+        sourceFollowLogo: false,  // false＝來源句跟 LIVE 章、true＝跟 Logo
+        live: true,               // LIVE 章可取消
+    },
     refineStack: []
 };
 
@@ -455,6 +464,17 @@ const EDITOR_FORMATS = {
         hides: { digestControls: true, safeFrame: true, stamp: true },
         hole: null,
     },
+    // YT 直播直標（2026-09-08 WP3）：不是封面，是疊在直播訊號上的透明底 PNG。
+    // 沒有底圖就沒有生圖、沒有附圖、沒有引擎、沒有「只改文字」與追加修改，
+    // 所以 hides 收得比封面更多（連引擎與指令欄都收）。
+    yt_vstrip: {
+        label: 'YT直播直標',
+        hint: '直播用的垂直標題條，透明底 PNG，直接疊在直播訊號上。第一標題最多 12 格、第二標題最多 14 格（連續英數字算一格）。不生圖、不打 AI。',
+        inputs: 'yt_vstrip',
+        locks: {},
+        hides: { digestControls: true, safeFrame: true, stamp: true, engine: true, instruction: true, refUpload: true },
+        hole: null,
+    },
     // YT 今日熱搜（2026-09-06 型錄 H 類）：紅色系「今日熱搜」標籤＋紅色 Logo 斜標，
     // 議題型版面，沒有日期、沒有 LIVE。底圖與標題規則同國內外新聞直播。
     yt_hot_cover: {
@@ -511,6 +531,7 @@ const DOWNLOAD_FORMAT_NAMES = {
     ten_cover: { full: '十點滿版', split: '十點雙切' },
     yt_live_cover: 'YT直播',
     yt_hourly_cover: { single: 'YT整點', dual: 'YT整點雙則' },
+    yt_vstrip: 'YT直標',
     yt_hot_cover: 'YT熱搜',
 };
 const DOWNLOAD_NAME_ILLEGAL = /[\\/:*?"<>|\r\n]/g;
@@ -891,7 +912,11 @@ function applyEditorFormatLocks() {
     // 指令欄全版型都顯示（2026-09-08 下午裁決，推翻同日早上的隱藏）：封面／YT 的
     // 端點現在收 instruction，內容當畫面提示餵給推導步驟。畫面描述欄同時被移除，
     // 指令欄因此是封面唯一的自由輸入。
-    _hide(document.getElementById('instructionRow'), false);
+    // ——例外只有一個（2026-09-08 WP3）：直標不打任何模型，指令欄沒有東西可以餵，
+    // 留著只會是一格填了不生效的輸入。所以由版型的 hides.instruction 決定。
+    _hide(document.getElementById('instructionRow'), !!hides.instruction);
+    // 引擎 GPT／Gemini 同理：直標沒有生圖這一步，選哪個引擎都一樣
+    _hide(document.getElementById('p1EngineRow'), !!hides.engine);
     _hide(document.getElementById('p1-btnSafeFrame'), !!hides.safeFrame);
     _hide(document.getElementById('p1-btnStamp'), !!hides.stamp);
     // 壓框開關與挖空方向都只對有挖空側的版型有意義
@@ -917,12 +942,17 @@ function applyEditorFormatInputs() {
     const inputs = editorFormat().inputs;
     const wantsCover = inputs === 'cover';
     const wantsYt = inputs === 'yt_cover';
+    // YT 直播直標（2026-09-08 WP3）：獨立一塊欄位，不跟 ytCoverInputs 共用——
+    // 那一塊裡面有附圖／AI 消化／只改文字，直標一個都不要
+    const wantsVstrip = inputs === 'yt_vstrip';
+    const special = wantsCover || wantsYt || wantsVstrip;
     const news = document.getElementById('newsInputs');
     const cover = document.getElementById('coverInputs');
     const yt = document.getElementById('ytCoverInputs');
+    const vstrip = document.getElementById('ytVstripInputs');
     const refBox = document.getElementById('refUploadBox');
     const digestRow = document.getElementById('digestTypeRow');
-    if (news) news.classList.toggle('hidden', wantsCover || wantsYt);
+    if (news) news.classList.toggle('hidden', special);
     if (cover) cover.classList.toggle('hidden', !wantsCover);
     // 滿版／雙切（2026-09-08 WP1）：不再是兩個版型，改由第二標題有沒有值即時判定。
     // 右附圖位、「只改文字」鈕與指示器全部跟著跑，見 updateCoverLayoutIndicator。
@@ -930,11 +960,14 @@ function applyEditorFormatInputs() {
     updateCoverTitleStyleButton();
     updateYtBottomBandButton();
     if (yt) yt.classList.toggle('hidden', !wantsYt);
+    if (vstrip) vstrip.classList.toggle('hidden', !wantsVstrip);
+    updateVstripButtons();
     // 附圖上傳區：主流程、YT 直播封面、十點不一樣（2026-09-06 起收原圖放置）都用。
     // 封面版型時把它搬到該組欄位下面——留在原位會跑到角色鈕正下方，看起來像消失了。
+    // 直標沒有底圖也沒有生圖，附圖無處可去，整區收起來（hides.refUpload）。
     if (refBox) {
-        refBox.classList.remove('hidden');
-        const host = wantsYt ? yt : (wantsCover ? cover : news);
+        refBox.classList.toggle('hidden', !!(editorFormat().hides || {}).refUpload);
+        const host = wantsVstrip ? vstrip : (wantsYt ? yt : (wantsCover ? cover : news));
         if (host && refBox.previousElementSibling !== host) host.insertAdjacentElement('afterend', refBox);
     }
     // 指令欄同理（2026-09-08 WP1）：它原本住在 newsInputs 裡面，而封面／YT 版型會把
@@ -961,7 +994,10 @@ function applyEditorFormatInputs() {
     updateYtLayoutIndicator();
     if (ytDateField) ytDateField.classList.toggle('hidden', hot);
     // 封面模式完全沒有消化這一段，版面形式用不到，整組收起來
-    if (digestRow) digestRow.classList.toggle('hidden', wantsCover || wantsYt);
+    if (digestRow) digestRow.classList.toggle('hidden', special);
+    // 直標是透明底 PNG：預覽區底下鋪深灰格紋，不然白字疊在白底上等於看不到
+    const preview = document.getElementById('oneClickImage');
+    if (preview) preview.classList.toggle('transparent-preview', wantsVstrip);
     for (const id of ['coverDate', 'ytCoverDate']) {
         const dateField = document.getElementById(id);
         if ((wantsCover || wantsYt) && dateField && !dateField.value) dateField.value = todayText();
@@ -1032,6 +1068,10 @@ function updateAIBtnRoleHint() {
     // 生成中按鈕正顯示進度，切角色／密度不該把進度文字蓋掉
     if (_genTicker) return;
     if (!buttonText) return;
+    if (editorFormat().inputs === 'yt_vstrip') {
+        buttonText.innerText = '生成直標（透明 PNG）';
+        return;
+    }
     if (editorFormat().inputs === 'cover' || editorFormat().inputs === 'yt_cover') {
         buttonText.innerText = `生成${editorFormat().label}`;
         return;
@@ -2190,9 +2230,193 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
     }
 }
 
+/* ============================================================
+   YT 直播「直標」（2026-09-08 WP3）
+   透明底 PNG，疊在直播訊號上。沒有底圖＝沒有生圖、沒有附圖、沒有引擎、
+   沒有「只改文字」、沒有追加修改。五組按鈕的狀態存在 state.vstrip。
+   ============================================================ */
+const YT_OVERLAY_BACKEND_URL = `${API_BASE}/api/editor/yt-overlay`;
+const VSTRIP_MAIN_MAX_CELLS = 12;
+const VSTRIP_SUB_MAX_CELLS = 14;
+// Logo 角落與直標同側就會壓到字：靠左的直標不能放 tl／bl，靠右的不能放 tr／br
+const VSTRIP_BLOCKED_CORNERS = { left: ['tl', 'bl'], right: ['tr', 'br'] };
+// 換邊時把 Logo 移到對側**同高**的角落，不是一律回右上
+const VSTRIP_MIRROR_CORNER = { tl: 'tr', bl: 'br', tr: 'tl', br: 'bl' };
+
+/* 直排的「格數」。與 compose._vertical_cells 等價：連續英數字併成一格（縱中橫）、
+   空白不算、其餘一字一格。標點只是換字形不影響數量，所以這裡不做替換。
+   用 for...of 逐 code point 走，不是 UTF-16 單元——表情符號會被拆成兩格。 */
+function vstripCells(text) {
+    const cells = [];
+    let run = '';
+    for (const ch of String(text || '')) {
+        if (/^[A-Za-z0-9]$/.test(ch)) { run += ch; continue; }
+        if (run) { cells.push(run); run = ''; }
+        if (/\s/.test(ch)) continue;
+        cells.push(ch);
+    }
+    if (run) cells.push(run);
+    return cells;
+}
+
+function vstripFields() {
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    const v = state.vstrip;
+    return {
+        title: val('vstripTitle'),
+        title_second: val('vstripTitleSecond'),
+        source_text: val('vstripSource'),
+        variant: v.variant,
+        title_side: v.titleSide,
+        logo_corner: v.logoCorner,
+        source_follow_logo: !!v.sourceFollowLogo,
+        live: !!v.live,
+    };
+}
+
+function setVstripVariant(variant) {
+    state.vstrip.variant = variant;
+    updateVstripButtons();
+}
+
+function setVstripTitleSide(side) {
+    state.vstrip.titleSide = side;
+    // Logo 還停在直標那一側就會被壓到：自動搬到對側同高的角落，不用使用者自己發現
+    if (VSTRIP_BLOCKED_CORNERS[side].includes(state.vstrip.logoCorner)) {
+        state.vstrip.logoCorner = VSTRIP_MIRROR_CORNER[state.vstrip.logoCorner];
+    }
+    updateVstripButtons();
+}
+
+function setVstripLogoCorner(corner) {
+    if (VSTRIP_BLOCKED_CORNERS[state.vstrip.titleSide].includes(corner)) {
+        return showToast('這個角落會壓到直標，請選另一邊');
+    }
+    state.vstrip.logoCorner = corner;
+    updateVstripButtons();
+}
+
+function setVstripSourceFollow(followLogo) {
+    state.vstrip.sourceFollowLogo = !!followLogo;
+    updateVstripButtons();
+}
+
+function toggleVstripLive(checkbox) {
+    state.vstrip.live = !!checkbox.checked;
+}
+
+// 按鈕外觀：選中的填色、沒選中的只有邊框；會壓到直標的角落直接 disabled
+function _vstripPick(selector, value) {
+    document.querySelectorAll(selector).forEach(btn => {
+        const on = btn.dataset.vstripValue === value;
+        btn.classList.toggle('bg-violet-600', on);
+        btn.classList.toggle('text-white', on);
+        btn.classList.toggle('text-slate-400', !on);
+    });
+}
+
+function updateVstripButtons() {
+    if (editorFormat().inputs !== 'yt_vstrip') return;
+    const v = state.vstrip;
+    _vstripPick('[data-vstrip-variant]', v.variant);
+    _vstripPick('[data-vstrip-side]', v.titleSide);
+    _vstripPick('[data-vstrip-corner]', v.logoCorner);
+    _vstripPick('[data-vstrip-source]', v.sourceFollowLogo ? 'logo' : 'live');
+    const blocked = VSTRIP_BLOCKED_CORNERS[v.titleSide];
+    document.querySelectorAll('[data-vstrip-corner]').forEach(btn => {
+        const bad = blocked.includes(btn.dataset.vstripValue);
+        btn.disabled = bad;
+        btn.classList.toggle('opacity-40', bad);
+        btn.title = bad ? '會壓到直標' : 'TVBS NEWS 白色字標放這個角落';
+    });
+    // 來源句空白時「跟 LIVE 章／跟 Logo」沒有意義，整列收起來
+    const sourceRow = document.getElementById('vstripSourceRow');
+    const hasSource = !!(document.getElementById('vstripSource')?.value || '').trim();
+    if (sourceRow) sourceRow.classList.toggle('hidden', !hasSource);
+    const live = document.getElementById('vstripLive');
+    if (live) live.checked = !!v.live;
+    updateVstripCellHint();
+}
+
+// 欄位下方的格數提示：邊打邊算，不用等生成才知道超了
+function updateVstripCellHint() {
+    const hint = document.getElementById('vstripCellHint');
+    if (!hint) return;
+    const main = vstripCells(document.getElementById('vstripTitle')?.value || '').length;
+    const sub = vstripCells(document.getElementById('vstripTitleSecond')?.value || '').length;
+    const over = main > VSTRIP_MAIN_MAX_CELLS || sub > VSTRIP_SUB_MAX_CELLS;
+    hint.innerText = `第一標題 ${main} 格／${VSTRIP_MAIN_MAX_CELLS}　第二標題 ${sub} 格／${VSTRIP_SUB_MAX_CELLS}`;
+    hint.classList.toggle('text-red-400', over);
+    hint.classList.toggle('text-slate-600', !over);
+}
+
+function onVstripInput() {
+    updateVstripButtons();
+}
+
+function showVstripResult(data, fields) {
+    const imageUrl = `data:${data.mime_type};base64,${data.image_base64}`;
+    document.getElementById('oneClickImage').src = imageUrl;
+    const download = document.getElementById('oneClickDownload');
+    download.href = imageUrl;
+    download.download = downloadFileName(state.editorFormat, fields.title, 'png');
+    download.innerText = '下載 PNG';
+    // 直標沒有底圖，追加修改與「只改文字」都不適用——清成 null，refine 鈕自然不會亮
+    resetRefineState(null, null);
+    document.getElementById('oneClickLabel').innerText = editorFormat().label;
+    const layout = data.layout || {};
+    document.getElementById('oneClickMeta').innerText = [
+        `第一標題 ${layout.main_cells_count} 格`,
+        layout.sub_cells_count ? `第二標題 ${layout.sub_cells_count} 格` : '',
+        fields.title_side === 'left' ? '靠左' : '靠右',
+        VSTRIP_VARIANT_LABELS[fields.variant] || '',
+        fields.live ? 'LIVE' : '無 LIVE 章',
+    ].filter(Boolean).join('｜');
+    document.getElementById('oneClickEmpty').classList.add('hidden');
+    document.getElementById('oneClickResult').classList.remove('hidden');
+}
+
+const VSTRIP_VARIANT_LABELS = { original_audio: '原音呈現', ai_translation: 'AI即時翻譯' };
+
+async function handleYtVstripGenerate() {
+    const fields = vstripFields();
+    if (!fields.title) return showToast('請輸入第一標題');
+    // 格數在送出前先擋：後端也會擋（400），但白跑一趟沒有必要
+    const mainCells = vstripCells(fields.title).length;
+    if (mainCells > VSTRIP_MAIN_MAX_CELLS) {
+        return showToast(`第一標題超過 ${VSTRIP_MAIN_MAX_CELLS} 格（目前 ${mainCells} 格）`);
+    }
+    const subCells = vstripCells(fields.title_second).length;
+    if (subCells > VSTRIP_SUB_MAX_CELLS) {
+        return showToast(`第二標題超過 ${VSTRIP_SUB_MAX_CELLS} 格（目前 ${subCells} 格）`);
+    }
+
+    const btn = document.getElementById('aiBtn');
+    const loading = document.getElementById('aiLoading');
+    btn.disabled = true;
+    loading.classList.remove('hidden');
+    try {
+        const res = await fetch(YT_OVERLAY_BACKEND_URL, {
+            method: 'POST',
+            headers: _apiHeaders(),
+            body: JSON.stringify(fields),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(_apiError(data, res.status));
+        showVstripResult(data, fields);
+    } catch (err) {
+        console.error(err);
+        showToast(err.message || '直標生成失敗，請稍後再試');
+    } finally {
+        btn.disabled = false;
+        loading.classList.add('hidden');
+    }
+}
+
 async function handleOneClickGenerate() {
     if (editorFormat().inputs === 'cover') return handleTenCoverGenerate();
     if (editorFormat().inputs === 'yt_cover') return handleYtCoverGenerate();
+    if (editorFormat().inputs === 'yt_vstrip') return handleYtVstripGenerate();
     const input = document.getElementById("aiInput").value.trim();
     if (!input) return showToast("請輸入欲生成的新聞內容");
 

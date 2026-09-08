@@ -26,6 +26,9 @@ DEFAULT_FORMAT = "default"
 PIPELINE_GENERATE = "generate"
 PIPELINE_COVER = "cover"
 PIPELINE_YT_COVER = "yt_cover"
+# YT 直播「直標」（2026-09-08 WP3）：不生圖、不打任何模型，純程式畫一張透明底 PNG
+# 疊在直播訊號上，所以自成一條 pipeline，跟三種 YT 封面不是同一件事。
+PIPELINE_YT_OVERLAY = "yt_overlay"
 
 # 封面的兩種做法。ai＝整張交給生圖模型（只有 Logo 後製）；
 # composite＝AI 只出兩張無文字底圖、文字全部由 Pillow 畫（見 compose.compose_ten_cover）。
@@ -710,6 +713,15 @@ EDITOR_FORMATS = {
         "label": "YT整點直播",
         "pipeline": PIPELINE_YT_COVER,
         "yt_layout": YT_COVER_LAYOUT_HOURLY,
+        "digest_rules": "",
+        "hole_side": None,
+    },
+    # YT 直播直標（2026-09-08 WP3）：不是封面，是疊在直播訊號上的透明底 PNG。
+    # 沒有底圖、沒有生圖、沒有 AI——所有東西由 compose.compose_yt_overlay 畫。
+    # 下拉順序刻意排在整點直播正下方（使用者裁決）。
+    "yt_vstrip": {
+        "label": "YT直播直標",
+        "pipeline": PIPELINE_YT_OVERLAY,
         "digest_rules": "",
         "hole_side": None,
     },

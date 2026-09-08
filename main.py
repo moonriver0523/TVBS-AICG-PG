@@ -4557,6 +4557,127 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     )
 
 
+# ============================================================
+# YT 直播「直標」（2026-09-08 WP3）
+#
+# 跟三種 YT 封面最大的不同：**不生圖、不打任何模型、沒有底圖**。
+# 收到欄位就直接請 compose.compose_yt_overlay 畫一張 1920×1080 的透明底 PNG，
+# 給導播疊在直播訊號上。所以這支沒有 provider／reference_images／background_*，
+# 也沒有「只改文字」與追加修改——那兩件事的前提都是有一張底圖。
+# ============================================================
+
+
+class YtOverlayRequest(BaseModel):
+    # 上限刻意留寬（比照 YtCoverRequest 的 60）：真正的長度規則是「格數」不是字元數，
+    # 由 compose._vertical_cells 數出來、超過就丟 ComposeError→400，訊息會指名是哪一個
+    # 標題。這裡收緊成 12 只會變成 422，前端就拿不到那句話。
+    title: str = Field(min_length=1, max_length=60)
+    title_second: str = Field(default="", max_length=60)
+    source_text: str = Field(default="", max_length=40)
+    # 小標三選一：normal＝不掛小標；另兩者在 LIVE 章下方多一枚白底紅字小標
+    variant: Literal["normal", "original_audio", "ai_translation"] = "normal"
+    # 直標貼在畫面哪一側
+    title_side: Literal["left", "right"] = "left"
+    # Logo 角落；跟直標同一側會被 compose 擋掉（400）
+    logo_corner: Literal["tr", "br", "tl", "bl"] = "tr"
+    # 來源句跟著 Logo 走（False＝貼在 LIVE 章旁邊）
+    source_follow_logo: bool = False
+    # LIVE 章可取消（有些直播不掛 LIVE）
+    live: bool = True
+
+
+class YtOverlayResponse(BaseModel):
+    image_base64: str
+    mime_type: str = "image/png"
+    width: int
+    height: int
+    # 前端顯示「第一標題 9 格／第二標題 12 格」，以及各區塊的矩形（除錯用）
+    layout: dict
+
+
+def _yt_overlay_layout_payload(layout: dict) -> dict:
+    """把 yt_vertical_layout 的結果整理成前端吃得下的 JSON。
+
+    格數單獨拉成整數欄位——讓前端自己數陣列長度，遲早有一處數錯。
+    """
+    return {
+        "main_cells": list(layout["main_cells"]),
+        "sub_cells": list(layout["sub_cells"]),
+        "main_cells_count": len(layout["main_cells"]),
+        "sub_cells_count": len(layout["sub_cells"]),
+        "main_max_cells": compose.VSTRIP_MAIN_MAX_CELLS,
+        "sub_max_cells": compose.VSTRIP_SUB_MAX_CELLS,
+        "column_height": layout["column_height"],
+        "pitch": round(float(layout["pitch"]), 2),
+        "box": list(layout["box"]),
+        "live": list(layout["live"]),
+        "label": list(layout["label"]),
+        "logo": list(layout["logo"]),
+        "source": list(layout["source"]),
+    }
+
+
+@app.post(
+    "/api/editor/yt-overlay",
+    response_model=YtOverlayResponse,
+    dependencies=[Depends(verify_internal_api_key)],
+)
+def editor_yt_overlay(req: YtOverlayRequest) -> YtOverlayResponse:
+    request_id = request_log.new_request_id()
+    title = req.title.strip()
+    second = req.title_second.strip()
+    try:
+        # 先畫再算幾何：Logo 同側那道擋法只寫在 compose_yt_overlay 裡，
+        # 先呼叫 yt_vertical_layout 的話那一條會漏掉（它不檢查 Logo）。
+        png = compose.compose_yt_overlay(
+            main_title=title,
+            sub_title=second,
+            source_text=req.source_text.strip(),
+            variant=req.variant,
+            logo_corner=req.logo_corner,
+            title_side=req.title_side,
+            source_follow_logo=req.source_follow_logo,
+            live=req.live,
+        )
+        layout = compose.yt_vertical_layout(
+            main_title=title,
+            sub_title=second,
+            title_side=req.title_side,
+            variant=req.variant,
+            logo_corner=req.logo_corner,
+            source_text=req.source_text.strip(),
+            source_follow_logo=req.source_follow_logo,
+        )
+    except compose.ComposeError as exc:
+        # 直標的失敗全部是使用者自己改得掉的（字太多、Logo 放錯邊），一律 400，
+        # 並把 compose 的訊息原樣往前端送——它已經寫明是哪一個標題、幾格。
+        print(f"[yt-overlay] 直標合成失敗：{exc}", flush=True)
+        request_log.log_failure(
+            request_id=request_id, source="editor-yt-overlay", news_text=title,
+            error=str(exc), prompt="（直標，不生圖）", role="編輯", provider="",
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    request_log.log_generation(
+        request_id=request_id,
+        source=f"editor-yt-overlay-{req.variant}-{req.title_side}",
+        news_text=title,
+        variable="｜".join(filter(None, [second, req.source_text.strip(),
+                                        "" if req.live else "無LIVE章"])),
+        prompt="（直標，不生圖）",
+        role="編輯",
+        image_model="yt-overlay:compose",
+    )
+    width, height = compose.YT_CANVAS
+    return YtOverlayResponse(
+        image_base64=base64.b64encode(png).decode("ascii"),
+        mime_type="image/png",
+        width=width,
+        height=height,
+        layout=_yt_overlay_layout_payload(layout),
+    )
+
+
 # 遠端／隧道測試：前端與 API 同一 origin，瀏覽器才打得到後端。
 # 本機 :3000 預覽仍走 127.0.0.1:8787（見 app.js API_BASE）。
 _REPO_ROOT = pathlib.Path(__file__).resolve().parent
