@@ -544,7 +544,13 @@
                     <div id="oneClickResult" class="hidden">
                         <div class="flex items-center justify-between gap-3 mb-3">
                             <span id="oneClickLabel" class="text-[10px] font-black uppercase tracking-widest text-violet-400">AI Generated</span>
-                            <a id="oneClickDownload" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg.jpg">下載圖片</a>
+                            <div class="flex items-center gap-2">
+                                <!-- 下載檔名（選填）：留空自動帶 日期_版型_標題，見 app.js downloadFileName -->
+                                <input id="downloadName" type="text" maxlength="120"
+                                       class="w-40 bg-slate-950/80 border border-slate-800 rounded-md px-2 py-1 text-[10px] text-slate-100 input-focus-ring"
+                                       placeholder="檔名（選填）" />
+                                <a id="oneClickDownload" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg.jpg">下載圖片</a>
+                            </div>
                         </div>
                         <img id="oneClickImage" alt="一鍵生成的新聞 CG" class="w-full rounded-lg border border-slate-800" />
 
@@ -815,7 +821,13 @@
             <div id="generatedImageResult" class="hidden mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                 <div class="flex items-center justify-between gap-3 mb-3">
                     <span id="generatedImageProviderLabel" class="text-[10px] font-black uppercase tracking-widest text-violet-400">AI Generated Preview</span>
-                    <a id="downloadGeneratedImage" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg.jpg">下載圖片</a>
+                    <div class="flex items-center gap-2">
+                        <!-- 第二頁自己的檔名欄（ID 不能重複，值也不該跟第一頁互相汙染） -->
+                        <input id="downloadNameAdvanced" type="text" maxlength="120"
+                               class="w-40 bg-slate-950/80 border border-slate-800 rounded-md px-2 py-1 text-[10px] text-slate-100 input-focus-ring"
+                               placeholder="檔名（選填）" />
+                        <a id="downloadGeneratedImage" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg.jpg">下載圖片</a>
+                    </div>
                 </div>
                 <img id="generatedImage" alt="AI 生成的新聞 CG 預覽" class="w-full rounded-lg border border-slate-800" />
             </div>

@@ -486,6 +486,68 @@ function editorFormat() {
     return EDITOR_FORMATS[state.editorFormat] || EDITOR_FORMATS[EDITOR_FORMAT_DEFAULT];
 }
 
+/* ============================================================
+   下載檔名（2026-09-08 使用者回饋 A）：全站所有版型共用一支。
+   留空 → YYYYMMDD_<版型短名>_<標題前 8 字>；有填 → 使用者字串。
+   檔名非法字元（Windows 不接受的那幾個）與換行一律去掉，收尾去空白。
+   ============================================================ */
+const DOWNLOAD_FORMAT_NAMES = {
+    default: '編輯CG',
+    broadcast_left: '播出鏡面左',
+    broadcast_right: '播出鏡面右',
+    ten_cover: '十點雙切',
+    ten_cover_full: '十點滿版',
+    yt_live_cover: 'YT直播',
+    yt_hourly_cover: 'YT整點',
+    yt_hot_cover: 'YT熱搜',
+};
+const DOWNLOAD_NAME_ILLEGAL = /[\\/:*?"<>|\r\n]/g;
+const DOWNLOAD_TITLE_MAX = 8;
+
+function downloadFormatName(kind) {
+    const key = kind || state.editorFormat || EDITOR_FORMAT_DEFAULT;
+    // 記者角色沒有版型下拉，一律 default——短名跟編輯的 default 要分得開
+    if (key === EDITOR_FORMAT_DEFAULT && state.currentRole !== '編輯') return 'CG';
+    return DOWNLOAD_FORMAT_NAMES[key] || DOWNLOAD_FORMAT_NAMES[EDITOR_FORMAT_DEFAULT];
+}
+
+/* 標題來源：封面用左標題／YT 用標題欄／一般 CG 用消化出的 [標題] 行 */
+function downloadTitleSource(kind) {
+    const key = kind || state.editorFormat || EDITOR_FORMAT_DEFAULT;
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    if (key === 'ten_cover' || key === 'ten_cover_full') return val('coverTitleLeft');
+    if (key === 'yt_live_cover' || key === 'yt_hourly_cover' || key === 'yt_hot_cover') {
+        return val('ytCoverTitle');
+    }
+    const match = val('field-variable').match(/\[標題\]\s*([^\n]+)/);
+    return match ? match[1].trim() : '';
+}
+
+/* 使用者填的檔名。第二頁（進階微調）有自己的欄位，避免第一頁的殘值誤用 */
+function customDownloadName() {
+    const id = state.currentPage === 2 ? 'downloadNameAdvanced' : 'downloadName';
+    return document.getElementById(id)?.value || '';
+}
+
+function downloadDateStamp() {
+    const d = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+}
+
+function downloadFileName(kind, title, ext) {
+    const clean = s => String(s == null ? '' : s).replace(DOWNLOAD_NAME_ILLEGAL, '').trim();
+    const extension = clean(ext) || 'png';
+    const custom = clean(customDownloadName());
+    if (custom) return `${custom}.${extension}`;
+    const name = clean(title === undefined ? downloadTitleSource(kind) : title)
+        .slice(0, DOWNLOAD_TITLE_MAX)
+        .trim();
+    const parts = [downloadDateStamp(), clean(downloadFormatName(kind))];
+    if (name) parts.push(name);
+    return `${parts.filter(Boolean).join('_')}.${extension}`;
+}
+
 /* 消化程度三檔。key 與後端 DigestDensity 一致，改這裡要同步改 main.py */
 const DENSITY_LABELS = {
     verbatim: '不改字',   // 2026-09-07 使用者裁決：UI 顯示改「不改字」，key 與後端 verbatim 不動
@@ -1796,7 +1858,7 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
         document.getElementById('oneClickImage').src = imageUrl;
         const download = document.getElementById('oneClickDownload');
         download.href = imageUrl;
-        download.download = 'tvbs-ten-cover.png';
+        download.download = downloadFileName(state.editorFormat);
         download.innerText = '下載 PNG';
         // 追加修改只在 AI 版適用（2026-09-07）：AI 版的源圖是後貼 Logo 前的模型原圖，
         // 改完再走一次後貼就是新成品。合成版的成品是程式用 Pillow 拼的，沒有可以餵回
@@ -1909,7 +1971,7 @@ function showYtCoverResult(data, fields) {
     document.getElementById('oneClickImage').src = imageUrl;
     const download = document.getElementById('oneClickDownload');
     download.href = imageUrl;
-    download.download = { hourly: 'tvbs-yt-hourly-cover.png', hot: 'tvbs-yt-hot-cover.png' }[fields.layout] || 'tvbs-yt-live-cover.png';
+    download.download = downloadFileName(state.editorFormat, fields.title);
     download.innerText = '下載 PNG';
     state.ytCoverBackgroundIsAi = !!data.background_is_ai;
     state.ytCoverTitleMode = data.title_mode || 'ai';
@@ -2048,7 +2110,7 @@ async function handleOneClickGenerate() {
         document.getElementById("oneClickImage").src = imageUrl;
         const download = document.getElementById("oneClickDownload");
         download.href = imageUrl;
-        download.download = `tvbs-news-cg.${isPng ? "png" : "jpg"}`;
+        download.download = downloadFileName(state.editorFormat, undefined, isPng ? "png" : "jpg");
         download.innerText = `下載 ${isPng ? "PNG" : "JPEG"}`;
         // ③ 記住「置框前」原圖供追加修改；未置框時成品本身就是原圖
         resetRefineState(refineSourceFromResponse(data), data);
@@ -2238,7 +2300,7 @@ async function handleImageGeneration() {
         const isPng = data.mime_type === 'image/png';
         image.src = imageUrl;
         download.href = imageUrl;
-        download.download = `tvbs-news-cg.${isPng ? 'png' : 'jpg'}`;
+        download.download = downloadFileName(state.editorFormat, undefined, isPng ? 'png' : 'jpg');
         download.innerText = `下載 ${isPng ? 'PNG' : 'JPEG'}`;
         resultLabel.innerText = `${providerName} Generated Preview`;
         image.alt = `${providerName} 生成的新聞 CG 預覽`;
@@ -2531,7 +2593,7 @@ function showRefinedImage(data) {
     document.getElementById('oneClickImage').src = imageUrl;
     const download = document.getElementById('oneClickDownload');
     download.href = imageUrl;
-    download.download = `tvbs-news-cg.${isPng ? 'png' : 'jpg'}`;
+    download.download = downloadFileName(state.editorFormat, undefined, isPng ? 'png' : 'jpg');
     document.getElementById('oneClickLabel').innerText = data.model || 'AI Generated';
 }
 
