@@ -321,6 +321,16 @@ class FrontendWiringTests(unittest.TestCase):
     def test_switching_format_clears_the_split_backgrounds(self):
         self.assertIn("state.ytSplitBackgrounds = null;", APP_JS)
 
+    def test_recompose_button_tracks_both_layouts(self):
+        """生完雙切再清掉第二標題：按鈕要跟著停用，不然會拿半格底圖去壓滿版。"""
+        self.assertIn(
+            "recompose.disabled = layout === 'split' ? !state.ytSplitBackgrounds : !state.refineSource;",
+            APP_JS,
+        )
+
+    def test_hourly_hint_mentions_the_second_title(self):
+        self.assertIn("第二標題填了就雙切", APP_JS)
+
 
 if __name__ == "__main__":
     unittest.main()

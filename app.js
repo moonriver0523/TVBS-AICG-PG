@@ -452,7 +452,7 @@ const EDITOR_FORMATS = {
     // 紅底日期、沒有副標）。
     yt_hourly_cover: {
         label: 'YT整點直播',
-        hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。附圖與底圖規則同國內外新聞直播。',
+        hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。第二標題填了就雙切（左右各一格底圖與標題，兩格字級相同）。附圖與底圖規則同國內外新聞直播。',
         inputs: 'yt_cover',
         ytLayout: 'hourly',
         locks: {},
@@ -1229,9 +1229,13 @@ function updateYtLayoutIndicator() {
             + (active ? 'border border-violet-600 bg-violet-600 text-white'
                       : 'border border-violet-600 text-slate-500 hover:text-white');
     });
-    // 雙切的成品是兩張底圖拼的，沒有「追加修改」可用（見 showYtCoverResult）
+    // 「只改文字」的可用性跟著版面走（比照十點的 applyCoverLayoutFields）：雙切要有兩格底圖、
+    // 滿版要有 refineSource。**兩邊都要判**——只判雙切的話，生完雙切再把第二標題清掉，
+    // 按鈕會留在啟用狀態，按下去就拿雙切的半格底圖去壓滿版，圖被裁掉一半還不會報錯。
     const recompose = document.getElementById('ytCoverRecomposeBtn');
-    if (recompose && layout === 'split') recompose.disabled = !state.ytSplitBackgrounds;
+    if (recompose) {
+        recompose.disabled = layout === 'split' ? !state.ytSplitBackgrounds : !state.refineSource;
+    }
 }
 
 function focusYtLayoutField() {
