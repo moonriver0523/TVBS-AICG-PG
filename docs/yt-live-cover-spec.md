@@ -188,7 +188,32 @@ hourly 另收 `time_text`。前端 `EDITOR_FORMATS[*].ytLayout` 帶到 `ytCoverF
 ## 2026-09-08：Logo 模板修正
 
 `static/brand/tvbs-logo-white.png` 抹掉 V 上方誤加的小點（使用者回饋 #2），備份在
-`D:\Downloadsicg_font_20260906\`。這個檔十點封面與 YT 封面共用（`compose.TVBS_LOGO_WHITE`）。
+`D:\Downloads\aicg_font_20260906\`。這個檔十點封面與 YT 封面共用（`compose.TVBS_LOGO_WHITE`）。
+
+## 2026-09-09：Logo「V」左筆畫補回上半截
+
+使用者回報全站 Logo 的「V」少了一小截，附了播出畫面截圖當正版對照。量出來的根因：
+兩個 Logo 檔的 V 左筆畫上緣都被截在半腰，看起來像一個沒有點的 i——2026-09-08 抹掉的
+那顆「點」其實是同一個問題的另一半，抹掉點之後剩下的短筆畫才是真正錯的地方。
+
+正版 wordmark 的規則（從截圖量的）：**V 左筆畫的上緣與 T 直劃的上緣同一列，平切收邊**，
+左右緣與既有筆畫同斜率。修法是量既有筆畫左右緣的直線、往上外插到 T 直劃頂列，
+8 倍超取樣填成同斜率的平行四邊形，再與原圖 alpha 取 max（只加不減，不動其他字母）。
+
+| 檔案 | T 直劃頂列 | V 左筆畫原頂列 | 修正後頂列 | 邊緣斜率（左／右） | 直線殘差 |
+|---|---|---|---|---|---|
+| `tvbs-logo-white.png` (314×145) | 54 | 69 | 54 | −0.317 / −0.307 | 0.43 px |
+| `tvbs-logo-white-plain.png` (707×282) | 91 | 132 | 91 | −0.305 / −0.308 | 1.08 px |
+
+備份（修正前）：`D:\Downloads\aicg_font_20260906\tvbs-logo-white_v_short_backup_20260909.png`
+與 `..._plain_v_short_backup_20260909.png`。
+
+守門測試：`tests/test_editor_formats.py::test_v_left_stroke_reaches_the_t_stem_top`，
+在補回的那一截取三個哨兵點，換回舊素材會紅。
+
+已確認不受影響：`static/ui/logo-aicg.png` 裡那個 12 px 小字標的 V 左筆畫本來就與 T 直劃切齊。
+仍帶舊 Logo 的是入門手冊／進度報告裡的**截圖**（`docs/user-guide-page1.html`、
+`docs/aicg-進度報告.html` 的內嵌圖），要等下次重拍手冊才會換掉。
 
 ## 2026-09-08：整點直播「雙則」（WP2）
 

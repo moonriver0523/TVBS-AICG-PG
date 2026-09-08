@@ -232,6 +232,27 @@ class ComposeOutputTests(unittest.TestCase):
             "舊的純字標備援不見了",
         )
 
+    def test_v_left_stroke_reaches_the_t_stem_top(self):
+        """2026-09-09：兩個 Logo 檔的「V」左筆畫上半截都被截掉，看起來像沒點的 i。
+
+        正版 wordmark（使用者提供的播出畫面截圖）裡，V 左筆畫的上緣與 T 直劃的
+        上緣切齊、平切收邊；修好後補回的就是這一截。這裡取上半截裡的點當哨兵，
+        避免哪天又被舊素材蓋回去。
+        """
+        cases = [
+            # 檔名, V 左筆畫上半截裡必須不透明的取樣點 (x, y)
+            ("tvbs-logo-white.png", [(90, 55), (88, 60), (86, 65)]),
+            ("tvbs-logo-white-plain.png", [(330, 93), (325, 105), (318, 120)]),
+        ]
+        for name, points in cases:
+            with self.subTest(name), Image.open(compose.BRAND_DIR / name) as logo:
+                alpha = logo.convert("RGBA").split()[3]
+                for x, y in points:
+                    self.assertGreater(
+                        alpha.getpixel((x, y)), 200,
+                        f"{name} 的 V 左筆畫在 ({x},{y}) 是空的——上半截又被截掉了",
+                    )
+
     def test_white_logo_asset_exists_and_is_white(self):
         self.assertTrue(compose.TVBS_LOGO_WHITE.exists(), "白色 Logo 素材不見了")
         with Image.open(compose.TVBS_LOGO_WHITE) as logo:
