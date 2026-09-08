@@ -44,7 +44,7 @@ _BROADCAST_RULES_TEMPLATE = """
 BROADCAST INSERT LAYOUT ({side_zh}側留給後製) — OVERRIDES THE LAYOUT SENTENCE ABOVE WHERE THEY CONFLICT:
 1. A large rectangular area filling most of the {side_en} half of the frame, centred vertically, is reserved for a video window that is composited in after this image is made. Treat that whole half as if it were already occupied.
 2. Put NOTHING there: no text, no headline, no icon, no chart, no figure, no logo, no callout, no decorative element. Whatever you place there will be covered and lost.
-3. The layout sentence above asks for the design to be centred. FOR THIS FORMAT THE BODY IS NOT CENTRED: write into "structure" that the HEADLINE is the ONLY element allowed to span the full width — it runs across the top strip of the frame, above the reserved area, as ONE line (two tightly-leaded lines only if it cannot fit in one), and it must end above the reserved area: nothing of it may hang down beside or into the video window. Every OTHER content block — every card, figure, icon and label — sits in the {opposite_en} half, stacked from top to bottom under the headline, entirely clear of the {side_en} half.
+3. The layout sentence above asks for the design to be centred. FOR THIS FORMAT THE BODY IS NOT CENTRED: write into "structure" that the HEADLINE is the ONLY element allowed to span the full width — it runs across the top strip of the frame, above the reserved area, as ONE line (two tightly-leaded lines only if it cannot fit in one), and it must end above the reserved area: nothing of it may hang down beside or into the video window. Every OTHER content block — every card, figure, icon and label — sits in the {opposite_en} half, stacked from top to bottom under the headline, entirely clear of the {side_en} half. THE HEADLINE MUST CARRY THE KEY FIGURE OR THE OUTCOME OF THE STORY, never a bare topic name: a reader who sees only that line should already know what happened.
 4. Keep the reserved area visually calm — plain continuous background, no busy texture, no bright focal point, no face. Say so in "structure".
 {stamp_rules}7. Each [內文小標] line is one short scannable fact. Wrap the figure or the key phrase of each line in angle brackets so it can be highlighted.
 8. Describe positions with direction words only (upper, lower, {side_en}, {opposite_en}, alongside, stacked). NEVER express any position or size as a percentage, pixel count, ratio or number of any kind.
@@ -54,18 +54,31 @@ BROADCAST INSERT LAYOUT ({side_zh}側留給後製) — OVERRIDES THE LAYOUT SENT
 # 第 5／6 條依蓋章開關二選一（2026-09-07 使用者回報：蓋章 OFF 在播出鏡面失效——
 # 這兩條原本無條件要求 <蓋章>，注入順序又在 STAMP_OFF_RULES 之後，把 OFF 壓掉了）。
 _BROADCAST_STAMP_ON = """5. THE CLOSING <蓋章> BANNER IS NOT FULL WIDTH IN THIS FORMAT. Every earlier rule that calls it "the lowest row of the content area" or "the lowest row of the design" refers to the content half only. Write into "structure" that the stamp banner sits inside the {opposite_en} half, directly under the last card, and does NOT span the frame or reach across into the reserved {side_en} half. The headline is the one exception: it spans the full width across the top strip, but nothing of it may hang down into the reserved area.
-6. "variable" must be exactly one [標題] line, then exactly three [內文小標] lines, then one <蓋章> line. Three points, no more and no fewer: this format's card stack has three rows.
+6. "variable" must be exactly one [標題] line, then exactly three [內文小標] lines, then one <蓋章> line. Three points, no more and no fewer: this format's card stack has three rows.{density_rules}
 """
 _BROADCAST_STAMP_OFF = """5. THERE IS NO STAMP BANNER IN THIS GRAPHIC (the user switched it OFF, and that setting wins over every rule above or below that mentions a closing banner). Do NOT write any stamp banner, conclusion strip or closing bar into "structure": the last card is the lowest element of the {opposite_en} half. The headline is the one exception: it spans the full width across the top strip, but nothing of it may hang down into the reserved {side_en} area.
-6. "variable" must be exactly one [標題] line, then exactly three [內文小標] lines, and NOTHING after them — no <蓋章> line. Three points, no more and no fewer: this format's card stack has three rows.
+6. "variable" must be exactly one [標題] line, then exactly three [內文小標] lines, and NOTHING after them — no <蓋章> line. Three points, no more and no fewer: this format's card stack has three rows.{density_rules}
 """
 
 
-def _broadcast_rules(side: str, stamp: bool | None = None) -> str:
+# 2026-09-08 使用者回饋 D：字多檔位在播出鏡面無處發揮——第 6 條固定「每卡一句」，
+# 消化再怎麼放寬，卡片還是一行。字多時改成每卡兩行（短標＋數據），卡片數不變。
+#
+# ⚠️ 跟上面同一條鐵律：這段文字裡不得出現任何數字（連 half-width 阿拉伯數字都不行），
+# 長度一律用文字描述（a few characters／a brief phrase）。
+_BROADCAST_DENSITY_STANDARD = """ THIS GRAPHIC IS RUNNING AT THE 字多 DENSITY, SO EACH OF THOSE CARDS CARRIES TWO LINES INSTEAD OF ONE: the first line is a short punchy label of only a few characters, and the second line is the supporting figure or detail behind it, kept to a brief phrase. Write every [內文小標] as those two parts separated by a full-width vertical bar 「｜」, and say in "structure" that each card stacks its label above its supporting line, the label set larger than the line under it."""
+
+
+def _broadcast_rules(
+    side: str, stamp: bool | None = None, density: str | None = None
+) -> str:
     left = side == "left"
     stamp_block = _BROADCAST_STAMP_OFF if stamp is False else _BROADCAST_STAMP_ON
     return _BROADCAST_RULES_TEMPLATE.format(
         stamp_rules=stamp_block.format(
+            density_rules=(
+                _BROADCAST_DENSITY_STANDARD if density == "standard" else ""
+            ),
             side_en="left" if left else "right",
             opposite_en="right" if left else "left",
         ),
@@ -132,7 +145,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 === TYPOGRAPHY (this is the point of the image) ===
 - The two headlines are the loudest thing in the frame: very heavy condensed Chinese display type, STACKED ON THE LINES GIVEN ABOVE (the split is already decided — never change it), tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of each photograph darkens gently so the headline stays readable.
 - THE NUMBER OF LINES AND WHERE THEY BREAK ARE FIXED. Each headline lists its lines above with a count. Render EVERY listed line on its OWN separate row, in the listed order: never merge two listed lines onto one row, never break one listed line across two rows, never drop or reorder one. A headline listed as three lines must appear as three stacked rows.
-- COLOUR EACH LINE EXACTLY AS LABELLED in that list: (white) = solid white, (yellow) = bright golden yellow, (red) = vivid red with a white outline. Two or three consecutive lines may carry the same colour — that is intended and correct, so follow the labels literally and never recolour a line to make the block look more varied.
+- COLOUR EACH LINE EXACTLY AS LABELLED in that list: (white) = solid white, (yellow) = bright golden yellow, (red) = vivid red with a white outline. Follow the labels literally — never recolour a line, and never give a whole headline one flat colour.
 - The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
 - The date is a clean, light, small white sans-serif, no effects, inside the header band.
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
@@ -165,7 +178,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 === TYPOGRAPHY (this is the point of the image) ===
 - The headline is the loudest thing in the frame: very heavy condensed Chinese display type, STACKED ON THE LINES GIVEN ABOVE (the split is already decided — never change it), occupying roughly the left half of the frame, tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of the photograph darkens gently so the headline stays readable.
 - THE NUMBER OF LINES AND WHERE THEY BREAK ARE FIXED. The headline lists its lines above with a count. Render EVERY listed line on its OWN separate row, in the listed order: never merge two listed lines onto one row, never break one listed line across two rows, never drop or reorder one. A headline listed as three lines must appear as three stacked rows.
-- COLOUR EACH LINE EXACTLY AS LABELLED in that list: (white) = solid white, (yellow) = bright golden yellow, (red) = vivid red with a white outline. Two or three consecutive lines may carry the same colour — that is intended and correct, so follow the labels literally and never recolour a line to make the block look more varied.
+- COLOUR EACH LINE EXACTLY AS LABELLED in that list: (white) = solid white, (yellow) = bright golden yellow, (red) = vivid red with a white outline. Follow the labels literally — never recolour a line, and never give a whole headline one flat colour.
 - The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
 - The date is a clean, light, small white sans-serif, no effects, inside the header band.
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
@@ -620,16 +633,23 @@ def get(key: str | None) -> dict:
     return EDITOR_FORMATS.get(key or DEFAULT_FORMAT, EDITOR_FORMATS[DEFAULT_FORMAT])
 
 
-def digest_rules(key: str | None, role: str, stamp: bool | None = None) -> str:
+def digest_rules(
+    key: str | None,
+    role: str,
+    stamp: bool | None = None,
+    density: str | None = None,
+) -> str:
     """消化階段要注入的規則。非編輯角色一律空字串——第三層防呆。
 
-    stamp 只影響播出鏡面：False 時第 5／6 條改成「沒有蓋章」版本，其餘版型不變。
+    stamp 與 density 都只影響播出鏡面：stamp False 時第 5／6 條換成「沒有蓋章」版本；
+    density "standard"（字多）時第 6 條加一段「每卡兩行」。其餘版型兩者都不看。
+    播出鏡面一律現算——stamp 沒表態且非字多時，算出來跟預先算好的那份逐字元相同。
     """
     if role != "編輯":
         return ""
     fmt = get(key)
-    if stamp is False and fmt.get("hole_side"):
-        return _broadcast_rules(fmt["hole_side"], stamp=False)
+    if fmt.get("hole_side"):
+        return _broadcast_rules(fmt["hole_side"], stamp=stamp, density=density)
     return fmt["digest_rules"]
 
 

@@ -1017,7 +1017,8 @@ def build_digest_instructions(
         instructions += TONE_LIGHT_RULES
     # 編輯專屬版型（播出鏡面）。editor_formats.digest_rules 對非編輯角色一律回空字串，
     # 這是「記者不可能誤用」的第三層防呆（前兩層在前端）。
-    instructions += editor_formats.digest_rules(editor_format, role, stamp)
+    # density 一併傳進去：字多檔位在播出鏡面要把每張卡從一行改成兩行（2026-09-08 回饋 D）
+    instructions += editor_formats.digest_rules(editor_format, role, stamp, density)
     # 沒有 asis 附圖時完全不注入，消化 prompt 逐字元不變。
     if asis_reference_count:
         instructions += USER_REFERENCE_ASIS_DIGEST_RULES
