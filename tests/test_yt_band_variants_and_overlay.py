@@ -8,6 +8,8 @@
    ——短標題不縮字，ink 更高，用長標題量的上界會放行一個實際會糊字的設定。
 3. **直標是透明底。** 疊在直播訊號上的東西，畫布不透明就等於把訊號整片蓋掉。
 4. **主標在內側、副標在外側。** 兩欄都是深藍，像素分不出誰是誰，只能驗幾何。
+4b. **兩欄同字級、同底色、同一塊色框**（2026-09-08 使用者裁決）：格距由字多的那欄決定、
+   兩欄同寬、中間沒有縫、底色一個顏色畫整塊；字少的那欄早點結束。
 5. **直排不是把整行轉 90°。** 標點要換直排字形（「→﹁、、→︑）。字級照格距算，em 框
    比格距高一點，相鄰的字會些微溢出格子，所以「裁一格出來量墨水位置」會量到隔壁的
    筆畫——字形這件事改用整張比對驗：清掉對照表重畫，兩張圖必須不一樣。
@@ -173,10 +175,20 @@ class VerticalLayoutTests(unittest.TestCase):
                 sub_cx = (layout["sub"][0] + layout["sub"][2]) / 2
                 self.assertLess(abs(main_cx - width / 2), abs(sub_cx - width / 2))
 
-    def test_the_main_column_is_the_wider_one(self):
+    def test_the_two_columns_are_the_same_width(self):
+        """同字級就得同寬，不然窄的那欄字會被 0.94 欄寬的上限壓小。"""
         layout = self._layout()
-        self.assertGreater(layout["main"][2] - layout["main"][0],
-                           layout["sub"][2] - layout["sub"][0])
+        self.assertEqual(layout["main"][2] - layout["main"][0],
+                         layout["sub"][2] - layout["sub"][0])
+
+    def test_the_two_columns_touch_and_form_one_box(self):
+        """同一個色框不拆開：兩欄之間沒有縫，box 就是兩欄的聯集。"""
+        for side in ("left", "right"):
+            with self.subTest(side=side):
+                layout = self._layout(title_side=side)
+                inner, outer = sorted((layout["main"], layout["sub"]), key=lambda r: r[0])
+                self.assertEqual(inner[2], outer[0], "兩欄之間有縫")
+                self.assertEqual(layout["box"], (inner[0], inner[1], outer[2], inner[3]))
 
     def test_both_columns_share_a_top_and_a_bottom(self):
         """截圖量出來就是等長：ref1 兩欄都是 y 67→358。"""
@@ -184,11 +196,14 @@ class VerticalLayoutTests(unittest.TestCase):
         self.assertEqual(layout["main"][1], layout["sub"][1])
         self.assertEqual(layout["main"][3], layout["sub"][3])
 
-    def test_the_column_with_more_cells_gets_the_smaller_pitch(self):
+    def test_both_columns_share_one_pitch_set_by_the_longer_title(self):
+        """兩行直標字級一樣大：格距只有一個，由格數多的那欄決定。"""
         layout = self._layout()
-        height = layout["column_height"]
-        self.assertGreater(height / len(layout["main_cells"]),
-                           height / len(layout["sub_cells"]))
+        most = max(len(layout["main_cells"]), len(layout["sub_cells"]))
+        self.assertAlmostEqual(layout["pitch"], layout["column_height"] / most, places=6)
+        # 主標 9 格比副標 12 格短：主標用同一個格距，只佔欄高的 9/12
+        self.assertLess(len(layout["main_cells"]), most)
+        self.assertLess(layout["pitch"] * len(layout["main_cells"]), layout["column_height"])
 
     def test_the_geometry_matches_the_screenshot_within_a_percent(self):
         """ref1（718×404）：直標 x 19..77、y 67..358。換算成比例要對得上。"""
@@ -196,9 +211,12 @@ class VerticalLayoutTests(unittest.TestCase):
         layout = self._layout(title_side="left")
         strip_x0, strip_x1 = layout["sub"][0], layout["main"][2]
         self.assertAlmostEqual(strip_x0 / width, 19 / 718, delta=0.006)
-        self.assertAlmostEqual(strip_x1 / width, 77 / 718, delta=0.006)
+        # 兩欄同寬之後整組比截圖（32+26+1）寬一點：19 + 32×2 = 83
+        self.assertAlmostEqual(strip_x1 / width, 83 / 718, delta=0.006)
         self.assertAlmostEqual(layout["main"][1] / height, 67 / 404, delta=0.006)
-        self.assertAlmostEqual(layout["main"][3] / height, 358 / 404, delta=0.010)
+        # 兩欄同格距之後 12 格撐到欄底上限（0.90），比截圖的 358/404 略長；上限本身不能破
+        self.assertLessEqual(layout["main"][3] / height, compose.VSTRIP_BOTTOM_MAX_RATIO + 1e-9)
+        self.assertGreaterEqual(layout["main"][3] / height, 358 / 404 - 0.006)
 
     def test_the_strip_sits_on_the_side_it_was_told_to(self):
         width = compose.YT_CANVAS[0]
@@ -280,6 +298,33 @@ class VerticalCanvasTests(unittest.TestCase):
                 self.assertEqual(a, 255)
                 self.assertGreater(b, r + 25, "欄底色不是藍的")
 
+    def test_the_box_is_one_continuous_colour_across_the_seam(self):
+        """同一個色框：跨過兩欄交界的那一列，顏色連續（沒有縫、沒有兩種藍）。"""
+        img = _vstrip()
+        layout = compose.yt_vertical_layout(main_title=MAIN, sub_title=SUB)
+        x0, _, x1, y1 = layout["box"]
+        y = y1 - 3
+        row = [img.getpixel((x, y)) for x in range(x0, x1)]
+        self.assertTrue(all(px[3] == 255 for px in row), "色框裡有透明縫")
+        for left, right in zip(row, row[1:]):
+            self.assertLessEqual(max(abs(left[i] - right[i]) for i in range(3)), 3,
+                                 "相鄰兩個像素跳色：色框被拆成兩塊")
+
+    def test_both_titles_are_drawn_at_the_same_glyph_size(self):
+        """兩行直標字級一樣大：拿同一個字在兩欄各畫一格，墨水高度要一樣。"""
+        img = _vstrip(main_title="國國國", sub_title="國國國國國國")
+        layout = compose.yt_vertical_layout(main_title="國國國", sub_title="國國國國國國")
+        pitch = layout["pitch"]
+        heights = {}
+        for key in ("main", "sub"):
+            x0, y0, x1, _ = layout[key]
+            cell = img.crop((x0 + 2, y0, x1 - 2, y0 + round(pitch))).convert("L")
+            # 白字在深藍上：亮度高的就是墨水
+            ink = cell.point(lambda v: 255 if v > 160 else 0).getbbox()
+            self.assertIsNotNone(ink, f"{key} 第一格沒有字")
+            heights[key] = ink[3] - ink[1]
+        self.assertLessEqual(abs(heights["main"] - heights["sub"]), 2, heights)
+
     def test_a_logo_on_the_same_side_as_the_strip_is_refused_rather_than_drawn_over_it(self):
         for side, corner in (("left", "tl"), ("left", "bl"), ("right", "tr"), ("right", "br")):
             with self.subTest(side=side, corner=corner):
@@ -341,7 +386,7 @@ class VerticalGlyphTests(unittest.TestCase):
         cells = layout["sub_cells"]
         index = cells.index("30")
         x0, y0, x1, _ = layout["sub"]
-        pitch = layout["column_height"] / len(cells)
+        pitch = layout["pitch"]
         # 只取格子中間六成，避開上下鄰居溢出來的筆畫
         top = y0 + round((index + 0.2) * pitch)
         bottom = y0 + round((index + 0.8) * pitch)

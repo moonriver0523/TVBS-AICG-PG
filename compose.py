@@ -1481,27 +1481,29 @@ def compose_yt_hot_cover(
 #   這是量出來的：ref1 兩欄都是 y 67→358，主標 9 格、副標 12 格，格距 8.0%／6.0%。
 #
 # 兩件跟直覺不一樣、但截圖就是這樣的事：
-#   1. 兩欄都是深藍，沒有紅欄。ref1／ref2 取色都是外側 (28,53,99)、內側 (27,41,74)。
-#   2. 右上角是白色 TVBS NEWS 字標，不是 YT 封面那塊藍色斜標籤。
-# 兩者都留成參數（sub_fill／logo_tab），要改一行就好。
+#   1. 兩欄都是深藍，沒有紅欄。ref1／ref2 取色外側 (28,53,99)、內側 (27,41,74)；
+#      2026-09-08 使用者裁決兩欄同底色、同一塊色框，統一用內側那個色（fill 參數）。
+#   2. 右上角是白色 TVBS NEWS 字標，不是 YT 封面那塊藍色斜標籤（logo_tab 參數）。
 #
 # 直排是逐字疊放，不是把整行轉 90°：標點要換成直排相容字元（「→﹁、。→︒），
 # 連續的英數字（AI／AMD／30）併成一格橫著寫（縱中橫），截圖裡就是這樣排的。
 # ============================================================
 
 VSTRIP_LEFT_RATIO = 0.0265           # 整組直標離畫面外緣（19/718）
-VSTRIP_MAIN_WIDTH_RATIO = 0.0445     # 主標欄寬（32/718）
-VSTRIP_SUB_WIDTH_RATIO = 0.0362      # 副標欄寬（26/718）
-VSTRIP_SEAM_RATIO = 0.0014           # 兩欄之間的細縫
+# 2026-09-08 使用者裁決：兩欄字級一樣大、底色一致、同一個色框不拆開——
+# 所以兩欄同寬（都用主標欄寬）、中間沒有縫、共用一個格距，底色是一整塊。
+VSTRIP_MAIN_WIDTH_RATIO = 0.0445     # 每欄寬（32/718），兩欄同寬
+VSTRIP_SUB_WIDTH_RATIO = VSTRIP_MAIN_WIDTH_RATIO
+VSTRIP_SEAM_RATIO = 0.0              # 兩欄之間不留縫：同一個色框
 VSTRIP_TOP_RATIO = 0.166             # 文字欄上緣，一般版（67/404）
 VSTRIP_TOP_WITH_LABEL_RATIO = 0.191  # 有原音呈現／AI即時翻譯小標時（77/404）
 VSTRIP_BOTTOM_MAX_RATIO = 0.90       # 欄底最多到這裡，再長就縮字
-VSTRIP_MAIN_PITCH_RATIO = 0.080      # 主標格距上限（291/404/9）
-VSTRIP_SUB_PITCH_RATIO = 0.060       # 副標格距上限（291/404/12）
+VSTRIP_MAIN_PITCH_RATIO = 0.080      # 格距上限（291/404/9），兩欄共用
+VSTRIP_SUB_PITCH_RATIO = VSTRIP_MAIN_PITCH_RATIO
 VSTRIP_MIN_PITCH_RATIO = 0.045       # 縮到這裡還放不下就丟 ComposeError
 VSTRIP_CELL_TIGHT = 0.92             # 字級佔格距（字距約 0.08em）
-VSTRIP_MAIN_FILL = (27, 41, 74)      # 內側欄：深藏青（截圖取色）
-VSTRIP_SUB_FILL = (28, 53, 99)       # 外側欄：略亮的藍（截圖取色）
+VSTRIP_MAIN_FILL = (27, 41, 74)      # 整塊色框：深藏青（截圖取色）
+VSTRIP_SUB_FILL = VSTRIP_MAIN_FILL   # 2026-09-08 起兩欄同色（保留名字給舊呼叫）
 VSTRIP_FILL_SHADE = 0.78             # 欄內由外而內的漸層，模擬截圖的漸層感
 VSTRIP_LIVE_TOP_RATIO = 0.104        # LIVE 章上緣，一般版（42/404）
 VSTRIP_LIVE_TOP_WITH_LABEL_RATIO = 0.057   # 有小標時 LIVE 往上讓（23/404）
@@ -1629,16 +1631,17 @@ def yt_vertical_layout(
 
     labelled = variant in VSTRIP_VARIANT_LABELS
     top = round(height * (VSTRIP_TOP_WITH_LABEL_RATIO if labelled else VSTRIP_TOP_RATIO))
-    # 兩欄同高：先讓各自用上限格距算出想要的長度，取比較長的那個當共用欄高
-    wanted = max(len(main_cells) * height * VSTRIP_MAIN_PITCH_RATIO,
-                 len(sub_cells) * height * VSTRIP_SUB_PITCH_RATIO)
+    # 兩欄同字級（2026-09-08 裁決）：格距由格數多的那欄決定，另一欄用同一個格距、
+    # 字少就早點結束；欄高＝格數多的那欄的長度（色框是一整塊，高度取這個）。
+    most = max(len(main_cells), len(sub_cells))
+    wanted = most * height * VSTRIP_MAIN_PITCH_RATIO
     column_h = round(min(wanted, height * VSTRIP_BOTTOM_MAX_RATIO - top))
-    floor = height * VSTRIP_MIN_PITCH_RATIO
-    for name, cells in (("第一標題", main_cells), ("第二標題", sub_cells)):
-        if cells and column_h / len(cells) < floor:
-            raise ComposeError(
-                f"{name} {len(cells)} 格，縮到最小字級仍放不進直標（欄高 {column_h}px）"
-            )
+    pitch = column_h / most
+    if pitch < height * VSTRIP_MIN_PITCH_RATIO:
+        longer = "第一標題" if len(main_cells) >= len(sub_cells) else "第二標題"
+        raise ComposeError(
+            f"{longer} {most} 格，縮到最小字級仍放不進直標（欄高 {column_h}px）"
+        )
 
     main_w = round(width * VSTRIP_MAIN_WIDTH_RATIO)
     sub_w = round(width * VSTRIP_SUB_WIDTH_RATIO)
@@ -1655,6 +1658,7 @@ def yt_vertical_layout(
 
     strip_x0 = min(main[0], sub[0]) if sub_cells else main[0]
     strip_x1 = max(main[2], sub[2]) if sub_cells else main[2]
+    box = (strip_x0, top, strip_x1, top + column_h)   # 一整塊色框
     live_w = round(width * VSTRIP_LIVE_WIDTH_RATIO)
     live_top = round(height * (VSTRIP_LIVE_TOP_WITH_LABEL_RATIO if labelled
                                else VSTRIP_LIVE_TOP_RATIO))
@@ -1688,9 +1692,9 @@ def yt_vertical_layout(
         else:
             source = _vstrip_source_box(live, logo, logo_corner, title_side, src_w, src_h, gap)
 
-    return {"live": live, "label": label, "main": main, "sub": sub, "source": source,
-            "logo": logo, "main_cells": main_cells, "sub_cells": sub_cells,
-            "column_height": column_h}
+    return {"live": live, "label": label, "main": main, "sub": sub, "box": box,
+            "source": source, "logo": logo, "main_cells": main_cells,
+            "sub_cells": sub_cells, "column_height": column_h, "pitch": pitch}
 
 
 def _vstrip_source_box(live, logo, logo_corner, title_side, src_w, src_h, gap):
@@ -1722,13 +1726,13 @@ def compose_yt_overlay(
     source_follow_logo: bool = False,
     logo_tab: bool = False,
     live: bool = True,
-    main_fill: tuple[int, int, int] = VSTRIP_MAIN_FILL,
-    sub_fill: tuple[int, int, int] = VSTRIP_SUB_FILL,
+    fill: tuple[int, int, int] = VSTRIP_MAIN_FILL,
     size: tuple[int, int] = YT_CANVAS,
 ) -> bytes:
     """合成 YT 直播用的「直標」透明底 PNG，回傳 PNG bytes（RGBA，沒有底圖）。
 
-    main_title 是主標（內側欄、字大），sub_title 是副標（外側欄、字小），兩欄同長。
+    main_title 是主標（內側欄），sub_title 是副標（外側欄）；2026-09-08 起兩欄**同字級、
+    同底色、同一塊色框**（fill 一個顏色畫整塊），字少的那欄早點結束。
     variant：normal／original_audio／ai_translation，後兩者在 LIVE 章下方多一枚白底小標。
     source_text 例「畫面來源：路透社」，預設橫排貼在 LIVE 章旁邊；source_follow_logo=True
     改成跟著 Logo 走（Logo 在上→下方，在下→上方）。
@@ -1758,21 +1762,17 @@ def compose_yt_overlay(
                                source_follow_logo=source_follow_logo)
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
 
-    # ---- 兩欄底色（外側欄先畫，內側欄壓在上面）----
-    for key, fill in (("sub", sub_fill), ("main", main_fill)):
-        x0, y0, x1, y1 = layout[key]
-        if x1 <= x0:
-            continue
-        outward = (key == "sub") == (title_side == "left")
-        canvas.alpha_composite(_vertical_column_layer((x1 - x0, y1 - y0), fill, outward), (x0, y0))
+    # ---- 底色：一整塊色框（兩欄不拆開），由外緣往內一道很淡的漸層 ----
+    x0, y0, x1, y1 = layout["box"]
+    canvas.alpha_composite(_vertical_column_layer((x1 - x0, y1 - y0), fill, title_side == "left"),
+                           (x0, y0))
 
-    # ---- 兩欄文字：白字，不用封面那套重描邊＋陰影（那是壓照片用的，壓深藍會糊）----
-    column_h = layout["column_height"]
+    # ---- 兩欄文字：白字、同字級，不用封面那套重描邊＋陰影（那是壓照片用的，壓深藍會糊）----
+    pitch = layout["pitch"]
     for key, cells in (("main", layout["main_cells"]), ("sub", layout["sub_cells"])):
         if not cells:
             continue
         x0, y0, x1, _ = layout[key]
-        pitch = column_h / len(cells)
         size_px = min(round(pitch * VSTRIP_CELL_TIGHT), round((x1 - x0) * 0.94))
         font = _font(size_px)
         for index, cell in enumerate(cells):

@@ -124,7 +124,8 @@
 
 ### WP3 底色框位置樣張＋PNG 壓標原型（compose.py＋scratch，不接端點／UI）
 - ✅ 底色框（2026-09-08 晚定版）：使用者從三張位置樣張挑「3 第二行」，並要求**框上緣漸層羽化**。`YT_BAND_TOP_RATIO` 0.60→**0.778**（第一行基線）、`YT_BAND_FADE_RATIO` 0.06→**0.0365**（到 0.8145 全濃度，壓在第二行墨水上緣之上），羽化改 smoothstep；三變體字典 `YT_BAND_VARIANTS` 移除。仍是開關、預設 OFF、60% 半透明；整點直播不適用。
-- `compose_yt_overlay()` 原型：1920×1080 透明 RGBA、標題條元素（半透明底塊）、兩行標題（沿用 `_draw_yt_title_line`）、來源句跟著 Logo 位置、LIVE 章；每個變體各出透明 PNG＋疊在灰底樣板畫面的預覽。
+- `compose_yt_overlay()` 原型：1920×1080 透明 RGBA、**直排**標題條（照使用者 Google 文件第 5 項截圖）、兩欄直排標題、來源句跟著 LIVE 章或 Logo、LIVE 章；每個組合各出透明 PNG＋疊在參考畫面的預覽。
+- 2026-09-08 晚使用者對直標的第一輪裁決：**兩欄字級一樣大、底色一致、同一個色框不拆開**（`VSTRIP_SEAM_RATIO`＝0、兩欄同寬同格距、`compose_yt_overlay(fill=…)` 一個顏色畫整塊；`yt_vertical_layout` 多回 `box`／`pitch`）。副標深紅樣張作廢。仍未接端點／UI，LIVE 章樣式待裁。
 
 ### 之後
 - 手冊（八種→六種、欄位改名、畫面描述列刪除、十點表重排）、`docs/ten-cover-spec.md`、`docs/yt-live-cover-spec.md` 在 WP1＋WP2 落地後一次更新。

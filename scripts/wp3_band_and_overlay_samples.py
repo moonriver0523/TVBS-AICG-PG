@@ -24,8 +24,7 @@ DATE = "2026/09/08"
 SOURCE = "畫面來源：路透社"
 MAIN_TITLE = "週五變天北、東轉雨"
 SUB_TITLE = "明早晚涼「中午仍破30度」"
-# (檔名, kwargs)。四組是 lead 指定的；第五組多出來，是為了把「副標欄改深紅」跟
-# 截圖的全藍版擺在一起比——兩張參考截圖裡都沒有紅欄，這件事得讓使用者自己看。
+# (檔名, kwargs)。2026-09-08 使用者裁決兩欄同字級、同底色、同一塊色框，副標深紅那組作廢。
 VSTRIP_COMBOS = (
     ("一般_左緣_Logo右上", dict(variant="normal", title_side="left", logo_corner="tr")),
     ("原音呈現_左緣_Logo右上_來源跟LIVE",
@@ -34,8 +33,6 @@ VSTRIP_COMBOS = (
      dict(variant="original_audio", title_side="left", logo_corner="br",
           source_follow_logo=True)),
     ("一般_右緣_Logo左上", dict(variant="normal", title_side="right", logo_corner="tl")),
-    ("一般_左緣_Logo右上_副標深紅",
-     dict(variant="normal", title_side="left", logo_corner="tr", sub_fill=(120, 18, 28))),
 )
 BACKDROP = OUT / "20260908_直標參考_一般國內直播.png"
 
