@@ -535,6 +535,19 @@ function downloadDateStamp() {
     return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
 }
 
+/* 檔名欄在結果區裡，生圖當下還是空的——使用者是看到圖之後才打字。
+   所以下載當下再算一次；同步在 click handler 裡改 download 屬性，瀏覽器吃得到。 */
+function wireDownloadNames() {
+    ['oneClickDownload', 'downloadGeneratedImage'].forEach(id => {
+        const link = document.getElementById(id);
+        if (!link) return;
+        link.addEventListener('click', () => {
+            const ext = (link.href || '').startsWith('data:image/png') ? 'png' : 'jpg';
+            link.download = downloadFileName(state.editorFormat, undefined, ext);
+        });
+    });
+}
+
 function downloadFileName(kind, title, ext) {
     const clean = s => String(s == null ? '' : s).replace(DOWNLOAD_NAME_ILLEGAL, '').trim();
     const extension = clean(ext) || 'png';
@@ -634,6 +647,7 @@ window.onload = () => {
         btn.classList.toggle('density-active', isActive);
         btn.classList.toggle('text-slate-500', !isActive);
     });
+    wireDownloadNames();
     switchPage(1);
 };
 

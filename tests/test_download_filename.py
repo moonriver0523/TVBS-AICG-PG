@@ -99,6 +99,15 @@ class DownloadNameFieldTests(unittest.TestCase):
                 self.assertIn(f'id="{element_id}"', INDEX_HTML)
         self.assertEqual(INDEX_HTML.count('id="downloadName"'), 1)
 
+    def test_name_is_recomputed_at_click_time(self):
+        """檔名欄在結果區裡，生圖當下還是空的——不在按下載時重算就永遠讀不到。"""
+        body = _function_body("wireDownloadNames")
+        self.assertIn("addEventListener('click'", body)
+        self.assertIn("oneClickDownload", body)
+        self.assertIn("downloadGeneratedImage", body)
+        self.assertIn("downloadFileName(", body)
+        self.assertIn("wireDownloadNames();", APP_JS)
+
     def test_helper_reads_the_field_of_the_current_page(self):
         body = _function_body("customDownloadName")
         self.assertIn("state.currentPage === 2", body)
