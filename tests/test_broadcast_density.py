@@ -28,6 +28,45 @@ class DensityRuleTests(unittest.TestCase):
                     # 卡片數不變，只有每張卡的行數變了
                     self.assertIn("exactly three [內文小標] lines", rules)
 
+    def test_standard_rewrites_the_point_rule_to_match(self):
+        """第 6 條要求兩段時，第 7 條不能還寫「一句短事實」，否則兩條互相衝突。"""
+        for key in BROADCAST_KEYS:
+            for stamp in STAMP_CASES:
+                with self.subTest(key=key, stamp=stamp):
+                    rules = editor_formats.digest_rules(
+                        key, "編輯", stamp=stamp, density="standard"
+                    )
+                    self.assertIn("短標｜補充細節", rules)
+                    self.assertIn("the two parts rule six describes", rules)
+                    self.assertIn("put those angle brackets in the 短標 part", rules)
+                    # 原本的單句版整條不得留下
+                    self.assertNotIn(
+                        "Each [內文小標] line is one short scannable fact", rules
+                    )
+
+    def test_the_two_rules_speak_the_same_language(self):
+        """第 6、7 條都要提到全形直線，措辭對得起來。"""
+        for key in BROADCAST_KEYS:
+            with self.subTest(key=key):
+                rules = editor_formats.digest_rules(key, "編輯", density="standard")
+                self.assertEqual(rules.count("full-width vertical bar 「｜」"), 2)
+
+    def test_other_densities_keep_the_original_point_rule_verbatim(self):
+        for key in BROADCAST_KEYS:
+            for density in ("simplified", "verbatim", None):
+                for stamp in STAMP_CASES:
+                    with self.subTest(key=key, density=density, stamp=stamp):
+                        rules = editor_formats.digest_rules(
+                            key, "編輯", stamp=stamp, density=density
+                        )
+                        self.assertIn(
+                            "7. Each [內文小標] line is one short scannable fact."
+                            " Wrap the figure or the key phrase of each line in angle"
+                            " brackets so it can be highlighted.",
+                            rules,
+                        )
+                        self.assertNotIn("短標｜補充細節", rules)
+
     def test_other_densities_keep_the_single_line_card(self):
         for key in BROADCAST_KEYS:
             for density in ("simplified", "verbatim", None):

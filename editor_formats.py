@@ -46,7 +46,7 @@ BROADCAST INSERT LAYOUT ({side_zh}側留給後製) — OVERRIDES THE LAYOUT SENT
 2. Put NOTHING there: no text, no headline, no icon, no chart, no figure, no logo, no callout, no decorative element. Whatever you place there will be covered and lost.
 3. The layout sentence above asks for the design to be centred. FOR THIS FORMAT THE BODY IS NOT CENTRED: write into "structure" that the HEADLINE is the ONLY element allowed to span the full width — it runs across the top strip of the frame, above the reserved area, as ONE line (two tightly-leaded lines only if it cannot fit in one), and it must end above the reserved area: nothing of it may hang down beside or into the video window. Every OTHER content block — every card, figure, icon and label — sits in the {opposite_en} half, stacked from top to bottom under the headline, entirely clear of the {side_en} half. THE HEADLINE MUST CARRY THE KEY FIGURE OR THE OUTCOME OF THE STORY, never a bare topic name: a reader who sees only that line should already know what happened.
 4. Keep the reserved area visually calm — plain continuous background, no busy texture, no bright focal point, no face. Say so in "structure".
-{stamp_rules}7. Each [內文小標] line is one short scannable fact. Wrap the figure or the key phrase of each line in angle brackets so it can be highlighted.
+{stamp_rules}{point_rules}
 8. Describe positions with direction words only (upper, lower, {side_en}, {opposite_en}, alongside, stacked). NEVER express any position or size as a percentage, pixel count, ratio or number of any kind.
 """
 
@@ -68,19 +68,26 @@ _BROADCAST_STAMP_OFF = """5. THERE IS NO STAMP BANNER IN THIS GRAPHIC (the user 
 # 長度一律用文字描述（a few characters／a brief phrase）。
 _BROADCAST_DENSITY_STANDARD = """ THIS GRAPHIC IS RUNNING AT THE 字多 DENSITY, SO EACH OF THOSE CARDS CARRIES TWO LINES INSTEAD OF ONE: the first line is a short punchy label of only a few characters, and the second line is the supporting figure or detail behind it, kept to a brief phrase. Write every [內文小標] as those two parts separated by a full-width vertical bar 「｜」, and say in "structure" that each card stacks its label above its supporting line, the label set larger than the line under it."""
 
+# 第 7 條跟著第 6 條一起換檔（2026-09-08 第二輪）：字多時第 6 條要求每卡兩行，
+# 第 7 條若還寫「一句短事實」，兩條就會被模型讀成互相衝突。字少／不改字維持原句。
+_BROADCAST_POINT_RULE_DEFAULT = """7. Each [內文小標] line is one short scannable fact. Wrap the figure or the key phrase of each line in angle brackets so it can be highlighted."""
+_BROADCAST_POINT_RULE_STANDARD = """7. Each [內文小標] is written as the two parts rule six describes — 短標｜補充細節 — joined by a full-width vertical bar 「｜」. The 短標 part before the bar is one short scannable fact; the 補充細節 part after it carries the supporting data or detail behind that fact. Wrap the figure or the key phrase in angle brackets so it can be highlighted, and put those angle brackets in the 短標 part."""
+
 
 def _broadcast_rules(
     side: str, stamp: bool | None = None, density: str | None = None
 ) -> str:
     left = side == "left"
+    standard = density == "standard"
     stamp_block = _BROADCAST_STAMP_OFF if stamp is False else _BROADCAST_STAMP_ON
     return _BROADCAST_RULES_TEMPLATE.format(
         stamp_rules=stamp_block.format(
-            density_rules=(
-                _BROADCAST_DENSITY_STANDARD if density == "standard" else ""
-            ),
+            density_rules=_BROADCAST_DENSITY_STANDARD if standard else "",
             side_en="left" if left else "right",
             opposite_en="right" if left else "left",
+        ),
+        point_rules=(
+            _BROADCAST_POINT_RULE_STANDARD if standard else _BROADCAST_POINT_RULE_DEFAULT
         ),
         side_zh="左" if left else "右",
         side_en="left" if left else "right",
