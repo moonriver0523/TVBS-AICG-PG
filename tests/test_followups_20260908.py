@@ -39,7 +39,6 @@ def _lookup_only_merz(subjects, english=None):
     return found, [n for n in subjects if n not in found]
 
 
-
 def _element_inner_html(html: str, element_id: str) -> str:
     """取出某個 <div id="..."> 的內容——數 div 開關標籤，不用正規式硬猜。"""
     start = html.index(f'<div id="{element_id}"')
