@@ -7,7 +7,7 @@
 1. **兩行不拆段。** 雙則走的是 title／title_second 原樣兩行，不能再被 split_live_title 切。
 2. **接縫不能有硬邊。** 標題橫跨全寬，中間任何一條直線都會從字中間穿過去。
 3. **附圖要先拆到各自那一格。** 左格附了一張圖不能讓右格以為自己也有底圖、跳過畫面推導。
-4. **每行 14 字上限只套用在雙則。** 單則是同一句拆兩段，長度受原標題限制，行為不能變。
+4. **每行 18 字上限（2026-09-08 晚由 14 放寬）只套用在雙則。** 單則是同一句拆兩段，長度受原標題限制，行為不能變。
 """
 import base64
 import io
@@ -155,7 +155,7 @@ class HourlyLineLimitTests(unittest.TestCase):
 
     def test_dual_rejects_a_line_over_the_cap(self):
         with self.assertRaises(compose.ComposeError) as ctx:
-            self._cover("一二三四五六七八九十一二三四五", SECOND,
+            self._cover("一二三四五六七八九十一二三四五六七八九", SECOND,
                         line_max_chars=compose.YT_HOURLY_LINE_MAX_CHARS)
         self.assertIn("請縮短這一行", str(ctx.exception))
 
@@ -167,7 +167,7 @@ class HourlyLineLimitTests(unittest.TestCase):
 
     def test_single_mode_has_no_character_cap(self):
         """單則不帶 line_max_chars，行為與 WP2 之前一模一樣。"""
-        self._cover("一二三四五六七八九十一二三四五", "第二段")
+        self._cover("一二三四五六七八九十一二三四五六七八九", "第二段")
 
     def test_a_line_that_cannot_fit_at_all_still_raises(self):
         with self.assertRaises(compose.ComposeError) as ctx:
@@ -283,23 +283,23 @@ class DualEndpointTests(unittest.TestCase):
 
     def test_line_over_the_cap_returns_400_before_any_image_is_generated(self):
         """審查必修（2026-09-08）：字數擋要在生底圖之前，不能燒完兩次生圖才回錯。"""
-        payload = _payload(title="一二三四五六七八九十一二三四五")
+        payload = _payload(title="一二三四五六七八九十一二三四五六七八九")
         with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")),              patch.object(main, "yt_dual_panel_plan", side_effect=AssertionError("不該推導")):
             res = client.post("/api/editor/yt-cover", json=payload, headers=_headers())
         self.assertEqual(res.status_code, 400, res.text)
-        self.assertIn("第一標題超過 14 字", res.json()["detail"])
+        self.assertIn("第一標題超過 18 字", res.json()["detail"])
         self.assertIn("請縮短這一行", res.json()["detail"])
 
     def test_second_title_over_the_cap_names_the_second_line(self):
-        payload = _payload(title_second="一二三四五六七八九十一二三四五")
+        payload = _payload(title_second="一二三四五六七八九十一二三四五六七八九")
         with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")):
             res = client.post("/api/editor/yt-cover", json=payload, headers=_headers())
         self.assertEqual(res.status_code, 400, res.text)
-        self.assertIn("第二標題超過 14 字", res.json()["detail"])
+        self.assertIn("第二標題超過 18 字", res.json()["detail"])
 
     def test_frontend_pre_checks_the_cap_before_sending(self):
         js = (ROOT / "app.js").read_text(encoding="utf-8")
-        self.assertIn("const YT_HOURLY_LINE_MAX_CHARS = 14;", js)
+        self.assertIn("const YT_HOURLY_LINE_MAX_CHARS = 18;", js)
         self.assertRegex(js, r"function displayWidth\(text\)")
         self.assertRegex(js, r"displayWidth\(t\) > YT_HOURLY_LINE_MAX_CHARS")
         self.assertNotIn("async function handleAIDigestion", js)
@@ -345,10 +345,10 @@ class HourlyDigestTests(unittest.TestCase):
             dc.call_args.kwargs["system_prompt"],
         )
 
-    def test_prompt_says_two_stories_are_one_line_each_capped_at_14(self):
+    def test_prompt_says_two_stories_are_one_line_each_capped_at_18(self):
         prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_YT_HOURLY
         self.assertIn("ONE full-width line", prompt)
-        self.assertIn("at most 14 characters", prompt)
+        self.assertIn("at most 18 characters", prompt)
 
     def test_single_topic_leaves_the_second_title_empty(self):
         res, _ = self._post({"topics": 1, "title": "新北診所爆C肝群聚 11人確診", "title_second": ""})
@@ -405,3 +405,54 @@ class FrontendWiringTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TenDigestRetryTests(unittest.TestCase):
+    """2026-09-08 晚：十點消化標題常違反三段字數（字太少撐不出三段、或一段 11 字），不合格就重問一次。"""
+
+    def _post(self, payloads, target="ten_cover"):
+        with patch.object(main, "digest_completion",
+                          side_effect=[_completion(p) for p in payloads]) as dc:
+            res = client.post(
+                "/api/editor/cover-titles",
+                json={"news_text": "一則夠長的新聞內文，足以觸發消化流程。", "target": target},
+                headers=_headers(),
+            )
+        return res, dc
+
+    def test_a_compliant_answer_is_accepted_first_time(self):
+        good = {"topics": 1, "title_left": "韓國電力吃緊 擬增二十座 核反應爐", "title_right": ""}
+        res, dc = self._post([good])
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(dc.call_count, 1)
+        self.assertEqual(editor_formats.ten_digest_violations(good), [])
+
+    def test_an_overlong_segment_triggers_one_retry_with_the_reason(self):
+        bad = {"topics": 1, "title_left": "AI熱潮推升韓國電力需求 路透需增建 核反應爐", "title_right": ""}
+        good = {"topics": 1, "title_left": "韓國電力吃緊 擬增二十座 核反應爐", "title_right": ""}
+        res, dc = self._post([bad, good])
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(dc.call_count, 2)
+        self.assertEqual(res.json()["title_left"], good["title_left"])
+        retry_prompt = dc.call_args_list[1].kwargs["system_prompt"]
+        self.assertIn("BROKE THESE RULES", retry_prompt)
+        self.assertIn("AI熱潮推升韓國電力需求", retry_prompt)
+        self.assertNotIn("BROKE THESE RULES", dc.call_args_list[0].kwargs["system_prompt"])
+
+    def test_too_few_characters_also_count_as_a_violation(self):
+        short = {"topics": 1, "title_left": "韓國 缺電 建核", "title_right": ""}
+        problems = editor_formats.ten_digest_violations(short)
+        self.assertTrue(any("must be 4" in p for p in problems), problems)
+        self.assertTrue(any("must be 12" in p for p in problems), problems)
+
+    def test_a_second_bad_answer_is_still_returned_not_looped_forever(self):
+        bad = {"topics": 1, "title_left": "AI熱潮推升韓國電力需求 路透需增建 核反應爐", "title_right": ""}
+        res, dc = self._post([bad, bad])
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(dc.call_count, main.TEN_DIGEST_MAX_ATTEMPTS)
+        self.assertEqual(res.json()["title_left"], bad["title_left"])
+
+    def test_the_hourly_target_never_retries(self):
+        res, dc = self._post([{"topics": 1, "title": "一 二", "title_second": ""}], target="yt_hourly")
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(dc.call_count, 1)

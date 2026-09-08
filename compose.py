@@ -302,9 +302,11 @@ COVER_ONAIR_FILL = (206, 26, 32)
 # COVER_TITLE_FILL_MIN_CHARS 就再拆，但總行數上限 3（白／黃／紅，使用者裁決不能四行）
 # ——不然共同字級會被最長那行拖垮。
 # 滿版是單一標題、沒有另一格可比，維持逐行各自撐滿。
-COVER_TITLE_SIZE_RATIO = 0.11        # 標題起始字級（佔畫面高）
+# 2026-09-08 晚使用者：雙切合成版「字級還是不夠大」。起始字級 0.11→0.135、可用寬 0.90→0.94；
+# 配套是消化標題每段 4–7 字（見 editor_formats），一行 11 字的那種段會把共同字級拖到 0.07。
+COVER_TITLE_SIZE_RATIO = 0.135       # 標題起始字級（佔畫面高）
 COVER_TITLE_MIN_SIZE_RATIO = 0.045
-COVER_TITLE_WIDTH_RATIO = 0.90       # 標題最寬佔該格寬的比例
+COVER_TITLE_WIDTH_RATIO = 0.94       # 標題最寬佔該格寬的比例
 COVER_TITLE_FILL_MIN_CHARS = 7       # 雙切：長度超過這個字數的行就再拆（拆到夠短，共同字級才大）
 COVER_TITLE_TOP_CLEARANCE_RATIO = 0.01   # 標題最上一行的字頂與標頭帶之間留的空隙
 COVER_TITLE_LINE_GAP = 1.06          # 行距（字級倍數）
@@ -873,10 +875,12 @@ YT_LINE1_BASELINE_RATIO = 0.778      # 第一行字底
 YT_LINE2_BASELINE_RATIO = 0.958      # 第二行字底
 YT_TITLE_SIZE_RATIO = 0.145          # 標題起始字級（字高約 100/720）
 YT_TITLE_MIN_SIZE_RATIO = 0.085
-YT_TITLE_STROKE_RATIO = 0.05         # 深色描邊佔字級比例（假粗體吃掉的部分另外補，見 _draw_yt_title_line）
+# 2026-09-08 晚使用者：國內外／熱搜「太粗、複雜的字分不出來」，整點「太細」，兩邊要對齊。
+# 描邊 0.05→0.04、假粗體 0.015→0.008，三種版面統一走 _draw_yt_title_line（整點原本沒假粗體沒陰影）。
+YT_TITLE_STROKE_RATIO = 0.04         # 深色描邊佔字級比例（假粗體吃掉的部分另外補，見 _draw_yt_title_line）
 # 2026-09-08 第二輪：3.5% 太重，第二行黃字筆畫互相黏住、字腔（口、日的內白）被吃掉，
 # 「關閉社群媒體」糊成一團。降到 1.5%——12 字的長行在最小字級下字腔仍然清楚。
-YT_TITLE_BOLD_RATIO = 0.015          # 假粗體：同色描邊佔字級比例
+YT_TITLE_BOLD_RATIO = 0.008          # 假粗體：同色描邊佔字級比例
 YT_TITLE_SHADOW_RATIO = 0.02         # 陰影位移佔字級比例（底色框預設關之後才補的）
 YT_LINE1_FILL = (255, 255, 255)
 YT_LINE2_FILL = (250, 215, 0)
@@ -1206,7 +1210,7 @@ YT_HOURLY_TITLE_SIZE_RATIO = 0.15       # 字高 32/220
 YT_HOURLY_AI_NOTE_TOP_RATIO = 0.34      # LIVE 章（含時間帶）之下的右側空位
 # 「雙則」每行字數上限（2026-09-08 使用者裁決）：兩行各是一則新聞的完整標題，
 # 不是同一句拆兩段，長度沒有天然上限，所以要有一條硬線。單則模式不套用。
-YT_HOURLY_LINE_MAX_CHARS = 14
+YT_HOURLY_LINE_MAX_CHARS = 18          # 2026-09-08 晚使用者：14 放寬到 18
 
 
 def title_display_width(text: str) -> float:
@@ -1308,11 +1312,8 @@ def compose_yt_hourly_cover(
         # 共用字級縮到最小仍塞不下時放著不管就是字被畫框裁掉
         if font.getbbox(text)[2] > max_w:
             raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{text}」（請縮短這一行）")
-        stroke = max(4, round(font.size * YT_TITLE_STROKE_RATIO))
-        _draw_text(
-            draw, (margin, round(height * baseline_ratio)), text, font,
-            fill=fill, stroke=YT_TITLE_STROKE, stroke_width=stroke, anchor="ls",
-        )
+        # 與國內外／熱搜同一支畫字（描邊＋假粗體＋陰影），三種 YT 封面字重對齊
+        _draw_yt_title_line(draw, (margin, round(height * baseline_ratio)), text, font, fill, anchor="ls")
 
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")

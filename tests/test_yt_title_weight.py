@@ -131,7 +131,9 @@ class CounterTests(unittest.TestCase):
         self.assertLess(max(rejected), max(current))
 
     def test_bold_ratio_is_the_value_the_user_asked_for(self):
-        self.assertEqual(compose.YT_TITLE_BOLD_RATIO, 0.015)
+        """2026-09-08 晚第三輪：1.5% 仍「太粗、複雜的字分不出來」→ 0.8%，描邊 5%→4%。"""
+        self.assertEqual(compose.YT_TITLE_BOLD_RATIO, 0.008)
+        self.assertEqual(compose.YT_TITLE_STROKE_RATIO, 0.04)
 
     def test_shadow_offset_was_reduced_too(self):
         self.assertEqual(compose.YT_TITLE_SHADOW_RATIO, 0.02)
@@ -158,7 +160,7 @@ class WeightTests(unittest.TestCase):
 
     def test_bold_has_no_artificial_floor(self):
         """設 max(2, …) 會讓 1.5% 與完全不加粗在常見字級下畫出一模一樣的字。"""
-        self.assertEqual(round(157 * compose.YT_TITLE_BOLD_RATIO), 2)
+        self.assertEqual(round(157 * compose.YT_TITLE_BOLD_RATIO), 1)
 
 
 class ShadowTests(unittest.TestCase):

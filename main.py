@@ -3692,6 +3692,9 @@ class CoverTitleDigestRequest(BaseModel):
     target: Literal["ten_cover", "ten_cover_full", "yt_cover", "yt_hourly"] = "ten_cover"
 
 
+TEN_DIGEST_MAX_ATTEMPTS = 2   # 十點三段字數不合格時最多問幾次（含第一次）
+
+
 class CoverTitleDigestResponse(BaseModel):
     title_left: str = ""
     title_right: str = ""
@@ -3739,22 +3742,34 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
         or os.getenv("OPENAI_DIGEST_MODEL")
         or DEFAULT_DIGEST_MODEL
     )
-    try:
-        response = digest_completion(
-            model=model,
-            system_prompt=system_prompt,
-            news_text=req.news_text.strip(),
-            max_output_tokens=2000,
-            schema_name="cover_titles",
-            schema=schema,
-            site="cover",
-        )
-        data = parse_digest_json(response.choices[0].message.content or "")
-    except Exception as exc:  # noqa: BLE001
-        print(f"[cover-titles] 消化標題失敗：{type(exc).__name__}: {exc}", flush=True)
-        raise HTTPException(status_code=502, detail=f"消化標題失敗：{type(exc).__name__}") from exc
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=502, detail="消化標題失敗：回傳格式不對")
+    ten_family = ten or req.target == "ten_cover_full"
+    data = None
+    # 十點的三段字數（每段 4–7、全篇 12–18）模型常不守（2026-09-08 晚使用者：字太少撐不出三段、
+    # 或一段 11 字把字級拖垮），所以驗一次，不合格就帶著違規原因重問一次；再不合格就照收。
+    for attempt in range(TEN_DIGEST_MAX_ATTEMPTS if ten_family else 1):
+        prompt = system_prompt
+        if attempt:
+            prompt += "\n" + editor_formats.ten_digest_retry_note(data)
+        try:
+            response = digest_completion(
+                model=model,
+                system_prompt=prompt,
+                news_text=req.news_text.strip(),
+                max_output_tokens=2000,
+                schema_name="cover_titles",
+                schema=schema,
+                site="cover",
+            )
+            data = parse_digest_json(response.choices[0].message.content or "")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[cover-titles] 消化標題失敗：{type(exc).__name__}: {exc}", flush=True)
+            raise HTTPException(status_code=502, detail=f"消化標題失敗：{type(exc).__name__}") from exc
+        if not isinstance(data, dict):
+            raise HTTPException(status_code=502, detail="消化標題失敗：回傳格式不對")
+        if not ten_family or not editor_formats.ten_digest_violations(data):
+            break
+        print(f"[cover-titles] 十點標題不合三段規格，重問（第 {attempt + 1} 次）："
+              f"{editor_formats.ten_digest_violations(data)}", flush=True)
     if ten:
         left = _clip_title(data.get("title_left"), 40)
         right = _clip_title(data.get("title_right"), 40)
@@ -4394,7 +4409,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     hourly = req.layout == editor_formats.YT_COVER_LAYOUT_HOURLY
     hot = req.layout == editor_formats.YT_COVER_LAYOUT_HOT
     if dual and req.title_mode == editor_formats.YT_COVER_TITLE_MODE_COMPOSITE:
-        # 雙則每行 14 個全形字寬的上限要在生底圖之前擋（審查必修 2026-09-08）：
+        # 雙則每行 YT_HOURLY_LINE_MAX_CHARS 個全形字寬的上限要在生底圖之前擋（審查必修 2026-09-08）：
         # 放到 compose 才擋，等於燒完兩次生圖才回錯。AI 整張版不套字數擋（字是模型畫的）。
         for label, text in (("第一標題", req.title), ("第二標題", req.title_second)):
             if compose.title_display_width(text.strip()) > compose.YT_HOURLY_LINE_MAX_CHARS:

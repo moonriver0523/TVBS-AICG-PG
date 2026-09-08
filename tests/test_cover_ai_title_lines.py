@@ -90,10 +90,12 @@ class AiPromptTests(unittest.TestCase):
             "layout": "split", "mode": "ai",
         })
         # 2026-09-08：行數與顏色逐行標在清單上（顏色依行序：白／黃／紅）
+        # 2026-09-08 晚起始字級 0.135：6 字的「成氣候衝擊區」在起始字級塞不進半格，超寬防呆
+        # 從中間切成兩行補滿第三行（顏色依行序，紅行就是這樣補出來的）
         for expected in (
-            "(exactly 3 lines", "(exactly 2 lines",
+            "(exactly 3 lines",
             "Line 1 (white): 尼泊爾災區", "Line 2 (yellow): 無人機空拍", "Line 3 (red): 滅村慘況",
-            "Line 1 (white): 台南易淹水", "Line 2 (yellow): 成氣候衝擊區",
+            "Line 1 (white): 台南易淹水", "Line 2 (yellow): 成氣候", "Line 3 (red): 衝擊區",
         ):
             self.assertIn(expected, prompt)
         # 未分行的整條標題不再出現在 prompt 裡

@@ -448,7 +448,7 @@ const EDITOR_FORMATS = {
     // 紅底日期、沒有副標）。
     yt_hourly_cover: {
         label: 'YT整點直播',
-        hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。第二標題填了就是「雙則」：上白＝第一則、下黃＝第二則，每行一整句不拆、最多 14 字，底圖左右兩張羽化拼成一張。附圖與底圖規則同國內外新聞直播。',
+        hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。第二標題填了就是「雙則」：上白＝第一則、下黃＝第二則，每行一整句不拆、最多 18 字，底圖左右兩張羽化拼成一張。附圖與底圖規則同國內外新聞直播。',
         inputs: 'yt_cover',
         ytLayout: 'hourly',
         locks: {},
@@ -485,7 +485,7 @@ function coverLayoutNow() {
 /* YT 整點直播這一刻是單則還是雙則（2026-09-08 WP2）。判定只有一條規則：
    第二標題有值＝雙則（同一張底圖上下兩行，上白＝第一則、下黃＝第二則）。
    國內外新聞直播與今日熱搜沒有這個版面，一律 single。 */
-const YT_HOURLY_LINE_MAX_CHARS = 14;
+const YT_HOURLY_LINE_MAX_CHARS = 18;
 // 顯示寬度：全形算 1、半形算 0.5，跟後端 compose.title_display_width 同一套
 function displayWidth(text) {
     let w = 0;
@@ -2134,7 +2134,7 @@ function showYtCoverResult(data, fields) {
 async function handleYtCoverGenerate(recomposeOnly = false) {
     const fields = ytCoverFields();
     if (!fields.title) return showToast('請輸入直播標題');
-    // 雙則每行最多 14 個全形字寬（半形算半字），送出前先擋，別燒完兩次生圖才被後端退
+    // 雙則每行最多 YT_HOURLY_LINE_MAX_CHARS 個全形字寬（半形算半字），送出前先擋，別燒完兩次生圖才被後端退
     if (fields.title_second && fields.title_mode !== 'ai') {
         const tooLong = [['第一標題', fields.title], ['第二標題', fields.title_second]]
             .find(([, t]) => displayWidth(t) > YT_HOURLY_LINE_MAX_CHARS);

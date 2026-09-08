@@ -386,7 +386,7 @@ FIRST decide how many stories the article carries, and say so in "topics":
 THEN write the headlines.
 - When "topics" is 1: write ONE headline into "title_left" for the core of that story, and leave "title_right" as an empty string.
 - When "topics" is 2: write "title_left" for the story that appears FIRST in the article and "title_right" for the one that appears second. Keep the two headlines about their own story only — never repeat the same facts in both.
-- Each headline is EXACTLY 3 segments separated by ONE half-width space (two spaces in total, never one, never three); each segment 3–7 characters; whole headline at most 18 characters excluding spaces. Each segment becomes one printed line, coloured white / yellow / red in order, so a headline with only two segments loses its red line — that is a defect.
+- Each headline is EXACTLY 3 segments separated by ONE half-width space (two spaces in total, never one, never three); each segment 4–7 characters, NEVER more than 7; whole headline 12–18 characters excluding spaces (fewer than 12 leaves the cover half empty — that is a defect). Each segment becomes one printed line, coloured white / yellow / red in order, so a headline with only two segments loses its red line — that is a defect. A segment longer than 7 characters shrinks every line on the cover — also a defect.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
 """
@@ -396,7 +396,7 @@ COVER_TITLE_DIGEST_SYSTEM_TEN_FULL = """You write the single headline for a Taiw
 
 Return JSON with "title".
 - One punchy Traditional Chinese (Taiwan) headline for the core of the story.
-- EXACTLY 3 segments separated by ONE half-width space (two spaces in total, never one, never three); each segment 3–7 characters; whole headline at most 18 characters excluding spaces. Each segment becomes one printed line, coloured white / yellow / red in order, so a headline with only two segments loses its red line — that is a defect.
+- EXACTLY 3 segments separated by ONE half-width space (two spaces in total, never one, never three); each segment 4–7 characters, NEVER more than 7; whole headline 12–18 characters excluding spaces (fewer than 12 leaves the cover half empty — that is a defect). Each segment becomes one printed line, coloured white / yellow / red in order, so a headline with only two segments loses its red line — that is a defect.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
 """
@@ -408,6 +408,43 @@ Return JSON with "title".
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
 """
+
+TEN_DIGEST_SEGMENT_MIN = 4
+TEN_DIGEST_SEGMENT_MAX = 7
+TEN_DIGEST_TOTAL_MIN = 12
+TEN_DIGEST_TOTAL_MAX = 18
+
+
+def ten_digest_violations(data: dict | None) -> list[str]:
+    """十點消化標題的三段規格驗證：每段 4–7 字、全篇 12–18 字（不含空白）、剛好 3 段。
+
+    回違規描述清單（空＝合格）。同時看 title_left／title_right（雙切）與 title（滿版）。
+    """
+    if not isinstance(data, dict):
+        return ["not a JSON object"]
+    problems = []
+    for key in ("title_left", "title_right", "title"):
+        text = str(data.get(key) or "").strip()
+        if not text:
+            continue
+        segments = [seg for seg in split_cover_title(text) if seg.strip()]
+        total = sum(len(seg) for seg in segments)
+        if len(segments) != 3:
+            problems.append(f'"{key}" has {len(segments)} segments, must be exactly 3')
+        for seg in segments:
+            if not TEN_DIGEST_SEGMENT_MIN <= len(seg) <= TEN_DIGEST_SEGMENT_MAX:
+                problems.append(f'"{key}" segment 「{seg}」 is {len(seg)} characters, must be {TEN_DIGEST_SEGMENT_MIN}–{TEN_DIGEST_SEGMENT_MAX}')
+        if not TEN_DIGEST_TOTAL_MIN <= total <= TEN_DIGEST_TOTAL_MAX:
+            problems.append(f'"{key}" is {total} characters excluding spaces, must be {TEN_DIGEST_TOTAL_MIN}–{TEN_DIGEST_TOTAL_MAX}')
+    return problems
+
+
+def ten_digest_retry_note(data: dict | None) -> str:
+    """重問時附在 system prompt 後面的違規說明。"""
+    lines = "\n".join(f"- {item}" for item in ten_digest_violations(data))
+    return ("YOUR PREVIOUS ANSWER BROKE THESE RULES — rewrite the headline(s) so every rule holds:\n"
+            + lines + "\nCount the characters of each segment before you answer.")
+
 
 COVER_TITLE_DIGEST_SCHEMA_TEN = {
     "type": "object",
@@ -441,7 +478,7 @@ FIRST decide how many stories the article carries, and say so in "topics":
 
 THEN write the headlines.
 - When "topics" is 1: write ONE headline into "title" and leave "title_second" as an empty string. That headline is made of exactly TWO segments separated by ONE half-width space, each segment 5–12 characters; the two segments are printed as two lines, the first stating the event and the second the key detail or consequence.
-- When "topics" is 2: write "title" for the story that appears FIRST in the article and "title_second" for the one that appears second. Each of the two is ONE continuous headline printed as ONE full-width line, so it carries NO space at all and must be at most 14 characters. Keep each headline about its own story only — never repeat the same facts in both.
+- When "topics" is 2: write "title" for the story that appears FIRST in the article and "title_second" for the one that appears second. Each of the two is ONE continuous headline printed as ONE full-width line, so it carries NO space at all and must be at most 18 characters. Keep each headline about its own story only — never repeat the same facts in both.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
 """
