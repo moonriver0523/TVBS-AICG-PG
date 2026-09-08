@@ -26,17 +26,16 @@ GREY = (90, 90, 90)
 
 
 def _stamp_zone_ink(img: Image.Image) -> int:
-    """圓章區（水平正中、頂端貼齊畫面上緣）裡非底色的像素數。"""
+    """「精華」標籤區（標頭帶中段、水平正中）裡非底色的像素數。"""
     w, h = img.size
-    d = round(h * compose.COVER_STAMP_HEIGHT_RATIO)
-    top = round(h * compose.COVER_STAMP_TOP_RATIO)
-    zone = img.crop((w // 2 - d // 2, top, w // 2 + d // 2, min(h, top + d))).convert("RGB")
+    from test_ten_cover import _highlight_tag_box
+    zone = img.crop(_highlight_tag_box(w, h)).convert("RGB")
     raw = zone.tobytes()
     return sum(1 for r, g, b in zip(raw[0::3], raw[1::3], raw[2::3]) if abs(r - GREY[0]) + abs(g - GREY[1]) + abs(b - GREY[2]) > 60)
 
 
 class PasteStampTests(unittest.TestCase):
-    def test_paste_stamp_marks_top_centre_and_scales_to_canvas(self):
+    def test_paste_tag_lands_in_the_header_band_and_scales_to_canvas(self):
         for size in ((1920, 1080), (1536, 864)):
             base = _png_bytes(size=size, colour=GREY)
             before = Image.open(io.BytesIO(base))

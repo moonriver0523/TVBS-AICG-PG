@@ -40,6 +40,16 @@ def _data_url(raw: bytes) -> str:
     return "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
 
 
+def _highlight_tag_box(w: int, h: int) -> tuple[int, int, int, int]:
+    """「精華」紅刷筆標籤在畫布上的方框（與 compose._draw_cover_highlight_stamp 同一套推導）。"""
+    band_h = round(h * compose.COVER_HEADER_RATIO)
+    tag_h = round(band_h * compose.COVER_STAMP_BAND_RATIO)
+    with Image.open(compose.TEN_HIGHLIGHT_TAG) as tpl:
+        tag_w = round(tpl.width * tag_h / tpl.height)
+    y0 = (band_h - tag_h) // 2
+    return ((w - tag_w) // 2, y0, (w - tag_w) // 2 + tag_w, y0 + tag_h)
+
+
 def _ai_note_region_is_plate(img: Image.Image, align_right: bool) -> bool:
     """「AI示意圖」小標位置是否有半透明黑底（比底圖暗很多）。"""
     w, h = img.size
@@ -152,17 +162,16 @@ class ComposeTests(unittest.TestCase):
         # 右半帶（日期／ON AIR 由模型畫）不動
         self.assertEqual(count((w // 2, 0, w, band_h), lambda p: p != (12, 20, 60)), 0)
 
-    def test_highlight_badge_pastes_round_stamp_top_centre(self):
-        """精華：標頭仍 ON AIR，畫面頂端中央貼藍光圓章（模板），非精華時該區不出現亮藍環。
+    def test_highlight_badge_pastes_red_brush_tag_in_the_header_band(self):
+        """精華：標頭仍 ON AIR，標頭帶中段貼紅色刷筆標籤（模板），非精華時該區維持深藍。
 
-        2026-09-08 使用者實測：原本在底部標題區上方（TOP_RATIO 0.67）會壓到標題，改到頂端中段。
+        2026-09-08 使用者兩次裁決：先是原本的深藍圓章跨在底部標題區上會壓到標題，
+        接著整個樣式換成紅色刷筆底＋白字的橫式標籤，位置改到標頭帶中段。
         """
         on_air = self._cover(badge="on_air")
         highlight = self._cover(badge="highlight")
         w, h = highlight.size
-        stamp_h = round(h * compose.COVER_STAMP_HEIGHT_RATIO)
-        top = round(h * compose.COVER_STAMP_TOP_RATIO)
-        box = (w // 2 - stamp_h // 2, top, w // 2 + stamp_h // 2, top + stamp_h)
+        box = _highlight_tag_box(w, h)
 
         def pixels(img):
             raw = img.crop(box).tobytes()
@@ -170,29 +179,33 @@ class ComposeTests(unittest.TestCase):
 
         hi, base = pixels(highlight), pixels(on_air)
         changed = sum(1 for a, b in zip(hi, base) if a != b) / len(hi)
-        self.assertGreater(changed, 0.5)          # 圓章確實蓋在這個區域
-        yellow = sum(1 for r, g, b in hi if r > 200 and g > 170 and b < 90) / len(hi)
-        self.assertGreater(yellow, 0.02)          # 「十點／精華」黃字
+        self.assertGreater(changed, 0.5)          # 標籤確實蓋在這個區域
+        red = sum(1 for r, g, b in hi if r > 140 and g < 90 and b < 90) / len(hi)
+        self.assertGreater(red, 0.2)              # 紅色刷筆底
+        white = sum(1 for r, g, b in hi if r > 225 and g > 225 and b > 225) / len(hi)
+        self.assertGreater(white, 0.01)           # 白字「精華」
+        # 非精華時同一塊是標頭帶的深藍
+        self.assertEqual(on_air.getpixel((w // 2, round(h * compose.COVER_HEADER_RATIO * 0.5))), compose.COVER_HEADER_FILL)
         # 標頭右側仍是 ON AIR 紅標（精華不再是標頭紅字）
         band_h = round(h * compose.COVER_HEADER_RATIO)
         head = highlight.crop((w - 300, 0, w, band_h)).tobytes()
         reds = sum(1 for r, g, b in zip(head[0::3], head[1::3], head[2::3]) if r > 180 and g < 60)
         self.assertGreater(reds, 500)
 
-    def test_highlight_stamp_clears_the_title_area_and_the_header_contents(self):
-        """圓章移到頂端中央（2026-09-08）後，標題區與標頭帶左右兩端都不能被動到。
+    def test_highlight_tag_clears_the_title_area_and_the_header_contents(self):
+        """標籤只能待在標頭帶中段：標題區與標頭帶左右兩端都不能被動到。
 
-        使用者實測回報的正是「壓到標題」；標頭帶左半是 Logo＋節目標籤、右端是日期＋ON AIR，
-        圓章只能待在中段那塊空白。
+        使用者實測回報的正是「壓到標題」；標頭帶左半是 Logo＋節目標籤、右端是日期＋ON AIR。
         """
         on_air, highlight = self._cover(badge="on_air"), self._cover(badge="highlight")
         w, h = highlight.size
         band_h = round(h * compose.COVER_HEADER_RATIO)
-        stamp_h = round(h * compose.COVER_STAMP_HEIGHT_RATIO)
+        x0, _, x1, y1 = _highlight_tag_box(w, h)
         for name, box in (
             ("標題區", (0, round(h * 0.55), w, h)),
-            ("標頭帶左半（Logo／節目標籤）", (0, 0, w // 2 - stamp_h, band_h)),
-            ("標頭帶右端（日期／ON AIR）", (w // 2 + stamp_h, 0, w, band_h)),
+            ("標頭帶以下", (0, band_h + 2, w, h)),
+            ("標頭帶左半（Logo／節目標籤）", (0, 0, x0 - 2, band_h)),
+            ("標頭帶右端（日期／ON AIR）", (x1 + 2, 0, w, band_h)),
         ):
             with self.subTest(zone=name):
                 self.assertEqual(highlight.crop(box).tobytes(), on_air.crop(box).tobytes())

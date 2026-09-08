@@ -34,7 +34,10 @@ TVBS_LOGO_WHITE = BRAND_DIR / "tvbs-logo-white.png"
 TEN_SHOW_TAG = BRAND_DIR / "ten-show-tag.png"  # 2026-09-07 換成正版樣式：藍色斜切、金「十」＋白字、NEWS NIGHT
 HOT_SEARCH_TAG = BRAND_DIR / "hot-search-tag.png"  # 「今日｜熱搜🔍」紅色三格標籤
 TEN_BOTTOM_LINE = BRAND_DIR / "ten-bottom-line.png"  # 十點封面底部：深藍帶＋發光直線（依 0901／0902 原版）
-TEN_HIGHLIGHT_STAMP = BRAND_DIR / "ten-highlight-stamp.png"  # 精華圓章：深藍圓＋藍光環＋「十點不一樣／精華」（依 0819 原版）
+# 2026-09-08 使用者裁決：「精華」改成紅色刷筆底＋白字的橫式標籤，貼在標頭帶中段。
+# 舊的圓章檔保留不刪（0819 原版樣式，之後要對照或還原時還在），但已經沒有程式碼引用它。
+TEN_HIGHLIGHT_TAG = BRAND_DIR / "ten-highlight-tag.png"      # 精華標籤：紅色刷筆底＋白字「精華」，左右有刷痕
+TEN_HIGHLIGHT_STAMP = BRAND_DIR / "ten-highlight-stamp.png"  # 舊版精華圓章（2026-09-08 起停用，檔案保留）
 
 # 中文字型：Pillow 不吃系統字型後備，必須指名檔案。依序找，第一個存在的就用。
 #
@@ -310,17 +313,17 @@ COVER_SHADE_ALPHA = 190
 
 COVER_SHOW_NAME = "十點不一樣"
 COVER_AI_NOTE = "AI示意圖"
-# 2026-09-07：精華不再是標頭紅標；原版做法（0819／0805）是標頭照樣 ON AIR，
-# 另貼一枚「十點不一樣 精華」圓章（模板 TEN_HIGHLIGHT_STAMP）；2026-09-08 起移到畫面頂端中央。
+# 2026-09-07：精華不再是標頭紅標；標頭照樣 ON AIR，另貼一枚「精華」標籤。
+# 2026-09-08 使用者裁決：從 0819 原版的深藍圓章改成**紅色刷筆底＋白字的橫式標籤**
+# （模板 TEN_HIGHLIGHT_TAG），位置從畫面中下方（會壓到標題）改到標頭帶中段。
 COVER_BADGES = {
     "on_air": ("ON AIR", (206, 26, 32)),
     "highlight": ("ON AIR", (206, 26, 32)),
 }
 COVER_DEFAULT_BADGE = "on_air"
-# 2026-09-08 使用者實測：0.67（跨在底部標題區上）會壓到標題。改成水平置中、頂端貼齊
-# 畫面上緣——標頭帶只有左半（Logo＋節目標籤）與右端（日期＋ON AIR）有東西，中段本來就空。
-COVER_STAMP_HEIGHT_RATIO = 0.21      # 精華圓章直徑佔畫布高
-COVER_STAMP_TOP_RATIO = 0.01         # 圓章頂端位置（貼齊畫面上緣，壓在標頭帶中段）
+# 幾何比照 paste_cover_logo／節目標籤：以標頭帶高為準，佔帶高 80%，水平與垂直都置中。
+# 標頭帶只有左半（Logo＋節目標籤）與右端（日期＋ON AIR）有東西，中段本來就空。
+COVER_STAMP_BAND_RATIO = 0.80        # 精華標籤高度佔標頭帶高的比例
 COVER_MAX_TITLE_LINES = 3
 
 
@@ -444,19 +447,23 @@ def _draw_cover_bottom_line(canvas: Image.Image) -> None:
 
 
 def _draw_cover_highlight_stamp(canvas: Image.Image) -> None:
-    """精華圓章：貼模板於畫面水平正中、頂端貼齊畫面上緣（壓在標頭帶中段）。
+    """精華標籤：紅色刷筆模板，貼在標頭帶中段（水平置中、垂直置中於帶內）。
 
-    2026-09-08 使用者實測回報：原本照 0819 原版跨在底部標題區上（TOP_RATIO 0.67），
-    實際會壓到標題。標頭帶中段本來就是空的，圓章移上去兩邊都不打架。
+    2026-09-08 使用者兩次裁決：先是實測回報原本的深藍圓章跨在底部標題區上（TOP_RATIO 0.67）
+    會壓到標題，接著把樣式整個換成紅色刷筆底＋白字的橫式標籤（TEN_HIGHLIGHT_TAG）。
+    標頭帶只有左半與右端有東西，中段本來就空，兩邊都不打架。
 
     幾何以**傳進來的畫布**的尺寸為準，不是 COVER_CANVAS：純 AI 版直接貼在模型回來的
     原圖上，那張的解析度是模型決定的（2026-09-07 起 paste_cover_highlight_stamp 共用這支）。
+    帶高一律用比例算（合成版 COVER_HEADER_RATIO、AI 版 COVER_AI_HEADER_RATIO 都是十分之一上下，
+    這裡取合成版那個值，AI 版的圖也對得上）。
     """
     width, height = canvas.size
-    stamp_h = round(height * COVER_STAMP_HEIGHT_RATIO)
-    with Image.open(TEN_HIGHLIGHT_STAMP) as tpl:
-        stamp_w = round(tpl.width * stamp_h / tpl.height)
-    _paste_template(canvas, TEN_HIGHLIGHT_STAMP, ((width - stamp_w) // 2, round(height * COVER_STAMP_TOP_RATIO)), stamp_h)
+    band_h = round(height * COVER_HEADER_RATIO)
+    tag_h = round(band_h * COVER_STAMP_BAND_RATIO)
+    with Image.open(TEN_HIGHLIGHT_TAG) as tpl:
+        tag_w = round(tpl.width * tag_h / tpl.height)
+    _paste_template(canvas, TEN_HIGHLIGHT_TAG, ((width - tag_w) // 2, (band_h - tag_h) // 2), tag_h)
 
 
 def _draw_cover_header(draw: ImageDraw.ImageDraw, canvas: Image.Image, date_text: str, badge: str) -> int:

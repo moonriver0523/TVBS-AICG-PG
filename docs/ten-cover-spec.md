@@ -11,14 +11,15 @@
 - **標頭帶**：畫面頂端 10.5% 高的深藍帶，底緣一條亮藍細線。由左至右：正版白色 Logo、
   「十點不一樣」節目標籤（**貼模板** `static/brand/ten-show-tag.png`：2026-09-07 使用者給的正版樣式——藍色斜切、
   金色「十」＋白字「點不一樣」、下行 NEWS NIGHT，gpt-image-2 重繪、透明底，高度佔帶高 80%；不再用程式畫）、日期（白字）、ON AIR 紅色標籤（前有白點）。
-- **精華**：標頭照樣是 ON AIR，另在畫面水平正中、**頂端貼齊畫面上緣**（`COVER_STAMP_TOP_RATIO`=0.01）
-  貼一枚圓章模板 `static/brand/ten-highlight-stamp.png`（深藍圓＋藍色光環＋「十點不一樣／精華」黃字，
-  直徑佔畫布高 21%，gpt-image-2 依型錄 0819 原版重繪）。2026-09-07 起取代原本標頭紅字「精華」。
-  **2026-09-08 使用者實測回報「壓到標題」**：原本照 0819 原版跨在底部標題區上（0.67），改到標頭帶中段——
+- **精華**：標頭照樣是 ON AIR，另在**標頭帶中段**貼一枚「精華」標籤模板
+  `static/brand/ten-highlight-tag.png`（**紅色刷筆底＋白字「精華」，左右邊緣有刷痕**，1466×506 透明底）。
+  幾何比照 Logo 與節目標籤：高度佔標頭帶高 80%（`COVER_STAMP_BAND_RATIO`），水平置中、垂直置中於帶內。
+  2026-09-07 起取代原本標頭紅字「精華」；**2026-09-08 兩次裁決**：先是使用者實測回報原本的深藍圓章
+  跨在底部標題區上（`COVER_STAMP_TOP_RATIO`=0.67）會壓到標題，接著把樣式整個換成紅色刷筆橫式標籤。
   標頭帶只有左半（Logo＋節目標籤）與右端（日期＋ON AIR）有東西，中段本來就空；兩個 AI 模板的
-  HARD CONSTRAINTS 也明文「只有日期與紅標在標頭帶、位置在右端」，不會跟圓章搶位。
-  合成版與 AI 版共用 `_draw_cover_highlight_stamp`，改常數即可；不越界由
-  `test_highlight_stamp_clears_the_title_area_and_the_header_contents` 守著。
+  HARD CONSTRAINTS 也明文「只有日期與紅標在標頭帶、位置在右端」，不會跟標籤搶位。
+  合成版與 AI 版共用 `_draw_cover_highlight_stamp`。舊圓章 `ten-highlight-stamp.png` **檔案保留但已無引用**。
+  不越界由 `test_highlight_tag_clears_the_title_area_and_the_header_contents` 守著。
 - **AI示意圖**：標頭帶下方、各格外側角落的半透明黑底小標，**只有 AI 底圖那格才印**。
 - **標題**：各格下緣，左格靠左、右格靠右，最多 3 行由下往上堆，**逐行各自撐滿格寬**（短行大、長行小，
   字級上限佔畫布高 11%，短行最多比最寬行大 1.5 倍 `COVER_TITLE_LINE_SIZE_SPREAD`，2026-09-07 起；
