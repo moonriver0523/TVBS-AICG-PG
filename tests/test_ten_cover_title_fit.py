@@ -119,7 +119,9 @@ class FitTests(unittest.TestCase):
 class TooLongTests(unittest.TestCase):
     def test_hopeless_title_returns_400_not_overflowing_image(self):
         body = {
-            "title_left": "這是一段完全沒有空格也沒有數量詞可以拆的超級無敵長標題文字測試用途", "title_right": "右格 標題",
+            # 2026-09-08 版位由 0.84 放寬到 0.90 後，原本那則 32 字的標題在最小字級下塞得進了
+            # （拆成 16／8／8，16 字 × 49px＝784 ≤ 797），改用更長的一則才仍是「真的塞不下」。
+            "title_left": "這是一段完全沒有空格也沒有數量詞可以拆的超級無敵長標題文字測試用途請勿縮短", "title_right": "右格 標題",
             "mode": "composite", "layout": "split",
             "asis_left": _data_url(_png_bytes(size=(1024, 1024))), "asis_right": _data_url(_png_bytes(size=(1024, 1024))),
         }

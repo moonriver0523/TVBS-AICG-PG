@@ -286,10 +286,13 @@ COVER_MARGIN = 26                    # 內容離左右畫框的距離
 COVER_ONAIR_FILL = (206, 26, 32)
 # 2026-09-07 使用者回報「字明顯太小」：起始字級 0.085 → 0.11，且雙切也改成逐行各自撐滿
 # （比照 AI 版：每行依自己的寬度決定字級，短行大、長行小），不再全格同字級。
+# 2026-09-08 使用者回報「雙切標題字太小、只有白黃兩行沒有紅字」：版位放寬到 0.90、
+# 短行放寬到 1.5 倍，並補「補到 3 行」規則（COVER_TITLE_FILL_MIN_CHARS，見 _fill_cover_title_lines）。
 COVER_TITLE_SIZE_RATIO = 0.11        # 標題起始字級（佔畫面高）
-COVER_TITLE_LINE_SIZE_SPREAD = 1.35  # 雙切：短行最多比最寬行大這麼多倍，免得一行巨大一行極小
+COVER_TITLE_LINE_SIZE_SPREAD = 1.5   # 雙切：短行最多比最寬行大這麼多倍，免得一行巨大一行極小
 COVER_TITLE_MIN_SIZE_RATIO = 0.045
-COVER_TITLE_WIDTH_RATIO = 0.84       # 標題最寬佔該格寬的比例
+COVER_TITLE_WIDTH_RATIO = 0.90       # 標題最寬佔該格寬的比例
+COVER_TITLE_FILL_MIN_CHARS = 9       # 雙切：行數不足 3 行時，長度到這個字數的行再拆一次
 COVER_TITLE_LINE_GAP = 1.06          # 行距（字級倍數）
 COVER_TITLE_BOTTOM_RATIO = 0.085     # 最後一行字底離畫面底的距離
 # 滿版（單一標題，2026-09-07 使用者裁決）：比照今日熱搜，標題橫跨整個畫面寬、置中，
@@ -553,6 +556,28 @@ def wrap_cover_title_lines(lines: list[str], max_w: int, size: int, max_lines: i
     return lines
 
 
+def _fill_cover_title_lines(lines: list[str], max_lines: int = COVER_MAX_TITLE_LINES) -> list[str]:
+    """雙切專用「補到 3 行」（2026-09-08 使用者回報：只有白黃兩行、沒有紅字）。
+
+    `wrap_cover_title_lines` 只在**塞不進格寬**時才拆，兩行都塞得進就維持兩行——第三行的
+    紅字永遠不出現，字級也被最寬的那一行壓著。這裡在寬度之外再補一條純字數規則：行數不足
+    max_lines 時，把最長的一行（≥ COVER_TITLE_FILL_MIN_CHARS 字）從中間再拆一次，重複到
+    湊滿行數或沒有夠長的行為止。短標題（「勞保撥補 上看1300億」）不受影響。
+
+    滿版（full_width）不套：它本來就整寬置中，一行塞得下就不該硬拆。
+    """
+    lines = list(lines)
+    while len(lines) < max_lines:
+        idx = max(range(len(lines)), key=lambda i: len(lines[i]))
+        if len(lines[idx]) < COVER_TITLE_FILL_MIN_CHARS:
+            break
+        head, tail = _split_line_near_middle(lines[idx])
+        if not head.strip() or not tail.strip():
+            break
+        lines[idx : idx + 1] = [head, tail]
+    return lines
+
+
 def _cover_title_metrics(panel_w: int, full_width: bool) -> tuple[int, int, int]:
     """一格標題的 (可用寬, 起始字級, 最小字級)。合成版與 AI 版共用同一套推導。"""
     height = COVER_CANVAS[1]
@@ -583,7 +608,8 @@ def cover_title_lines(title: str, *, full_width: bool = False) -> list[str]:
     if not lines:
         return []
     max_w, size, _ = _cover_title_metrics(cover_title_panel_width(full_width), full_width)
-    return wrap_cover_title_lines(lines, max_w, size)
+    lines = wrap_cover_title_lines(lines, max_w, size)
+    return lines if full_width else _fill_cover_title_lines(lines)
 
 
 def _draw_cover_title(
@@ -601,6 +627,8 @@ def _draw_cover_title(
     panel_w = panel_x1 - panel_x0
     max_w, size, min_size = _cover_title_metrics(panel_w, full_width)
     lines = wrap_cover_title_lines(lines, max_w, size)
+    if not full_width:
+        lines = _fill_cover_title_lines(lines)
     fonts = [_fit_font(ln, max_w, size, min_size) for ln in lines]
     if not full_width:
         # 雙切：短行不能比最寬行大太多（AI 版三行字級相近），滿版維持今日熱搜式逐行撐滿
