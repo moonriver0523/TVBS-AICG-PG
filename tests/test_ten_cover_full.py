@@ -30,11 +30,13 @@ def _decode(data) -> Image.Image:
 
 class FormatTableTests(unittest.TestCase):
     def test_two_independent_formats(self):
-        self.assertEqual(editor_formats.cover_layout("ten_cover"), "split")
+        # 2026-09-08 WP1：兩個版型合併成一個 key，版面由第二標題自動判定（auto）。
+        # 舊 key ten_cover_full 降為後端別名，仍然要解析得出「滿版」。
+        self.assertEqual(editor_formats.cover_layout("ten_cover"), "auto")
         self.assertEqual(editor_formats.cover_layout("ten_cover_full"), "full")
         self.assertEqual(editor_formats.cover_layout("default"), "")
         self.assertIn("滿版", editor_formats.get("ten_cover_full")["label"])
-        self.assertIn("雙切", editor_formats.get("ten_cover")["label"])
+        self.assertEqual(editor_formats.get("ten_cover")["label"], "十點不一樣")
 
     def test_full_prompt_has_one_photo_and_one_headline(self):
         text = editor_formats.COVER_AI_FULL_PROMPT_TEMPLATE.format(
