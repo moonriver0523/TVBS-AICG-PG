@@ -468,11 +468,29 @@
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                    placeholder="挪威國王哈拉德辭世 開放公眾瞻仰遺容" />
                         </div>
+                        <!-- 整點直播的第二標題（2026-09-08 WP2）：填了就雙切，做法對齊十點不一樣 -->
+                        <div id="ytCoverTitleSecondRow" class="hidden">
+                            <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">第二標題（選填，填了就雙切）</label>
+                            <input id="ytCoverTitleSecond" type="text" maxlength="60"
+                                   oninput="updateYtLayoutIndicator()"
+                                   class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
+                                   placeholder="直播帶貨美國爆紅 砸數十億美元" />
+                            <div id="ytLayoutIndicator" class="hidden flex items-center gap-1.5 mt-1.5">
+                                <span class="text-[9px] font-black text-slate-600">版面</span>
+                                <button type="button" data-yt-layout="full" onclick="focusYtLayoutField()"
+                                        title="只填第一標題＝滿版（一張底圖、兩行標題）"
+                                        class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-500 hover:text-white">滿版</button>
+                                <button type="button" data-yt-layout="split" onclick="focusYtLayoutField()"
+                                        title="兩個標題都填＝雙切（左右各一格底圖與標題）；點這裡只會把游標移到第二標題"
+                                        class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-500 hover:text-white">雙切</button>
+                                <span class="text-[9px] text-slate-600">判定結果，不是開關</span>
+                            </div>
+                        </div>
                         <div class="flex flex-col gap-1">
                             <textarea id="ytCoverNewsText" rows="3" maxlength="20000"
                                       class="w-full bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-300 input-focus-ring resize-y"
                                       placeholder="新聞內文（選填）——貼上後按「AI 消化標題」，標題會回填到上方欄位，看過再按生成"></textarea>
-                            <button type="button" onclick="handleCoverTitleDigest('yt_cover')"
+                            <button type="button" onclick="handleCoverTitleDigest(ytCoverDigestTarget())"
                                     class="self-start px-2.5 py-1 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all">AI 消化標題</button>
                         </div>
                         <div class="flex items-center gap-2">

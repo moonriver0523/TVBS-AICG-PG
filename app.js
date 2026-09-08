@@ -373,6 +373,10 @@ let state = {
     // YT 封面底部壓色框（2026-09-08）：預設關——原本 80% 不透明的帶子把照片下半整片吃掉。
     // 開的時候只有 60%（後端 compose.YT_BAND_ALPHA）。整點直播的版面沒有底帶，按鈕不顯示。
     ytBottomBand: false,
+    // YT 整點雙切（2026-09-08 WP2）的兩格壓字前底圖，給「只改文字」重壓用。
+    // 不走 refineSource：雙切成品是兩張圖拼的，餵回生圖模型改圖會把中線與另一格重畫，
+    // 所以雙切一律沒有「追加修改」，底圖只留在這裡（比照 state.tenCoverBackground）。
+    ytSplitBackgrounds: null,
     refineStack: []
 };
 
@@ -482,6 +486,13 @@ function coverLayoutNow() {
     return right ? 'split' : 'full';
 }
 
+/* YT 整點直播這一刻是滿版還是雙切（2026-09-08 WP2）。判定與十點同一條規則：
+   第二標題有值＝雙切。國內外新聞直播與今日熱搜沒有雙切，一律 full。 */
+function ytLayoutNow() {
+    if ((editorFormat().ytLayout || '') !== 'hourly') return 'full';
+    return (document.getElementById('ytCoverTitleSecond')?.value || '').trim() ? 'split' : 'full';
+}
+
 /* ============================================================
    下載檔名（2026-09-08 使用者回饋 A）：全站所有版型共用一支。
    留空 → YYYYMMDD_<版型短名>_<標題前 8 字>；有填 → 使用者字串。
@@ -494,7 +505,7 @@ const DOWNLOAD_FORMAT_NAMES = {
     broadcast: { left: '播出鏡面左', right: '播出鏡面右' },
     ten_cover: { full: '十點滿版', split: '十點雙切' },
     yt_live_cover: 'YT直播',
-    yt_hourly_cover: 'YT整點',
+    yt_hourly_cover: { full: 'YT整點', split: 'YT整點雙切' },
     yt_hot_cover: 'YT熱搜',
 };
 const DOWNLOAD_NAME_ILLEGAL = /[\\/:*?"<>|\r\n]/g;
@@ -506,8 +517,10 @@ function downloadFormatName(kind) {
     if (key === EDITOR_FORMAT_DEFAULT && state.currentRole !== '編輯') return 'CG';
     const name = DOWNLOAD_FORMAT_NAMES[key] || DOWNLOAD_FORMAT_NAMES[EDITOR_FORMAT_DEFAULT];
     if (typeof name === 'string') return name;
-    // 巢狀：十點用判定後的版面、播出鏡面用挖空側
-    return name[key === 'ten_cover' ? coverLayoutNow() : state.holeSide] || name.left || name.full;
+    // 巢狀：十點與 YT 整點用判定後的版面、播出鏡面用挖空側
+    if (key === 'ten_cover') return name[coverLayoutNow()] || name.full;
+    if (key === 'yt_hourly_cover') return name[ytLayoutNow()] || name.full;
+    return name[state.holeSide] || name.left || name.full;
 }
 
 /* 標題來源：封面用左標題／YT 用標題欄／一般 CG 用消化出的 [標題] 行 */
@@ -938,6 +951,10 @@ function applyEditorFormatInputs() {
     const ytDateField = document.getElementById('ytCoverDate');
     if (flagRow) flagRow.classList.toggle('hidden', hourly || hot);
     if (timeField) timeField.classList.toggle('hidden', !hourly);
+    // 整點雙切（2026-09-08 WP2）：第二標題欄與指示器只有整點版型看得到
+    const secondRow = document.getElementById('ytCoverTitleSecondRow');
+    if (secondRow) secondRow.classList.toggle('hidden', !hourly);
+    updateYtLayoutIndicator();
     if (ytDateField) ytDateField.classList.toggle('hidden', hot);
     // 封面模式完全沒有消化這一段，版面形式用不到，整組收起來
     if (digestRow) digestRow.classList.toggle('hidden', wantsCover || wantsYt);
@@ -954,6 +971,8 @@ function setEditorFormat(key) {
     // 換版型就丟掉上一版的壓字前底圖：滿版的底圖送進雙切會被後端擋（400），留著只會誤導。
     // 只在這裡清——applyEditorFormatInputs 換角色也會走，放那邊會把還能用的底圖洗掉。
     state.tenCoverBackground = null;
+    // 同理：上一個版型的雙切底圖對新版型沒有意義（滿版只需要一張），留著只會誤導
+    state.ytSplitBackgrounds = null;
     const coverRecompose = document.getElementById('coverRecomposeBtn');
     if (coverRecompose) coverRecompose.disabled = true;
     renderEditorFormats();
@@ -1193,6 +1212,35 @@ function updateCoverLayoutIndicator() {
 // 那是使用者自己的決定，不由按鈕代勞——所以兩顆都只做「把游標移過去」。
 function focusCoverLayoutField() {
     document.getElementById('coverTitleRight')?.focus();
+}
+
+/* YT 整點的「滿版／雙切」指示器（2026-09-08 WP2），做法與十點那個逐字對齊：
+   這是判定結果不是輸入，點「雙切」只把游標移到第二標題。 */
+function updateYtLayoutIndicator() {
+    const row = document.getElementById('ytLayoutIndicator');
+    if (!row) return;
+    const applies = editorFormat().inputs === 'yt_cover' && (editorFormat().ytLayout || '') === 'hourly';
+    row.classList.toggle('hidden', !applies);
+    if (!applies) return;
+    const layout = ytLayoutNow();
+    row.querySelectorAll('[data-yt-layout]').forEach(btn => {
+        const active = btn.dataset.ytLayout === layout;
+        btn.className = 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
+            + (active ? 'border border-violet-600 bg-violet-600 text-white'
+                      : 'border border-violet-600 text-slate-500 hover:text-white');
+    });
+    // 雙切的成品是兩張底圖拼的，沒有「追加修改」可用（見 showYtCoverResult）
+    const recompose = document.getElementById('ytCoverRecomposeBtn');
+    if (recompose && layout === 'split') recompose.disabled = !state.ytSplitBackgrounds;
+}
+
+function focusYtLayoutField() {
+    document.getElementById('ytCoverTitleSecond')?.focus();
+}
+
+/* 消化按鈕的 target：整點直播要判定 1／2 個主題（回兩個標題），其餘維持單標題。 */
+function ytCoverDigestTarget() {
+    return (editorFormat().ytLayout || '') === 'hourly' ? 'yt_hourly' : 'yt_cover';
 }
 
 /* 版面一變，跟著版面走的三件事要同步：右附圖位、「只改文字」鈕、下載短名。
@@ -1967,6 +2015,8 @@ async function handleCoverTitleDigest(target) {
     // 2026-09-08 WP1：不再依版型改 target——版面由消化結果決定，不是反過來。
     // AI 判定內文是 1 個還是 2 個主題，單主題只回第一標題（回填後即為滿版）。
     const ten = target === 'ten_cover';
+    // 2026-09-08 WP2：整點直播用自己的 target，回兩個標題＋主題數（同十點的判定）
+    const ytHourly = target === 'yt_hourly';
     const textarea = document.getElementById(ten ? 'coverNewsText' : 'ytCoverNewsText');
     const newsText = (textarea?.value || '').trim();
     if (newsText.length < 10) return showToast('先貼新聞內文（至少 10 個字）');
@@ -1988,8 +2038,16 @@ async function handleCoverTitleDigest(target) {
             updateCoverLayoutIndicator();
         } else {
             document.getElementById('ytCoverTitle').value = data.title || '';
+            if (ytHourly) {
+                const second = document.getElementById('ytCoverTitleSecond');
+                if (second) second.value = data.title_second || '';
+                // 回填完版面就跟著變（第二標題空＝滿版），指示器與下載短名一起更新
+                updateYtLayoutIndicator();
+            }
         }
-        showToast(ten && !(data.title_right || '').trim()
+        const single = ten ? !(data.title_right || '').trim()
+            : ytHourly ? !(data.title_second || '').trim() : false;
+        showToast((ten || ytHourly) && single
             ? '判定為單一主題（滿版），標題已回填，看過沒問題再按「生成」'
             : '標題已回填，看過沒問題再按「生成」');
     } catch (err) {
@@ -2006,6 +2064,8 @@ function ytCoverFields() {
     const layout = editorFormat().ytLayout || 'news';
     return {
         title: val('ytCoverTitle'),
+        // 整點直播＋這一欄有值＝雙切（後端 editor_formats.yt_cover_is_split）
+        title_second: layout === 'hourly' ? val('ytCoverTitleSecond') : '',
         layout,
         title_mode: document.getElementById('ytCoverAiTitle')?.checked === false ? 'composite' : 'ai',
         original_audio: layout === 'news' && !!document.getElementById('ytCoverOriginalAudio')?.checked,
@@ -2021,17 +2081,25 @@ function ytCoverFields() {
 // 用既有底圖重疊文字（追加修改後、或只改標題／副標／日期）。
 // background 從 refineSource 來——那格語意就是「給改圖用的原圖」，這條線上它是無文字底圖。
 async function recomposeYtCover(refined) {
-    const source = refineSourceFromResponse(refined);
+    // 雙切（2026-09-08 WP2）：兩格各自帶回自己的壓字前底圖，後端各壓各的字。
+    // 走 state.ytSplitBackgrounds 而不是 refineSource——雙切沒有追加修改，見該欄位註解。
+    const split = state.ytSplitBackgrounds;
+    const source = split ? null : refineSourceFromResponse(refined);
     const res = await fetch(YT_COVER_BACKEND_URL, {
         method: 'POST',
         headers: _apiHeaders(),
         body: JSON.stringify({
             ...ytCoverFields(),
-            title_mode: state.ytCoverTitleMode,
+            title_mode: split ? 'composite' : state.ytCoverTitleMode,
             provider: effectiveImageProvider(),
-            background_image_base64: source.base64,
-            background_mime_type: source.mimeType,
-            background_is_ai: state.ytCoverBackgroundIsAi,
+            background_image_base64: split ? split.left.base64 : source.base64,
+            background_mime_type: split ? split.left.mimeType : source.mimeType,
+            background_is_ai: split ? split.left.isAi : state.ytCoverBackgroundIsAi,
+            ...(split ? {
+                background_second_base64: split.right.base64,
+                background_second_mime_type: split.right.mimeType,
+                background_second_is_ai: split.right.isAi,
+            } : {}),
         }),
     });
     const data = await res.json().catch(() => ({}));
@@ -2048,13 +2116,25 @@ function showYtCoverResult(data, fields) {
     download.innerText = '下載 PNG';
     state.ytCoverBackgroundIsAi = !!data.background_is_ai;
     state.ytCoverTitleMode = data.title_mode || 'ai';
-    // 追加修改：以無文字底圖為源，改完由 handleRefine 再疊一次文字
-    resetRefineState(refineSourceFromResponse(data), data);
+    if (data.split) {
+        // 雙切：兩格底圖收在自己的 state，追加修改整個關掉（成品拼完就分不回去，
+        // 餵回生圖模型會把中線與另一格一起重畫）。resetRefineState(null) 會停用「修改」鈕。
+        state.ytSplitBackgrounds = {
+            left: { base64: data.background_image_base64, mimeType: data.background_mime_type || 'image/png', isAi: !!data.background_is_ai },
+            right: { base64: data.background_second_base64, mimeType: data.background_second_mime_type || 'image/png', isAi: !!data.background_second_is_ai },
+        };
+        resetRefineState(null, data);
+    } else {
+        state.ytSplitBackgrounds = null;
+        // 追加修改：以無文字底圖為源，改完由 handleRefine 再疊一次文字
+        resetRefineState(refineSourceFromResponse(data), data);
+    }
+    if (data.notice) showToast(data.notice);
     const recompose = document.getElementById('ytCoverRecomposeBtn');
     if (recompose) recompose.disabled = false;
     document.getElementById('oneClickLabel').innerText = editorFormat().label;
     document.getElementById('oneClickMeta').innerText =
-        [data.line1, data.line2,
+        [data.line1, data.line2, data.second_line1, data.second_line2,
          fields.original_audio ? '原音呈現' : '', fields.ai_translation ? 'AI即時翻譯' : '',
          fields.time_text].filter(Boolean).join('｜');
     document.getElementById('oneClickEmpty').classList.add('hidden');
@@ -2065,9 +2145,12 @@ function showYtCoverResult(data, fields) {
 async function handleYtCoverGenerate(recomposeOnly = false) {
     const fields = ytCoverFields();
     if (!fields.title) return showToast('請輸入直播標題');
-    if (recomposeOnly && !state.refineSource) return showToast('還沒有底圖，請先生成一次');
-    // AI 標題模式的成品沒有「只改文字」這回事——字是模型畫的，改字就是整張重生
-    if (recomposeOnly && state.ytCoverTitleMode === 'ai') {
+    if (recomposeOnly && !state.refineSource && !state.ytSplitBackgrounds) {
+        return showToast('還沒有底圖，請先生成一次');
+    }
+    // AI 標題模式的成品沒有「只改文字」這回事——字是模型畫的，改字就是整張重生。
+    // 雙切一律是程式壓字（後端強制），所以不受這條限制。
+    if (recomposeOnly && !state.ytSplitBackgrounds && state.ytCoverTitleMode === 'ai') {
         showToast('標題由 AI 生成，改字要整張重生…');
         recomposeOnly = false;
     }
@@ -2081,9 +2164,9 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
         let data;
         if (recomposeOnly) {
             showToast('用現有底圖重疊文字…');
-            data = await recomposeYtCover(state.refineDisplay || {
+            data = await recomposeYtCover(state.refineDisplay || (state.refineSource ? {
                 image_data_base64: state.refineSource.base64, mime_type: state.refineSource.mimeType,
-            });
+            } : null));
         } else {
             const asis = state.userRefImages.some(ref => ref.purpose === 'asis');
             const aiTitle = fields.title_mode === 'ai';

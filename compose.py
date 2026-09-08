@@ -1261,6 +1261,14 @@ def compose_yt_hourly_cover(
 # 斜線在標題那一帶會壓到某一格的字。
 YT_HOURLY_SPLIT_GAP_RATIO = 0.015       # 標題離中線的內縮（要大於描邊＋陰影，字才不碰到白線）
 YT_HOURLY_SPLIT_DATE_GAP_RATIO = 0.02   # 日期紅條底緣離第一行標題頂的距離
+# 雙切的四行共用同一個字級，而且只有半格寬可用，滿版的下限（0.085）會讓 11 字以上的
+# 標題直接報錯。使用者裁決放寬到 0.075（＝81px），滿版仍維持 0.085。
+YT_HOURLY_SPLIT_MIN_SIZE_RATIO = 0.075
+# 行距：滿版整點的兩行是兩個固定基線（0.80／0.965，相差 0.165 畫面高）。雙切的字級小很多
+# （半格寬＋四行共用），照抄絕對比例會讓兩行看起來散開，所以改成**跟著字級走**。
+# 倍數取自 2026-09-08 國內外新聞直播調過的行距：0.180 畫面高 ÷ 0.145 起始字級 ≈ 1.24。
+# 直接把 0.180 這個絕對值搬過來反而比現況更寬（0.165 → 0.180），不是使用者要的「略縮」。
+YT_HOURLY_SPLIT_LINE_GAP = 1.24
 
 
 def compose_yt_hourly_split_cover(
@@ -1346,28 +1354,33 @@ def compose_yt_hourly_split_cover(
     left_x0, left_x1 = margin, mid - gap
     right_x0, right_x1 = mid + gap, width - margin
     start = round(height * YT_HOURLY_TITLE_SIZE_RATIO)
-    smallest = round(height * YT_TITLE_MIN_SIZE_RATIO)
-    plan = [
-        (lines["left_line1"], YT_LINE1_FILL, YT_HOURLY_LINE1_BASELINE_RATIO, left_x0, left_x1),
-        (lines["left_line2"], YT_LINE2_FILL, YT_HOURLY_LINE2_BASELINE_RATIO, left_x0, left_x1),
-        (lines["right_line1"], YT_LINE1_FILL, YT_HOURLY_LINE1_BASELINE_RATIO, right_x0, right_x1),
-        (lines["right_line2"], YT_LINE2_FILL, YT_HOURLY_LINE2_BASELINE_RATIO, right_x0, right_x1),
+    smallest = round(height * YT_HOURLY_SPLIT_MIN_SIZE_RATIO)
+    # 第二行貼底不動，第一行往下靠——行距跟著字級算（見 YT_HOURLY_SPLIT_LINE_GAP）
+    line2_baseline = round(height * YT_HOURLY_LINE2_BASELINE_RATIO)
+    plan_texts = [
+        (lines["left_line1"], YT_LINE1_FILL, 0, left_x0, left_x1),
+        (lines["left_line2"], YT_LINE2_FILL, 1, left_x0, left_x1),
+        (lines["right_line1"], YT_LINE1_FILL, 0, right_x0, right_x1),
+        (lines["right_line2"], YT_LINE2_FILL, 1, right_x0, right_x1),
     ]
-    shared = min(_fit_font(text, x1 - x0, start, smallest).size for text, _, _, x0, x1 in plan)
+    shared = min(_fit_font(text, x1 - x0, start, smallest).size for text, _, _, x0, x1 in plan_texts)
     font = _font(shared)
     # _fit_font 縮到最小字級仍塞不下時會照樣回最小字級，放著不管就是某一行伸進另一格。
-    for text, _, _, x0, x1 in plan:
+    for text, _, _, x0, x1 in plan_texts:
         if font.getbbox(text)[2] > x1 - x0:
-            raise ComposeError(
-                f"標題太長，縮到最小字級仍超出半格版面：「{text}」（請用半形空格分段或縮短）"
-            )
+            raise ComposeError(f"標題太長，縮到最小字級仍超出半格版面：「{text}」（請縮短這一段）")
+    line1_baseline = line2_baseline - round(font.size * YT_HOURLY_SPLIT_LINE_GAP)
+    plan = [
+        (text, fill, line1_baseline if row == 0 else line2_baseline, x0, x1)
+        for text, fill, row, x0, x1 in plan_texts
+    ]
 
     # ---- 日期紅條：只畫一次，貼在左半格第一行標題正上方 ----
     tab_w = round(width * YT_HOURLY_DATE_TAB_WIDTH_RATIO)
     tab_h = round(height * YT_HOURLY_DATE_TAB_HEIGHT_RATIO)
     # 整點滿版的 0.52 是照著它自己那個字級量的；雙切字級小很多，沿用會讓紅條浮在半空中，
     # 所以改成跟著第一行標題的字頂走（使用者要的是「第一行標題正上方」）。
-    line1_top = round(height * YT_HOURLY_LINE1_BASELINE_RATIO) - font.getmetrics()[0]
+    line1_top = line1_baseline - font.getmetrics()[0]
     tab_y1 = line1_top - round(height * YT_HOURLY_SPLIT_DATE_GAP_RATIO)
     tab_y0 = tab_y1 - tab_h
     draw = ImageDraw.Draw(canvas)
@@ -1379,8 +1392,8 @@ def compose_yt_hourly_split_cover(
     )
 
     # ---- 四行標題：各自靠自己半格的左緣 ----
-    for text, fill, baseline_ratio, x0, _ in plan:
-        _draw_yt_title_line(draw, (x0, round(height * baseline_ratio)), text, font, fill, anchor="ls")
+    for text, fill, baseline, x0, _ in plan:
+        _draw_yt_title_line(draw, (x0, baseline), text, font, fill, anchor="ls")
 
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")

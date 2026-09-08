@@ -3687,16 +3687,20 @@ def _cover_composite(
 
 class CoverTitleDigestRequest(BaseModel):
     news_text: str = Field(min_length=10, max_length=20_000)
-    target: Literal["ten_cover", "ten_cover_full", "yt_cover"] = "ten_cover"
+    # yt_hourly（2026-09-08 WP2）＝整點直播，與十點同款「先判 1／2 主題」；
+    # yt_cover＝國內外新聞直播與今日熱搜，維持單標題。
+    target: Literal["ten_cover", "ten_cover_full", "yt_cover", "yt_hourly"] = "ten_cover"
 
 
 class CoverTitleDigestResponse(BaseModel):
     title_left: str = ""
     title_right: str = ""
     title: str = ""
-    # 十點：這篇內文被判定成幾個主題（1＝滿版、2＝雙切）。前端據此更新版面指示器。
-    # 一致性以「title_right 有沒有值」為準：模型說 2 卻只給一個標題就退回 1，
-    # 說 1 卻多給了右標就把右標清掉——回一組自相矛盾的值，前端的指示器會跟欄位打架。
+    # 整點雙切的第二標題（target=yt_hourly；單主題時空）
+    title_second: str = ""
+    # 十點／整點：這篇內文被判定成幾個主題（1＝滿版、2＝雙切）。前端據此更新版面指示器。
+    # 一致性以「第二標題有沒有值」為準：模型說 2 卻只給一個標題就退回 1，
+    # 說 1 卻多給了第二標題就清掉——回一組自相矛盾的值，前端的指示器會跟欄位打架。
     topics: int = 1
 
 
@@ -3716,14 +3720,20 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
     2026-09-06 使用者裁決：封面類版型也要能自動消化，但回填後停下來讓編輯看過。
     """
     ten = req.target == "ten_cover"
+    hourly = req.target == "yt_hourly"
     if ten:
         base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_TEN
+        schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_TEN
     elif req.target == "ten_cover_full":
         base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_TEN_FULL
+        schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT
+    elif hourly:
+        base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_YT_HOURLY
+        schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT_HOURLY
     else:
         base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_YT
+        schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT
     system_prompt = base_prompt + CONTENT_FIDELITY_RULES
-    schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_TEN if ten else editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT
     model = (
         os.getenv("DIGEST_MODEL")
         or os.getenv("OPENAI_DIGEST_MODEL")
@@ -3760,6 +3770,12 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
     title = _clip_title(data.get("title"), 60)
     if not title:
         raise HTTPException(status_code=502, detail="消化標題失敗：模型沒給標題")
+    if hourly:
+        # 整點雙切（2026-09-08 WP2）：判定規則與十點同一套，只是欄位叫 title／title_second
+        second = _clip_title(data.get("title_second"), 60)
+        if data.get("topics") == 1:
+            second = ""
+        return CoverTitleDigestResponse(title=title, title_second=second, topics=2 if second else 1)
     return CoverTitleDigestResponse(title=title)
 
 
@@ -3991,6 +4007,10 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
 
 class YtCoverRequest(BaseModel):
     title: str = Field(min_length=1, max_length=60)
+    # 第二則新聞的標題（2026-09-08 WP2）。整點直播＋這一欄有值＝雙切：左右各一格底圖、
+    # 各自兩行標題（判定在 editor_formats.yt_cover_is_split）。空＝現行滿版流程一字不變。
+    # 國內外新聞直播與今日熱搜沒有雙切版面，帶了也忽略。
+    title_second: str = Field(default="", max_length=60)
     # news＝國內外新聞直播；hourly＝整點直播；hot＝今日熱搜（見 editor_formats.YT_COVER_LAYOUTS）
     layout: Literal["news", "hourly", "hot"] = "news"
     # ai＝整張連標題字交給生圖模型畫，程式只後貼固定元素（2026-09-06 使用者裁決預設）；
@@ -4022,16 +4042,36 @@ class YtCoverRequest(BaseModel):
     background_mime_type: str = "image/png"
     # 那張底圖是不是 AI 生的——決定要不要疊「AI示意圖」。前端原樣帶回上一次的回應值。
     background_is_ai: bool = False
+    # 雙切的右格底圖（2026-09-08 WP2）。左格走上面那三個欄位，右格走這三個——
+    # 「只改文字」要把兩格的底圖都帶回來，成品拼完就分不回去了。
+    background_second_base64: str = Field(default="", max_length=28_000_000)
+    background_second_mime_type: str = "image/png"
+    background_second_is_ai: bool = False
 
 
 class YtCoverResponse(ImageGenerateResponse):
     # source_image_base64（繼承欄位）＝追加修改的源圖：composite 模式是無文字底圖，
     # ai 模式是模型畫好含標題、但還沒貼固定元素的整張圖。
+    # 雙切一律留空：追加修改是「把這張圖餵回生圖模型改」，兩格拼好的成品送回去會被
+    # 當成一張圖重畫，中線與另一格都會走樣。雙切要改底圖就重生。
     line1: str = ""
     line2: str = ""
     visual: str = ""
     background_is_ai: bool = False
     title_mode: str = "ai"
+    # ---- 整點雙切（2026-09-08 WP2）----
+    split: bool = False
+    second_line1: str = ""
+    second_line2: str = ""
+    # 「只改文字」用的兩格壓字前底圖（只有雙切會帶）。刻意不塞進 source_image_base64，
+    # 理由同 TenCoverResponse：那格的語意是「餵回 /api/images/refine 的原圖」。
+    background_image_base64: str = ""
+    background_mime_type: str = ""
+    background_second_base64: str = ""
+    background_second_mime_type: str = ""
+    background_second_is_ai: bool = False
+    # 後端自己改了設定時的說明（目前只有「雙切不支援 AI 整張版，已改程式壓字」）
+    notice: str = ""
 
 
 def derive_yt_cover_plan(
@@ -4253,12 +4293,205 @@ def yt_cover_asis_count(req: "YtCoverRequest") -> int:
     return sum(1 for ref in req.reference_images if ref.purpose == "asis")
 
 
+# ---- 整點雙切（2026-09-08 WP2）----
+#
+# 做法是「把一個雙切請求拆成兩個單格請求」，每一格再走既有的那一套（標題分段、畫面
+# 推導、附圖直接上版、既有底圖重貼）。不另外寫一條平行邏輯：拆完之後 need_visual、
+# has_asis、recomposite 這些判斷全部沿用 resolve_yt_cover_plan，不會兩邊各飄各的。
+
+
+def yt_split_panel_requests(req: "YtCoverRequest") -> tuple["YtCoverRequest", "YtCoverRequest"]:
+    """把雙切請求拆成左右兩個單格請求：標題、原圖放置附圖與既有底圖各歸各格。
+
+    原圖放置 1 張＝左格、2 張＝左右各一（超過只取前 2 張）。非 asis 的附圖（實景／
+    肖像／地圖）兩格共用，那是生圖參考不是版位。
+
+    **附圖一定要先拆**：resolve_yt_cover_plan 的 has_asis 看的是整份清單，
+    不拆的話左格附了一張圖會讓右格也以為自己有底圖，右格的畫面推導就被跳過。
+    """
+    asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
+    others = [ref for ref in req.reference_images if ref.purpose != "asis"]
+    if len(asis) > 2:
+        print(f"[yt-cover:split] 原圖放置附圖 {len(asis)} 張，雙切只有兩格，只取前 2 張", flush=True)
+    left = req.model_copy(update={
+        "title": req.title.strip(),
+        "title_second": "",
+        "reference_images": others + asis[:1],
+    })
+    right = req.model_copy(update={
+        "title": req.title_second.strip(),
+        "title_second": "",
+        "reference_images": others + asis[1:2],
+        "background_image_base64": req.background_second_base64,
+        "background_mime_type": req.background_second_mime_type,
+        "background_is_ai": req.background_second_is_ai,
+    })
+    return left, right
+
+
+def yt_split_panel_background(panel_req: "YtCoverRequest") -> tuple[bytes, bool, str] | None:
+    """一格的底圖：既有底圖或原圖放置附圖，回 (bytes, 是否 AI 生的, 模型名)；要生圖回 None。
+
+    附圖**不先裁 16:9**：這一格只佔畫面左半或右半，裁過再交給 compose 裁一次，
+    等於同一張圖被裁兩次，主體會被切掉。原圖直接交給 compose 就好。
+    """
+    if panel_req.background_image_base64:
+        return (
+            base64.b64decode(panel_req.background_image_base64),
+            panel_req.background_is_ai,
+            "yt-cover:recomposite",
+        )
+    asis = [ref for ref in panel_req.reference_images if ref.purpose == "asis"]
+    if asis:
+        _, _, encoded = _split_data_url(asis[0].data_url)
+        if not encoded:
+            raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
+        return base64.b64decode(encoded), False, "yt-cover:asis"
+    return None
+
+
+def yt_split_backgrounds(
+    panel_reqs: tuple["YtCoverRequest", "YtCoverRequest"], plans: list
+) -> tuple[list[bytes], list[bool], str]:
+    """兩格的底圖，回 (兩張 bytes, 兩格是否 AI 生的, 模型名)。
+
+    要生的那幾格平行生——序列跑等待時間直接加倍，單張本來就要 30–90 秒（同十點雙切）。
+    生的是 1:1 方圖（走十點那條 `_cover_panel_image`）：這一格只佔半個畫面，
+    生 16:9 再塞進半格會被裁掉左右兩側，主體多半就沒了。
+    """
+    panels: list[bytes | None] = [None, None]
+    is_ai = [False, False]
+    models: list[str] = []
+    todo: list[int] = []
+    for i, panel_req in enumerate(panel_reqs):
+        ready = yt_split_panel_background(panel_req)
+        if ready is None:
+            todo.append(i)
+            continue
+        panels[i], is_ai[i], model = ready
+        if model not in models:
+            models.append(model)
+    if todo:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {
+                i: pool.submit(
+                    _cover_panel_image,
+                    plans[i][1] or panel_reqs[i].title.strip(),
+                    panel_reqs[i].provider,
+                    [ref for ref in panel_reqs[i].reference_images if ref.purpose != "asis"],
+                    plans[i][2], plans[i][3],
+                    getattr(plans[i], "excluded", []),
+                )
+                for i in todo
+            }
+            for i, future in futures.items():
+                panels[i], model = future.result()
+                is_ai[i] = True
+                if model not in models:
+                    models.append(model)
+    return [panels[0], panels[1]], is_ai, "、".join(models) or "yt-cover:asis"
+
+
+def editor_yt_hourly_split_cover(req: "YtCoverRequest", notice: str = "") -> "YtCoverResponse":
+    """整點雙切：兩格各自一張底圖與兩行標題，程式壓字（2026-09-08 WP2）。
+
+    走到這裡時 title_mode 一定是 composite（AI 整張版在入口就被擋掉並記 notice）。
+    """
+    date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
+    panel_reqs = yt_split_panel_requests(req)
+    plans = [resolve_yt_cover_plan(panel_req) for panel_req in panel_reqs]
+    request_id = request_log.new_request_id()
+    log_source = f"editor-yt-cover-{req.layout}-split"
+    visual = "｜".join(filter(None, (plans[0][1], plans[1][1])))
+    log_prompt = visual or "（附圖／既有底圖）"
+    both_titles = f"{req.title.strip()}／{req.title_second.strip()}"
+
+    def _log_failure(exc: Exception) -> None:
+        request_log.log_failure(
+            request_id=request_id, source=log_source, news_text=both_titles,
+            error=str(exc), prompt=log_prompt, role="編輯", provider=req.provider,
+        )
+
+    try:
+        panels, is_ai, image_model = yt_split_backgrounds(panel_reqs, plans)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log_failure(exc)
+        raise
+    try:
+        cover = compose.compose_yt_hourly_split_cover(
+            panels[0], panels[1],
+            left_line1=plans[0][0][0], left_line2=plans[0][0][1],
+            right_line1=plans[1][0][0], right_line2=plans[1][0][1],
+            date_text=date_text,
+            time_text=req.time_text.strip(),
+            left_ai_note=is_ai[0], right_ai_note=is_ai[1],
+        )
+    except compose.ComposeError as exc:
+        print(f"[compose] YT 整點雙切封面失敗：{exc}", flush=True)
+        _log_failure(exc)
+        raise HTTPException(status_code=500, detail=f"封面生成失敗：{exc}") from exc
+
+    subjects = list(plans[0][2]) + list(plans[1][2])
+    photos = {**yt_cover_plan_photos(plans[0]), **yt_cover_plan_photos(plans[1])}
+    request_log.log_generation(
+        request_id=request_id,
+        source=log_source,
+        news_text=both_titles,
+        variable="\n".join(filter(None, [
+            plans[0][0][0], plans[0][0][1], plans[1][0][0], plans[1][0][1],
+            req.time_text.strip(),
+        ])),
+        prompt=log_prompt,
+        role="編輯",
+        provider=req.provider,
+        image_model=image_model,
+        portrait_subject="、".join(subjects),
+        portrait_photo_source="、".join(
+            photos[name].source_page if name in photos else "（查無）" for name in subjects
+        ),
+    )
+    return YtCoverResponse(
+        image_data_base64=base64.b64encode(cover).decode("ascii"),
+        mime_type="image/png",
+        model=image_model,
+        # source_image_base64 刻意留空：雙切成品是兩張圖拼的，餵回生圖模型改圖會把
+        # 中線與另一格一起重畫。要改底圖就重生（前端據此把「追加修改」關掉）。
+        line1=plans[0][0][0],
+        line2=plans[0][0][1],
+        second_line1=plans[1][0][0],
+        second_line2=plans[1][0][1],
+        visual=visual,
+        split=True,
+        notice=notice,
+        title_mode=editor_formats.YT_COVER_TITLE_MODE_COMPOSITE,
+        background_image_base64=base64.b64encode(panels[0]).decode("ascii"),
+        background_mime_type="image/png",
+        background_is_ai=is_ai[0],
+        background_second_base64=base64.b64encode(panels[1]).decode("ascii"),
+        background_second_mime_type="image/png",
+        background_second_is_ai=is_ai[1],
+    )
+
+
 @app.post(
     "/api/editor/yt-cover",
     response_model=YtCoverResponse,
     dependencies=[Depends(verify_internal_api_key)],
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
+    notice = ""
+    split = editor_formats.yt_cover_is_split(req.layout, req.title_second)
+    if split and req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI:
+        # AI 整張版是「一張圖畫完含標題」，雙切的版面是程式把兩張底圖拼起來、
+        # 兩格標題各壓各的——沒有一張圖可以交給模型畫。強制程式壓字並在回應說明，
+        # 不然使用者只會看到勾著的「標題由 AI 生成」卻拿到程式壓字的圖。
+        notice = "整點雙切不支援「標題由 AI 生成」，已改用程式壓字"
+        print(f"[yt-cover:split] {notice}", flush=True)
+        req = req.model_copy(update={"title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE})
+    if split:
+        return editor_yt_hourly_split_cover(req, notice)
     if yt_cover_asis_count(req) >= 1 and req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI:
         # 有原圖放置一律程式壓字（2026-09-07 使用者裁決，與十點封面同一原則）：
         # 原圖放置＝真實新聞照直接上版，交給模型重畫會走樣；原本只在 ≥2 張時強制，

@@ -98,13 +98,31 @@ class HourlySplitLayoutTest(unittest.TestCase):
                 self.assertEqual(x, MID + gap)
                 self.assertLessEqual(right, WIDTH - margin)
 
-    def test_two_lines_per_panel_use_the_hourly_baselines(self):
+    def test_second_line_pinned_to_bottom_first_line_follows_the_font(self):
+        """第二行貼底（同滿版），第一行的位置由行距×字級算出來，不是固定比例。"""
         calls = _capture()
         baselines = sorted({y for _, y, _, _, _, _ in calls})
-        self.assertEqual(baselines, [
-            round(HEIGHT * compose.YT_HOURLY_LINE1_BASELINE_RATIO),
-            round(HEIGHT * compose.YT_HOURLY_LINE2_BASELINE_RATIO),
-        ])
+        self.assertEqual(len(baselines), 2)
+        size = {font.size for _, _, _, font, _, _ in calls}.pop()
+        self.assertEqual(baselines[1], round(HEIGHT * compose.YT_HOURLY_LINE2_BASELINE_RATIO))
+        self.assertEqual(baselines[1] - baselines[0], round(size * compose.YT_HOURLY_SPLIT_LINE_GAP))
+
+    def test_line_gap_shrinks_with_the_font(self):
+        """字級縮小時行距跟著縮：照抄滿版的固定基線會讓小字的兩行看起來散開。"""
+        gap = lambda calls: (max(y for _, y, _, _, _, _ in calls)
+                             - min(y for _, y, _, _, _, _ in calls))
+        big = _capture(left_line1="洪災", left_line2="抗議", right_line1="帶貨", right_line2="爆紅")
+        self.assertGreater(gap(big), gap(_capture()))
+
+    def test_split_min_size_is_lower_than_the_full_hourly(self):
+        """雙切四行共用字級又只有半格寬，下限放寬到 0.075（滿版仍 0.085）。
+
+        實測：這個下限下每行最多 10 個中文字，11 字就會報錯。
+        """
+        self.assertLess(compose.YT_HOURLY_SPLIT_MIN_SIZE_RATIO, compose.YT_TITLE_MIN_SIZE_RATIO)
+        _compose(left_line1="測" * 10)          # 不該丟例外
+        with self.assertRaises(compose.ComposeError):
+            _compose(left_line1="測" * 11)
 
     def test_line_colours_white_then_yellow_in_both_panels(self):
         calls = _capture()
@@ -118,7 +136,7 @@ class HourlySplitLayoutTest(unittest.TestCase):
     def test_title_too_long_raises(self):
         with self.assertRaises(compose.ComposeError) as ctx:
             _compose(right_line1="直播帶貨在美國爆紅砸下數十億美元行銷預算搶佔市場")
-        self.assertIn("半格", str(ctx.exception))
+        self.assertIn("請縮短這一段", str(ctx.exception))
 
     def test_missing_line_raises(self):
         with self.assertRaises(compose.ComposeError) as ctx:
