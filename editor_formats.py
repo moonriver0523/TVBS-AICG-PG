@@ -404,6 +404,25 @@ YT_COVER_TITLE_MODE_AI = "ai"
 YT_COVER_TITLE_MODE_COMPOSITE = "composite"
 YT_COVER_TITLE_MODES = (YT_COVER_TITLE_MODE_AI, YT_COVER_TITLE_MODE_COMPOSITE)
 
+# 底部壓色框開關（2026-09-08 使用者裁決，預設 OFF）。合成版由 compose 的 bottom_band
+# 決定畫不畫，AI 版只能靠 prompt——所以 LAYOUT 的第一條與 IMAGERY 的結尾都要換句話說，
+# 不然模型看到「filling the frame behind the band」還是會自己畫一條帶子出來。
+# 開的時候明講「半透明約六成」，與合成版的 compose.YT_BAND_ALPHA=153 對齊。
+YT_COVER_BAND_CLAUSE_NEWS_ON = "- The lower 40% of the frame is a semi-transparent (about 60% opaque) deep-navy band with a subtle circuit-board / tech-block texture, fading in at its top edge; the photograph stays visible through it."
+YT_COVER_BAND_CLAUSE_HOT_ON = "- The lower 40% of the frame is a semi-transparent (about 60% opaque) DEEP CRIMSON / near-black band with a subtle red circuit-board / tech-block texture, fading in at its top edge; the photograph stays visible through it."
+YT_COVER_BAND_CLAUSE_OFF = "- There is NO solid colour band, panel or strip behind the headline: the photograph runs uninterrupted to the bottom edge and stays fully visible. The headline's readability comes from its thick outline and drop shadow alone."
+YT_COVER_BAND_IMAGERY_TAIL_ON = " behind the band"
+YT_COVER_BAND_IMAGERY_TAIL_OFF = ""
+
+
+def yt_cover_band_fields(layout: str, bottom_band: bool) -> dict:
+    """AI 標題模板的底帶兩個欄位。整點版沒有底帶，兩個欄位都用不到（模板裡沒有這兩個佔位）。"""
+    if bottom_band:
+        clause = YT_COVER_BAND_CLAUSE_HOT_ON if layout == YT_COVER_LAYOUT_HOT else YT_COVER_BAND_CLAUSE_NEWS_ON
+        return {"band_clause": clause, "band_imagery_tail": YT_COVER_BAND_IMAGERY_TAIL_ON}
+    return {"band_clause": YT_COVER_BAND_CLAUSE_OFF, "band_imagery_tail": YT_COVER_BAND_IMAGERY_TAIL_OFF}
+
+
 YT_COVER_FULL_PROMPT_NEWS = """Design a complete Taiwanese TV news LIVE-stream thumbnail (YouTube cover), 16:9.
 
 === TEXT TO RENDER (Traditional Chinese, Taiwan) ===
@@ -412,15 +431,15 @@ Render EXACTLY these strings, character for character, nothing else:
 - Headline line 2 (lower line): {line2}
 
 === LAYOUT ===
-- The lower 40% of the frame is a semi-transparent deep-navy band with a subtle circuit-board / tech-block texture, fading in at its top edge.
-- Both headline lines are CENTRED horizontally on that band, stacked, each on one line, huge and heavy Chinese display type filling almost the full width.
+{band_clause}
+- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, huge and heavy Chinese display type filling almost the full width.
 - Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
 - Keep the UPPER-LEFT corner (a block about 24% wide and 40% tall) completely free of text or busy detail: a red LIVE badge and a date tab are pasted there afterwards.
 - Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a channel logo tab is pasted there afterwards.
 
 === IMAGERY ===
 {visual}
-Photographic, dramatically lit, news-documentary quality, filling the frame behind the band.
+Photographic, dramatically lit, news-documentary quality, filling the frame{band_imagery_tail}.
 
 === HARD CONSTRAINTS ===
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
@@ -460,8 +479,8 @@ Render EXACTLY these strings, character for character, nothing else:
 - Headline line 2 (lower line): {line2}
 
 === LAYOUT ===
-- The lower 40% of the frame is a semi-transparent DEEP CRIMSON / near-black band with a subtle red circuit-board / tech-block texture, fading in at its top edge.
-- Both headline lines are CENTRED horizontally on that band, stacked, each on one line, huge and heavy Chinese display type filling almost the full width.
+{band_clause}
+- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, huge and heavy Chinese display type filling almost the full width.
 - Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
 - Keep the UPPER-LEFT corner (a block about 30% wide and 16% tall) completely free of text or busy detail: a red-and-white "trending" tag is pasted there afterwards.
 - Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a red channel logo tab is pasted there afterwards.
@@ -469,7 +488,7 @@ Render EXACTLY these strings, character for character, nothing else:
 
 === IMAGERY ===
 {visual}
-Photographic, news-documentary quality, filling the frame behind the band.
+Photographic, news-documentary quality, filling the frame{band_imagery_tail}.
 
 === HARD CONSTRAINTS ===
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.

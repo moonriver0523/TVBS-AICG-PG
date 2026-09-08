@@ -148,3 +148,24 @@ hourly 另收 `time_text`。前端 `EDITOR_FORMATS[*].ytLayout` 帶到 `ytCoverF
   兩個版型一起改，屬另一件事。
 - 釘住現況的測試：`tests/test_yt_title_parity.py`（合成版逐像素相同、常數只有一處定義、
   兩個模板措辭相同）。以後任何一邊調字級都會被擋下來。
+
+## 2026-09-08：底部壓色框改成開關（預設 OFF，開的時候半透明）
+
+使用者裁決：底帶不要一直壓在那裡，改成自己開；開了也要透得出照片。
+
+- `YtCoverRequest.bottom_band: bool = False`。合成版由 `compose_yt_cover`／`compose_yt_hot_cover`
+  的同名參數決定要不要呼叫 `_draw_title_band`（關＝**完全不畫**，標題靠自己的粗黑描邊立在照片上）。
+- `YT_BAND_ALPHA` 205 → **153**（60%）。原本 80% 幾乎把照片下半整片吃掉；「開」不是回到舊行為。
+- AI 標題模式只能靠 prompt，所以 `YT_COVER_FULL_PROMPT_NEWS`／`_HOT` 的 LAYOUT 第一條與 IMAGERY
+  結尾都換成佔位 `{band_clause}`／`{band_imagery_tail}`，由 `editor_formats.yt_cover_band_fields()` 給：
+  ON＝「semi-transparent (about 60% opaque) …band…」＋「filling the frame behind the band」；
+  OFF＝「There is NO solid colour band…readability comes from its thick outline and drop shadow alone」
+  ＋「filling the frame」。**IMAGERY 那句一定要一起改**：留著「behind the band」模型還是會畫一條出來。
+- **整點直播（hourly）不適用**：`compose_yt_hourly_cover` 本來就不畫底帶，AI 模板也明文
+  「No band behind them」。後端 `bottom_band = bool(req.bottom_band) and not hourly`、
+  模板 format 不帶那兩個欄位，前端在該版型不顯示按鈕。
+- 前端：`state.ytBottomBand`（預設 false）＋ `#ytBottomBandBtn`（琥珀色，比照蓋章開關）。
+  欄位加在 `ytCoverFields()`，所以生成與「只改文字」／追加修改回貼走的是同一個值。
+- 測試：`tests/test_yt_bottom_band.py`（OFF 時底帶區＝底圖原色、ON 時逐通道落在底圖色與帶色之間、
+  兩種 prompt 措辭、hourly 不受影響、前端 state 與按鈕）。`test_yt_cover` 原本那題看底帶顏色的
+  要自己 `bottom_band=True` 才看得到。

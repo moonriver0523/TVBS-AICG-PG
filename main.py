@@ -3941,6 +3941,9 @@ class YtCoverRequest(BaseModel):
     # 國內外新聞直播的兩個獨立標示（頻道實際版面可並存）；整點直播忽略
     original_audio: bool = False     # LIVE 章上方「原音呈現」
     ai_translation: bool = False     # 日期下方「AI即時翻譯」
+    # 底部壓色框（2026-09-08 使用者裁決，預設 OFF）：關＝完全不畫，標題靠描邊立在照片上；
+    # 開＝畫，且只有 60% 不透明（compose.YT_BAND_ALPHA）。整點直播沒有底帶，後端直接忽略。
+    bottom_band: bool = False
     date_text: str = Field(default="", max_length=20)
     # 整點直播專用：整點時間（如 20:00），選填，有填才掛在 LIVE 章下
     time_text: str = Field(default="", max_length=10)
@@ -4143,7 +4146,12 @@ def _yt_cover_full_image(
         editor_formats.YT_COVER_LAYOUT_HOT: editor_formats.YT_COVER_FULL_PROMPT_HOT,
     }.get(req.layout, editor_formats.YT_COVER_FULL_PROMPT_NEWS)
     image_req = ImageGenerateRequest(
-        prompt=template.format(line1=lines[0], line2=lines[1], visual=visual.strip() or req.title.strip()),
+        prompt=template.format(
+            line1=lines[0], line2=lines[1], visual=visual.strip() or req.title.strip(),
+            # 整點版模板沒有底帶佔位（版面本來就沒有底帶），多給的欄位 format 會忽略
+            **(editor_formats.yt_cover_band_fields(req.layout, req.bottom_band)
+               if req.layout != editor_formats.YT_COVER_LAYOUT_HOURLY else {}),
+        ),
         provider=req.provider,
         aspect_ratio="16:9",
         image_size=req.image_size,
@@ -4188,6 +4196,9 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     # 整點直播與今日熱搜沒有原音呈現／AI即時翻譯（2026-09-06 使用者裁決），後端直接忽略
     original_audio = bool(req.original_audio) and not (hourly or hot)
     ai_translation = bool(req.ai_translation) and not (hourly or hot)
+    # 整點直播的版面本來就沒有底帶（compose_yt_hourly_cover 不畫、AI 模板也明文 no band），
+    # 這個開關對它沒有意義，直接忽略——比照原音呈現／AI即時翻譯。
+    bottom_band = bool(req.bottom_band) and not hourly
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
 
     plan = resolve_yt_cover_plan(req)
@@ -4231,6 +4242,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 line2=lines[1],
                 ai_note=is_ai,
                 draw_titles=not ai_title,
+                bottom_band=bottom_band,
             )
         elif hourly:
             cover = compose.compose_yt_hourly_cover(
@@ -4252,6 +4264,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 ai_translation=ai_translation,
                 ai_note=is_ai,
                 draw_titles=not ai_title,
+                bottom_band=bottom_band,
             )
     except compose.ComposeError as exc:
         print(f"[compose] YT 直播封面失敗：{exc}", flush=True)

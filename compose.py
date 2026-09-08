@@ -784,7 +784,9 @@ YT_LOGO_TOP_RATIO = 0.014
 YT_BAND_TOP_RATIO = 0.60             # 深藍科技底帶起點
 YT_BAND_FADE_RATIO = 0.06            # 頂端漸入高度
 YT_BAND_FILL = (8, 25, 70)
-YT_BAND_ALPHA = 205
+# 2026-09-08 使用者裁決：底部壓色框改成開關（預設 OFF），開的時候要半透明——
+# 原本 205／255 ≈ 80% 幾乎把照片下半整片吃掉。153／255 = 60%。
+YT_BAND_ALPHA = 153
 YT_BAND_BLOCK_FILL = (60, 130, 230)
 YT_LINE1_BASELINE_RATIO = 0.764      # 第一行字底
 YT_LINE2_BASELINE_RATIO = 0.958      # 第二行字底
@@ -938,8 +940,12 @@ def compose_yt_cover(
     ai_translation: bool = False,
     ai_note: bool = False,
     draw_titles: bool = True,
+    bottom_band: bool = False,
 ) -> bytes:
     """合成 YT 國內外新聞直播封面（2026-09-06 依頻道實際版面）。
+
+    bottom_band（2026-09-08 使用者裁決，預設關）：底部深藍壓色框。關＝完全不畫，
+    標題靠描邊自己立在照片上；開＝畫，且只有 YT_BAND_ALPHA（60%）不透明，照片透得出來。
 
     draw_titles=False（標題由 AI 生成模式）：background 已經是模型畫好含標題與底帶的
     整張圖，這裡只貼固定元素（LIVE 章／日期／原音呈現／AI即時翻譯／藍標籤／AI示意圖）。
@@ -960,7 +966,7 @@ def compose_yt_cover(
     margin = round(width * YT_MARGIN_RATIO)
 
     # ---- 底帶先鋪，章與標籤壓在上面（AI 標題模式：底帶與標題都是模型畫的）----
-    if draw_titles:
+    if draw_titles and bottom_band:
         _draw_title_band(canvas)
     _draw_top_line(canvas)
     _draw_logo_tab(canvas)
@@ -1187,10 +1193,12 @@ def compose_yt_hot_cover(
     line2: str,
     ai_note: bool = False,
     draw_titles: bool = True,
+    bottom_band: bool = False,
 ) -> bytes:
-    """合成 YT「今日熱搜」封面：紅色系標頭、無日期無 LIVE，底部深紅帶兩行標題。
+    """合成 YT「今日熱搜」封面：紅色系標頭、無日期無 LIVE，底部兩行標題。
 
     draw_titles=False（標題由 AI 生成）：background 已含標題與底帶，只貼固定元素。
+    bottom_band（2026-09-08 使用者裁決，預設關）：底部深紅壓色框，開關與透明度同新聞版。
     """
     line1, line2 = (line1 or "").strip(), (line2 or "").strip()
     if not line1 or not line2:
@@ -1198,7 +1206,7 @@ def compose_yt_hot_cover(
     canvas = _cover_panel(background, YT_CANVAS).convert("RGBA")
     width, height = YT_CANVAS
     margin = round(width * YT_MARGIN_RATIO)
-    if draw_titles:
+    if draw_titles and bottom_band:
         _draw_title_band(canvas, YT_HOT_BAND_FILL, YT_HOT_BAND_BLOCK_FILL)
     _draw_hot_header(canvas)
     if ai_note:

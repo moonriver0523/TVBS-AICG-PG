@@ -367,6 +367,9 @@ let state = {
     // 十點 AI 整張版的標題設計感（2026-09-08）：plain＝現行排版、designed＝滿框放大關鍵字。
     // 預設 plain——designed 讓模型大改版面，錯字與版面走鐘的風險比較高，要使用者自己開。
     coverTitleStyle: 'plain',
+    // YT 封面底部壓色框（2026-09-08）：預設關——原本 80% 不透明的帶子把照片下半整片吃掉。
+    // 開的時候只有 60%（後端 compose.YT_BAND_ALPHA）。整點直播的版面沒有底帶，按鈕不顯示。
+    ytBottomBand: false,
     refineStack: []
 };
 
@@ -841,6 +844,7 @@ function applyEditorFormatInputs() {
     const coverRecompose = document.getElementById('coverRecomposeBtn');
     if (coverRecompose) coverRecompose.classList.toggle('hidden', !fullLayout);
     updateCoverTitleStyleButton();
+    updateYtBottomBandButton();
     if (yt) yt.classList.toggle('hidden', !wantsYt);
     // 附圖上傳區：主流程、YT 直播封面、十點不一樣（2026-09-06 起收原圖放置）都用。
     // 封面版型時把它搬到該組欄位下面——留在原位會跑到角色鈕正下方，看起來像消失了。
@@ -1069,6 +1073,27 @@ function toggleStamp() {
     updateStampButton();
     updateInstructionOverrideHint();
     showToast(state.stamp ? '蓋章：開（最後一行加結論條）' : '蓋章：關（不放結論條）');
+}
+
+// YT 封面「底色框」開關（2026-09-08）。琥珀色。國內外新聞直播與今日熱搜才有底帶；
+// 整點直播的版面本來就沒有底帶（compose_yt_hourly_cover 不畫），按鈕在那個版型不顯示。
+function updateYtBottomBandButton() {
+    const btn = document.getElementById('ytBottomBandBtn');
+    if (!btn) return;
+    const layout = editorFormat().ytLayout || '';
+    const applies = editorFormat().inputs === 'yt_cover' && layout !== 'hourly';
+    btn.classList.toggle('hidden', !applies);
+    const on = state.ytBottomBand;
+    btn.className = (applies ? '' : 'hidden ')
+        + 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
+        + (on ? 'border border-amber-600 bg-amber-600 text-white' : 'border border-amber-600 text-slate-400 hover:text-white');
+    btn.innerText = on ? '底色框 ON' : '底色框 OFF';
+}
+
+function toggleYtBottomBand() {
+    state.ytBottomBand = !state.ytBottomBand;
+    updateYtBottomBandButton();
+    showToast(state.ytBottomBand ? '底色框：開（半透明，照片透得出來）' : '底色框：關（標題靠描邊立在照片上）');
 }
 
 // 十點封面「設計標題」開關（2026-09-08）。紫色，與安全框（綠）／蓋章（琥珀）／壓框（青）區分。
@@ -1854,6 +1879,7 @@ function ytCoverFields() {
         ai_translation: layout === 'news' && !!document.getElementById('ytCoverAiTranslation')?.checked,
         date_text: val('ytCoverDate'),
         time_text: layout === 'hourly' ? val('ytCoverTime') : '',
+        bottom_band: layout !== 'hourly' && state.ytBottomBand,
     };
 }
 
