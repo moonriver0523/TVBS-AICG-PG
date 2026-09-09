@@ -320,8 +320,8 @@ COVER_AI_TITLE_LEVEL_NAMES = {
     0: "規矩",
     1: "微設計",
     2: "有設計",
-    3: "強設計",
-    4: "最奔放",
+    3: "奔放",
+    4: "最狂",
 }
 
 # (a)–(g)：每一級（0 以外）都原樣附上。
@@ -333,13 +333,7 @@ _TITLE_FIXED_BLOCK = """- WHAT IS STILL FIXED, AND IS NOT A DESIGN DECISION: (a)
 _L1 = """- DESIGNED TITLE (level 1 of 4 — light) — THIS BULLET AND THE ONE BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. Give the headline a designed display finish, and change NOTHING ELSE about it. Choose the typeface, the outline and shadow treatment, the surface material (a gradient, a soft bevel, a subtle sheen) and any decorative frames or shapes behind or around the words, so the type looks like a broadcast title card rather than a caption. Everything else stays exactly as instructed above: the per-line colours stay EXACTLY as labelled (white / yellow / red), all lines stay at ONE size, and the block stays flush-stacked in the labelled lower corner.
 """
 
-_L2 = """- DESIGNED TITLE (level 2 of 4 — medium) — THIS BULLET AND THE ONE BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. Give the headline a designed display finish — you choose the typeface, the outline and shadow treatment, the surface material and any decorative frames or shapes behind or around the words — and then make these two moves, which are REQUIRED, not optional:
-  * PULL ONE KEY WORD OUT INSIDE A LINE. In each headline, take the place name, the number, the quoted phrase or the one word that carries the shock, and give it a different treatment from the rest of that same line: another colour, or a vivid block with the word reversed out of it. Quotation marks such as 「」 or 『』 around a phrase are a cue to do exactly this.
-  * MILD SIZE CONTRAST. The line that shouts is set about 1.2 times the height of the others — a visible step, not a dramatic one.
-- WHAT THIS CANCELS: the per-line colour labels (white / yellow / red) still set the base colour of each line, but the pulled-out key word may break them. Nothing else changes: the block stays flush-stacked in the labelled lower corner, and the placement instruction still binds.
-"""
-
-_L3 = """- DESIGNED TITLE (level 3 of 4 — strong) — THIS BULLET AND THE TWO BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. The headline is a title card built by a broadcast art director, not body text. Build it the way this show's real covers are built — a tame, evenly-set stack is a failure here:
+_L2 = """- DESIGNED TITLE (level 2 of 4 — designed) — THIS BULLET AND THE TWO BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. The headline is a title card built by a broadcast art director, not body text. Build it the way this show's real covers are built — a tame, evenly-set stack is a failure here:
   * SIZE HIERARCHY IS REQUIRED. The lines are not the same size. Set the short punchy line — the one that shouts, usually the one ending in 「！」 — at roughly one and a half to two times the height of the line that explains it, and let the explaining line tuck under it, indented or offset rather than flush-stacked.
   * PULL A KEY WORD OUT INSIDE A LINE. Within a line, take the place name, the number, the quoted phrase or the one word that carries the shock, and give it a different treatment from the rest of that same line: another colour, a vivid red or black block with the word reversed out of it, a heavier or larger cut. Quotation marks such as 「」 or 『』 around a phrase are a cue to do exactly this. Every line must not be one flat colour.
   * THE HOUSE PALETTE AND FINISH: saturated FLAT golden yellow, pure white and vivid red, over a thick black outline with a hard offset drop shadow and a tight coloured inner edge — punchy poster colour, high contrast, slight forward lean. Not a soft pastel wash, and not one uniform polished metallic fill across the whole headline.
@@ -347,7 +341,7 @@ _L3 = """- DESIGNED TITLE (level 3 of 4 — strong) — THIS BULLET AND THE TWO 
 - WHAT THIS CANCELS: the per-line colour labels (white / yellow / red) are only a hint you may ignore entirely — recolour freely, give one line several colours, reverse a word out of a coloured block, whatever reads best; the fixed one-line-per-row stack no longer binds as a SHAPE — you may stagger the lines, indent them or run one line larger over another (the lines themselves, and how many there are, are still fixed; see below). THE PLACEMENT STILL BINDS: the block stays in the lower-left (or lower-right) area it was assigned. ONE EXCEPTION TO THE SIZE HIERARCHY: when the listed lines are not a hook plus its explanation but one continuous phrase, sentence or proper name simply broken across rows, keep them at ONE size — enlarging half of a single name breaks it apart.
 """
 
-_L4 = """- DESIGNED TITLE (level 4 of 4 — loudest) — THIS BULLET AND THE TWO BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. The headline is a title card built by a broadcast art director, not body text. Build it the way this show's real covers are built, and go loud — a tame, evenly-set stack is a failure here:
+_L3 = """- DESIGNED TITLE (level 3 of 4 — loud) — THIS BULLET AND THE TWO BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. The headline is a title card built by a broadcast art director, not body text. Build it the way this show's real covers are built, and go loud — a tame, evenly-set stack is a failure here:
   * SIZE HIERARCHY IS REQUIRED. The lines are not the same size. Set the short punchy line — the one that shouts, usually the one ending in 「！」 — at roughly one and a half to two times the height of the line that explains it, and let the explaining line tuck under it, indented or offset rather than flush-stacked.
   * PULL A KEY WORD OUT INSIDE A LINE. Within a line, take the place name, the number, the quoted phrase or the one word that carries the shock, and give it a different treatment from the rest of that same line: another colour, a vivid red or black block with the word reversed out of it, a heavier or larger cut. Quotation marks such as 「」 or 『』 around a phrase are a cue to do exactly this. Every line must not be one flat colour.
   * THE HOUSE PALETTE AND FINISH: saturated FLAT golden yellow, pure white and vivid red, over a thick black outline with a hard offset drop shadow and a tight coloured inner edge — punchy poster colour, high contrast, slight forward lean. Not a soft pastel wash, and not one uniform polished metallic fill across the whole headline.
@@ -355,6 +349,22 @@ _L4 = """- DESIGNED TITLE (level 4 of 4 — loudest) — THIS BULLET AND THE TWO
   * You still choose the typeface, the exact colours, the outline and shadow treatment, the decorative frames or shapes behind or around the words, the emphasis, the scale of each part, and where on the frame the block sits. Be bold.
 - WHAT THIS CANCELS: the per-line colour labels (white / yellow / red) are only a hint you may ignore entirely — recolour freely, give one line several colours, reverse a word out of a coloured block, whatever reads best; the instruction to keep the headline in the lower-left (or lower-right) area no longer binds — place the block anywhere that composes well against the photograph; the fixed one-line-per-row stack no longer binds as a SHAPE — you may stagger the lines, indent them, run one line larger over another, or set a short line beside a long one (the lines themselves, and how many there are, are still fixed; see below). ONE EXCEPTION TO THE SIZE HIERARCHY: when the listed lines are not a hook plus its explanation but one continuous phrase, sentence or proper name simply broken across rows, keep them at ONE size — enlarging half of a single name breaks it apart.
 """
+
+# 使用者看完 0–4 實拍梯子後：「把現在的 4 當成 3，再做一個更誇張的 4。」
+# 4 = 3 的全部，再加下面這一段。加的是**幅度**（更大的落差、更多層的描邊、傾斜、
+# 疊字、爆裂裝飾），不是新的自由——FIXED (a)–(g) 一樣原樣附上，而且這一級要
+# 特別把「每個字仍要完整可讀、不得碰邊、不得進帶、不得跨格」再講一次：
+# 幅度愈大，模型愈容易把字推到邊上或蓋掉筆畫。
+_L4_EXTRA = """- GO FURTHER — THIS IS THE LOUDEST SETTING. Everything in the bullet above still applies; now push it to the edge of what still reads:
+  * The shouting line towers over the rest — up to two and a half or three times the height of the explaining line — and the block as a whole is big enough to dominate the photograph.
+  * MULTI-LAYER EDGES: stack outlines (a thick black one, then a white or coloured one outside it), add a deep three-dimensional extrusion, and give the surface a treatment picked from the story — molten metal, neon, cracked stone, wet chrome.
+  * The block may TILT or ARC slightly (a few degrees, no more than about eight), characters may step up and down instead of sitting on one baseline, and one word may overlap the next a little — but an overlap must never hide any part of any stroke.
+  * Add energy behind and around the words: radiating speed lines, sparks, shards, a torn or splashed colour shape, a burst of glow. Up to THREE pictograms instead of two.
+  * The photograph may darken further behind the block so all of this still reads.
+  * EVEN HERE: every character stays complete, unobstructed and legible; nothing touches or is clipped by any frame edge; nothing enters the header band or the bottom strip; and in the two-panel layout nothing crosses the seam. Loud is not the same as broken.
+"""
+
+_L4 = _L3.replace("level 3 of 4 — loud)", "level 4 of 4 — loudest)") + _L4_EXTRA
 
 COVER_AI_TITLE_LEVEL_BLOCKS = {1: _L1, 2: _L2, 3: _L3, 4: _L4}
 

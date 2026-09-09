@@ -77,27 +77,44 @@ class LadderTests(unittest.TestCase):
         self.assertEqual(len(set(seen.values())), len(seen))
 
     def test_freedoms_only_ever_grow(self):
-        """單調性：低一級不得先解放高一級才給的東西。"""
-        # 行內關鍵詞換色：2 級才開
+        """單調性：低一級不得先解放高一級才給的東西。
+
+        2026-09-09 使用者看完 0–4 實拍梯子後改的級距：舊 2（1.2 倍那級）與舊 3
+        「差距不大」，融成新 2；舊 4 下移成 3；最上面補一個更誇張的新 4。
+        """
+        # 整組 house style（行內關鍵詞換色、1.5–2 倍落差）：2 級才開
         self.assertNotIn("PULL", _clause(1))
         for level in (2, 3, 4):
-            self.assertIn("PULL", _clause(level))
-        # 大小落差 1.5–2 倍（house style）：3 級才開；2 級只有 1.2 倍
-        self.assertIn("1.2 times", _clause(2))
-        for level in (3, 4):
-            self.assertIn("one and a half to two times", _clause(level))
-        # 版位自由與小圖示：只有最高級
-        for level in (1, 2, 3):
+            with self.subTest(level=level):
+                self.assertIn("PULL", _clause(level))
+                self.assertIn("one and a half to two times", _clause(level))
+        # 版位自由與小圖示：3 級才開
+        for level in (1, 2):
             with self.subTest(level=level):
                 self.assertNotIn("pictograms", _clause(level))
                 self.assertNotIn("place the block anywhere", _clause(level))
-        self.assertIn("pictograms", _clause(4))
-        self.assertIn("place the block anywhere", _clause(4))
+        for level in (3, 4):
+            with self.subTest(level=level):
+                self.assertIn("pictograms", _clause(level))
+                self.assertIn("place the block anywhere", _clause(level))
+        # 誇張幅度（傾斜、疊字、多層描邊、爆裂裝飾）：只有最高級
+        for level in (1, 2, 3):
+            with self.subTest(level=level):
+                self.assertNotIn("GO FURTHER", _clause(level))
+        self.assertIn("GO FURTHER", _clause(4))
 
-    def test_level_three_says_out_loud_that_placement_still_binds(self):
-        """3 級解放的是排法不是位置。只是「不提位置」不夠——
+    def test_level_two_says_out_loud_that_placement_still_binds(self):
+        """2 級解放的是排法不是位置。只是「不提位置」不夠——
         前面 TYPOGRAPHY 有位置規則，但這一段整體宣告 OVERRIDE，不點名就會被順手當成解除。"""
-        self.assertIn("THE PLACEMENT STILL BINDS", _clause(3))
+        self.assertIn("THE PLACEMENT STILL BINDS", _clause(2))
+        self.assertNotIn("THE PLACEMENT STILL BINDS", _clause(3))
+
+    def test_the_loudest_level_repeats_the_legibility_guards(self):
+        """幅度愈大，模型愈容易把字推到邊上、讓疊字蓋掉筆畫。
+        4 級的加碼段自己要再講一次「完整可讀、不碰邊、不進帶、不跨格」。"""
+        clause = _clause(4)
+        self.assertIn("Loud is not the same as broken", clause)
+        self.assertIn("every character stays complete, unobstructed and legible", clause)
 
     def test_the_named_constant_is_still_the_top_level(self):
         """第七批以前的呼叫端與測試都指名這個常數。"""

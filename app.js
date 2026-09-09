@@ -682,11 +682,7 @@ window.onload = () => {
     updateStampButton();
     updateToneButtons();
     renderEditorFormats();
-    document.querySelectorAll('[data-density]').forEach(btn => {
-        const isActive = btn.dataset.density === state.digestDensity;
-        btn.classList.toggle('density-active', isActive);
-        btn.classList.toggle('text-slate-500', !isActive);
-    });
+    updateDigestDensityBar();
     wireDownloadNames();
     switchPage(1);
 };
@@ -1031,13 +1027,25 @@ function setEditorFormat(key) {
     }
 }
 
+// 拉桿的左→右順序。左端是「不改字」——它不是「字更少」，是逐字複製（輸出長度＝
+// 輸入長度，貼長稿反而比字多還長）。2026-09-09 使用者知情裁決：三檔仍放同一條拉桿。
+const DENSITY_ORDER = ['verbatim', 'simplified', 'standard'];
+
+function updateDigestDensityBar() {
+    const range = document.getElementById('digestDensityRange');
+    if (range) range.value = String(Math.max(0, DENSITY_ORDER.indexOf(state.digestDensity)));
+    const label = document.getElementById('digestDensityLabel');
+    if (label) label.innerText = DENSITY_LABELS[state.digestDensity] || state.digestDensity;
+}
+
+function setDigestDensityLevel(value) {
+    const index = Math.min(2, Math.max(0, parseInt(value, 10) || 0));
+    switchDigestDensity(DENSITY_ORDER[index]);
+}
+
 function switchDigestDensity(density) {
     state.digestDensity = density;
-    document.querySelectorAll('[data-density]').forEach(btn => {
-        const isActive = btn.dataset.density === density;
-        btn.classList.toggle('density-active', isActive);
-        btn.classList.toggle('text-slate-500', !isActive);
-    });
+    updateDigestDensityBar();
     updateAIBtnRoleHint();
     const label = DENSITY_LABELS[density] || density;
     showToast(density === 'verbatim'
@@ -1315,9 +1323,9 @@ function applyCoverLayoutFields() {
 const COVER_TITLE_CREATIVITY = [
     ['規矩', '白／黃／紅逐行配色，版位固定（現行排版）'],
     ['微設計', '字體、描邊、材質放開；配色、大小、版位不動'],
-    ['有設計', '再加：行內關鍵詞換色、大小小幅落差'],
-    ['強設計', '整組 house style（大小落差、關鍵詞壓框、飽和平塗），版位仍固定'],
-    ['最奔放', '再加：版位自由、可掛小圖示（字句永遠一字不改）'],
+    ['有設計', '整組節目美術字（大小落差、關鍵詞壓框、飽和平塗），版位仍固定'],
+    ['奔放', '再加：版位自由、可掛小圖示'],
+    ['最狂', '再加：更大落差、多層描邊立體、傾斜錯落、爆裂裝飾（字句永遠一字不改）'],
 ];
 
 function updateCoverTitleStyleButton() {
