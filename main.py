@@ -3839,6 +3839,15 @@ class CoverTitleDigestRequest(BaseModel):
 
 TEN_DIGEST_MAX_ATTEMPTS = 2   # 十點三段字數不合格時最多問幾次（含第一次）
 
+# 標題消化的輸出上限。原本寫死 2000，2026-09-09 直標那條（prompt 又多兩千多字元）
+# 實測整個被思考吃光：completion_tokens=1905 裡 reasoning_tokens=1856，正文只剩
+# 四十幾個 token，稍長一點的通稿就吐空字串 → JSONDecodeError → 502。
+# 理由與主消化的 DIGEST_MAX_TOKENS 完全相同（見該常數上方的長註解）：正文很短很穩，
+# 爆的是思考，而上限是天花板不是用量，只有真的寫出來的 token 才計費。
+# 拉到與主消化同一個量級，順便讓 digest_reasoning_body 的思考封頂在這條線上也生效
+# （2000 的預算扣掉正文保留額之後低於 1024，等於封不到）。
+COVER_TITLE_DIGEST_MAX_TOKENS = DIGEST_MAX_TOKENS
+
 
 class CoverTitleDigestResponse(BaseModel):
     title_left: str = ""
@@ -3908,7 +3917,7 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
                 model=model,
                 system_prompt=prompt,
                 news_text=req.news_text.strip(),
-                max_output_tokens=2000,
+                max_output_tokens=COVER_TITLE_DIGEST_MAX_TOKENS,
                 schema_name="cover_titles",
                 schema=schema,
                 site="cover",

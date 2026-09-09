@@ -178,3 +178,49 @@
 會剩下「底帶丁」，逐字守門員判成多出兩個字 → 五次重試 → 502。
 「不消化 ＋ 播出鏡面 ＋ 蓋章 OFF」是合法組合，所以 `<底帶>` 也要明列。
 `app.js` 查過：前端沒有解析標記的地方，只有 prompt 文字副本（已同步）。
+
+---
+
+## 實際生圖驗收（2026-09-09 晚，使用者儲值後）
+
+本機仍走 OpenAI 原生（`DIGEST_BACKEND=native DIGEST_MODEL=gpt-5 IMAGE_BACKEND=native`），
+OpenRouter 那把金鑰依舊 401。版面規則的驗收有效，消化文字風格與正式站的
+`anthropic/claude-sonnet-5` 不完全等同。
+
+四張樣張在 `D:\Downloads\` 與 `G:\我的雲端硬碟\Claude共用\AICG\`（前綴 `20260909-194`）：
+
+| 樣張 | 驗的項目 | 結果 |
+| --- | --- | --- |
+| A 熱搜封面 AI 字＋底色框 | 7、8 | 兩行同字級（黃字明顯較短、置中留白，不再被放大）；框上緣落在白字腳下、約畫面 76%，黃字整行在框內 |
+| B 國內外直播 AI 字＋底色框 | 7、8 | 同上，兩個版型一致 |
+| C 播出鏡面 left 字多 蓋章 OFF | 4 | 底帶出現：「指出通膨趨緩與就業放緩　支持加快降息」跨全寬、在挖空框下方，四張卡在右半邊，示意圖浮水印在右下 |
+| D 播出鏡面 right 字多 蓋章 OFF | 4 | 鏡射正確（卡在左、窗在右），底帶「降息判斷依據數據　非為政治壓力」同樣跨全寬 |
+
+第 2 項用使用者給的那則路透通稿實測：
+
+```
+第一標題: 小布希與各界談911影響        => 10 格 / 上限 12
+第二標題: 達拉斯布希中心25周年活動      => 12 格 / 上限 14
+來源    : George W. Bush Presidential Center   （取自 Must credit 那一行）
+```
+
+### 這次驗收抓到的兩件事
+
+1. **`/api/editor/cover-titles` 的輸出上限寫死 2000，對推理模型不夠。**
+   直標那條 prompt 又多兩千多字元，實測 `completion_tokens=1905` 裡
+   `reasoning_tokens=1856`，正文只剩四十幾個 token，整個吐空字串 →
+   `JSONDecodeError` → 502。改成 `COVER_TITLE_DIGEST_MAX_TOKENS = DIGEST_MAX_TOKENS`
+   （理由與主消化同一條：正文短而穩、爆的是思考，而上限是天花板不是用量）。
+   順帶讓 `digest_reasoning_body` 的思考封頂在這條線上也生效——2000 的預算扣掉
+   正文保留額之後低於 1024，等於封不到。
+
+2. **第 5 項要修的那個失敗，這次當場重現了一次。** D 的第一次 attempt：
+   `budget=10000 completion_tokens=10000 reasoning_tokens=10000 finish=length TRUNCATED`，
+   raw content 全空、重試才成功。本機走原生 OpenAI 沒有思考封頂（那是 OpenRouter
+   的欄位），正式站有。新加的 `reasoning_tokens` 欄位讓這件事第一次看得見。
+
+### 品質上的小瑕疵（沒改，記著）
+- 消化出來的「911周年」「25周年」在臺灣用法應該是「週年」。這是消化文字的問題不是版面，
+  而且本機跑的是 gpt-5、不是正式站的模型，先不動。
+- 來源回傳英文原名（`George W. Bush Presidential Center`）。條文寫的是「有標準中譯就用中譯，
+  否則用原文」，這個機構沒有通用中譯，回原文合規。
