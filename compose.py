@@ -353,14 +353,16 @@ COVER_MAX_TITLE_LINES_SPLIT = 3      # 雙切
 # 以及模型畫太薄時程式補到的目標。分成兩個數字遲早會各走各的。
 # 2026-09-09（第二輪）使用者改裁：「應該要藍框區域稍微變大一點點，你現在變成把 LOGO
 # 那些縮太小才是問題。」——上一版量到帶薄（實測 58/720 = 8.1%）就把 Logo 縮小去遷就，
-# 方向反了。0.10 → 0.12，並且改成**把帶補厚**而不是把 Logo 縮小。
-COVER_AI_HEADER_RATIO = 0.12
+# 方向反了。改成**把帶補厚**而不是把 Logo 縮小，帶高直接借合成版那一個：
+# 合成版的帶就是 COVER_HEADER_RATIO，Logo 佔帶高 70%、標籤 80%、垂直置中，
+# 那是使用者早就看習慣的比例；AI 版另外訂一個數字只會讓兩版長得不一樣。
+COVER_AI_HEADER_RATIO = COVER_HEADER_RATIO
 COVER_AI_LEFT_RATIO = 0.015
 COVER_AI_HEADER_MIN_RATIO = 0.055     # 量到的帶高低於這個就是量錯（誤把帶內的字當邊界）
 COVER_AI_HEADER_MAX_RATIO = 0.145
 COVER_AI_HEADER_DELTA = 90            # 判定「離開標頭帶」的 RGB 曼哈頓距離
-COVER_AI_HEADER_CLEARANCE = 0.12      # Logo／標籤與帶底之間再留這麼多帶高當空隙
-COVER_AI_HEADER_EDGE_MAX_RATIO = 0.030   # 帶底那組「輝光＋亮藍細線」最多這麼厚
+COVER_AI_HEADER_GLOW_MAX_RATIO = 0.030   # 帶底輝光往上最多這麼厚
+COVER_AI_HEADER_RULE_MAX_RATIO = 0.012   # 帶底那條亮藍細線往下最多這麼厚
 COVER_AI_HEADER_FLAT_DELTA = 6           # 與帶身顏色差這麼多以內＝還算帶身（不是輝光）
 
 
@@ -370,9 +372,13 @@ def _ai_band_columns(width: int) -> range:
 
 
 def _is_band_edge(pixel) -> bool:
-    """帶底的輝光與亮藍細線都是藍色壓倒性的；照片就算有天空也少有這麼純的藍。"""
+    """帶底的輝光與亮藍細線：藍色壓倒性、而且紅幾乎是 0（實測 r ≤ 13）。
+
+    只寫「藍比紅多、藍夠亮」會把天空也算進去（淡藍天 135,206,235 就過關），
+    掃描一路衝進照片裡，帶底就量得太深——最後又變成標籤壓在亮線上，繞回原本的災情。
+    """
     r, g, b = pixel[:3]
-    return b > r + 40 and b > 80
+    return r < 40 and b > r + 40 and b > 80
 
 
 def _probe_ai_header_band(canvas: Image.Image) -> tuple[int, int] | None:
@@ -399,7 +405,7 @@ def _probe_ai_header_band(canvas: Image.Image) -> tuple[int, int] | None:
     if not (round(height * COVER_AI_HEADER_MIN_RATIO) <= top <= limit):
         return None
 
-    edge_cap = round(height * COVER_AI_HEADER_EDGE_MAX_RATIO)
+    edge_cap = round(height * COVER_AI_HEADER_RULE_MAX_RATIO)
     depths: list[int] = []
     for x in _ai_band_columns(width):
         depth = 0
@@ -476,7 +482,7 @@ def ensure_ai_header_band(canvas: Image.Image) -> int:
     px = rgb.load()
     x_mid = round(canvas.size[0] * 0.5)
     body = px[x_mid, max(1, top // 2)]
-    glow_cap = round(height * COVER_AI_HEADER_EDGE_MAX_RATIO)
+    glow_cap = round(height * COVER_AI_HEADER_GLOW_MAX_RATIO)
     glow_top = top
     while (
         top - glow_top < glow_cap
@@ -510,14 +516,13 @@ def paste_cover_logo(image_bytes: bytes) -> bytes:
     # 2026-09-09（第二輪）：帶太薄就把帶補厚（見 ensure_ai_header_band），
     # Logo 照補完的帶高算——第一版是反過來把 Logo 縮小去遷就薄帶，使用者退回。
     band_h = ensure_ai_header_band(canvas)
-    inner = max(1, band_h - round(band_h * COVER_AI_HEADER_CLEARANCE))
-    logo_h = max(1, round(inner * 0.70))
+    logo_h = max(1, round(band_h * 0.70))
     with Image.open(TVBS_LOGO_WHITE) as logo_file:
         logo_w = max(1, round(logo_h * logo_file.width / logo_file.height))
     logo_x = round(width * COVER_AI_LEFT_RATIO)
-    _paste_logo(canvas, (logo_x, (inner - logo_h) // 2), logo_w)
-    tag_h = max(1, round(inner * 0.80))
-    _paste_template(canvas, TEN_SHOW_TAG, (logo_x + logo_w + round(width * 0.02), (inner - tag_h) // 2), tag_h)
+    _paste_logo(canvas, (logo_x, (band_h - logo_h) // 2), logo_w)
+    tag_h = max(1, round(band_h * 0.80))
+    _paste_template(canvas, TEN_SHOW_TAG, (logo_x + logo_w + round(width * 0.02), (band_h - tag_h) // 2), tag_h)
 
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")

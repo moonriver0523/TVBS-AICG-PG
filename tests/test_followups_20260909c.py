@@ -158,10 +158,27 @@ class AiHeaderBandTests(unittest.TestCase):
         """260909-03 的帶高寫死一成（720 → 72），Logo 50、標籤 58。
         這次是把帶補厚，不是把 Logo 縮小——所以只能更大，不能更小。"""
         band = round(720 * compose.COVER_AI_HEADER_RATIO)
-        inner = band - round(band * compose.COVER_AI_HEADER_CLEARANCE)
-        self.assertGreaterEqual(round(inner * 0.70), 50)
-        self.assertGreaterEqual(round(inner * 0.80), 58)
+        self.assertGreaterEqual(round(band * 0.70), 50)
+        self.assertGreaterEqual(round(band * 0.80), 58)
         self.assertGreater(compose.COVER_AI_HEADER_RATIO, 0.10, "藍框要比原本大一點點")
+
+    def test_the_ai_band_matches_the_composite_band(self):
+        """兩版十點要長得一樣。AI 版自己訂一個帶高，只會變成同一個節目兩種比例。"""
+        self.assertEqual(compose.COVER_AI_HEADER_RATIO, compose.COVER_HEADER_RATIO)
+
+    def test_a_blue_sky_under_the_band_is_not_mistaken_for_the_hairline(self):
+        """帶底往下掃的條件若只寫「藍比紅多、藍夠亮」，淡藍天也會過關，
+        一路掃進照片裡把帶底量得太深——帶就補得不夠，標籤又壓在亮線上。"""
+        sky = (135, 206, 235)
+        canvas = Image.new("RGB", (1280, 720), sky)
+        top = round(720 * 0.081)
+        canvas.paste(Image.new("RGB", (1280, top), self.BAND), (0, 0))
+        canvas.paste(Image.new("RGB", (1280, 3), self.RULE), (0, top))
+        canvas = canvas.convert("RGBA")
+        self.assertEqual(compose.measure_ai_header_band(canvas), top + 3)
+        target = round(720 * compose.COVER_AI_HEADER_RATIO)
+        self.assertEqual(compose.ensure_ai_header_band(canvas), target)
+        self.assertEqual(canvas.convert("RGB").getpixel((640, target + 2)), sky)
 
     def test_the_logo_lands_inside_the_thickened_band(self):
         out = Image.open(
