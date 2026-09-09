@@ -149,3 +149,32 @@
 | 8 | 三個模板都有共用字級條文 | 生圖後兩行真的一樣大 |
 
 全套 1172 題綠。
+
+---
+
+## 補記：思考 token 確實已經開著（第 5 項的前提查證）
+
+`reasoning.max_tokens` 的存在會**啟用**推理（OpenRouter 文件：`enabled` 由 `effort`
+或 `max_tokens` 的存在推導）。如果正式站本來沒開，這個改動就會變成把每次消化都
+弄慢——與需求相反。所以查了正式站的日誌：
+
+```
+[digest_usage] site=generate model=anthropic/claude-sonnet-5 budget=10000 completion_tokens=9535 ratio=0.95 finish=stop NEAR-LIMIT
+[digest_usage] site=generate model=anthropic/claude-sonnet-5 budget=10000 completion_tokens=10000 ratio=1.00 finish=length TRUNCATED
+[digest_usage] site=generate model=anthropic/claude-sonnet-5 budget=6000  completion_tokens=4599 ratio=0.77 finish=stop
+```
+
+`completion_tokens` 已經把思考算在裡面（Anthropic／OpenRouter 都是這樣報）。
+觀測到的正文最大值是 1361 token，所以 9535 那一次有**八千多**是思考，
+而 `10000 finish=length TRUNCATED` 就是使用者說的「偶有失敗」。
+封頂 2000 是真的封頂，不是把它打開。
+
+`log_digest_usage` 同時補記 `reasoning_tokens`（從 `completion_tokens_details` 拿），
+以後不必再靠反推。
+
+## 補記：`<底帶>` 的連帶影響
+
+`main._VERBATIM_MARKER_RE` 原本只列 `<蓋章>`，其餘靠 `[<>]` 剝括號——`<底帶> 丁`
+會剩下「底帶丁」，逐字守門員判成多出兩個字 → 五次重試 → 502。
+「不消化 ＋ 播出鏡面 ＋ 蓋章 OFF」是合法組合，所以 `<底帶>` 也要明列。
+`app.js` 查過：前端沒有解析標記的地方，只有 prompt 文字副本（已同步）。

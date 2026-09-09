@@ -92,6 +92,44 @@ class VstripTitleDigestTests(unittest.TestCase):
         self.assertEqual(kwargs["schema"], editor_formats.VSTRIP_TITLE_DIGEST_SCHEMA)
 
 
+class BottomBandMarkerTests(unittest.TestCase):
+    """`<底帶>` 是新標記，凡是「認得標記」的地方都要跟著認得它。"""
+
+    def test_verbatim_fidelity_strips_the_marker_like_the_stamp_one(self):
+        """不消化 ＋ 播出鏡面 ＋ 蓋章 OFF 是合法組合。標記沒被剝掉的話，
+        「底帶」兩個字會被當成多出來的內文，逐字守門員判不合格 → 五次重試 → 502。"""
+        self.assertEqual(
+            main.verbatim_fidelity_problem("[標題] 甲\n<底帶> 丁", "甲丁"), ""
+        )
+
+    def test_the_marker_is_listed_explicitly_not_just_by_the_brackets(self):
+        self.assertIn("<底帶>", main._VERBATIM_MARKER_RE.pattern)
+
+
+class SlashInTitleTests(unittest.TestCase):
+    """第 6 項：整條路徑（分段 → 超寬拆行）都不准把日期切開。"""
+
+    TITLE = "古羅馬圖拉真浴場 9/12開放民眾參觀"
+
+    def test_the_date_survives_the_whole_pipeline(self):
+        for full_width in (True, False):
+            with self.subTest(full_width=full_width):
+                lines = compose.cover_title_lines(self.TITLE, full_width=full_width)
+                self.assertTrue(any("9/12" in line for line in lines), lines)
+                self.assertNotIn("9", [line.strip() for line in lines])
+
+    def test_a_real_separator_still_separates(self):
+        self.assertEqual(
+            editor_formats.split_cover_title("羅馬/浴場/開放"), ["羅馬", "浴場", "開放"]
+        )
+
+    def test_other_numeric_separators_are_protected_too(self):
+        for text in ("跌破5.5元今天收盤", "晚間20:00開播特別報導"):
+            with self.subTest(text=text):
+                head, tail = compose._split_line_near_middle(text)
+                self.assertNotIn(head[-1] + tail[0], ("5.", ".5", "0:", ":0"))
+
+
 class DigestLatencyTests(unittest.TestCase):
     """第 5 項：播出鏡面消化太久、偶有逾時沒生成。
 

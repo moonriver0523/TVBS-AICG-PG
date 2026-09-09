@@ -1145,6 +1145,11 @@ def log_digest_usage(site: str, model: str, budget: int, response) -> None:
     try:
         usage = getattr(response, "usage", None)
         completion = getattr(usage, "completion_tokens", None) or 0
+        # 思考 token 也算在 completion_tokens 裡（Anthropic／OpenRouter 都是），
+        # 但拆不開就看不出「爆掉的是思考還是正文」——2026-09-09 追消化速度時
+        # 只能靠 completion 9535 vs 觀測正文 1361 去反推。拆出來記著。
+        details = getattr(usage, "completion_tokens_details", None)
+        reasoning = getattr(details, "reasoning_tokens", None)
         finish = response.choices[0].finish_reason if response.choices else "?"
         ratio = completion / budget if budget else 0.0
         flag = ""
@@ -1158,8 +1163,9 @@ def log_digest_usage(site: str, model: str, budget: int, response) -> None:
         provider = (getattr(response, "model_extra", None) or {}).get("provider") or "-"
         print(
             f"[digest_usage] site={site} model={model} provider={provider} "
-            f"budget={budget} completion_tokens={completion} ratio={ratio:.2f} "
-            f"finish={finish}{flag}",
+            f"budget={budget} completion_tokens={completion} "
+            f"reasoning_tokens={'-' if reasoning is None else reasoning} "
+            f"ratio={ratio:.2f} finish={finish}{flag}",
             flush=True,
         )
     except Exception as exc:  # 監控壞掉不可以拖垮消化
@@ -1350,7 +1356,7 @@ def parse_digest_json(raw_content: str) -> dict:
 #
 # 只在「指令欄是空的」時才啟用：指令欄的優先序高於消化程度（使用者裁決），
 # 「濃縮成三點」本來就該把逐字要求放掉，這時候拿原文去比對會把正確結果判成錯的。
-_VERBATIM_MARKER_RE = re.compile(r"\[標題\]|\[內文小標\]|<蓋章>|[<>]")
+_VERBATIM_MARKER_RE = re.compile(r"\[標題\]|\[內文小標\]|<蓋章>|<底帶>|[<>]")
 _VERBATIM_WS_RE = re.compile(r"\s+")
 
 
