@@ -277,6 +277,10 @@ class GenerateRequest(BaseModel):
     type_label: str
     role: str = "記者"
     density: DigestDensity = "standard"
+    # CG 美術創意 0–4（2026-09-10）。0＝現行成品，完全不注入。None／未帶＝0。
+    # 十點封面那條拉桿是另一個欄位（TenCoverRequest.title_creativity），兩條互不影響。
+    # 上下界寫字面值：CG_CREATIVITY_LEVEL_MIN/MAX 定義在條文區塊，比這個類別晚。
+    visual_creativity: int = Field(default=0, ge=0, le=4)
     # True＝留白改由後端 safe_frame 置框，消化階段要出滿版版面而非縮小置中
     safe_frame: bool = False
     # 網頁版「給 AI 的指令」專用欄位（PLAN.md ①）。這是文內解析之外**多出來**的
@@ -733,6 +737,91 @@ MAXIMUM_DENSITY_RULES = """
 """
 
 
+# ============================================================
+# CG 創意拉桿（2026-09-10 使用者：「創意程度除了十點不一樣之外，編輯的播出鏡面、
+# 記者版的，是否也可以加入這個功能。編輯的 yt 封面就不用了。」）
+#
+# 為什麼不能直接把十點那一段接過來：十點調的是「封面上那三行標題長什麼樣」，
+# 整段條文都在講標題塊。播出鏡面／記者版沒有那種標題塊，它們是一整張資訊圖，
+# 而且身上綁著安全框、卡片列數、標題強制拆兩行這些硬規則。照抄只會被忽略。
+#
+# 所以這一套調的是**美術處理**：標題與關鍵數字的字體、描邊、壓框、立體、裝飾。
+# 版面骨架（幾張卡、幾個點、放哪裡、安全留白）不在這條拉桿上——那些是上鏡規約，
+# 由前面的區塊決定。第一版刻意保守：使用者說「你先做一版給我看」，
+# 寧可先交一條不會炸掉上鏡規則的拉桿，再依實拍梯子往上加。
+#
+# 注入點在 editor_formats.digest_rules 之後（本 repo 慣例：位置在後＋明文 OVERRIDE
+# 才壓得住），但條文自己第一句就聲明「只覆蓋美術，不覆蓋版面與內容」。
+CG_CREATIVITY_LEVEL_MIN = 0
+CG_CREATIVITY_LEVEL_MAX = 4
+CG_CREATIVITY_LEVEL_NAMES = {
+    0: "規矩",
+    1: "微設計",
+    2: "有設計",
+    3: "奔放",
+    4: "最狂",
+}
+
+# 每一級（0 以外）都原樣附上。這一塊是「拉桿不准碰的東西」。
+_CG_CREATIVITY_FIXED = """
+WHAT THE CREATIVITY SETTING NEVER CHANGES — THIS PARAGRAPH OUTRANKS THE ONE ABOVE IT:
+(a) THE WORDS. The creativity setting styles the text; it never rewrites it. Do not add, drop, translate, shorten or reorder a single character to make a design work, and never invent a figure, a label, a caption, a unit or a source line for the sake of the layout.
+(b) THE POINT COUNT AND THE LINE STRUCTURE stay exactly as the blocks above set them. If a block above fixes an exact number of [內文小標] lines, that number still holds. Design freedom is not permission to add a card, drop a card or merge two points.
+(c) THE BROADCAST SAFE AREA stays exactly as instructed above, including the sentence the structure description must begin with, the ban on expressing any position or size as a number, and the ban on anything spanning or touching an edge.
+(d) NO NEW TEXT OF ANY KIND. Decorative marks are wordless: no letters, no digits, no invented badges, no watermark, no signature, no extra labels. Icons carry no writing.
+(e) EVERY CHARACTER STAYS COMPLETE, UNOBSTRUCTED AND LEGIBLE at broadcast distance. A decoration that crosses a stroke, a shadow that swallows a stroke, or type squeezed until the counters close, is a defect — not a style.
+(f) Traditional Chinese, Taiwan forms throughout.
+"""
+
+_CG_L1 = """
+
+VISUAL CREATIVITY — LEVEL 1 OF 4 (LIGHT). This paragraph overrides the earlier typography wording ONLY where they disagree about how the text LOOKS; it changes nothing about what the text SAYS or where the elements SIT.
+In "structure", specify a designed display finish for the headline and for the key figures: a heavier display cut, a clean outline, a soft drop shadow, and one accent colour used consistently. Everything else — the arrangement, the number of cards, the colour system, the spacing — stays as described above.
+"""
+
+_CG_L2 = """
+
+VISUAL CREATIVITY — LEVEL 2 OF 4 (DESIGNED). This paragraph overrides the earlier typography wording ONLY where they disagree about how the text LOOKS; it changes nothing about what the text SAYS or where the elements SIT.
+In "structure", require all of the following, not as options:
+- The headline carries a designed display treatment: heavy cut, thick outline, hard drop shadow.
+- IN EVERY CARD OR POINT, the figure or key phrase already marked with angle brackets is pulled out visually — set larger than the words around it and given a contrasting colour, or reversed out of a solid colour block. A card whose text is one flat colour is under-designed at this setting.
+- Cards and panels get a defined edge: a thin bright rule, a subtle inner glow or a soft outer shadow, so each one reads as an object rather than a rectangle of colour.
+The arrangement, the number of cards and the safe area stay exactly as described above.
+"""
+
+_CG_L3_EXTRA = """- SIZE HIERARCHY INSIDE THE TYPE: the headline and the single most important figure are set far larger than the supporting lines — a clear step, not a nudge — while the supporting lines stay at one consistent size as each other.
+- One or two flat wordless pictograms, chosen from what the story is about, sit beside the headline or the leading card.
+- The background carries a themed texture or gradient related to the subject (circuitry, water, smoke, topography), kept dark and low-contrast behind the text so nothing competes with the words.
+"""
+
+# 高一級＝低一級的全文再加碼，不用「照 level two 那樣做」的引用：模型看不到別份
+# prompt，引用等於沒寫。（十點那條拉桿是同一個做法。）
+_CG_L3 = _CG_L2.replace("LEVEL 2 OF 4 (DESIGNED)", "LEVEL 3 OF 4 (LOUD)") + _CG_L3_EXTRA
+
+_CG_L4_EXTRA = """- GO FURTHER — THIS IS THE LOUDEST SETTING. Everything above still applies; now push the ART, and only the art, to the edge of what still reads:
+- Stack outlines on the headline and the hero figure (a thick dark one, then a bright one outside it) and give them a deep three-dimensional extrusion with a treatment drawn from the story — molten metal, neon, cracked stone, wet chrome.
+- The headline block may TILT or ARC very slightly (a few degrees, never more than about eight) and its characters may step up and down instead of sitting on one baseline.
+- Add energy around the hero element: radiating lines, sparks, shards, a splashed or torn colour shape, a burst of glow. Up to three wordless pictograms.
+- The background may darken further so all of this still reads.
+- LOUD IS NOT THE SAME AS BROKEN: nothing tilts far enough to touch or overrun the reserved empty margin, no decoration crosses a stroke, and every card still sits where the arrangement above puts it.
+"""
+
+_CG_CREATIVITY_BLOCKS = {
+    1: _CG_L1,
+    2: _CG_L2,
+    3: _CG_L3,
+    4: _CG_L3.replace("LEVEL 3 OF 4 (LOUD)", "LEVEL 4 OF 4 (LOUDEST)") + _CG_L4_EXTRA,
+}
+
+
+def cg_creativity_rules(level: int) -> str:
+    """0＝完全不注入（現行成品）；1–4 追加該級的美術條文＋不變的 FIXED 段。"""
+    block = _CG_CREATIVITY_BLOCKS.get(level)
+    if not block:
+        return ""
+    return block + _CG_CREATIVITY_FIXED
+
+
 # 「不消化」檔（2026-09-03 使用者要求）。原本只有標準／簡化兩檔，兩檔都會改寫使用者
 # 的字。這一檔把消化整個關掉：使用者貼的內文一個字都不准動。
 #
@@ -1080,6 +1169,7 @@ def build_digest_instructions(
     tone: DigestTone | None = None,
     map_scope_guard: bool = False,
     hole_side: str | None = None,
+    visual_creativity: int = 0,
 ) -> str:
     is_editor = role == "編輯"
     template = EDITOR_SYSTEM_PROMPT_TEMPLATE if is_editor else SYSTEM_PROMPT_TEMPLATE
@@ -1135,6 +1225,10 @@ def build_digest_instructions(
     instructions += editor_formats.digest_rules(
         editor_format, role, stamp, density, side=hole_side
     )
+    # 創意拉桿放在版型區塊之後：本 repo 的慣例是「位置在後＋明文 OVERRIDE」才壓得住
+    # 前面那些命令句。但它自己第一句就限縮成「只覆蓋美術」，而 FIXED 段再把
+    # 字句、點數、安全框、清單外文字四件事釘回去。
+    instructions += cg_creativity_rules(visual_creativity)
     # 沒有 asis 附圖時完全不注入，消化 prompt 逐字元不變。
     if asis_reference_count:
         instructions += USER_REFERENCE_ASIS_DIGEST_RULES
@@ -1610,6 +1704,7 @@ def generate(req: GenerateRequest):
         tone=req.tone,
         editor_format=req.editor_format,
         hole_side=req.hole_side,
+        visual_creativity=req.visual_creativity,
     )
 
     # 上游（OpenRouter 多 provider 輪替）偶發 502、輸出截斷或不合 schema 的回傳是常態，

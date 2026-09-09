@@ -304,6 +304,8 @@ let state = {
     currentRole: '記者',
     // 2026-09-03：三檔（verbatim=不消化／simplified=字少／standard=字多），預設字少
     digestDensity: 'simplified',
+    // CG 美術創意 0–4（2026-09-10）。記者版與編輯各版型共用；封面那兩條拉桿是別的欄位。
+    cgCreativity: 0,
     // 蓋章由使用者決定（2026-09-03）。以前是消化階段自己決定，同一個產品三種行為。
     // 2026-09-07 起預設 OFF（使用者裁決）；指令欄若提到蓋章，後端以指令欄為準（見 main.py 的優先序規則）。
     stamp: false,
@@ -685,6 +687,7 @@ window.onload = () => {
     updateToneButtons();
     renderEditorFormats();
     updateDigestDensityBar();
+    updateCgCreativityBar();
     wireDownloadNames();
     switchPage(1);
 };
@@ -1038,6 +1041,30 @@ function updateDigestDensityBar() {
     if (range) range.value = String(Math.max(0, DENSITY_ORDER.indexOf(state.digestDensity)));
     const label = document.getElementById('digestDensityLabel');
     if (label) label.innerText = DENSITY_LABELS[state.digestDensity] || state.digestDensity;
+}
+
+// CG 美術創意 0–4（2026-09-10 使用者要求：播出鏡面與記者版也要）。
+// 調的只有美術處理，版面骨架／卡片數／安全留白／字句都不歸它管（見 main.py 的條文）。
+const CG_CREATIVITY = [
+    ['規矩', '現行成品，完全不加設計指示'],
+    ['微設計', '標題與關鍵數字給描邊、陰影、單一強調色'],
+    ['有設計', '再加：關鍵數字挖出來換色／反白，卡片給邊光'],
+    ['奔放', '再加：字級落差、無字小圖示、主題化背景質感'],
+    ['最狂', '再加：多層描邊立體、輕微傾斜錯落、爆裂與速度線'],
+];
+
+function updateCgCreativityBar() {
+    const range = document.getElementById('cgCreativityRange');
+    if (range) range.value = String(state.cgCreativity);
+    const label = document.getElementById('cgCreativityLabel');
+    if (label) label.innerText = CG_CREATIVITY[state.cgCreativity][0];
+}
+
+function setCgCreativity(value) {
+    const level = Math.min(4, Math.max(0, parseInt(value, 10) || 0));
+    state.cgCreativity = level;
+    updateCgCreativityBar();
+    showToast('CG 創意 ' + level + '　' + CG_CREATIVITY[level][0] + '：' + CG_CREATIVITY[level][1]);
 }
 
 function setDigestDensityLevel(value) {
@@ -1859,6 +1886,7 @@ async function digestNewsText(input) {
             type_label: digestTypeLabelForApi(),
             role: state.currentRole,
             density: state.digestDensity,
+            visual_creativity: state.cgCreativity,
             stamp: state.stamp,
             tone: state.tone,
             editor_format: state.editorFormat,
