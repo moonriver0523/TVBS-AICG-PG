@@ -604,8 +604,10 @@ function downloadFileName(kind, title, ext) {
 /* 消化程度三檔。key 與後端 DigestDensity 一致，改這裡要同步改 main.py */
 const DENSITY_LABELS = {
     verbatim: '不改字',   // 2026-09-07 使用者裁決：UI 顯示改「不改字」，key 與後端 verbatim 不動
+    minimal: '字極少',    // 2026-09-10 五段拉桿新增
     simplified: '字少',
     standard: '字多',
+    maximum: '字超多',    // 2026-09-10 五段拉桿新增
 };
 
 /* 第一頁「AI 自動判斷版型」的懶人選項，非真實 CHART_TYPES 成員 */
@@ -1029,7 +1031,7 @@ function setEditorFormat(key) {
 
 // 拉桿的左→右順序。左端是「不改字」——它不是「字更少」，是逐字複製（輸出長度＝
 // 輸入長度，貼長稿反而比字多還長）。2026-09-09 使用者知情裁決：三檔仍放同一條拉桿。
-const DENSITY_ORDER = ['verbatim', 'simplified', 'standard'];
+const DENSITY_ORDER = ['verbatim', 'minimal', 'simplified', 'standard', 'maximum'];
 
 function updateDigestDensityBar() {
     const range = document.getElementById('digestDensityRange');
@@ -1039,7 +1041,7 @@ function updateDigestDensityBar() {
 }
 
 function setDigestDensityLevel(value) {
-    const index = Math.min(2, Math.max(0, parseInt(value, 10) || 0));
+    const index = Math.min(DENSITY_ORDER.length - 1, Math.max(0, parseInt(value, 10) || 0));
     switchDigestDensity(DENSITY_ORDER[index]);
 }
 

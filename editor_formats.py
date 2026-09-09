@@ -122,7 +122,7 @@ BROADCAST_BOTTOM_MARKER = "底帶"
 
 
 def _broadcast_point_count(density: str | None) -> dict:
-    word = "four" if density == "standard" else "three"
+    word = "four" if density in ("standard", "maximum") else "three"
     return {"count_word": word, "count_word_cap": word.capitalize()}
 
 # 第 7 條跟著第 6 條一起換檔（2026-09-08 第二輪）：字多時第 6 條要求每卡兩行，
@@ -135,7 +135,8 @@ def _broadcast_rules(
     side: str, stamp: bool | None = None, density: str | None = None
 ) -> str:
     left = side == "left"
-    standard = density == "standard"
+    # 字超多沿用字多的版面加碼（四張卡、每卡兩行）：卡片列數是版面實體限制，不隨密度長。
+    standard = density in ("standard", "maximum")
     stamp_block = _BROADCAST_STAMP_OFF if stamp is False else _BROADCAST_STAMP_ON
     return _BROADCAST_RULES_TEMPLATE.format(
         stamp_rules=stamp_block.format(
@@ -1056,7 +1057,7 @@ def digest_rules(
     """消化階段要注入的規則。非編輯角色一律空字串——第三層防呆。
 
     stamp 與 density 都只影響播出鏡面：stamp False 時第 5／6 條換成「沒有蓋章」版本；
-    density "standard"（字多）時第 6 條加一段「每卡兩行」。其餘版型兩者都不看。
+    density 為 "standard"（字多）或 "maximum"（字超多）時第 6 條加一段「每卡兩行」。其餘版型兩者都不看。
     side 同樣只有播出鏡面在看，而且只有新的 broadcast 版型吃得到（見 resolve_hole_side）：
     消化端要把內容趕到挖空側的另外半邊，方向講錯的話整張圖的重點會被影片蓋掉。
     播出鏡面一律現算——stamp 沒表態且非字多時，算出來跟預先算好的那份逐字元相同。

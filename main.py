@@ -255,7 +255,12 @@ async def site_password_gate(request, call_next):
     )
 
 
-DigestDensity = Literal["standard", "simplified", "verbatim"]
+# 2026-09-10 使用者：「字少字多拉桿可否也做成 5 階梯，最左邊：不改字，最右邊：字超多，
+# 預設還是字少。」——兩端各補一級。新的兩級是**既有級的加碼**，不是新寫一套：
+# minimal = SIMPLIFIED 再收緊、maximum = STANDARD 再放寬，這樣自由度／資訊量一定單調。
+# 由少到多的順序寫在 DIGEST_DENSITY_ORDER，前台拉桿與測試都以它為準。
+DigestDensity = Literal["verbatim", "minimal", "simplified", "standard", "maximum"]
+DIGEST_DENSITY_ORDER = ("verbatim", "minimal", "simplified", "standard", "maximum")
 # 色調。None＝呼叫端沒表態（LINE、舊呼叫端），完全不注入。
 DigestTone = Literal["light", "dark"]
 
@@ -702,6 +707,32 @@ SIMPLIFIED MODE OVERRIDE — THESE RULES OVERRIDE ANY EARLIER STANDARD-MODE LENG
 """
 
 
+# 「字極少」檔（2026-09-10 五段拉桿的左二）。SIMPLIFIED 之後才注入，所以它只要
+# 講「再往下收」就好，不必重寫一套。這一級的用途是「一眼看完」的大字卡。
+MINIMAL_DENSITY_RULES = """
+
+字極少 MODE — THIS BLOCK IS EVEN TIGHTER THAN THE SIMPLIFIED BLOCK ABOVE AND OVERRIDES IT WHEREVER THEY DISAGREE:
+1. ONE point. Not one to three — one. Pick the single fact that the audience must leave with, and drop everything else, however interesting.
+2. That one [內文小標] line runs to at most about twelve characters. If it will not fit, cut words, never shrink the meaning into jargon.
+3. The graphic is a single dominant statement: one huge number, name or conclusion, with at most ONE short supporting label beside or beneath it. No card stack, no bullet列, no secondary group, no callout cluster.
+4. The headline and that one point must not say the same thing twice in different words. If they would, rewrite the point to carry what the headline does not.
+5. Design "structure" for that: one focal element occupying the middle of the content area at a size readable across a room, everything else empty.
+"""
+
+# 「字超多」檔（2026-09-10 五段拉桿的右一）。STANDARD 之後才注入。
+# 加的是**密度**，不是新的許可——第 3 條刻意重申「不准編」，因為要求更多字最容易
+# 誘發模型自己補料，而封面／CG 上編出來的數字是對外事故。
+MAXIMUM_DENSITY_RULES = """
+
+字超多 MODE — THIS BLOCK GOES BEYOND THE 字多 BLOCK ABOVE AND OVERRIDES IT WHEREVER THEY DISAGREE:
+1. POINT COUNT: carry every distinct point the material supports, up to EIGHT [內文小標] lines. The rule above stopped at six; this setting does not.
+2. LINE LENGTH AND TOTAL: each [內文小標] line may run to about thirty characters, and the whole graphic may reach roughly three hundred and sixty to four hundred and eighty characters. Every line still has to be readable on air — long is not the same as cramped.
+3. THIS STILL LICENSES NOTHING NEW. Every added line comes from the source material. Do not invent a figure, a date, a name or a cause to reach the count; do not restate an earlier point in different words; do not pad with generic background. If the material supports only three points, write three — this setting raises the ceiling, it does not set a quota.
+4. Group the points: when you write more than five, say in "structure" that they are arranged in labelled groups or two columns rather than one long list, so the viewer can find the one that matters.
+5. A LATER BLOCK MAY STILL FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT, and that number wins over the "up to eight" here: those card stacks physically have that many rows.
+"""
+
+
 # 「不消化」檔（2026-09-03 使用者要求）。原本只有標準／簡化兩檔，兩檔都會改寫使用者
 # 的字。這一檔把消化整個關掉：使用者貼的內文一個字都不准動。
 #
@@ -1075,10 +1106,14 @@ def build_digest_instructions(
     elif map_scope_guard:
         # 只有兩段式把自動判斷分類成非地圖時才會是 True（見 resolve_effective_type_label）
         instructions += MAP_SCOPE_GUARD_RULES
-    if density == "standard":
+    if density in ("standard", "maximum"):
         instructions += STANDARD_DENSITY_RULES.format(**_STANDARD_LIMIT_CLAUSES[is_editor])
-    elif density == "simplified":
+        if density == "maximum":
+            instructions += MAXIMUM_DENSITY_RULES
+    elif density in ("simplified", "minimal"):
         instructions += SIMPLIFIED_DENSITY_RULES
+        if density == "minimal":
+            instructions += MINIMAL_DENSITY_RULES
     elif density == "verbatim":
         instructions += VERBATIM_DENSITY_RULES
     # 蓋章緊接在 density 之後：ON 的第 5 條要引用逐字模式，順序不能倒過來。
