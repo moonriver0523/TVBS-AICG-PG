@@ -1705,7 +1705,17 @@ def yt_vertical_layout(
     band_bottom = round(height * VSTRIP_BOTTOM_MAX_RATIO)
     same_side_bottom = logo_corner == ("bl" if title_side == "left" else "br")
     if same_side_bottom:
-        band_bottom = min(band_bottom, logo_y0 - round(height * VSTRIP_TOP_GAP_RATIO))
+        gap = round(height * VSTRIP_TOP_GAP_RATIO)
+        band_bottom = min(band_bottom, logo_y0 - gap)
+        # 來源句也落在同一個下角時它排在 Logo 上方，等於又墊高了一層——色框要再讓一次，
+        # 不然 14 格的長標題底緣會壓到那行字（實測 left/bl/bl 差 11px 就撞上）。
+        landing = vstrip_source_corner(
+            source_corner=source_corner, logo_corner=logo_corner,
+            title_side=title_side, source_follow_logo=source_follow_logo,
+        )
+        if (source_text or "").strip() and landing == logo_corner:
+            src_h = round(height * VSTRIP_SOURCE_SIZE_RATIO * 1.3)
+            band_bottom -= src_h + round(height * VSTRIP_SOURCE_GAP_RATIO)
 
     # 兩欄同字級（2026-09-08 裁決）：格距由格數多的那欄決定，另一欄用同一個格距、
     # 字少就早點結束；欄高＝格數多的那欄的長度（色框是一整塊，高度取這個）。

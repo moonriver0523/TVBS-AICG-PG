@@ -148,12 +148,26 @@ class BroadcastBottomStripTests(unittest.TestCase):
                 self.assertNotIn("THE CLOSING <蓋章> BANNER IS NOT FULL WIDTH", rules)
 
     def test_stamp_on_leaves_the_watermark_corner_clear(self):
-        """apply_broadcast_hole 事後會在安全區右下角蓋「示意圖」，會壓到跨全寬的條。"""
+        """apply_broadcast_hole 事後會在安全區右下角蓋「示意圖」，會壓到跨全寬的條。
+
+        關鍵是那個角**不鏡射**：不管挖空在左還在右，浮水印永遠畫在
+        (x1 - HOLE_INSET, y1 - HOLE_INSET)，也就是安全區的右下角。兩個版型都要說
+        lower-RIGHT，跟著 opposite_en 翻邊的話 broadcast_right 會叫模型留錯角。
+        """
         self.assertEqual(compose.WATERMARK_TEXT, "示意圖")
-        for key, opposite in (("broadcast_left", "right"), ("broadcast_right", "left")):
+        for key in self.KEYS:
             with self.subTest(key=key):
                 rules = editor_formats.digest_rules(key, "編輯", stamp=True)
-                self.assertIn(f"extreme lower-{opposite} corner", rules)
+                self.assertIn("extreme lower-RIGHT corner", rules)
+                self.assertNotIn("extreme lower-left corner", rules)
+
+    def test_the_watermark_really_is_at_the_bottom_right_for_both_sides(self):
+        """上一條的前提：浮水印座標寫死在安全區右下角，與挖空側無關。"""
+        import inspect
+
+        source = inspect.getsource(compose.apply_broadcast_hole)
+        self.assertIn("(x1 - HOLE_INSET, y1 - HOLE_INSET)", source)
+        self.assertIn('anchor="rs"', source)
 
     def test_rule_three_no_longer_contradicts_rule_five(self):
         for key in self.KEYS:
@@ -257,13 +271,15 @@ class VstripShorterTests(unittest.TestCase):
 
     def test_the_longest_allowed_title_still_fits(self):
         """規格上限 12／14 格，配上最擠的選項組合也不能丟 ComposeError。"""
-        main = "十二個格子滿滿滿的標題"
+        main = "十二個格子滿滿滿滿的標題"
         sub = "十四個格子滿滿滿滿滿的標題喔"
-        self.assertEqual(len(compose._vertical_cells(main)), 11)
-        self.assertEqual(len(compose._vertical_cells(sub)), 14)
+        self.assertEqual(len(compose._vertical_cells(main)), compose.VSTRIP_MAIN_MAX_CELLS)
+        self.assertEqual(len(compose._vertical_cells(sub)), compose.VSTRIP_SUB_MAX_CELLS)
+        # 最擠：有小標（上緣被壓低）＋ Logo 同側下角（下緣被壓高）＋ 來源句也在那一角
         compose.compose_yt_overlay(
             main_title=main, sub_title=sub, title_side="left",
             variant="original_audio", logo_corner="bl",
+            source_text="美聯社", source_corner="bl",
         )
 
 
@@ -319,6 +335,34 @@ class VstripSourceTests(unittest.TestCase):
                 lx0, ly0, lx1, ly1 = layout["logo"]
                 overlaps = sx0 < lx1 and sx1 > lx0 and sy0 < ly1 and sy1 > ly0
                 self.assertFalse(overlaps, f"{corner}: 來源句壓到 Logo")
+
+    def test_nothing_overlaps_in_any_combination(self):
+        """來源句 × Logo × 色框，三者兩兩都不准疊——窮舉所有合法組合。"""
+        import itertools
+
+        def hits(a, b):
+            return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+
+        titles = [("明早晚涼中午破30度", "北臺灣週三轉濕涼留意日夜溫差"),
+                  ("十二個格子滿滿滿滿的標題", "十四個格子滿滿滿滿滿的標題喔"),
+                  ("川普宣布關稅", "")]
+        for side, logo, corner, variant in itertools.product(
+            compose.VSTRIP_SIDES, compose.VSTRIP_CORNERS,
+            compose.VSTRIP_SOURCE_CORNERS, compose.VSTRIP_VARIANTS,
+        ):
+            if logo == ("tl" if side == "left" else "tr"):
+                continue  # 同側上角本來就擋掉
+            for main_title, sub_title in titles:
+                with self.subTest(side=side, logo=logo, corner=corner,
+                                  variant=variant, cells=len(main_title)):
+                    layout = compose.yt_vertical_layout(
+                        main_title=main_title, sub_title=sub_title, title_side=side,
+                        logo_corner=logo, variant=variant,
+                        source_text="美聯社", source_corner=corner,
+                    )
+                    self.assertFalse(hits(layout["source"], layout["box"]), "來源句壓到色框")
+                    self.assertFalse(hits(layout["logo"], layout["box"]), "Logo 壓到色框")
+                    self.assertFalse(hits(layout["source"], layout["logo"]), "來源句壓到 Logo")
 
     def test_bad_corner_is_refused_rather_than_silently_ignored(self):
         with self.assertRaises(compose.ComposeError):

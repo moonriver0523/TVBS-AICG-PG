@@ -293,3 +293,66 @@ hourly 另收 `time_text`。前端 `EDITOR_FORMATS[*].ytLayout` 帶到 `ytCoverF
 以前每行各自撐滿，短行會排得比長行大一截，兩行看起來不齊。同字級之後上下兩行等高，
 與頻道實際封面一致。十點不一樣的滿版仍是逐行各自撐滿（牽涉「設計標題」AI 版的排法，
 使用者保留未裁）；十點雙切本來就已經是同字級。
+
+## 2026-09-09（第二批）：AI 底色框對齊、直標縮短、畫面來源四角
+
+使用者回饋三件與 YT 這條線有關的事，計畫與根因分析在
+`docs/plan-20260909-user-feedback.md`，這裡只記定版的規格。
+
+### 底色框：AI 生成字版本的 prompt
+
+合成版（`compose._draw_title_band`）早就修過——上緣 `YT_BAND_TOP_RATIO=0.778`
+（第一行基線）淡入、`+0.0365` 到全濃度、`YT_BAND_ALPHA=153`（60%）。AI 版沒有程式
+可畫，只能靠 `editor_formats.YT_COVER_BAND_CLAUSE_{NEWS,HOT}_ON`，而那兩條寫的是
+「the lower **40%** of the frame」——比合成版的 22% 高了將近一倍，所以 AI 版的框
+一直又高又不透明。
+
+定版寫法改成**關係式**（實測模型跟得動「在下面那一行字後面」，跟不動百分比）：
+
+- 框只在**下面那一行標題**後面（`BEHIND THE LOWER HEADLINE LINE ONLY`）。
+- 上緣是柔邊，起點與**第一行的基線**齊高——第一行仍站在裸照片上。
+- 到第二行字的上緣才到全濃度，再一路到畫面底。
+- 「大約畫面下方五分之一，絕不是下半張」＋「半透明約六成，照片透得出來」。
+
+整點版本來就沒有底帶（模板明文 no band），不受影響。
+
+### 直標（YT直播直標）縮短
+
+| 常數 | 舊 | 新 | 為什麼 |
+|---|---|---|---|
+| `VSTRIP_COLUMN_MAX_RATIO` | （無） | 0.64 | 色框**總長度**硬上限。只縮格距擋不住 14 格（14×0.070=0.98h 必被夾成上下貼邊），這條才是關鍵 |
+| `VSTRIP_MAIN_PITCH_RATIO` | 0.080 | 0.070 | 字級與長度一起縮 |
+| `VSTRIP_MIN_PITCH_RATIO` | 0.045 | 0.040 | 隨總長度上限下修，14 格才過得了 |
+| `VSTRIP_BOTTOM_MAX_RATIO` | 0.90 | 0.94 | 語意改成「可用範圍下緣」，不再等於實際長度 |
+| `VSTRIP_VERTICAL_ANCHOR` | （無） | 0.38 | 色框在可用範圍內置中偏上，不再釘在上緣往下長 |
+| `VSTRIP_COLUMN_WIDTH_EM` | （無） | 1.12 | 欄寬＝字級×1.12。舊版欄寬固定而字級由格距算，兩者脫鉤——字級一縮，兩行之間的空白反而變大 |
+
+`yt_vertical_layout` 因此多回傳 `cell_size`（畫字用的字級，`compose_yt_overlay` 直接用，
+兩邊不再各算一次）與 `source_corner`。
+
+LIVE 章與原音呈現／AI即時翻譯小標**維持釘在原位**，不跟著色框浮動——它們是頻道固定
+元素，跟著標題長短上下跑會很怪。副作用是短標題時色框離 LIVE 章比舊版遠；要拉回去
+就把 `VSTRIP_VERTICAL_ANCHOR` 調小（0＝貼著章底）。
+
+9／14 格實測：`0.181–0.940`（長 0.759／字 54px／欄寬 85px）→
+`0.227–0.867`（長 0.640／字 45px／欄寬 50px）。
+
+### 直標的 Logo 角落
+
+同側限制從「整側擋掉」放寬成「只擋同側的**上**角」（那裡有 LIVE 章與色框頂）。
+同側的**下**角開放，`yt_vertical_layout` 會把色框底緣夾在 `logo_y0 − gap` 以上；
+若來源句也落在同一個下角（它排在 Logo 上方），再多讓一層 `src_h + gap`。
+夾完格距仍低於 `VSTRIP_MIN_PITCH_RATIO` 才丟 `ComposeError`，訊息註明是 Logo 壓縮的。
+
+### 畫面來源
+
+- `compose.vstrip_source_text`：使用者只填來源名（「美聯社」），
+  `VSTRIP_SOURCE_PREFIX="畫面來源："` 自動補；已經以「畫面來源」開頭的不再補（冪等）。
+- `source_follow_logo: bool` → `source_corner: "" | tl | tr | bl | br`
+  （`compose.vstrip_source_corner`）。空字串＝舊行為，舊呼叫端逐字元不變；
+  `source_follow_logo=True` 等價於 `source_corner = logo_corner`。
+- 落點規則：該角就是 Logo 那角 → 排到 Logo 的另一邊；是 LIVE 章那角 → 貼章旁邊；
+  其餘 → 直接內縮貼角。`side × logo_corner × source_corner × variant` 全組合窮舉
+  驗過三者兩兩不重疊（`tests/test_followups_20260909.py`）。
+- 前端：placeholder 改「美聯社」＋一行說明；位置那列從兩顆按鈕改成四顆角落按鈕；
+  換直標邊時來源句角落跟著鏡射。

@@ -2285,10 +2285,16 @@ function setVstripVariant(variant) {
 }
 
 function setVstripTitleSide(side) {
+    const previous = state.vstrip.titleSide;
     state.vstrip.titleSide = side;
-    // Logo 還停在直標那一側就會被壓到：自動搬到對側同高的角落，不用使用者自己發現
+    // Logo 還停在直標那一側的上角就會被壓到：自動搬到對側同高的角落，不用使用者自己發現
     if (VSTRIP_BLOCKED_CORNERS[side].includes(state.vstrip.logoCorner)) {
         state.vstrip.logoCorner = VSTRIP_MIRROR_CORNER[state.vstrip.logoCorner];
+    }
+    // 來源句一起鏡射（2026-09-09）：預設 tl 是「LIVE 章旁邊」，換成靠右卻還停在 tl
+    // 就變成孤零零貼在對角，跟舊版「跟 LIVE 章」的行為對不上。
+    if (previous !== side) {
+        state.vstrip.sourceCorner = VSTRIP_MIRROR_CORNER[state.vstrip.sourceCorner];
     }
     updateVstripButtons();
 }
