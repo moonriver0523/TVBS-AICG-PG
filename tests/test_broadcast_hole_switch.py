@@ -32,9 +32,19 @@ class HeadlineRuleTests(unittest.TestCase):
                     self.assertIn("as ONE line", rules)
                     self.assertIn("must end above the reserved area", rules)
                     self.assertIn(f"sits in the {opposite} half", rules)
-                    self.assertIn("The headline is the one exception: it spans the full width", rules)
                     self.assertNotIn(f"stays inside the {opposite} half", rules)
                     self.assertNotIn("cross the vertical midline", rules)
+                    if stamp:
+                        # 2026-09-09：蓋章改成跨全寬躺在挖空框底下的低帶，所以第 3 條
+                        # 的「唯一可以跨全寬」要指回第 5 條，兩條才不會互相衝突。
+                        self.assertIn("the one other full-width element", rules)
+                        self.assertIn("BELOW the reserved area", rules)
+                    else:
+                        # 蓋章 OFF 沒有第二個跨全寬的元素，第 3 條維持原句
+                        self.assertNotIn("the one other full-width element", rules)
+                        self.assertIn(
+                            "The headline is the one exception: it spans the full width", rules
+                        )
 
     def test_rules_still_carry_no_numbers(self):
         for key in ("broadcast_left", "broadcast_right"):

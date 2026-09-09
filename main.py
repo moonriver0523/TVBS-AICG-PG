@@ -616,6 +616,42 @@ Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style
 {layout_rule}"""
 
 
+# 「字多」檔（2026-09-09 使用者回饋）。三檔裡以前只有字少與不改字有 override 區塊，
+# 字多什麼都不注入——它就是樣板本身，所以選了跟沒選一樣。使用者回報「字多消化後
+# 資訊量還是太少，可以放寬資訊卡的數量／資訊密度／內文字數」，這一塊就是那個放寬。
+#
+# 蓋掉的是編輯版樣板寫死的「150-180 字」與「每行不超過 15 字」；記者版樣板沒有數量
+# 上限可蓋，對它而言這塊是正向指示（多列幾點、每點帶得動細節）。
+#
+# 第 6 條刻意留給後面的版型區塊：播出鏡面的第 6 條寫「exactly four．．．no more and
+# no fewer」，那是版面實體限制（卡片就那幾列），不能被這塊的「最多六點」蓋掉。
+STANDARD_DENSITY_RULES = """
+
+字多 MODE (THE USER ASKED FOR THE DENSE VERSION) — THIS BLOCK OVERRIDES THE LENGTH AND COUNT LIMITS STATED ABOVE:
+1. This is the densest of the three digestion settings, and the user chose it because the graphic was coming back carrying too little information. Your job here is to fill the graphic, not to summarise it down.
+2. POINT COUNT: carry every distinct point the source material genuinely supports, up to six [內文小標] lines. Do not stop at three out of habit. Two facts that belong to different aspects of the story are two points, not one merged line.
+3. LINE LENGTH: {line_limit_clause} Each [內文小標] line may run to about twenty-four characters, long enough to carry a figure and what that figure means in the same line.
+4. TOTAL LENGTH: {total_limit_clause} Aim for roughly two hundred and forty to three hundred and twenty characters in total.
+5. DENSITY PER POINT: a point that states only a bare fact is under-written at this setting. Give each line its figure AND its consequence, its comparison, its timing or its source — whichever the material supplies.
+6. A LATER BLOCK MAY FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT. When a format-specific block below states an exact number of [內文小標] lines, that number wins over the "up to six" in rule two: the card stack of that layout physically has that many rows. Rules three, four and five still apply inside those rows.
+7. THIS LICENSES NOTHING NEW. Every added line must come from the source material. Do not invent a figure, do not restate a point you already made in different words, and do not pad with generic background to reach a length. If the material genuinely supports only two points, write two — a padded graphic is worse than a short one.
+8. Design "structure" for that quantity: enough rows or cards for the points you wrote, sized so the longer lines stay legible on air rather than shrinking to fit.
+"""
+
+# 第 3、4 條要指名蓋掉的上限——但那兩個上限只寫在編輯版樣板裡。對記者版指名一個
+# 不存在的句子只會讓模型去找它，所以兩個角色各給一句自己的措辭。
+_STANDARD_LIMIT_CLAUSES = {
+    True: {
+        "line_limit_clause": "The 「每行不超過 15 字」 limit above is LIFTED.",
+        "total_limit_clause": "The 「總字數嚴禁超過 150-180 個字」 target above is LIFTED.",
+    },
+    False: {
+        "line_limit_clause": "There is no per-line character cap at this setting.",
+        "total_limit_clause": "There is no total-length cap at this setting.",
+    },
+}
+
+
 SIMPLIFIED_DENSITY_RULES = """
 
 SIMPLIFIED MODE OVERRIDE — THESE RULES OVERRIDE ANY EARLIER STANDARD-MODE LENGTH OR FORMAT REQUIREMENT:
@@ -1004,7 +1040,9 @@ def build_digest_instructions(
     elif map_scope_guard:
         # 只有兩段式把自動判斷分類成非地圖時才會是 True（見 resolve_effective_type_label）
         instructions += MAP_SCOPE_GUARD_RULES
-    if density == "simplified":
+    if density == "standard":
+        instructions += STANDARD_DENSITY_RULES.format(**_STANDARD_LIMIT_CLAUSES[is_editor])
+    elif density == "simplified":
         instructions += SIMPLIFIED_DENSITY_RULES
     elif density == "verbatim":
         instructions += VERBATIM_DENSITY_RULES

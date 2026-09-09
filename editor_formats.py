@@ -57,7 +57,7 @@ _BROADCAST_RULES_TEMPLATE = """
 BROADCAST INSERT LAYOUT ({side_zh}側留給後製) — OVERRIDES THE LAYOUT SENTENCE ABOVE WHERE THEY CONFLICT:
 1. A large rectangular area filling most of the {side_en} half of the frame, centred vertically, is reserved for a video window that is composited in after this image is made. Treat that whole half as if it were already occupied.
 2. Put NOTHING there: no text, no headline, no icon, no chart, no figure, no logo, no callout, no decorative element. Whatever you place there will be covered and lost.
-3. The layout sentence above asks for the design to be centred. FOR THIS FORMAT THE BODY IS NOT CENTRED: write into "structure" that the HEADLINE is the ONLY element allowed to span the full width — it runs across the top strip of the frame, above the reserved area, as ONE line (two tightly-leaded lines only if it cannot fit in one), and it must end above the reserved area: nothing of it may hang down beside or into the video window. Every OTHER content block — every card, figure, icon and label — sits in the {opposite_en} half, stacked from top to bottom under the headline, entirely clear of the {side_en} half. THE HEADLINE MUST CARRY THE KEY FIGURE OR THE OUTCOME OF THE STORY, never a bare topic name: a reader who sees only that line should already know what happened.
+3. The layout sentence above asks for the design to be centred. FOR THIS FORMAT THE BODY IS NOT CENTRED: write into "structure" that the HEADLINE is the ONLY element allowed to span the full width{stamp_span_note} — it runs across the top strip of the frame, above the reserved area, as ONE line (two tightly-leaded lines only if it cannot fit in one), and it must end above the reserved area: nothing of it may hang down beside or into the video window. Every OTHER content block — every card, figure, icon and label — sits in the {opposite_en} half, stacked from top to bottom under the headline, entirely clear of the {side_en} half. THE HEADLINE MUST CARRY THE KEY FIGURE OR THE OUTCOME OF THE STORY, never a bare topic name: a reader who sees only that line should already know what happened.
 4. Keep the reserved area visually calm — plain continuous background, no busy texture, no bright focal point, no face. Say so in "structure".
 {stamp_rules}{point_rules}
 8. Describe positions with direction words only (upper, lower, {side_en}, {opposite_en}, alongside, stacked). NEVER express any position or size as a percentage, pixel count, ratio or number of any kind.
@@ -66,11 +66,16 @@ BROADCAST INSERT LAYOUT ({side_zh}側留給後製) — OVERRIDES THE LAYOUT SENT
 
 # 第 5／6 條依蓋章開關二選一（2026-09-07 使用者回報：蓋章 OFF 在播出鏡面失效——
 # 這兩條原本無條件要求 <蓋章>，注入順序又在 STAMP_OFF_RULES 之後，把 OFF 壓掉了）。
-_BROADCAST_STAMP_ON = """5. THE CLOSING <蓋章> BANNER IS NOT FULL WIDTH IN THIS FORMAT. Every earlier rule that calls it "the lowest row of the content area" or "the lowest row of the design" refers to the content half only. Write into "structure" that the stamp banner sits inside the {opposite_en} half, directly under the last card, and does NOT span the frame or reach across into the reserved {side_en} half. The headline is the one exception: it spans the full width across the top strip, but nothing of it may hang down into the reserved area.
-6. "variable" must be exactly one [標題] line, then exactly three [內文小標] lines, then one <蓋章> line. Three points, no more and no fewer: this format's card stack has three rows.{density_rules}
+#
+# 2026-09-09 使用者回饋：挖空框是 16:9、垂直置中貼在留白半邊，於是那半邊的**最下方**
+# 空了一條橫帶（安全區高的兩成多）什麼都沒有，看起來很怪。第 5 條因此反過來——蓋章
+# 改成橫跨全寬、貼在挖空框底下那條低帶，與同樣跨全寬的標題上下夾住挖空框。
+# 最右下角要留給 apply_broadcast_hole 事後蓋的「示意圖」浮水印。
+_BROADCAST_STAMP_ON = """5. THE CLOSING <蓋章> BANNER RUNS THE FULL WIDTH ALONG THE VERY BOTTOM IN THIS FORMAT. The reserved video window does not reach the bottom of the frame: it is centred vertically, so a clear horizontal strip is left underneath it. Write into "structure" that the stamp banner is a single full-width bar lying in that low strip, BELOW the reserved area, hugging the bottom of the design and spanning from the {side_en} edge across to the {opposite_en} edge — it is the counterweight to the headline, which spans the full width across the top strip. Nothing of the banner may rise up beside or into the video window, and it stays a single line. Keep the extreme lower-{opposite_en} corner of that banner clear of essential wording: a small mark is added there afterwards.
+6. "variable" must be exactly one [標題] line, then exactly {count_word} [內文小標] lines, then one <蓋章> line. {count_word_cap} points, no more and no fewer: this format's card stack has {count_word} rows.{density_rules}
 """
 _BROADCAST_STAMP_OFF = """5. THERE IS NO STAMP BANNER IN THIS GRAPHIC (the user switched it OFF, and that setting wins over every rule above or below that mentions a closing banner). Do NOT write any stamp banner, conclusion strip or closing bar into "structure": the last card is the lowest element of the {opposite_en} half. The headline is the one exception: it spans the full width across the top strip, but nothing of it may hang down into the reserved {side_en} area.
-6. "variable" must be exactly one [標題] line, then exactly three [內文小標] lines, and NOTHING after them — no <蓋章> line. Three points, no more and no fewer: this format's card stack has three rows.{density_rules}
+6. "variable" must be exactly one [標題] line, then exactly {count_word} [內文小標] lines, and NOTHING after them — no <蓋章> line. {count_word_cap} points, no more and no fewer: this format's card stack has {count_word} rows.{density_rules}
 """
 
 
@@ -79,7 +84,24 @@ _BROADCAST_STAMP_OFF = """5. THERE IS NO STAMP BANNER IN THIS GRAPHIC (the user 
 #
 # ⚠️ 跟上面同一條鐵律：這段文字裡不得出現任何數字（連 half-width 阿拉伯數字都不行），
 # 長度一律用文字描述（a few characters／a brief phrase）。
-_BROADCAST_DENSITY_STANDARD = """ THIS GRAPHIC IS RUNNING AT THE 字多 DENSITY, SO EACH OF THOSE CARDS CARRIES TWO LINES INSTEAD OF ONE: the first line is a short punchy label of only a few characters, and the second line is the supporting figure or detail behind it, kept to a brief phrase. Write every [內文小標] as those two parts separated by a full-width vertical bar 「｜」, and say in "structure" that each card stacks its label above its supporting line, the label set larger than the line under it."""
+#
+# 2026-09-09 第二輪：使用者說「字多消化後資訊量還是太少，可以放寬資訊卡的數量／
+# 資訊密度／內文字數」。所以字多在播出鏡面除了每卡兩行，卡數也從三張放寬到四張
+# （見 _broadcast_point_count），而且補充那一行的長度不再限制成「brief phrase」。
+_BROADCAST_DENSITY_STANDARD = """ THIS GRAPHIC IS RUNNING AT THE 字多 DENSITY, SO EACH OF THOSE CARDS CARRIES TWO LINES INSTEAD OF ONE: the first line is a short punchy label of only a few characters, and the second line is the supporting figure or detail behind it, written as a full informative clause rather than a bare tag — say what the figure means, not just what it is. Write every [內文小標] as those two parts separated by a full-width vertical bar 「｜」, and say in "structure" that each card stacks its label above its supporting line, the label set larger than the line under it. Fill every card: this density exists because the user asked for MORE information on the graphic, so a card carrying only a couple of characters after the bar is a defect."""
+
+
+# 播出鏡面的卡片張數：字多放寬到四張，其餘檔位維持三張（版面本來就是三列）。
+# ⚠️ 一律用英文數字（three／four），不得寫成阿拉伯數字——見 _BROADCAST_RULES_TEMPLATE
+# 上方的鐵律。
+# 第 3 條的「標題是唯一可以跨全寬的元素」在蓋章 ON 之後不再成立（第 5 條把蓋章條
+# 也放到全寬），兩條會被模型讀成互相衝突，所以 ON 的時候補一句指回第 5 條。
+_BROADCAST_STAMP_SPAN_NOTE = " (the closing <蓋章> banner is the one other full-width element — rule five lays it along the very bottom, under the reserved area)"
+
+
+def _broadcast_point_count(density: str | None) -> dict:
+    word = "four" if density == "standard" else "three"
+    return {"count_word": word, "count_word_cap": word.capitalize()}
 
 # 第 7 條跟著第 6 條一起換檔（2026-09-08 第二輪）：字多時第 6 條要求每卡兩行，
 # 第 7 條若還寫「一句短事實」，兩條就會被模型讀成互相衝突。字少／不改字維持原句。
@@ -98,6 +120,7 @@ def _broadcast_rules(
             density_rules=_BROADCAST_DENSITY_STANDARD if standard else "",
             side_en="left" if left else "right",
             opposite_en="right" if left else "left",
+            **_broadcast_point_count(density),
         ),
         point_rules=(
             _BROADCAST_POINT_RULE_STANDARD if standard else _BROADCAST_POINT_RULE_DEFAULT
@@ -105,6 +128,7 @@ def _broadcast_rules(
         side_zh="左" if left else "右",
         side_en="left" if left else "right",
         opposite_en="right" if left else "left",
+        stamp_span_note="" if stamp is False else _BROADCAST_STAMP_SPAN_NOTE,
     )
 
 
@@ -532,8 +556,14 @@ YT_COVER_TITLE_MODES = (YT_COVER_TITLE_MODE_AI, YT_COVER_TITLE_MODE_COMPOSITE)
 # 決定畫不畫，AI 版只能靠 prompt——所以 LAYOUT 的第一條與 IMAGERY 的結尾都要換句話說，
 # 不然模型看到「filling the frame behind the band」還是會自己畫一條帶子出來。
 # 開的時候明講「半透明約六成」，與合成版的 compose.YT_BAND_ALPHA=153 對齊。
-YT_COVER_BAND_CLAUSE_NEWS_ON = "- The lower 40% of the frame is a semi-transparent (about 60% opaque) deep-navy band with a subtle circuit-board / tech-block texture, fading in at its top edge; the photograph stays visible through it."
-YT_COVER_BAND_CLAUSE_HOT_ON = "- The lower 40% of the frame is a semi-transparent (about 60% opaque) DEEP CRIMSON / near-black band with a subtle red circuit-board / tech-block texture, fading in at its top edge; the photograph stays visible through it."
+#
+# 2026-09-09 使用者回報：合成版早就修過（框高不超過標題第二行、而且半透明），AI 版
+# 的框還是又高又不透明。根因就在這兩條——寫的是「lower 40%」，而合成版的框上緣是
+# compose.YT_BAND_TOP_RATIO=0.778，只佔畫面下方 22%，差了將近一倍。改寫成**關係式**
+# 描述（框只在下面那一行字後面，上緣從第一行的基線淡入）：模型跟得動「behind the
+# lower line」，跟不動百分比；比例留著但改成正確的值，只當輔助。
+YT_COVER_BAND_CLAUSE_NEWS_ON = "- A translucent deep-navy band with a subtle circuit-board / tech-block texture sits BEHIND THE LOWER HEADLINE LINE ONLY. Its top edge starts as a soft fade level with the BASELINE of the upper headline line — the upper line therefore still stands on the bare photograph — and reaches full strength just above the top of the lower line, then runs to the bottom edge. It is a shallow band covering only about the bottom fifth of the frame, never the bottom half. It is translucent (about 60% opaque): the photograph stays clearly visible through it."
+YT_COVER_BAND_CLAUSE_HOT_ON = "- A translucent DEEP CRIMSON / near-black band with a subtle red circuit-board / tech-block texture sits BEHIND THE LOWER HEADLINE LINE ONLY. Its top edge starts as a soft fade level with the BASELINE of the upper headline line — the upper line therefore still stands on the bare photograph — and reaches full strength just above the top of the lower line, then runs to the bottom edge. It is a shallow band covering only about the bottom fifth of the frame, never the bottom half. It is translucent (about 60% opaque): the photograph stays clearly visible through it."
 YT_COVER_BAND_CLAUSE_OFF = "- There is NO solid colour band, panel or strip behind the headline: the photograph runs uninterrupted to the bottom edge and stays fully visible. The headline's readability comes from its thick outline and drop shadow alone."
 YT_COVER_BAND_IMAGERY_TAIL_ON = " behind the band"
 YT_COVER_BAND_IMAGERY_TAIL_OFF = ""

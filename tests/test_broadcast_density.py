@@ -25,8 +25,21 @@ class DensityRuleTests(unittest.TestCase):
                     self.assertIn("TWO LINES INSTEAD OF ONE", rules)
                     self.assertIn("｜", rules)
                     self.assertIn("stacks its label above its supporting line", rules)
-                    # 卡片數不變，只有每張卡的行數變了
-                    self.assertIn("exactly three [內文小標] lines", rules)
+                    # 2026-09-09 使用者：字多的資訊量還是太少，卡數三張放寬到四張
+                    self.assertIn("exactly four [內文小標] lines", rules)
+                    self.assertNotIn("exactly three [內文小標] lines", rules)
+
+    def test_other_densities_keep_three_cards(self):
+        """放寬只發生在字多；其餘檔位仍是三張卡。"""
+        for key in BROADCAST_KEYS:
+            for density in ("simplified", "verbatim", None):
+                for stamp in STAMP_CASES:
+                    with self.subTest(key=key, density=density, stamp=stamp):
+                        rules = editor_formats.digest_rules(
+                            key, "編輯", stamp=stamp, density=density
+                        )
+                        self.assertIn("exactly three [內文小標] lines", rules)
+                        self.assertNotIn("exactly four [內文小標] lines", rules)
 
     def test_standard_rewrites_the_point_rule_to_match(self):
         """第 6 條要求兩段時，第 7 條不能還寫「一句短事實」，否則兩條互相衝突。"""
