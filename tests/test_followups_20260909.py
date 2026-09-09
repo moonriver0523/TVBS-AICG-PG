@@ -31,24 +31,35 @@ class AiBandClauseTests(unittest.TestCase):
         editor_formats.YT_COVER_BAND_CLAUSE_HOT_ON,
     )
 
-    def test_band_is_described_relative_to_the_lower_headline_line(self):
+    def test_band_is_described_relative_to_the_two_coloured_lines(self):
+        """2026-09-09（第四批）：改用顏色點名兩條線——白字的基線是上緣，黃字的上緣是
+        全飽和處。比「上面那一行／下面那一行」具體，模型跟得動。"""
         for clause in self.CLAUSES:
             with self.subTest(clause=clause[:40]):
-                self.assertIn("BEHIND THE LOWER HEADLINE LINE ONLY", clause)
-                self.assertIn("BASELINE of the UPPER headline line", clause)
+                self.assertIn("BASELINE (the feet) of the WHITE upper headline line", clause)
+                self.assertIn("just above the top of the GOLDEN YELLOW lower line", clause)
 
     def test_the_clause_overrides_the_templates_lower_40_percent_figure(self):
         """2026-09-09（第三批）實測根因：模板下一行的「lower 40%」被拿去撐色框。
 
-        關係式描述本身不夠——那個數字就在旁邊，模型會照它畫。條文要明說 40% 是給
-        文字塊的，並且框高改用相對量（兩行標題塊的一半）。
+        第三批把百分比整個拿掉、只留關係式，使用者實測仍然太高（附圖）——模型手上
+        就只剩那個 40% 可抄。第四批把合成版的真實數字寫回去，數字與關係式並存。
         """
         for clause in self.CLAUSES:
             with self.subTest(clause=clause[:40]):
-                self.assertIn("OVERRIDES the 「lower 40%」 figure above", clause)
-                self.assertIn("sizes the TEXT BLOCK, never the band", clause)
-                self.assertIn("HALF the height of the two-line headline block", clause)
-                self.assertIn("NOT a panel filling the lower half of the frame", clause)
+                self.assertIn("NOT FROM THE 「lower 40%」 FIGURE ABOVE", clause)
+                self.assertIn("sizes the TEXT BLOCK and says nothing about the band", clause)
+                self.assertIn("TOP EDGE IS AT 78% OF THE FRAME HEIGHT", clause)
+                self.assertIn("ONLY THE BOTTOM 22%", clause)
+                self.assertIn("NOT the lower 40%", clause)
+
+    def test_the_number_in_the_clause_matches_the_composite_band(self):
+        """條文寫的 78%／22% 就是合成版的 compose.YT_BAND_TOP_RATIO，不能各寫各的。"""
+        top = round(compose.YT_BAND_TOP_RATIO * 100)
+        for clause in self.CLAUSES:
+            with self.subTest(clause=clause[:40]):
+                self.assertIn(f"AT {top}% OF THE FRAME HEIGHT", clause)
+                self.assertIn(f"ONLY THE BOTTOM {100 - top}%", clause)
 
     def test_the_clause_comes_after_the_headline_bullet_not_before(self):
         """這個 repo 的慣例是位置在後＋明文 OVERRIDE 才贏；放在 40% 前面等於被壓掉。"""
@@ -71,7 +82,7 @@ class AiBandClauseTests(unittest.TestCase):
         """合成版框上緣 0.778＝畫面下方兩成多；條文的相對量要落在同一個量級。"""
         self.assertLess(1 - compose.YT_BAND_TOP_RATIO, 0.25)
         for clause in self.CLAUSES:
-            self.assertIn("shallow strip along the bottom of the frame", clause)
+            self.assertIn("shallow strip about one fifth of the picture", clause)
 
     def test_off_clause_untouched(self):
         self.assertIn("NO solid colour band", editor_formats.YT_COVER_BAND_CLAUSE_OFF)
@@ -192,26 +203,57 @@ class BroadcastBottomStripTests(unittest.TestCase):
                 on = editor_formats.digest_rules(key, "編輯", stamp=True)
                 self.assertIn("closing <蓋章> banner is the one other full-width element", on)
                 off = editor_formats.digest_rules(key, "編輯", stamp=False)
-                self.assertIn("last card is the one other full-width element", off)
+                self.assertIn("<底帶> line is the one other full-width element", off)
 
-    def test_stamp_off_fills_the_bottom_strip_with_the_last_card(self):
-        """2026-09-09（第三批）使用者：「沒有開蓋章，其他資訊還是可以放底下」。
+    def test_stamp_off_fills_the_bottom_strip_with_its_own_marked_line(self):
+        """2026-09-09（第三批＋第四批）使用者：「沒有開蓋章，其他資訊還是可以放底下」。
 
-        上一批留的缺口：OFF 時沒有橫幅可以放，挖空框底下那條帶整條空著。現在改成
-        最後一張卡下移到底帶並跨全寬——仍然是一般卡片，不是收尾標語。
+        第三批寫成「最後一張卡下移到底帶」，使用者實測（蓋章 OFF ＋字多）底部仍然全空：
+        那張卡在 variable 裡跟其他卡一模一樣，模型沒有依據把它挑出來。第四批改成給它
+        自己的標記 <底帶>，比照 <蓋章>（那個開著就做得到）。使用者同時開放底帶跨版。
         """
         for key in self.KEYS:
             with self.subTest(key=key):
                 rules = editor_formats.digest_rules(key, "編輯", stamp=False)
                 self.assertIn("THERE IS NO STAMP BANNER IN THIS GRAPHIC", rules)
-                self.assertIn("THE LOW STRIP UNDER THE RESERVED AREA IS STILL USED", rules)
-                self.assertIn("LAST of the [內文小標] cards moves down into that strip", rules)
+                self.assertIn("THE LOW STRIP UNDER THE RESERVED AREA IS STILL FILLED", rules)
+                self.assertIn("BY A <底帶> LINE INSTEAD", rules)
                 self.assertIn("BELOW the reserved area", rules)
+                # variable 的收尾必須是那一行，才有東西可以擺到底帶
+                self.assertIn("then exactly one line beginning with the marker <底帶>", rules)
+                # 使用者：底部元素可跨版（就像標題可跨版）
+                self.assertIn("it crosses both halves", rules)
                 # 不能被讀成又要生一條蓋章
                 self.assertIn("do not put a <蓋章> line", rules)
-                self.assertIn("not a closing slogan", rules)
+                self.assertIn("NOT as a closing slogan", rules)
                 # 浮水印一樣蓋在右下角，OFF 也要留位
                 self.assertIn("extreme lower-RIGHT corner", rules)
+
+    def test_the_reserved_window_is_described_as_wide_and_short(self):
+        """第 1 條原本寫「filling most of the half」，模型畫成整片高牆，底下那條帶
+        根本不存在（使用者附圖）。實際的挖空框是寬扁的橫幅視窗、垂直置中
+        （compose.apply_broadcast_hole：寬佔安全區四成五、比例 16:9）。"""
+        for key in self.KEYS:
+            for stamp in (True, False):
+                with self.subTest(key=key, stamp=stamp):
+                    rules = editor_formats.digest_rules(key, "編輯", stamp=stamp)
+                    self.assertIn("WIDE, SHORT rectangle", rules)
+                    self.assertIn("much wider than it is tall", rules)
+                    self.assertIn("deeper clear strip is left BELOW it", rules)
+                    self.assertIn("does NOT reach the bottom of the frame", rules)
+                    self.assertNotIn("filling most of the", rules)
+
+    def test_the_backstop_promotes_the_last_card_when_the_model_forgets(self):
+        """prompt 只是勸告，第三批就是敗在這裡。漏寫 <底帶> 就把最後一張卡升級。"""
+        variable = "[標題] 甲\n[內文小標] 乙\n[內文小標] 丙\n[內文小標] 丁"
+        self.assertEqual(
+            main.ensure_bottom_band_line(variable),
+            "[標題] 甲\n[內文小標] 乙\n[內文小標] 丙\n<底帶> 丁",
+        )
+
+    def test_the_backstop_leaves_a_compliant_result_alone(self):
+        variable = "[標題] 甲\n[內文小標] 乙\n<底帶> 丙"
+        self.assertEqual(main.ensure_bottom_band_line(variable), variable)
 
     def test_still_no_digits_anywhere(self):
         import re

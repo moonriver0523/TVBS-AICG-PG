@@ -42,7 +42,7 @@ class HeadlineRuleTests(unittest.TestCase):
                     if stamp:
                         self.assertIn("closing <蓋章> banner", rules)
                     else:
-                        self.assertIn("the last card", rules)
+                        self.assertIn("<底帶> line is the one other full-width element", rules)
 
     def test_rules_still_carry_no_numbers(self):
         for key in ("broadcast_left", "broadcast_right"):

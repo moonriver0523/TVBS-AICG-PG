@@ -304,7 +304,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span class="hidden sm:inline text-[10px] text-[color:var(--dim)]">V8.2</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260909-01</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -583,14 +583,14 @@
 
                         <div class="flex items-center gap-1.5">
                             <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">Logo 角落</span>
-                            <button type="button" data-vstrip-corner data-vstrip-value="tr" onclick="setVstripLogoCorner('tr')"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">右上</button>
-                            <button type="button" data-vstrip-corner data-vstrip-value="br" onclick="setVstripLogoCorner('br')"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">右下</button>
                             <button type="button" data-vstrip-corner data-vstrip-value="tl" onclick="setVstripLogoCorner('tl')"
                                     class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">左上</button>
                             <button type="button" data-vstrip-corner data-vstrip-value="bl" onclick="setVstripLogoCorner('bl')"
                                     class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">左下</button>
+                            <button type="button" data-vstrip-corner data-vstrip-value="tr" onclick="setVstripLogoCorner('tr')"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">右上</button>
+                            <button type="button" data-vstrip-corner data-vstrip-value="br" onclick="setVstripLogoCorner('br')"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">右下</button>
                         </div>
 
                         <!-- 來源句沒填就整列收起來：那時候選角落沒有意義。
@@ -599,10 +599,10 @@
                             <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">來源句位置</span>
                             <button type="button" data-vstrip-source data-vstrip-value="tl" onclick="setVstripSourceCorner('tl')"
                                     class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">左上</button>
-                            <button type="button" data-vstrip-source data-vstrip-value="tr" onclick="setVstripSourceCorner('tr')"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">右上</button>
                             <button type="button" data-vstrip-source data-vstrip-value="bl" onclick="setVstripSourceCorner('bl')"
                                     class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">左下</button>
+                            <button type="button" data-vstrip-source data-vstrip-value="tr" onclick="setVstripSourceCorner('tr')"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">右上</button>
                             <button type="button" data-vstrip-source data-vstrip-value="br" onclick="setVstripSourceCorner('br')"
                                     class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">右下</button>
                         </div>

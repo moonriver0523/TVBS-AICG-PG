@@ -69,6 +69,9 @@ Text Styling Rules:
 - Any <蓋章> marker:
   -> Apply strong full-box highlight style to the following text
   -> Use solid background color (e.g. red background with white text)
+- Any <底帶> marker:
+  -> Remove the marker and set the text as an ordinary information bar, NOT a coloured stamp
+  -> Place it as a single bar along the very bottom of the design, spanning the full width
 
 Visual Elements:
 - Include high-quality flat icons or 3D data charts relevant to the content

@@ -55,7 +55,7 @@ HOLE_SIDES = ("left", "right")
 _BROADCAST_RULES_TEMPLATE = """
 
 BROADCAST INSERT LAYOUT ({side_zh}側留給後製) — OVERRIDES THE LAYOUT SENTENCE ABOVE WHERE THEY CONFLICT:
-1. A large rectangular area filling most of the {side_en} half of the frame, centred vertically, is reserved for a video window that is composited in after this image is made. Treat that whole half as if it were already occupied.
+1. A WIDE, SHORT rectangle — much wider than it is tall — sitting in the {side_en} half of the frame, centred vertically, is reserved for a video window that is composited in after this image is made. It takes up most of that half's WIDTH but only about half of its HEIGHT, so a clear horizontal strip is left above it and a deeper clear strip is left BELOW it, running the whole way across the frame. It is NOT a tall panel and it does NOT reach the bottom of the frame. Treat the window itself as already occupied.
 2. Put NOTHING there: no text, no headline, no icon, no chart, no figure, no logo, no callout, no decorative element. Whatever you place there will be covered and lost.
 3. The layout sentence above asks for the design to be centred. FOR THIS FORMAT THE BODY IS NOT CENTRED: write into "structure" that the HEADLINE is the ONLY element allowed to span the full width{stamp_span_note} — it runs across the top strip of the frame, above the reserved area, as ONE line (two tightly-leaded lines only if it cannot fit in one), and it must end above the reserved area: nothing of it may hang down beside or into the video window. Every OTHER content block — every card, figure, icon and label — sits in the {opposite_en} half, stacked from top to bottom under the headline, entirely clear of the {side_en} half. THE HEADLINE MUST CARRY THE KEY FIGURE OR THE OUTCOME OF THE STORY, never a bare topic name: a reader who sees only that line should already know what happened.
 4. Keep the reserved area visually calm — plain continuous background, no busy texture, no bright focal point, no face. Say so in "structure".
@@ -74,8 +74,8 @@ BROADCAST INSERT LAYOUT ({side_zh}側留給後製) — OVERRIDES THE LAYOUT SENT
 _BROADCAST_STAMP_ON = """5. THE CLOSING <蓋章> BANNER RUNS THE FULL WIDTH ALONG THE VERY BOTTOM IN THIS FORMAT. The reserved video window does not reach the bottom of the frame: it is centred vertically, so a clear horizontal strip is left underneath it. Write into "structure" that the stamp banner is a single full-width bar lying in that low strip, BELOW the reserved area, hugging the bottom of the design and spanning from the {side_en} edge across to the {opposite_en} edge — it is the counterweight to the headline, which spans the full width across the top strip. Nothing of the banner may rise up beside or into the video window, and it stays a single line. Keep the extreme lower-RIGHT corner of that banner clear of essential wording: a small mark is added there afterwards. (It is the lower-right corner whichever half is reserved — the mark's position does not mirror.)
 6. "variable" must be exactly one [標題] line, then exactly {count_word} [內文小標] lines, then one <蓋章> line. {count_word_cap} points, no more and no fewer: this format's card stack has {count_word} rows.{density_rules}
 """
-_BROADCAST_STAMP_OFF = """5. THERE IS NO STAMP BANNER IN THIS GRAPHIC (the user switched it OFF, and that setting wins over every rule above or below that mentions a closing banner). Do NOT write any stamp banner, conclusion strip or closing bar into "structure", and do not put a <蓋章> line in "variable". THE LOW STRIP UNDER THE RESERVED AREA IS STILL USED. The reserved video window does not reach the bottom of the frame: it is centred vertically, so a clear horizontal strip is left underneath it, and leaving that strip empty makes the graphic look unfinished. With no stamp banner to fill it, the LAST of the [內文小標] cards moves down into that strip and widens to span the full width, running from the {side_en} edge across to the {opposite_en} edge, BELOW the reserved area and hugging the bottom of the design — it is the counterweight to the headline, which spans the full width across the top strip. It is still an ordinary card, styled like the ones above it and carrying real content, not a closing slogan. The remaining cards stay stacked in the {opposite_en} half under the headline. Nothing of that bottom card may rise up beside or into the video window, and it stays a single line. Keep the extreme lower-RIGHT corner of it clear of essential wording: a small mark is added there afterwards. (It is the lower-right corner whichever half is reserved — the mark's position does not mirror.)
-6. "variable" must be exactly one [標題] line, then exactly {count_word} [內文小標] lines, and NOTHING after them — no <蓋章> line. {count_word_cap} points, no more and no fewer: this format's card stack has {count_word} rows.{density_rules}
+_BROADCAST_STAMP_OFF = """5. THERE IS NO STAMP BANNER IN THIS GRAPHIC (the user switched it OFF, and that setting wins over every rule above or below that mentions a closing banner). Do NOT write any stamp banner, conclusion strip or closing bar into "structure", and do not put a <蓋章> line in "variable". BUT THE LOW STRIP UNDER THE RESERVED AREA IS STILL FILLED, BY A <底帶> LINE INSTEAD. Leaving that strip empty makes the graphic look unfinished, and it is what the user complained about. Write into "structure" that the <底帶> line is a single bar lying in that low strip, BELOW the reserved area, hugging the bottom of the design and spanning the FULL width from the {side_en} edge across to the {opposite_en} edge — it crosses both halves, exactly like the headline does across the top strip, and the two of them sandwich the video window. It is styled as an ordinary information card like the ones stacked above it, NOT as a coloured stamp and NOT as a closing slogan: it carries a real fact of its own. The remaining cards stay stacked in the {opposite_en} half under the headline. Nothing of it may rise up beside or into the video window, and it stays a single line. Keep the extreme lower-RIGHT corner of it clear of essential wording: a small mark is added there afterwards. (It is the lower-right corner whichever half is reserved — the mark's position does not mirror.)
+6. THIS RULE OVERRIDES THE STAMP-OFF BLOCK ABOVE WHERE THEY DISAGREE ABOUT THE LAST LINE. "variable" must be exactly one [標題] line, then exactly {count_word} [內文小標] lines, then exactly one line beginning with the marker <底帶>. {count_word_cap} points, no more and no fewer: this format's card stack has {count_word} rows, and the <底帶> line is separate from them — it is the bar along the bottom, not one of the rows. Still no <蓋章> line anywhere. The <底帶> line carries an ordinary fact from the material, written short, in the same voice as the cards; it is never a slogan, a sign-off or a repeat of the headline.{density_rules}
 """
 
 
@@ -99,8 +99,22 @@ _BROADCAST_DENSITY_STANDARD = """ THIS GRAPHIC IS RUNNING AT THE 字多 DENSITY,
 #
 # 2026-09-09（第三批）使用者：「底下的除了蓋章之外，如果沒有開蓋章，其他資訊還是可以
 # 放底下」。蓋章 OFF 也改成有東西跨全寬（最後一張卡下移到底帶），所以 OFF 同樣要補句。
+#
+# 2026-09-09（第四批）使用者實測蓋章 OFF ＋字多，底部還是空的。第三批只是叫模型「把
+# 最後一張卡下移」——那張卡在 variable 裡跟其他卡長得一模一樣，模型沒有理由把它挑出來，
+# 於是四張一起疊在半邊。蓋章 ON 之所以做得到，是因為 <蓋章> 是 variable 裡一個**看得見
+# 的標記**。所以這一版比照辦理，給底帶自己的標記 <底帶>，並在 main 端做確定性兜底
+# （ensure_bottom_band_line）：模型漏寫就把最後一張卡升級成底帶。
+# 同一批也修第 1 條——挖空框其實是 16:9 的寬扁視窗（compose.apply_broadcast_hole），
+# 舊句「filling most of the half」讓模型畫成整片高牆，底下那條帶根本不存在。
+# 使用者同時開放底帶跨版（「就像標題可跨版」），第 5 條照這個寫。
 _BROADCAST_STAMP_SPAN_NOTE = " (the closing <蓋章> banner is the one other full-width element — rule five lays it along the very bottom, under the reserved area)"
-_BROADCAST_NO_STAMP_SPAN_NOTE = " (the last card is the one other full-width element — rule five moves it down into the strip along the very bottom, under the reserved area)"
+_BROADCAST_NO_STAMP_SPAN_NOTE = " (the <底帶> line is the one other full-width element — rule five lays it along the very bottom, under the reserved area, and it may cross both halves)"
+
+
+# 蓋章 OFF 時，播出鏡面底帶那一行的標記（2026-09-09 第四批）。與 <蓋章> 平行：
+# 有標記，模型才挑得出哪一行要放到底下那條橫帶。
+BROADCAST_BOTTOM_MARKER = "底帶"
 
 
 def _broadcast_point_count(density: str | None) -> dict:
@@ -385,7 +399,9 @@ def fallback_split_title(title: str) -> tuple[str, str]:
 # 紅線同 YT：只切、不改字——去掉分隔符後必須等於原標題。
 COVER_TITLE_AUTO_SPLIT_LEN = 7
 COVER_TITLE_MAX_LINES = 3
-_COVER_TITLE_SPLIT_RE = re.compile(r"[ \u3000\n\r｜|/]+")
+# 2026-09-09 使用者：標題裡的「9/12」被當成分段，封面切出「9」與「12開放民眾參觀」。
+# 斜線兩邊都是數字時就是日期／比數，不是分隔符；其餘用法（羅馬/浴場）照舊分段。
+_COVER_TITLE_SPLIT_RE = re.compile(r"[ \u3000\n\r｜|]+|(?<!\d)/+|/+(?!\d)")
 
 
 def split_cover_title(title: str) -> list[str]:
@@ -575,16 +591,24 @@ YT_COVER_TITLE_MODES = (YT_COVER_TITLE_MODE_AI, YT_COVER_TITLE_MODE_COMPOSITE)
 # 的慣例（位置在後＋明文 OVERRIDE 才贏）等於被後面的數字壓過去。
 # 兩件事一起改：把 {band_clause} 移到標題那一條之後，並在條文裡明說 40% 是給文字塊
 # 的、不是給色框的，框高改用「兩行標題塊的一半」這種相對量描述。
+#
+# 2026-09-09（第四批）使用者：還是太高，要壓到第二段黃字標題。第三批把百分比整個
+# 拿掉、只留關係式描述，模型手上就只剩上面那個 40% 可抄。這一版把合成版的真實數字
+# （compose.YT_BAND_TOP_RATIO=0.778 → 只佔下方 22%）明寫回去，數字與關係式並存，
+# 並點名是「白字的基線」「黃字的上緣」——顏色比行序具體，模型跟得動。
+# 同一批另修兩行標字級：模板要求每一行 filling almost the full width，字少的那一行
+# 就被放大去撐滿，兩行大小差一截。改成「共用一個字級、由較長那行決定」。
 _BAND_CLAUSE_TEMPLATE = (
-    "- THE COLOUR BAND (this bullet OVERRIDES the 「lower 40%」 figure above AS FAR AS THE BAND IS "
-    "CONCERNED — that figure sizes the TEXT BLOCK, never the band): a translucent {colour} band with "
-    "a subtle {texture} texture sits BEHIND THE LOWER HEADLINE LINE ONLY. Its top edge is a soft fade "
-    "level with the BASELINE of the UPPER headline line — the upper line therefore still stands on the "
-    "bare photograph, with no band behind it — and it reaches full strength just above the top of the "
-    "lower line, then runs to the bottom edge. The band is therefore only about HALF the height of the "
-    "two-line headline block and no taller: a shallow strip along the bottom of the frame, NOT a panel "
-    "filling the lower half of the frame. It is translucent (about 60% opaque): the photograph stays "
-    "clearly visible through it."
+    "- THE COLOUR BAND — TAKE THE NUMBER FROM THIS BULLET, NOT FROM THE 「lower 40%」 FIGURE ABOVE "
+    "(that figure sizes the TEXT BLOCK and says nothing about the band): a translucent {colour} band "
+    "with a subtle {texture} texture lies along the BOTTOM EDGE of the frame. ITS TOP EDGE IS AT 78% "
+    "OF THE FRAME HEIGHT MEASURED DOWN FROM THE TOP, so the band covers ONLY THE BOTTOM 22% of the "
+    "picture and nothing above that line. Concretely: the top edge is a soft fade running level with "
+    "the BASELINE (the feet) of the WHITE upper headline line, so the whole white line stands on the "
+    "bare photograph with no band behind it, and the band reaches full strength just above the top of "
+    "the GOLDEN YELLOW lower line, then runs to the bottom edge. It is a shallow strip about one fifth "
+    "of the picture: NOT a panel over the lower third, NOT the lower 40%, NOT half the frame. It is "
+    "translucent (about 60% opaque): the photograph stays clearly visible through it."
 )
 YT_COVER_BAND_CLAUSE_NEWS_ON = _BAND_CLAUSE_TEMPLATE.format(
     colour="deep-navy", texture="circuit-board / tech-block"
@@ -613,7 +637,8 @@ Render EXACTLY these strings, character for character, nothing else:
 - Headline line 2 (lower line): {line2}
 
 === LAYOUT ===
-- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in heavy black-weight (weight, not colour) Chinese display type filling almost the full width, with TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean and separated — the counters (the enclosed white spaces inside characters) must stay open; do not thicken the type until the strokes merge.
+- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in heavy black-weight (weight, not colour) Chinese display type, with TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean and separated — the counters (the enclosed white spaces inside characters) must stay open; do not thicken the type until the strokes merge.
+- THE TWO HEADLINE LINES ARE SET AT ONE SINGLE TYPE SIZE: identical cap height, identical stroke weight, identical character width. Choose that size from the LONGER line — it is the size at which the LONGER line spans almost the full width — then set the SHORTER line at that SAME size, so the shorter line simply comes out narrower and sits centred with empty space at both ends. NEVER enlarge the shorter line to make it reach the same width as the other one. A line with far fewer characters MUST end up visibly shorter, never bigger; two lines at different type sizes is a defect.
 {band_clause}
 - Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
 - Keep the UPPER-LEFT corner (a block about 24% wide and 40% tall) completely free of text or busy detail: a red LIVE badge and a date tab are pasted there afterwards.
@@ -637,7 +662,8 @@ Render EXACTLY these strings, character for character, nothing else:
 - Headline line 2 (lower line): {line2}
 
 === LAYOUT ===
-- Both headline lines sit in the lower third, LEFT-ALIGNED near the left edge, stacked, each on one line, huge and heavy Chinese display type spanning almost the full width. No band behind them: the type sits directly on the photograph.
+- Both headline lines sit in the lower third, LEFT-ALIGNED near the left edge, stacked, each on one line, huge and heavy Chinese display type. No band behind them: the type sits directly on the photograph.
+- THE TWO HEADLINE LINES ARE SET AT ONE SINGLE TYPE SIZE: identical cap height, identical stroke weight, identical character width. Choose that size from the LONGER line — it is the size at which the LONGER line spans almost the full width — then set the SHORTER line at that SAME size, so the shorter line simply ends earlier and leaves empty space to its right. NEVER enlarge the shorter line to make it reach the same width as the other one. A line with far fewer characters MUST end up visibly shorter, never bigger; two lines at different type sizes is a defect.
 - Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
 - Keep the UPPER-LEFT corner (about 14% wide and 14% tall) free: a small channel logo is pasted there afterwards.
 - Keep the UPPER-RIGHT corner (about 27% wide and 32% tall) free: a red LIVE badge with the broadcast time is pasted there afterwards.
@@ -661,7 +687,8 @@ Render EXACTLY these strings, character for character, nothing else:
 - Headline line 2 (lower line): {line2}
 
 === LAYOUT ===
-- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in heavy black-weight (weight, not colour) Chinese display type filling almost the full width, with TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean and separated — the counters (the enclosed white spaces inside characters) must stay open; do not thicken the type until the strokes merge.
+- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in heavy black-weight (weight, not colour) Chinese display type, with TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean and separated — the counters (the enclosed white spaces inside characters) must stay open; do not thicken the type until the strokes merge.
+- THE TWO HEADLINE LINES ARE SET AT ONE SINGLE TYPE SIZE: identical cap height, identical stroke weight, identical character width. Choose that size from the LONGER line — it is the size at which the LONGER line spans almost the full width — then set the SHORTER line at that SAME size, so the shorter line simply comes out narrower and sits centred with empty space at both ends. NEVER enlarge the shorter line to make it reach the same width as the other one. A line with far fewer characters MUST end up visibly shorter, never bigger; two lines at different type sizes is a defect.
 {band_clause}
 - Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
 - Keep the UPPER-LEFT corner (a block about 30% wide and 16% tall) completely free of text or busy detail: a red-and-white "trending" tag is pasted there afterwards.

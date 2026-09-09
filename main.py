@@ -1332,6 +1332,29 @@ def drop_stamp_lines(variable: str) -> str:
     return "\n".join(kept).strip()
 
 
+# 播出鏡面 ＋ 蓋章 OFF 的底帶（2026-09-09 第四批）。挖空框是寬扁的 16:9 視窗、垂直
+# 置中，底下本來就空著一條橫帶；蓋章 ON 時那條由 <蓋章> 填，OFF 時使用者要求「其他
+# 資訊還是可以放底下」。prompt 已經改成要求一行 <底帶>，但 prompt 只是勸告——第三批
+# 就是敗在這裡（叫模型「把最後一張卡下移」，模型分不出哪張是最後一張）。這裡做確定性
+# 兜底：漏寫就把最後一行 [內文小標] 升級成 <底帶>，位置與內容都不動，只換標記。
+_BOTTOM_BAND_LINE_RE = re.compile(r"^\s*[<＜]\s*底帶\s*[>＞]")
+_POINT_LINE_RE = re.compile(r"^\s*\[內文小標\]\s*")
+
+
+def ensure_bottom_band_line(variable: str) -> str:
+    lines = (variable or "").splitlines()
+    if any(_BOTTOM_BAND_LINE_RE.match(line) for line in lines):
+        return variable
+    for index in range(len(lines) - 1, -1, -1):
+        if _POINT_LINE_RE.match(lines[index]):
+            body = _POINT_LINE_RE.sub("", lines[index]).strip()
+            if not body:
+                return variable
+            promoted = lines[:index] + lines[index + 1:] + [f"<底帶> {body}"]
+            return "\n".join(promoted).strip()
+    return variable
+
+
 def verbatim_fidelity_problem(variable: str, news_text: str) -> str:
     """不消化模式：variable 去掉標記與空白後必須與原文逐字相同。"""
     body = _VERBATIM_WS_RE.sub(
@@ -1588,6 +1611,12 @@ def generate(req: GenerateRequest):
         if req.stamp is False and any(_STAMP_LINE_RE.match(line) for line in variable.splitlines()):
             print("[generate] 蓋章 OFF 但消化結果仍有 <蓋章> 行，已強制移除", flush=True)
             variable = drop_stamp_lines(variable)
+        # 播出鏡面 ＋ 蓋章 OFF：底帶那一行沒生出來就自己補（見 ensure_bottom_band_line）
+        if req.stamp is False and editor_formats.resolve_hole_side(req.editor_format, req.hole_side):
+            filled = ensure_bottom_band_line(variable)
+            if filled != variable:
+                print("[generate] 蓋章 OFF 但消化結果沒有 <底帶> 行，已把最後一張卡升級成底帶", flush=True)
+            variable = filled
         result = GenerateResponse(
             style=data.get("style", ""),
             structure=data.get("structure", ""),

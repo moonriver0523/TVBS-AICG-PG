@@ -60,7 +60,23 @@ class GenerateGuardTests(unittest.TestCase):
             with self.subTest(fmt=fmt):
                 result = self._run(stamp=False, role="編輯", editor_format=fmt)
                 self.assertNotIn("蓋章", result.variable)
-                self.assertIn("[內文小標] 停班課<晚間>宣布", result.variable)
+                if fmt == "default":
+                    self.assertIn("[內文小標] 停班課<晚間>宣布", result.variable)
+                else:
+                    # 播出鏡面（2026-09-09 第四批）：蓋章 OFF 時挖空框底下那條帶要有東西，
+                    # 消化沒生出 <底帶> 就把最後一張卡升級（見 main.ensure_bottom_band_line）。
+                    self.assertIn("<底帶> 停班課<晚間>宣布", result.variable)
+
+    def test_stamp_off_on_broadcast_leaves_a_compliant_bottom_band_alone(self):
+        payload = dict(PAYLOAD)
+        payload["variable"] = "[標題] 颱風逼近\n[內文小標] 明晨<陸警>\n<底帶> 停班課<晚間>宣布"
+        request = GenerateRequest(
+            news_text="素材", type_label="資料圖表", stamp=False,
+            role="編輯", editor_format="broadcast_left",
+        )
+        with patch.object(main.openai_client.chat.completions, "create", return_value=response(payload)):
+            result = generate(request)
+        self.assertEqual(result.variable, payload["variable"])
 
     def test_stamp_on_and_unset_keep_the_line(self):
         for stamp in (True, None):

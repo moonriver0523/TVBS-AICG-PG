@@ -71,12 +71,31 @@ class CompositeParityTests(unittest.TestCase):
 class AiPromptParityTests(unittest.TestCase):
     # 2026-09-08 使用者回饋「字體再粗一點、行距略縮」，兩個模板一起改；
     # 同日第二輪回報 ULTRA-HEAVY 太重（字腔糊掉），改成 heavy black weight。
-    TYPE_CLAUSE = "heavy black-weight (weight, not colour) Chinese display type filling almost the full width"
+    # 2026-09-09 第四批拿掉了 filling almost the full width——那句叫**每一行**各自撐滿，
+    # 字少的那行就被放大，兩行大小差一截（使用者附圖）。字級改由較長那行決定、兩行共用。
+    TYPE_CLAUSE = "heavy black-weight (weight, not colour) Chinese display type"
+    SHARED_SIZE_CLAUSE = "THE TWO HEADLINE LINES ARE SET AT ONE SINGLE TYPE SIZE"
 
     def test_both_templates_describe_the_type_size_the_same_way(self):
         for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
             with self.subTest(template=name):
                 self.assertIn(self.TYPE_CLAUSE, getattr(editor_formats, name))
+
+    def test_every_two_line_cover_shares_one_type_size(self):
+        """使用者：兩行標（白／黃）字級要完全一樣，字少的那行不准放大去撐滿。
+
+        合成版本來就共用字級（compose._yt_shared_title_font），AI 版之前沒有對應的話，
+        所以三個 AI 模板都要有這一條——整點版也是兩行標。
+        """
+        for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT",
+                     "YT_COVER_FULL_PROMPT_HOURLY"):
+            with self.subTest(template=name):
+                text = getattr(editor_formats, name)
+                self.assertIn(self.SHARED_SIZE_CLAUSE, text)
+                self.assertIn("Choose that size from the LONGER line", text)
+                self.assertIn("NEVER enlarge the shorter line", text)
+                self.assertNotIn("display type filling almost the full width", text)
+                self.assertNotIn("display type spanning almost the full width", text)
 
     def test_both_templates_ask_for_tight_leading_and_open_counters(self):
         for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):

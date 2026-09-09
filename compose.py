@@ -22,6 +22,7 @@
 import functools
 import io
 import pathlib
+import re
 import unicodedata
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -551,6 +552,18 @@ def _draw_cover_ai_note(canvas: Image.Image, x_anchor: int, y0: int, align_right
 _SPLIT_AFTER_CHARS = set("年月日元億萬千人次件位家戶%％度歲倍")
 
 
+# 一段「數字」不是只有連續數字：9/12、5.5、20:00 中間的符號也在數字裡面，從那裡斷行
+# 會把日期切成兩截（2026-09-09 使用者回報 9/12）。回傳所有**不准當斷點**的索引。
+_NUMBER_TOKEN_RE = re.compile(r"\d+(?:[/.:]\d+)+|\d+")
+
+
+def _number_inner_indices(text: str) -> set[int]:
+    inner: set[int] = set()
+    for match in _NUMBER_TOKEN_RE.finditer(text):
+        inner.update(range(match.start() + 1, match.end()))
+    return inner
+
+
 def _split_line_near_middle(text: str) -> tuple[str, str]:
     """把一行從中間附近切成兩行。
 
@@ -559,13 +572,14 @@ def _split_line_near_middle(text: str) -> tuple[str, str]:
     """
     n = len(text)
     mid = n // 2
+    inner = _number_inner_indices(text)
     for offset in range(0, 4):
         for i in (mid - offset, mid + offset):
             if 2 <= i <= n - 2 and text[i - 1] in _SPLIT_AFTER_CHARS and not text[i].isdigit():
                 return text[:i], text[i:]
     for offset in range(0, n):
         for i in (mid + offset, mid - offset):
-            if 1 <= i < n and not (text[i - 1].isdigit() and text[i].isdigit()):
+            if 1 <= i < n and i not in inner:
                 return text[:i], text[i:]
     return text[:mid], text[mid:]
 
