@@ -2642,6 +2642,8 @@ class NewsImageGenerateRequest(BaseModel):
     # 入口可傳自己的識別值選擇加入。
     client_id: str = ""
     density: DigestDensity = "standard"
+    # CG 美術創意 0-4（2026-09-10）：與 /api/generate 同一個旋鈕，一次到底的管線也要吃得到。
+    visual_creativity: int = Field(default=0, ge=0, le=4)
     provider: Literal["gemini", "gpt"] = "gemini"
     # None＝依 safe_frame 自動選擇（見 generate_news_image）；呼叫端仍可明確指定覆寫。
     aspect_ratio: str | None = None
@@ -3235,6 +3237,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 tone=req.tone,
                 editor_format=req.editor_format,
                 hole_side=req.hole_side,
+                visual_creativity=req.visual_creativity,
             )
         )
         digest, portrait_photos = resolve_digest_portraits(digest, req, provider)
