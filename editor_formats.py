@@ -199,7 +199,7 @@ Requirements:
 COVER_AI_PROMPT_TEMPLATE = """Design a complete, broadcast-quality Chinese-language news programme cover image (YouTube thumbnail style) for a Taiwanese prime-time news show.
 
 === CANVAS ===
-16:9 horizontal. Two photographs fill the ENTIRE frame edge to edge, split by ONE thin white DIAGONAL seam (slightly leaning: its top end sits a little right of centre, its bottom end a little left of centre) into a LEFT panel and a RIGHT panel. No borders, no gutters, no letterboxing. Across the very top runs a THIN deep-navy header band (about one tenth of the frame height) with a bright blue hairline along its bottom edge; along the very bottom runs a slim deep-navy strip with one thin glowing straight blue light line (no waves, no text). Everything else is photograph.
+16:9 horizontal. Two photographs fill the ENTIRE frame edge to edge, split by ONE thin white DIAGONAL seam (slightly leaning: its top end sits a little right of centre, its bottom end a little left of centre) into a LEFT panel and a RIGHT panel. No borders, no gutters, no letterboxing. Across the very top runs a deep-navy header band (%HEADER_BAND% of the frame height) with a bright blue hairline along its bottom edge; along the very bottom runs a slim deep-navy strip with one thin glowing straight blue light line (no waves, no text). Everything else is photograph.
 
 === TEXT TO RENDER (Traditional Chinese, Taiwan) ===
 Render EXACTLY these strings, character for character. Do not translate them, do not rewrite them, do not shorten them, and do not add any other words, letters or numbers anywhere in the image.
@@ -234,7 +234,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 COVER_AI_FULL_PROMPT_TEMPLATE = """Design a complete, broadcast-quality Chinese-language news programme cover image (YouTube thumbnail style) for a Taiwanese prime-time news show.
 
 === CANVAS ===
-16:9 horizontal. ONE single photograph fills the ENTIRE frame edge to edge. No split, no seam, no panels, no collage, no borders, no gutters, no letterboxing. Across the very top runs a THIN deep-navy header band (about one tenth of the frame height) with a bright blue hairline along its bottom edge; along the very bottom runs a slim deep-navy strip with one thin glowing straight blue light line (no waves, no text). Everything else is photograph.
+16:9 horizontal. ONE single photograph fills the ENTIRE frame edge to edge. No split, no seam, no panels, no collage, no borders, no gutters, no letterboxing. Across the very top runs a deep-navy header band (%HEADER_BAND% of the frame height) with a bright blue hairline along its bottom edge; along the very bottom runs a slim deep-navy strip with one thin glowing straight blue light line (no waves, no text). Everything else is photograph.
 
 === TEXT TO RENDER (Traditional Chinese, Taiwan) ===
 Render EXACTLY these strings, character for character. Do not translate them, do not rewrite them, do not shorten them, and do not add any other words, letters or numbers anywhere in the image.
@@ -277,6 +277,18 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 COVER_TITLE_STYLE_PLAIN = "plain"
 COVER_TITLE_STYLE_DESIGNED = "designed"
 COVER_TITLE_STYLES = (COVER_TITLE_STYLE_PLAIN, COVER_TITLE_STYLE_DESIGNED)
+
+# 帶高不手寫。第三批的教訓是「模型手上有什麼數字就抄什麼」，而 compose 補帶／貼 Logo
+# 用的是 COVER_AI_HEADER_RATIO——兩邊各寫各的，改一邊就會悄悄脫鉤。
+# 兩張模板裡還留著 {badge_text} 之類的執行期欄位，不能整段丟給 f-string，所以先放記號再換掉。
+_HEADER_BAND_PERCENT = round(compose.COVER_AI_HEADER_RATIO * 100)
+COVER_AI_PROMPT_TEMPLATE = COVER_AI_PROMPT_TEMPLATE.replace(
+    "%HEADER_BAND%", f"about {_HEADER_BAND_PERCENT}%"
+)
+COVER_AI_FULL_PROMPT_TEMPLATE = COVER_AI_FULL_PROMPT_TEMPLATE.replace(
+    "%HEADER_BAND%", f"about {_HEADER_BAND_PERCENT}%"
+)
+
 
 COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE = """- DESIGNED TITLE — THIS BULLET AND THE ONE BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. Treat the headline as a title card designed by an art director, not as body text. You choose the typeface, the weight, the colours, the outline and shadow treatment, the decorative frames or shapes behind or around the words, the emphasis, the scale of each part, and where on the frame the block sits. Be bold. Specifically, the following earlier rules NO LONGER APPLY: the per-line colour labels (white / yellow / red) are only a hint you may ignore entirely — recolour freely, give one line several colours, reverse a word out of a coloured block, whatever reads best; the instruction to keep the headline in the lower-left (or lower-right) area no longer binds — place the block anywhere that composes well against the photograph; the fixed one-line-per-row stack no longer binds — you may stagger the lines, indent them, run one line larger over another, or set a short line beside a long one.
 - WHAT IS STILL FIXED, AND IS NOT A DESIGN DECISION: (a) the CHARACTERS. Render the listed strings character for character in the listed order — never add, drop, translate, abbreviate, reorder or substitute a single character to make a layout work, and never break a listed line in the middle: a listed line is one unbroken unit, so a date or score written with a slash such as 9/12 stays whole on one row. (b) Traditional Chinese, Taiwan forms, every character correctly formed and legible — no Simplified or Japanese forms, no invented strokes. (c) The header band across the top and the slim navy strip along the bottom stay as described, and NO part of the headline may sit inside them or overlap them. (d) The whole LEFT HALF of the header band and the small area just below its outer top corner stay clean and empty — software pastes the channel logo, the programme tag and the 示意圖 label there afterwards. (e) No text of any kind other than the listed strings. (f) Nothing touches or is clipped by the frame edge. (g) In the two-panel layout, each headline stays ENTIRELY INSIDE ITS OWN PANEL and never crosses the diagonal seam or strays into the other panel: freeing the placement frees where it sits WITHIN its panel, not which panel it belongs to.

@@ -349,44 +349,152 @@ COVER_MAX_TITLE_LINES_SPLIT = 3      # 雙切
 # 位置與大小用畫布比例算，模型回什麼解析度都對得上。
 # 2026-09-07：原本 Logo 寬佔 18.5%（量自舊範例），在一成高的標頭帶裡整個爆出來壓到照片；
 # 改成跟合成版同一套幾何——以標頭帶高為準，Logo 佔帶高 70%、標籤佔 80%，垂直置中。
-COVER_AI_HEADER_RATIO = 0.10          # prompt 寫「about one tenth」；量不到時的退路
+# 這一個數字同時是三件事，故意只留一個：prompt 要求模型畫多高、量不到時的退路、
+# 以及模型畫太薄時程式補到的目標。分成兩個數字遲早會各走各的。
+# 2026-09-09（第二輪）使用者改裁：「應該要藍框區域稍微變大一點點，你現在變成把 LOGO
+# 那些縮太小才是問題。」——上一版量到帶薄（實測 58/720 = 8.1%）就把 Logo 縮小去遷就，
+# 方向反了。0.10 → 0.12，並且改成**把帶補厚**而不是把 Logo 縮小。
+COVER_AI_HEADER_RATIO = 0.12
 COVER_AI_LEFT_RATIO = 0.015
-# 2026-09-09 使用者回報：標頭帶「沒有完全包住 TVBS LOGO」，Logo 下緣掉到藍線外壓在照片上。
-# 根因不是 Logo 太大，是**模型畫的帶比 prompt 說的薄**——實測 62/720 = 8.6%，
-# 貼圖卻按寫死的 10% 算，Logo 底就剛好戳出去。跟挖空框同一個原則：不靠模型自律，
-# 改成從圖上量出帶到哪裡結束，再據以縮放置中。量不到（帶跟照片同色）才退回 0.10。
 COVER_AI_HEADER_MIN_RATIO = 0.055     # 量到的帶高低於這個就是量錯（誤把帶內的字當邊界）
 COVER_AI_HEADER_MAX_RATIO = 0.145
 COVER_AI_HEADER_DELTA = 90            # 判定「離開標頭帶」的 RGB 曼哈頓距離
 COVER_AI_HEADER_CLEARANCE = 0.12      # Logo／標籤與帶底之間再留這麼多帶高當空隙
+COVER_AI_HEADER_EDGE_MAX_RATIO = 0.030   # 帶底那組「輝光＋亮藍細線」最多這麼厚
+COVER_AI_HEADER_FLAT_DELTA = 6           # 與帶身顏色差這麼多以內＝還算帶身（不是輝光）
 
 
-def measure_ai_header_band(canvas: Image.Image) -> int:
-    """量模型畫的標頭帶到哪一列結束（回傳像素）。
+def _ai_band_columns(width: int) -> range:
+    """取樣用的直行：畫面中段。左邊是 Logo／節目標籤、右邊是日期／紅標，中間本來就空。"""
+    return range(round(width * 0.40), round(width * 0.60), max(1, width // 64))
 
-    做法：在畫面中段（左邊是 Logo／節目標籤、右邊是日期／ON AIR，中間一定是空的）
-    取幾條直線，各自從最上面往下找第一列「顏色明顯不同於第 0 列」的位置——那就是
-    帶底的亮藍線或照片的起點。取中位數，避免某一條剛好穿過模型多畫的裝飾。
+
+def _is_band_edge(pixel) -> bool:
+    """帶底的輝光與亮藍細線都是藍色壓倒性的；照片就算有天空也少有這麼純的藍。"""
+    r, g, b = pixel[:3]
+    return b > r + 40 and b > 80
+
+
+def _probe_ai_header_band(canvas: Image.Image) -> tuple[int, int] | None:
+    """量模型畫的標頭帶：回傳 (帶身結束的那一列, 含底部輝光與亮線在內的帶底)。
+
+    量不到（帶跟照片同色、或量到離譜的值）回 None——這時候**不准動手畫**：
+    連帶在哪裡都不知道，往下補一塊深藍很可能蓋掉模型畫的東西。
     """
     width, height = canvas.size
     limit = round(height * COVER_AI_HEADER_MAX_RATIO)
     rgb = canvas.convert("RGB")
     px = rgb.load()
-    bounds: list[int] = []
-    for x in range(round(width * 0.40), round(width * 0.60), max(1, width // 64)):
+    tops: list[int] = []
+    for x in _ai_band_columns(width):
         base = px[x, 0]
         for y in range(1, limit + 1):
-            here = px[x, y]
-            if sum(abs(here[i] - base[i]) for i in range(3)) > COVER_AI_HEADER_DELTA:
-                bounds.append(y)
+            if sum(abs(px[x, y][i] - base[i]) for i in range(3)) > COVER_AI_HEADER_DELTA:
+                tops.append(y)
                 break
-    if not bounds:
-        return round(height * COVER_AI_HEADER_RATIO)
-    bounds.sort()
-    band_h = bounds[len(bounds) // 2]
-    if not (round(height * COVER_AI_HEADER_MIN_RATIO) <= band_h <= limit):
-        return round(height * COVER_AI_HEADER_RATIO)
-    return band_h
+    if not tops:
+        return None
+    tops.sort()
+    top = tops[len(tops) // 2]
+    if not (round(height * COVER_AI_HEADER_MIN_RATIO) <= top <= limit):
+        return None
+
+    edge_cap = round(height * COVER_AI_HEADER_EDGE_MAX_RATIO)
+    depths: list[int] = []
+    for x in _ai_band_columns(width):
+        depth = 0
+        while depth < edge_cap and top + depth < height and _is_band_edge(px[x, top + depth]):
+            depth += 1
+        depths.append(depth)
+    depths.sort()
+    return top, top + depths[len(depths) // 2]
+
+
+def measure_ai_header_band(canvas: Image.Image) -> int:
+    """標頭帶（含底部亮線）到哪一列結束——後面要壓「AI示意圖」小標與精華圓章的都用這個。
+
+    量不到就退回 prompt 要求的高度。注意這裡量的是**帶底**而不是帶身結束處，
+    所以 `paste_cover_logo` 把帶補厚之後再量，拿到的就是補完的新帶底。
+    """
+    probe = _probe_ai_header_band(canvas)
+    if probe is None:
+        return round(canvas.size[1] * COVER_AI_HEADER_RATIO)
+    return probe[1]
+
+
+COVER_AI_HEADER_FILL_WINDOW = 41         # 填充列的水平中位濾波窗（要比字的筆畫寬得多）
+COVER_AI_HEADER_FILL_CLAMP = 60          # 濾完仍離帶身主色這麼遠的直行＝寬色塊，改用主色
+
+
+def _band_fill_row(canvas: Image.Image, top: int) -> Image.Image:
+    """做一列拿來往下填的帶身：保留左右的細微漸層，但濾掉帶裡的字。
+
+    取三列（避開單一列剛好穿過某個筆畫），逐行取中位數，再做一次水平中位濾波——
+    日期與紅標的筆畫寬度遠小於濾波窗，會被整個吃掉；漸層是慢變化，濾波前後幾乎一樣。
+    只把「明顯太亮」的換掉是不夠的：字邊的抗鋸齒像素比帶身還**暗**，
+    一路拉下去就是一條深色直線（2026-09-09 第一版的實測災情）。
+    """
+    width = canvas.size[0]
+    rgb = canvas.convert("RGB")
+    px = rgb.load()
+    rows = sorted({max(1, round(top * r)) for r in (0.33, 0.5, 0.67)})
+    columns = [
+        tuple(sorted(px[x, y][i] for y in rows)[len(rows) // 2] for i in range(3))
+        for x in range(width)
+    ]
+    half = COVER_AI_HEADER_FILL_WINDOW // 2
+    body = tuple(sorted(c[i] for c in columns)[width // 2] for i in range(3))
+    out = Image.new("RGB", (width, 1))
+    op = out.load()
+    for x in range(width):
+        window = columns[max(0, x - half):x + half + 1]
+        here = tuple(sorted(c[i] for c in window)[len(window) // 2] for i in range(3))
+        # 濾波窗整個落在紅標裡的時候，中位數就是紅的——寬色塊只能靠這一道擋。
+        if sum(abs(here[i] - body[i]) for i in range(3)) > COVER_AI_HEADER_FILL_CLAMP:
+            here = body
+        op[x, 0] = here
+    return out.convert("RGBA")
+
+
+def ensure_ai_header_band(canvas: Image.Image) -> int:
+    """把模型畫得太薄的標頭帶補到 COVER_AI_HEADER_RATIO，回傳補完後的帶底。
+
+    做法是把帶底那組「輝光＋亮藍細線」整條原封不動往下搬，中間空出來的部分用帶身
+    的一列填滿——不是把 Logo 縮小去遷就薄帶（那是 2026-09-09 第一版的錯誤方向）。
+    照片被吃掉最上面那幾列，那正是「藍框變大一點點」的意思。
+    """
+    height = canvas.size[1]
+    target = round(height * COVER_AI_HEADER_RATIO)
+    probe = _probe_ai_header_band(canvas)
+    if probe is None:
+        return target
+    top, bottom = probe
+    if bottom >= target:
+        return bottom
+
+    rgb = canvas.convert("RGB")          # 要留住這個參照，px 是它的 buffer
+    px = rgb.load()
+    x_mid = round(canvas.size[0] * 0.5)
+    body = px[x_mid, max(1, top // 2)]
+    glow_cap = round(height * COVER_AI_HEADER_EDGE_MAX_RATIO)
+    glow_top = top
+    while (
+        top - glow_top < glow_cap
+        and glow_top > 1
+        and sum(abs(px[x_mid, glow_top - 1][i] - body[i]) for i in range(3))
+        > COVER_AI_HEADER_FLAT_DELTA
+    ):
+        glow_top -= 1
+
+    edge = canvas.crop((0, glow_top, canvas.size[0], bottom))
+    fill_to = target - edge.size[1]
+    if fill_to > glow_top:
+        canvas.paste(
+            _band_fill_row(canvas, top).resize((canvas.size[0], fill_to - glow_top)),
+            (0, glow_top),
+        )
+    canvas.paste(edge, (0, max(glow_top, fill_to)))
+    return target
 
 
 def paste_cover_logo(image_bytes: bytes) -> bytes:
@@ -399,8 +507,9 @@ def paste_cover_logo(image_bytes: bytes) -> bytes:
     with Image.open(io.BytesIO(image_bytes)) as opened:
         canvas = opened.convert("RGBA")
     width, height = canvas.size
-    # 2026-09-09：帶高改成量出來的（見 measure_ai_header_band），不再吃寫死的一成。
-    band_h = measure_ai_header_band(canvas)
+    # 2026-09-09（第二輪）：帶太薄就把帶補厚（見 ensure_ai_header_band），
+    # Logo 照補完的帶高算——第一版是反過來把 Logo 縮小去遷就薄帶，使用者退回。
+    band_h = ensure_ai_header_band(canvas)
     inner = max(1, band_h - round(band_h * COVER_AI_HEADER_CLEARANCE))
     logo_h = max(1, round(inner * 0.70))
     with Image.open(TVBS_LOGO_WHITE) as logo_file:

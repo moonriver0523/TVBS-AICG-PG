@@ -10,7 +10,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
@@ -66,79 +66,141 @@ class HourlyBadgeTests(unittest.TestCase):
         self.assertGreater(width - margin - badge_w, width * 0.5, "章不該吃掉右半以上")
 
 
-class AiHeaderBandMeasureTests(unittest.TestCase):
+class AiHeaderBandTests(unittest.TestCase):
     """第 6 項：Logo 掉出標頭帶。
 
-    根因不是 Logo 太大，是模型畫的帶比 prompt 說的一成薄（實測 62/720 = 8.6%），
-    貼圖卻按寫死的 10% 算。所以量出來再貼——與挖空框同一個原則：不靠模型自律。
+    第一版量到帶薄（實測 58/720 = 8.1%）就把 Logo 縮小去遷就，使用者退回：
+    「應該要藍框區域稍微變大一點點，你現在變成把 LOGO 那些縮太小才是問題。」
+    所以改成把**帶補厚**到 COVER_AI_HEADER_RATIO，Logo 照補完的帶高算。
     """
 
-    @staticmethod
-    def _canvas(band_ratio: float, *, band=(7, 18, 56), photo=(200, 170, 120)) -> Image.Image:
-        img = Image.new("RGB", (1280, 720), photo)
-        band_h = round(720 * band_ratio)
-        Image.new("RGB", (1280, band_h), band).convert("RGB")
-        img.paste(Image.new("RGB", (1280, band_h), band), (0, 0))
+    BAND = (7, 18, 56)
+    RULE = (20, 150, 250)
+    PHOTO = (200, 170, 120)
+
+    @classmethod
+    def _canvas(cls, band_ratio: float, *, rule: int = 3) -> Image.Image:
+        img = Image.new("RGB", (1280, 720), cls.PHOTO)
+        top = round(720 * band_ratio)
+        img.paste(Image.new("RGB", (1280, top), cls.BAND), (0, 0))
+        img.paste(Image.new("RGB", (1280, rule), cls.RULE), (0, top))
         return img.convert("RGBA")
 
-    def test_it_measures_a_band_thinner_than_the_prompt_asked_for(self):
-        self.assertEqual(compose.measure_ai_header_band(self._canvas(0.086)), round(720 * 0.086))
+    @staticmethod
+    def _bytes(canvas: Image.Image) -> bytes:
+        buffer = io.BytesIO()
+        canvas.convert("RGB").save(buffer, format="PNG")
+        return buffer.getvalue()
 
-    def test_it_measures_a_band_thicker_than_the_prompt_asked_for(self):
-        self.assertEqual(compose.measure_ai_header_band(self._canvas(0.125)), round(720 * 0.125))
+    # ---- 量 ----
+
+    def test_it_measures_the_bottom_of_the_band_including_its_hairline(self):
+        """量的是**帶底**（含底部亮線），不是帶身結束處——後面壓小標／圓章的都靠這個。"""
+        canvas = self._canvas(0.086)
+        self.assertEqual(compose.measure_ai_header_band(canvas), round(720 * 0.086) + 3)
 
     def test_an_absurd_result_falls_back_to_the_prompt_figure(self):
-        """量到 2% 或 30% 就是量錯了（模型多畫了裝飾，或帶跟照片同色）。
-        寧可退回寫死的一成，也不要把 Logo 貼成一條線或蓋掉半張圖。"""
         fallback = round(720 * compose.COVER_AI_HEADER_RATIO)
         for ratio in (0.02, 0.30):
             with self.subTest(ratio=ratio):
                 self.assertEqual(compose.measure_ai_header_band(self._canvas(ratio)), fallback)
 
     def test_a_band_that_never_departs_falls_back_too(self):
-        """整張都同一個深藍（模型把照片也畫暗了）：量不到邊界就退回一成。"""
-        plain = Image.new("RGB", (1280, 720), (7, 18, 56)).convert("RGBA")
+        plain = Image.new("RGB", (1280, 720), self.BAND).convert("RGBA")
+        self.assertIsNone(compose._probe_ai_header_band(plain))
         self.assertEqual(
             compose.measure_ai_header_band(plain), round(720 * compose.COVER_AI_HEADER_RATIO)
         )
 
-    def test_the_logo_lands_inside_the_measured_band(self):
-        """真正要守的東西：貼完之後 Logo 的下緣還在帶子裡面。"""
-        band_ratio = 0.086
-        canvas = self._canvas(band_ratio)
-        buffer = io.BytesIO()
-        canvas.convert("RGB").save(buffer, format="PNG")
-        out = Image.open(io.BytesIO(compose.paste_cover_logo(buffer.getvalue()))).convert("RGB")
-        band_h = round(720 * band_ratio)
-        # 帶子底下那一列（照片區）在貼圖前後都該是照片色——Logo 沒有戳出去
-        for y in range(band_h + 1, band_h + 12):
+    # ---- 補 ----
+
+    def test_a_thin_band_is_filled_out_to_the_target(self):
+        canvas = self._canvas(0.081)
+        target = round(720 * compose.COVER_AI_HEADER_RATIO)
+        self.assertEqual(compose.ensure_ai_header_band(canvas), target)
+        px = canvas.convert("RGB").load()
+        self.assertEqual(px[640, target - 2], self.RULE, "底部亮線要整條搬下來，不是被填掉")
+        self.assertEqual(px[640, target - 12], self.BAND, "中間補的是帶身色")
+        self.assertEqual(px[640, target + 2], self.PHOTO, "照片只被吃掉最上面那幾列")
+
+    def test_a_band_the_model_drew_thick_enough_is_left_alone(self):
+        canvas = self._canvas(0.13)
+        before = canvas.tobytes()
+        self.assertEqual(compose.ensure_ai_header_band(canvas), round(720 * 0.13) + 3)
+        self.assertEqual(canvas.tobytes(), before, "夠厚就不要動它")
+
+    def test_nothing_is_painted_when_the_band_cannot_be_measured(self):
+        """量不到就不准動手畫：連帶在哪裡都不知道，補一塊深藍很可能蓋掉模型畫的東西。"""
+        canvas = Image.new("RGB", (1280, 720), self.BAND).convert("RGBA")
+        before = canvas.tobytes()
+        self.assertEqual(
+            compose.ensure_ai_header_band(canvas), round(720 * compose.COVER_AI_HEADER_RATIO)
+        )
+        self.assertEqual(canvas.tobytes(), before)
+
+    def test_the_fill_does_not_smear_wide_colour_blocks_downwards(self):
+        """帶裡有紅標與白日期。只換「太亮」的不夠（字邊的抗鋸齒比帶身還暗），
+        只做中位濾波也不夠（紅標比濾波窗寬），兩道都要在。"""
+        canvas = self._canvas(0.081)
+        draw = ImageDraw.Draw(canvas)
+        draw.rectangle([1040, 8, 1260, 50], fill=(250, 5, 5))       # ON AIR 紅標
+        draw.rectangle([900, 20, 1020, 40], fill=(255, 255, 255))   # 日期
+        compose.ensure_ai_header_band(canvas)
+        px = canvas.convert("RGB").load()
+        target = round(720 * compose.COVER_AI_HEADER_RATIO)
+        for x in (910, 980, 1100, 1200):
+            with self.subTest(x=x):
+                self.assertEqual(px[x, target - 12], self.BAND, "寬色塊被往下拉成一片了")
+
+    # ---- 貼 ----
+
+    def test_the_logo_is_not_smaller_than_before_this_fix(self):
+        """260909-03 的帶高寫死一成（720 → 72），Logo 50、標籤 58。
+        這次是把帶補厚，不是把 Logo 縮小——所以只能更大，不能更小。"""
+        band = round(720 * compose.COVER_AI_HEADER_RATIO)
+        inner = band - round(band * compose.COVER_AI_HEADER_CLEARANCE)
+        self.assertGreaterEqual(round(inner * 0.70), 50)
+        self.assertGreaterEqual(round(inner * 0.80), 58)
+        self.assertGreater(compose.COVER_AI_HEADER_RATIO, 0.10, "藍框要比原本大一點點")
+
+    def test_the_logo_lands_inside_the_thickened_band(self):
+        out = Image.open(
+            io.BytesIO(compose.paste_cover_logo(self._bytes(self._canvas(0.081))))
+        ).convert("RGB")
+        target = round(720 * compose.COVER_AI_HEADER_RATIO)
+        px = out.load()
+        for y in range(target + 4, target + 16):
             for x in range(4, 400, 37):
                 with self.subTest(x=x, y=y):
-                    self.assertEqual(out.getpixel((x, y)), (200, 170, 120))
+                    self.assertEqual(px[x, y], self.PHOTO, "Logo 或標籤戳出帶外了")
+        ink = [y for y in range(target) if any(sum(px[x, y]) > 400 for x in range(4, 400, 3))]
+        self.assertTrue(ink, "左半根本沒貼上東西")
+        self.assertGreater(max(ink) - min(ink), 40, "Logo／標籤被縮小了")
 
-    def test_the_highlight_stamp_follows_the_measured_band_too(self):
-        """精華標籤跟 Logo 同一個根因（它用的還是更大的 COVER_HEADER_RATIO＝10.5%）。
-        使用者沒回報是因為平常不開精華，不是因為它沒事。"""
-        source = (ROOT / "compose.py").read_text(encoding="utf-8")
-        stamp = source[source.index("def paste_cover_highlight_stamp"):]
-        stamp = stamp[:stamp.index("def _cover_panel")]
-        self.assertIn("_draw_cover_highlight_stamp(canvas, measure_ai_header_band(canvas))", stamp)
-
-    def test_the_composite_path_keeps_its_own_band_height(self):
-        """合成版的帶是程式自己畫的，高度一清二楚，不必也不該去量。"""
-        self.assertIn(
-            "def _draw_cover_highlight_stamp(canvas: Image.Image, band_h: int | None = None)",
-            (ROOT / "compose.py").read_text(encoding="utf-8"),
+    def test_the_ai_note_and_stamp_follow_the_thickened_band(self):
+        """三支是串起來跑的（main.py 3616→3620→3624）：Logo 補厚之後，
+        小標與圓章再量一次要拿到補完的新帶底，不是原本那條薄帶。"""
+        canvas = self._canvas(0.081)
+        after_logo = compose.paste_cover_logo(self._bytes(canvas))
+        measured = compose.measure_ai_header_band(
+            Image.open(io.BytesIO(after_logo)).convert("RGBA")
         )
+        self.assertEqual(measured, round(720 * compose.COVER_AI_HEADER_RATIO))
 
-    def test_the_ai_note_also_follows_the_measured_band(self):
-        """「AI示意圖」小標貼在帶子下方，用的必須是同一個量出來的高度，
-        不然帶薄的時候小標會浮在帶子裡面。"""
-        source = (ROOT / "compose.py").read_text(encoding="utf-8")
-        note = source[source.index("def paste_cover_ai_note"):]
-        note = note[:note.index("def paste_cover_highlight_stamp")]
-        self.assertIn("measure_ai_header_band(canvas)", note)
-        self.assertNotIn("height * COVER_AI_HEADER_RATIO", note)
+
+class HeaderBandPromptTests(unittest.TestCase):
+    """prompt 裡的帶高不准手寫——compose 補帶用的是常數，兩邊各寫各的就會脫鉤。"""
+
+    def test_both_templates_quote_the_constant(self):
+        import editor_formats
+
+        wanted = f"about {round(compose.COVER_AI_HEADER_RATIO * 100)}% of the frame height"
+        for name in ("COVER_AI_PROMPT_TEMPLATE", "COVER_AI_FULL_PROMPT_TEMPLATE"):
+            with self.subTest(template=name):
+                template = getattr(editor_formats, name)
+                self.assertIn(wanted, template)
+                self.assertNotIn("one tenth", template)
+                self.assertNotIn("%HEADER_BAND%", template)
 
 
 if __name__ == "__main__":

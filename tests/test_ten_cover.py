@@ -339,12 +339,15 @@ class TitleDigestTests(unittest.TestCase):
 
 
 class PromptSyncTests(unittest.TestCase):
-    """純 AI 版的 prompt 要跟合成版畫的同一個版面（斜切全幅、薄標頭帶、白黃紅逐行）。"""
+    """純 AI 版的 prompt 要跟合成版畫的同一個版面（斜切全幅、標頭帶、白黃紅逐行）。"""
 
     def test_prompt_describes_diagonal_full_bleed_layout(self):
+        # 2026-09-09（第二輪）使用者：「藍框區域稍微變大一點點」——帶不再叫 THIN，
+        # 高度也不再手寫，改成從 compose.COVER_AI_HEADER_RATIO 推（見
+        # test_followups_20260909c.HeaderBandPromptTests）。
         prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE
         self.assertIn("DIAGONAL seam", prompt)
-        self.assertIn("THIN deep-navy header band", prompt)
+        self.assertIn("deep-navy header band", prompt)
         self.assertIn("glowing straight blue light line", prompt)
 
     def test_prompt_colour_names_match_the_composite_table(self):
