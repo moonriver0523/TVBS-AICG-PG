@@ -74,15 +74,30 @@ class BandDefaultTests(unittest.TestCase):
                     )
 
     def test_the_shipped_constants_are_the_ones_the_user_picked(self):
-        """2026-09-08 裁決：第 3 位置（第二行）＋上緣羽化。"""
-        self.assertEqual(compose.YT_BAND_TOP_RATIO, 0.778)
-        self.assertEqual(compose.YT_BAND_FADE_RATIO, 0.0365)
+        """2026-09-08 裁決：第 3 位置（第二行）＋上緣羽化。
+        2026-09-09 使用者「羽化再多一點」：起點跟著第一行基線走（往上讓 LEAD 那一段），
+        羽化 0.0365 → 0.052。寫成關係式而不是兩個裸數字——行距一動就要一起動。"""
+        self.assertAlmostEqual(
+            compose.YT_BAND_TOP_RATIO,
+            compose.YT_LINE1_BASELINE_RATIO - compose.YT_BAND_LEAD_RATIO,
+        )
+        self.assertEqual(compose.YT_BAND_FADE_RATIO, 0.052)
+        self.assertGreater(compose.YT_BAND_FADE_RATIO, 0.0365, "使用者要的是更長的斜坡")
 
 
 class BandPlacementTests(unittest.TestCase):
-    def test_the_band_starts_at_the_first_line_baseline_not_above_it(self):
-        """羽化從第一行字底開始：再往上就會蓋到第一行的筆畫。"""
-        self.assertGreaterEqual(compose.YT_BAND_TOP_RATIO, compose.YT_LINE1_BASELINE_RATIO)
+    def test_the_band_does_not_tint_the_first_line_even_though_the_ramp_starts_higher(self):
+        """2026-09-09：斜坡改成比第一行基線再高 LEAD 一段起跑，才有地方長羽化。
+
+        會這樣做是因為 smoothstep 在 t 很小的時候幾乎是 0，那一段藏在白字腳下看不出來。
+        「看不出來」不能用講的——這裡直接量：白字墨水那一帶的濃度要低到幾乎為零，
+        全濃度處仍然壓在黃字墨水上緣之上（下一個測試）。"""
+        self.assertLess(compose.YT_BAND_TOP_RATIO, compose.YT_LINE1_BASELINE_RATIO)
+        span = compose.YT_LINE1_BASELINE_RATIO - compose.YT_BAND_TOP_RATIO
+        self.assertLessEqual(span, 0.025, "起跑點拉太高，白字就真的坐進框裡了")
+        ink_top = compose._yt_title_ink_top_ratio(compose.YT_LINE1_BASELINE_RATIO)
+        t = max(0.0, (ink_top - compose.YT_BAND_TOP_RATIO) / compose.YT_BAND_FADE_RATIO)
+        self.assertLess(t * t * (3 - 2 * t), 0.08, "白字墨水上緣已經有明顯底色")
 
     def test_the_fade_reaches_full_strength_before_the_second_line_ink(self):
         """裁決原文：不超過第二行標題。羽化結尾要壓在第二行墨水上緣之上。"""

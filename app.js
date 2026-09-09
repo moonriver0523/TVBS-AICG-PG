@@ -367,8 +367,9 @@ let state = {
     // 刻意不共用 refineSource——那格的語意是「餵回 /api/images/refine 的原圖」，合成版
     // 沒有那種東西；混用會讓「修改」鈕誤以為合成版可以 refine（見 handleRefine）。
     tenCoverBackground: null,
-    // 十點 AI 整張版的標題設計感（2026-09-08）：plain＝現行排版、designed＝滿框放大關鍵字。
-    // 預設 plain——designed 讓模型大改版面，錯字與版面走鐘的風險比較高，要使用者自己開。
+    // 十點 AI 整張版的標題設計感（2026-09-08）：plain＝現行排版（白黃紅逐行配色、版位固定）。
+    // 2026-09-09 使用者：designed 升級成「完全解放」——配色、版位、字體、邊框、強調全給 AI。
+    // 預設仍是 plain——解放後版面與配色都不可預期，要使用者自己開。
     coverTitleStyle: 'plain',
     // YT 封面底部壓色框：2026-09-08 晚使用者裁決預設**開**（60% 半透明、第二行上緣起羽化，見 compose）。
     // 整點直播的版面沒有底帶，按鈕不顯示。
@@ -453,6 +454,18 @@ const EDITOR_FORMATS = {
         hides: { digestControls: true, safeFrame: true, stamp: true },
         hole: null,
     },
+    // YT 直播直標（2026-09-08 WP3）：不是封面，是疊在直播訊號上的透明底 PNG。
+    // 2026-09-09 使用者：下拉往上移一格排在「國內外新聞直播」後面，標籤加全形減號前綴。
+    // 沒有底圖就沒有生圖、沒有附圖、沒有引擎、沒有「只改文字」與追加修改，
+    // 所以 hides 收得比封面更多（連引擎與指令欄都收）。
+    yt_vstrip: {
+        label: '－YT直播直標',
+        hint: '直播用的垂直標題條，透明底 PNG，直接疊在直播訊號上。第一標題最多 12 格、第二標題最多 14 格（連續英數字算一格）。不生圖、不打 AI。',
+        inputs: 'yt_vstrip',
+        locks: {},
+        hides: { digestControls: true, safeFrame: true, stamp: true, engine: true, instruction: true, refUpload: true, refine: true },
+        hole: null,
+    },
     // YT 整點直播：同一條底圖流程，版面換成整點版（Logo 左上、LIVE 章右上＋選填整點時間、
     // 紅底日期、沒有副標）。
     yt_hourly_cover: {
@@ -462,17 +475,6 @@ const EDITOR_FORMATS = {
         ytLayout: 'hourly',
         locks: {},
         hides: { digestControls: true, safeFrame: true, stamp: true },
-        hole: null,
-    },
-    // YT 直播直標（2026-09-08 WP3）：不是封面，是疊在直播訊號上的透明底 PNG。
-    // 沒有底圖就沒有生圖、沒有附圖、沒有引擎、沒有「只改文字」與追加修改，
-    // 所以 hides 收得比封面更多（連引擎與指令欄都收）。
-    yt_vstrip: {
-        label: 'YT直播直標',
-        hint: '直播用的垂直標題條，透明底 PNG，直接疊在直播訊號上。第一標題最多 12 格、第二標題最多 14 格（連續英數字算一格）。不生圖、不打 AI。',
-        inputs: 'yt_vstrip',
-        locks: {},
-        hides: { digestControls: true, safeFrame: true, stamp: true, engine: true, instruction: true, refUpload: true, refine: true },
         hole: null,
     },
     // YT 今日熱搜（2026-09-06 型錄 H 類）：紅色系「今日熱搜」標籤＋紅色 Logo 斜標，
@@ -1326,8 +1328,8 @@ function toggleCoverTitleStyle() {
     state.coverTitleStyle = state.coverTitleStyle === 'designed' ? 'plain' : 'designed';
     updateCoverTitleStyleButton();
     showToast(state.coverTitleStyle === 'designed'
-        ? '設計標題：開（標題撐滿整格、關鍵字放大）'
-        : '設計標題：關（維持現行排版）');
+        ? '設計標題：開（配色、版位、字體全交給 AI，白黃紅規則不套用）'
+        : '設計標題：關（白／黃／紅逐行配色，版位固定）');
 }
 
 // 播出鏡面白色壓框開關（2026-09-07）。青色，與安全框（綠）／蓋章（琥珀）區分。

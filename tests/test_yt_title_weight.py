@@ -187,7 +187,9 @@ class LeadingTests(unittest.TestCase):
     def test_leading_is_tighter_than_before(self):
         leading = compose.YT_LINE2_BASELINE_RATIO - compose.YT_LINE1_BASELINE_RATIO
         self.assertLess(leading, OLD_LEADING)
-        self.assertGreater(leading / OLD_LEADING, 0.90, "縮太多會擠在一起")
+        # 0.194（原始）→ 0.180（0908）→ 0.168（0909 使用者再要求縮）。
+        # 真正擋「擠在一起」的是下面 test_the_two_lines_do_not_overlap，這裡只擋離譜值。
+        self.assertGreater(leading / OLD_LEADING, 0.85, "縮太多會擠在一起")
 
     def test_second_line_still_sits_at_the_bottom(self):
         self.assertEqual(compose.YT_LINE2_BASELINE_RATIO, 0.958)

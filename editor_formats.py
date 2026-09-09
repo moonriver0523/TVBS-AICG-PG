@@ -19,6 +19,10 @@
 
 import re
 
+# 底色框的百分比要跟合成版同一個數字（見 _BAND_CLAUSE_TEMPLATE）。compose 只在函式
+# 內部反向 import editor_formats，模組層級不成環。
+import compose
+
 DEFAULT_FORMAT = "default"
 
 # 走一般 /api/generate + /api/images/generate；ten_cover 走 /api/editor/cover；
@@ -260,15 +264,22 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 
 
 # 標題設計感開關（2026-09-08 使用者要求：AI 整張版的標題要「設計感＋滿框」，像節目片頭字卡）。
-# 預設 plain＝維持現行排版；designed 才追加下面這段。兩個 AI 模板（雙切／滿版）共用同一段，
-# 措辭只寫「怎麼排」，不碰「印哪幾行、印哪些字」——那由 {title_left_lines} 逐行給定，
-# 這段裡再明文重申一次不得增減字，免得模型為了版面好看自己加字或砍字。
+# 預設 plain＝維持現行排版（白／黃／紅逐行配色、行數行序釘死）；designed 才追加下面這段。
+#
+# 2026-09-09 使用者：「十點不一樣的 AI 設計標題可以不用照白黃紅三段規則，設計規則與放置
+# 位置完全解放，可以嘗試各種字體、顏色、設計邊框、強調，完全交由 AI 大膽設計。」
+# 所以 designed 從「只改大小與位置」升級成整段 OVERRIDE：配色、版位、字體、邊框、
+# 強調手法全放給模型。解放的是**設計**，不是**內容**——底下明文列出仍然不准動的事：
+# 一個字都不能加減改（含 9/12 這種斜線不得拆開）、正體中文、標頭帶左半與 AI示意圖
+# 角落要留空（那兩處是程式後貼的，見 compose.paste_cover_logo／paste_cover_ai_note）、
+# 上下兩條深藍帶不得被字蓋掉。plain 那條線完全不受影響，出事就把開關關掉。
+# 位置在 TYPOGRAPHY 段最後、又寫明 OVERRIDE——本 repo 的慣例是「位置＋明文同向」才壓得住。
 COVER_TITLE_STYLE_PLAIN = "plain"
 COVER_TITLE_STYLE_DESIGNED = "designed"
 COVER_TITLE_STYLES = (COVER_TITLE_STYLE_PLAIN, COVER_TITLE_STYLE_DESIGNED)
 
-COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE = """- DESIGNED TITLE: treat the headline as a show title card. Set it edge to edge so it FILLS THE FULL WIDTH of its panel, in heavy black-weight (weight, not colour) display type with tight leading so the lines stack as one solid block. EMPHASIS IS BY SIZE ONLY: mix the type sizes within a line so the key figure, number or keyword is set noticeably LARGER than the characters around it — a deliberate, designed rhythm rather than one uniform size. Do NOT add a highlight colour of your own to pick that word out; colours stay exactly as assigned per line above. Keep each line's outline exactly as specified above, and add a strong drop shadow so the block lifts off the photograph.
-- That styling changes only the SIZE, WEIGHT and PLACEMENT of the characters. It does NOT change the line count, the line breaks, the order or the colours: those stay exactly as listed above, one listed line per row, each in its labelled colour. Render the lines character for character — never add, drop, reorder or re-split a single character to make the layout work.
+COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE = """- DESIGNED TITLE — THIS BULLET AND THE ONE BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. Treat the headline as a title card designed by an art director, not as body text. You choose the typeface, the weight, the colours, the outline and shadow treatment, the decorative frames or shapes behind or around the words, the emphasis, the scale of each part, and where on the frame the block sits. Be bold. Specifically, the following earlier rules NO LONGER APPLY: the per-line colour labels (white / yellow / red) are only a hint you may ignore entirely — recolour freely, give one line several colours, reverse a word out of a coloured block, whatever reads best; the instruction to keep the headline in the lower-left (or lower-right) area no longer binds — place the block anywhere that composes well against the photograph; the fixed one-line-per-row stack no longer binds — you may stagger the lines, indent them, run one line larger over another, or set a short line beside a long one.
+- WHAT IS STILL FIXED, AND IS NOT A DESIGN DECISION: (a) the CHARACTERS. Render the listed strings character for character in the listed order — never add, drop, translate, abbreviate, reorder or substitute a single character to make a layout work, and never break a listed line in the middle: a listed line is one unbroken unit, so a date or score written with a slash such as 9/12 stays whole on one row. (b) Traditional Chinese, Taiwan forms, every character correctly formed and legible — no Simplified or Japanese forms, no invented strokes. (c) The header band across the top and the slim navy strip along the bottom stay as described, and NO part of the headline may sit inside them or overlap them. (d) The whole LEFT HALF of the header band and the small area just below its outer top corner stay clean and empty — software pastes the channel logo, the programme tag and the 示意圖 label there afterwards. (e) No text of any kind other than the listed strings. (f) Nothing touches or is clipped by the frame edge.
 """
 
 
@@ -646,8 +657,8 @@ YT_COVER_TITLE_MODES = (YT_COVER_TITLE_MODE_AI, YT_COVER_TITLE_MODE_COMPOSITE)
 _BAND_CLAUSE_TEMPLATE = (
     "- THE COLOUR BAND — TAKE THE NUMBER FROM THIS BULLET, NOT FROM THE 「lower 40%」 FIGURE ABOVE "
     "(that figure sizes the TEXT BLOCK and says nothing about the band): a translucent {colour} band "
-    "with a subtle {texture} texture lies along the BOTTOM EDGE of the frame. ITS TOP EDGE IS AT 78% "
-    "OF THE FRAME HEIGHT MEASURED DOWN FROM THE TOP, so the band covers ONLY THE BOTTOM 22% of the "
+    "with a subtle {texture} texture lies along the BOTTOM EDGE of the frame. ITS TOP EDGE IS AT {top}% "
+    "OF THE FRAME HEIGHT MEASURED DOWN FROM THE TOP, so the band covers ONLY THE BOTTOM {rest}% of the "
     "picture and nothing above that line. Concretely: the top edge is a soft fade running level with "
     "the BASELINE (the feet) of the WHITE upper headline line, so the whole white line stands on the "
     "bare photograph with no band behind it, and the band reaches full strength just above the top of "
@@ -655,11 +666,16 @@ _BAND_CLAUSE_TEMPLATE = (
     "of the picture: NOT a panel over the lower third, NOT the lower 40%, NOT half the frame. It is "
     "translucent (about 60% opaque): the photograph stays clearly visible through it."
 )
+# 2026-09-09：百分比改成從 compose 的常數算，不再手抄。合成版的框一調（這批 0.778→0.770），
+# 抄在 prompt 裡的數字就會過期，而第三批的教訓正是「模型手上有什麼數字就抄什麼」。
+_BAND_TOP_PERCENT = round(compose.YT_BAND_TOP_RATIO * 100)
 YT_COVER_BAND_CLAUSE_NEWS_ON = _BAND_CLAUSE_TEMPLATE.format(
-    colour="deep-navy", texture="circuit-board / tech-block"
+    colour="deep-navy", texture="circuit-board / tech-block",
+    top=_BAND_TOP_PERCENT, rest=100 - _BAND_TOP_PERCENT,
 )
 YT_COVER_BAND_CLAUSE_HOT_ON = _BAND_CLAUSE_TEMPLATE.format(
-    colour="DEEP CRIMSON / near-black", texture="red circuit-board / tech-block"
+    colour="DEEP CRIMSON / near-black", texture="red circuit-board / tech-block",
+    top=_BAND_TOP_PERCENT, rest=100 - _BAND_TOP_PERCENT,
 )
 YT_COVER_BAND_CLAUSE_OFF = "- There is NO solid colour band, panel or strip behind the headline: the photograph runs uninterrupted to the bottom edge and stays fully visible. The headline's readability comes from its thick outline and drop shadow alone."
 YT_COVER_BAND_IMAGERY_TAIL_ON = " behind the band"
@@ -838,20 +854,21 @@ EDITOR_FORMATS = {
         "digest_rules": "",
         "hole_side": None,
     },
+    # YT 直播直標（2026-09-08 WP3）：不是封面，是疊在直播訊號上的透明底 PNG。
+    # 沒有底圖、沒有生圖、沒有 AI——所有東西由 compose.compose_yt_overlay 畫。
+    # 2026-09-09 使用者：下拉往上移一格排在「國內外新聞直播」後面，標籤前面加全形減號
+    # 「－」，跟真正的封面版型在視覺上分開（它不生封面）。
+    "yt_vstrip": {
+        "label": "－YT直播直標",
+        "pipeline": PIPELINE_YT_OVERLAY,
+        "digest_rules": "",
+        "hole_side": None,
+    },
     # YT 整點直播：同一條底圖流程，版面換成 compose.compose_yt_hourly_cover（整點時間選填）
     "yt_hourly_cover": {
         "label": "YT整點直播",
         "pipeline": PIPELINE_YT_COVER,
         "yt_layout": YT_COVER_LAYOUT_HOURLY,
-        "digest_rules": "",
-        "hole_side": None,
-    },
-    # YT 直播直標（2026-09-08 WP3）：不是封面，是疊在直播訊號上的透明底 PNG。
-    # 沒有底圖、沒有生圖、沒有 AI——所有東西由 compose.compose_yt_overlay 畫。
-    # 下拉順序刻意排在整點直播正下方（使用者裁決）。
-    "yt_vstrip": {
-        "label": "YT直播直標",
-        "pipeline": PIPELINE_YT_OVERLAY,
         "digest_rules": "",
         "hole_side": None,
     },

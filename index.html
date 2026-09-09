@@ -76,6 +76,12 @@
             border-color: var(--accent);
             box-shadow: 0 0 0 3px rgba(225, 6, 0, 0.22);
         }
+        /* 2026-09-09 使用者：欄位「內」的提示文字一律斜體，才看得出那是提示不是已填的值。
+           寫成全站規則而不是逐個欄位加 class——新增欄位不會忘了帶。 */
+        input::placeholder,
+        textarea::placeholder {
+            font-style: italic;
+        }
         .tag-btn {
             background: #1d1916;
             border: 1px solid var(--line);
@@ -304,7 +310,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260909-02</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260909-03</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -462,7 +468,7 @@
                             </label>
                             <!-- 設計標題（2026-09-08）：只有 AI 整張版有意義，合成版的字是程式壓的 -->
                             <button id="coverTitleStyleBtn" type="button" onclick="toggleCoverTitleStyle()"
-                                    title="開：標題撐滿整格、關鍵字放大、緊密堆疊，像節目片頭字卡，顏色不變；關：維持現行排版"
+                                    title="開：配色、版位、字體、邊框、強調全部交給 AI 大膽設計，不套白／黃／紅三行規則（字句仍一字不改）；關：白／黃／紅逐行配色、版位固定"
                                     class="hidden px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">設計標題 OFF</button>
                         </div>
                     </div>

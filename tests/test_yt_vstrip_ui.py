@@ -138,9 +138,11 @@ class FormatWiringTests(unittest.TestCase):
     def test_backend_lists_the_new_format_right_after_the_hourly_one(self):
         keys = list(editor_formats.EDITOR_FORMAT_KEYS)
         self.assertIn("yt_vstrip", keys)
-        self.assertEqual(keys[keys.index("yt_hourly_cover") + 1], "yt_vstrip")
+        # 2026-09-09 使用者改裁：往上移一格，排在「國內外新聞直播」後面
+        self.assertEqual(keys[keys.index("yt_live_cover") + 1], "yt_vstrip")
         entry = editor_formats.EDITOR_FORMATS["yt_vstrip"]
-        self.assertEqual(entry["label"], "YT直播直標")
+        # 2026-09-09 使用者：標籤前面加全形減號，跟真正的封面版型在下拉裡分開
+        self.assertEqual(entry["label"], "－YT直播直標")
         self.assertEqual(entry["pipeline"], editor_formats.PIPELINE_YT_OVERLAY)
         self.assertIsNone(entry["hole_side"])
 
@@ -155,7 +157,7 @@ class FormatWiringTests(unittest.TestCase):
 
     def test_frontend_puts_the_new_format_below_the_hourly_one(self):
         order = self._js_format_order()
-        self.assertEqual(order[order.index("yt_hourly_cover") + 1], "yt_vstrip")
+        self.assertEqual(order[order.index("yt_live_cover") + 1], "yt_vstrip")
 
     def test_frontend_entry_hides_everything_the_format_cannot_use(self):
         entry = re.search(r"(?ms)^    yt_vstrip:\s*\{(.*?)^    \},", APP_JS).group(1)

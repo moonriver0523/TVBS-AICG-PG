@@ -3,8 +3,11 @@
 守的紅線：
 1. **預設 plain。** 不帶 `title_style` 時 prompt 不得出現 designed 那一段——designed 讓模型
    大改版面，錯字與版面走鐘的風險比較高，要使用者自己開。
-2. **designed 只改排版、不改字。** 那一段自己要明文重申「照給定的行逐字印、不得增減」，
-   否則模型會為了版面好看自己加字或砍字。
+2. **designed 解放的是設計，不是內容。** 2026-09-09 使用者裁決把配色、版位、字體、
+   邊框、強調全部放給模型（白／黃／紅三段規則對它不再適用），但那一段自己要明文
+   重申「照給定的行逐字印、不得增減、不得中途斷行」，否則模型會為了版面好看
+   自己加字或砍字——9/12 這種斜線被拆成兩行就是最典型的一種。
+   另外三個「程式後貼」的區域（標頭帶左半、AI示意圖角落、上下兩條深藍帶）也不解放。
 3. **雙切與滿版兩個模板都吃。**
 """
 import base64
@@ -40,34 +43,42 @@ def _png_for(aspect_ratio: str) -> bytes:
 
 
 class ClauseTests(unittest.TestCase):
-    def test_designed_clause_demands_full_width_and_mixed_sizes(self):
-        clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
-        self.assertIn("FILLS THE FULL WIDTH", clause)
-        self.assertIn("EMPHASIS IS BY SIZE ONLY", clause)
-        self.assertIn("Do NOT add a highlight colour of your own", clause)
+    def test_designed_clause_hands_the_design_over(self):
+        """2026-09-09 使用者：「設計規則與放置位置完全解放，交由 AI 大膽設計。」
 
-    def test_designed_clause_does_not_override_the_line_and_colour_rules(self):
-        """設計標題只能改字級／字重／位置——行數、斷行、顏色、描邊仍由前面的規則說了算。"""
+        字體、顏色、邊框、強調、版位五樣都要明文交出去——只寫「你可以設計」而不
+        逐項點名，模型會照前面那幾條保守規則辦，等於沒解放。
+        """
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
-        self.assertIn("does NOT change the line count", clause)
-        self.assertIn("each in its labelled colour", clause)
-        self.assertIn("Keep each line's outline exactly as specified above", clause)
-        # 這一段不得自己指定描邊或配色：基礎規則是白／黃行深色描邊、只有紅行白描邊，
-        # 一句「加白色描邊」就把三行全變成白描邊了。
-        for banned in ("white stroke", "crisp white", "outline in white", "yellow or red"):
-            with self.subTest(banned=banned):
-                self.assertNotIn(banned, clause)
+        for freed in ("typeface", "colours", "decorative frames", "emphasis",
+                      "where on the frame the block sits"):
+            with self.subTest(freed=freed):
+                self.assertIn(freed, clause)
 
-    def test_designed_clause_says_black_is_a_weight_not_a_colour(self):
-        """「extremely heavy black display type」的 black 會被讀成填色。"""
+    def test_designed_clause_cancels_the_white_yellow_red_rule_explicitly(self):
+        """本 repo 的慣例：位置在後**加上**明文 OVERRIDE 才壓得過前面的規則。
+        前面那三條（逐行配色、鎖在左下、一行一列）都要被點名取消，含糊帶過沒有用。"""
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
-        self.assertIn("heavy black-weight (weight, not colour)", clause)
-        self.assertNotIn("heavy black display type", clause)
+        self.assertIn("OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE", clause)
+        self.assertIn("per-line colour labels (white / yellow / red) are only a hint", clause)
+        self.assertIn("no longer binds", clause)
+
+    def test_designed_clause_still_locks_the_areas_the_program_pastes_into(self):
+        """解放的是設計，不是版面規約：標頭帶／底部飾帶不准被字蓋掉，
+        標頭帶左半與 AI示意圖 那個角落要留空（compose 後貼 Logo／節目標籤／小標）。"""
+        clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
+        self.assertIn("NO part of the headline may sit inside them or overlap them", clause)
+        self.assertIn("LEFT HALF of the header band", clause)
+        self.assertIn("示意圖", clause)
 
     def test_designed_clause_repeats_the_verbatim_rule(self):
+        """最重要的一條：解放版位以後，模型最容易做的事就是為了版面好看動字。"""
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
         self.assertIn("character for character", clause)
-        self.assertIn("never add, drop, reorder or re-split", clause)
+        self.assertIn("never add, drop, translate, abbreviate, reorder or substitute", clause)
+        # 斷行也是設計的一部分，但「一行的中間」不准斷——9/12 會被拆成兩行
+        self.assertIn("never break a listed line in the middle", clause)
+        self.assertIn("9/12", clause)
 
     def test_both_templates_have_the_slot(self):
         for name in ("COVER_AI_PROMPT_TEMPLATE", "COVER_AI_FULL_PROMPT_TEMPLATE"):

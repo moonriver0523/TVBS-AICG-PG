@@ -49,8 +49,11 @@ class AiBandClauseTests(unittest.TestCase):
             with self.subTest(clause=clause[:40]):
                 self.assertIn("NOT FROM THE 「lower 40%」 FIGURE ABOVE", clause)
                 self.assertIn("sizes the TEXT BLOCK and says nothing about the band", clause)
-                self.assertIn("TOP EDGE IS AT 78% OF THE FRAME HEIGHT", clause)
-                self.assertIn("ONLY THE BOTTOM 22%", clause)
+                # 2026-09-09（第五批）數字改成從 compose 算（合成版 0.778→0.770），
+                # 這裡跟著問常數，不再手抄一份會過期的百分比。
+                top = round(compose.YT_BAND_TOP_RATIO * 100)
+                self.assertIn(f"TOP EDGE IS AT {top}% OF THE FRAME HEIGHT", clause)
+                self.assertIn(f"ONLY THE BOTTOM {100 - top}%", clause)
                 self.assertIn("NOT the lower 40%", clause)
 
     def test_the_number_in_the_clause_matches_the_composite_band(self):

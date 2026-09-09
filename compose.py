@@ -349,8 +349,44 @@ COVER_MAX_TITLE_LINES_SPLIT = 3      # 雙切
 # 位置與大小用畫布比例算，模型回什麼解析度都對得上。
 # 2026-09-07：原本 Logo 寬佔 18.5%（量自舊範例），在一成高的標頭帶裡整個爆出來壓到照片；
 # 改成跟合成版同一套幾何——以標頭帶高為準，Logo 佔帶高 70%、標籤佔 80%，垂直置中。
-COVER_AI_HEADER_RATIO = 0.10          # prompt 寫「about one tenth」，貼圖以此為準
+COVER_AI_HEADER_RATIO = 0.10          # prompt 寫「about one tenth」；量不到時的退路
 COVER_AI_LEFT_RATIO = 0.015
+# 2026-09-09 使用者回報：標頭帶「沒有完全包住 TVBS LOGO」，Logo 下緣掉到藍線外壓在照片上。
+# 根因不是 Logo 太大，是**模型畫的帶比 prompt 說的薄**——實測 62/720 = 8.6%，
+# 貼圖卻按寫死的 10% 算，Logo 底就剛好戳出去。跟挖空框同一個原則：不靠模型自律，
+# 改成從圖上量出帶到哪裡結束，再據以縮放置中。量不到（帶跟照片同色）才退回 0.10。
+COVER_AI_HEADER_MIN_RATIO = 0.055     # 量到的帶高低於這個就是量錯（誤把帶內的字當邊界）
+COVER_AI_HEADER_MAX_RATIO = 0.145
+COVER_AI_HEADER_DELTA = 90            # 判定「離開標頭帶」的 RGB 曼哈頓距離
+COVER_AI_HEADER_CLEARANCE = 0.12      # Logo／標籤與帶底之間再留這麼多帶高當空隙
+
+
+def measure_ai_header_band(canvas: Image.Image) -> int:
+    """量模型畫的標頭帶到哪一列結束（回傳像素）。
+
+    做法：在畫面中段（左邊是 Logo／節目標籤、右邊是日期／ON AIR，中間一定是空的）
+    取幾條直線，各自從最上面往下找第一列「顏色明顯不同於第 0 列」的位置——那就是
+    帶底的亮藍線或照片的起點。取中位數，避免某一條剛好穿過模型多畫的裝飾。
+    """
+    width, height = canvas.size
+    limit = round(height * COVER_AI_HEADER_MAX_RATIO)
+    rgb = canvas.convert("RGB")
+    px = rgb.load()
+    bounds: list[int] = []
+    for x in range(round(width * 0.40), round(width * 0.60), max(1, width // 64)):
+        base = px[x, 0]
+        for y in range(1, limit + 1):
+            here = px[x, y]
+            if sum(abs(here[i] - base[i]) for i in range(3)) > COVER_AI_HEADER_DELTA:
+                bounds.append(y)
+                break
+    if not bounds:
+        return round(height * COVER_AI_HEADER_RATIO)
+    bounds.sort()
+    band_h = bounds[len(bounds) // 2]
+    if not (round(height * COVER_AI_HEADER_MIN_RATIO) <= band_h <= limit):
+        return round(height * COVER_AI_HEADER_RATIO)
+    return band_h
 
 
 def paste_cover_logo(image_bytes: bytes) -> bytes:
@@ -363,14 +399,16 @@ def paste_cover_logo(image_bytes: bytes) -> bytes:
     with Image.open(io.BytesIO(image_bytes)) as opened:
         canvas = opened.convert("RGBA")
     width, height = canvas.size
-    band_h = round(height * COVER_AI_HEADER_RATIO)
-    logo_h = max(1, round(band_h * 0.70))
+    # 2026-09-09：帶高改成量出來的（見 measure_ai_header_band），不再吃寫死的一成。
+    band_h = measure_ai_header_band(canvas)
+    inner = max(1, band_h - round(band_h * COVER_AI_HEADER_CLEARANCE))
+    logo_h = max(1, round(inner * 0.70))
     with Image.open(TVBS_LOGO_WHITE) as logo_file:
         logo_w = max(1, round(logo_h * logo_file.width / logo_file.height))
     logo_x = round(width * COVER_AI_LEFT_RATIO)
-    _paste_logo(canvas, (logo_x, (band_h - logo_h) // 2), logo_w)
-    tag_h = max(1, round(band_h * 0.80))
-    _paste_template(canvas, TEN_SHOW_TAG, (logo_x + logo_w + round(width * 0.02), (band_h - tag_h) // 2), tag_h)
+    _paste_logo(canvas, (logo_x, (inner - logo_h) // 2), logo_w)
+    tag_h = max(1, round(inner * 0.80))
+    _paste_template(canvas, TEN_SHOW_TAG, (logo_x + logo_w + round(width * 0.02), (inner - tag_h) // 2), tag_h)
 
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")
@@ -392,8 +430,8 @@ def paste_cover_ai_note(image_bytes: bytes, *, split: bool) -> bytes:
     with Image.open(io.BytesIO(image_bytes)) as opened:
         canvas = opened.convert("RGBA")
     width, height = canvas.size
-    # AI 版的標頭帶高由 prompt 決定（about one tenth），與合成版的 COVER_HEADER_RATIO 不同
-    note_y = round(height * COVER_AI_HEADER_RATIO) + round(height * 0.025)
+    # AI 版的標頭帶高由模型畫多少決定，不是 prompt 說的一成（2026-09-09），所以量出來再往下讓
+    note_y = measure_ai_header_band(canvas) + round(height * 0.025)
     margin = round(width * COVER_MARGIN / COVER_CANVAS[0])
     _draw_cover_ai_note(canvas, margin, note_y, align_right=False)
     if split:
@@ -877,22 +915,31 @@ YT_TOP_LINE_TOP = (27, 122, 222)
 YT_TOP_LINE_BOTTOM = (32, 165, 218)
 YT_LOGO_LEFT_RATIO = 0.844
 YT_LOGO_TOP_RATIO = 0.014
+# 2026-09-08 使用者回饋「字體再粗一點、行距略縮」（國內外新聞直播與今日熱搜共用這組）：
+# 行距 0.194 → 0.180（縮約 7%），第二行貼底不動、第一行往下靠；
+# 加粗用「同色描邊」做假粗體（字型檔只有台北黑體 Bold 一個字重，沒有更粗的可換）。
+# 2026-09-09 使用者「非 AI 的雙行標行距可以再縮減」：0.180 → 0.168，一樣只動第一行。
+YT_LINE1_BASELINE_RATIO = 0.790      # 第一行字底（原 0.778）
+YT_LINE2_BASELINE_RATIO = 0.958      # 第二行字底
+YT_TITLE_SIZE_RATIO = 0.145          # 標題起始字級（字高約 100/720）
 # 2026-09-08 使用者定版（三個位置樣張挑第 3 個「第二行」）：底帶從第一行字底（基線）開始
-# 羽化，到第二行字的墨水上緣稍上（0.8145）才到全濃度——漸層剛好落在兩行標題之間的空隙，
+# 羽化，到第二行字的墨水上緣才到全濃度——漸層落在兩行標題之間的空隙，
 # 不糊第一行、也不把第二行切成兩截。原本 0.60／0.06 把照片下半整片吃掉。
-YT_BAND_TOP_RATIO = 0.778            # 底帶起點＝第一行基線（YT_LINE1_BASELINE_RATIO）
-YT_BAND_FADE_RATIO = 0.0365          # 上緣羽化高度：0.778 + 0.0365 = 0.8145 到全濃度
+#
+# 2026-09-09 使用者「底色框的邊緣可以再多一點漸層羽化」。這跟上面的行距縮減互相擠：
+# 空隙變小，羽化沒地方長。做法是讓斜坡**往上多起跑一段**（LEAD）——smoothstep 在
+# t 很小的時候幾乎是 0（t=0.13 → 濃度 4.6%），那一段藏在白字腳下看不出來，
+# 卻讓整條斜坡從 3.65% 拉長到 6% 畫面高，硬邊感消失。全濃度仍然壓在黃字墨水上緣。
+YT_BAND_LEAD_RATIO = 0.020           # 斜坡起點比第一行基線再高一點點（幾乎透明的那段）
+YT_BAND_TOP_RATIO = YT_LINE1_BASELINE_RATIO - YT_BAND_LEAD_RATIO   # 0.770
+# 結尾仍然壓在黃字墨水上緣之上（0.8231，見 _yt_title_ink_top_ratio）——2026-09-08
+# 那條「不超過第二行標題」的裁決沒有被這批取消，所以羽化只能長到 0.822 為止。
+YT_BAND_FADE_RATIO = 0.052           # 羽化高度（原 0.0365，+42%）：0.770 + 0.052 = 0.822
 YT_BAND_FILL = (8, 25, 70)
 # 2026-09-08 使用者裁決：底部壓色框改成開關（預設 OFF），開的時候要半透明——
 # 原本 205／255 ≈ 80% 幾乎把照片下半整片吃掉。153／255 = 60%。
 YT_BAND_ALPHA = 153
 YT_BAND_BLOCK_FILL = (60, 130, 230)
-# 2026-09-08 使用者回饋「字體再粗一點、行距略縮」（國內外新聞直播與今日熱搜共用這組）：
-# 行距 0.194 → 0.180（縮約 7%），第二行貼底不動、第一行往下靠；
-# 加粗用「同色描邊」做假粗體（字型檔只有台北黑體 Bold 一個字重，沒有更粗的可換）。
-YT_LINE1_BASELINE_RATIO = 0.778      # 第一行字底
-YT_LINE2_BASELINE_RATIO = 0.958      # 第二行字底
-YT_TITLE_SIZE_RATIO = 0.145          # 標題起始字級（字高約 100/720）
 YT_TITLE_MIN_SIZE_RATIO = 0.085
 # 2026-09-08 晚使用者：國內外／熱搜「太粗、複雜的字分不出來」，整點「太細」，兩邊要對齊。
 # 描邊 0.05→0.04、假粗體 0.015→0.008，三種版面統一走 _draw_yt_title_line（整點原本沒假粗體沒陰影）。
@@ -1213,9 +1260,11 @@ def compose_yt_cover(
 # 比例量自截圖去掉 YT 介面後的縮圖區（約 415×220）。
 YT_HOURLY_LOGO_WIDTH_RATIO = 0.118      # Logo 寬（48/415）
 YT_HOURLY_LOGO_TOP_RATIO = 0.064
-YT_HOURLY_BADGE_WIDTH_RATIO = 0.25      # LIVE 章寬（104/415）
+# 2026-09-09 使用者：右上 LIVE 章與整點時間白框「再縮小一點點」。章寬 0.25→0.225，
+# 時間帶寬度是從 badge_w 推的會跟著縮，帶高另外按同比例收（0.095→0.086）。
+YT_HOURLY_BADGE_WIDTH_RATIO = 0.225     # LIVE 章寬（原 0.25）
 YT_HOURLY_BADGE_TOP_RATIO = 0.024
-YT_HOURLY_TIME_BAND_HEIGHT_RATIO = 0.095  # 章下時間帶高（21/220）
+YT_HOURLY_TIME_BAND_HEIGHT_RATIO = 0.086  # 章下時間帶高（原 0.095）
 YT_HOURLY_TIME_BAND_FILL = (255, 255, 255)   # 頻道實際：白底紅字
 YT_HOURLY_TIME_BAND_TEXT = (200, 20, 30)
 YT_HOURLY_DATE_TAB_WIDTH_RATIO = 0.30   # 日期紅條寬（125/415）
