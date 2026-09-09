@@ -92,4 +92,15 @@ gcloud run deploy tvbs-aicg-linebot --source . --region asia-east1
 
 ## 目前版本
 
-V8.2 — 詳見 `docs/HANDOFF.md` 第七節「已收錄的模板現況」
+版本號寫在 `VERSION`（唯一真相源），格式 `YYMMDD-XX`：`YY` 是年分後兩碼、`XX` 當天從
+`01` 起跳，換一天重新開始。網頁大標「TVBS AICG」右邊顯示的就是它。
+
+**每次改動都要 bump，不是每次佈署**：
+
+```bash
+python scripts/bump_version.py          # 遞增，同時改掉 index.html 的 #appVersion
+python scripts/bump_version.py --set 260909-04
+```
+
+兩邊對不上時測試會擋（`tests/test_app_version.py`）。
+模板現況見 `docs/HANDOFF.md` 第七節「已收錄的模板現況」。

@@ -451,7 +451,8 @@ def paste_cover_highlight_stamp(image_bytes: bytes) -> bytes:
     """
     with Image.open(io.BytesIO(image_bytes)) as opened:
         canvas = opened.convert("RGBA")
-    _draw_cover_highlight_stamp(canvas)
+    # 2026-09-09：帶高量出來再貼，理由同 paste_cover_logo
+    _draw_cover_highlight_stamp(canvas, measure_ai_header_band(canvas))
 
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")
@@ -502,7 +503,7 @@ def _draw_cover_bottom_line(canvas: Image.Image) -> None:
         canvas.alpha_composite(tpl, (0, height - strip_h))
 
 
-def _draw_cover_highlight_stamp(canvas: Image.Image) -> None:
+def _draw_cover_highlight_stamp(canvas: Image.Image, band_h: int | None = None) -> None:
     """精華標籤：紅色刷筆模板，貼在標頭帶中段（水平置中、垂直置中於帶內）。
 
     2026-09-08 使用者兩次裁決：先是實測回報原本的深藍圓章跨在底部標題區上（TOP_RATIO 0.67）
@@ -511,11 +512,14 @@ def _draw_cover_highlight_stamp(canvas: Image.Image) -> None:
 
     幾何以**傳進來的畫布**的尺寸為準，不是 COVER_CANVAS：純 AI 版直接貼在模型回來的
     原圖上，那張的解析度是模型決定的（2026-09-07 起 paste_cover_highlight_stamp 共用這支）。
-    帶高一律用比例算（合成版 COVER_HEADER_RATIO、AI 版 COVER_AI_HEADER_RATIO 都是十分之一上下，
-    這裡取合成版那個值，AI 版的圖也對得上）。
+
+    band_h：合成版的帶是程式自己畫的，帶多高一清二楚（None＝用 COVER_HEADER_RATIO）；
+    AI 版的帶是模型畫的，實測只有 8%上下，照 10.5% 貼這枚標籤會跟 Logo 一樣戳出帶外
+    （2026-09-09 使用者回報的就是 Logo 那一個），所以 AI 那條線要把量到的帶高傳進來。
     """
     width, height = canvas.size
-    band_h = round(height * COVER_HEADER_RATIO)
+    if band_h is None:
+        band_h = round(height * COVER_HEADER_RATIO)
     # 垂直置中要扣掉帶底那條亮藍細線，才跟 Logo 與節目標籤同一條中線
     # （`_draw_cover_header` 兩者都是 (band_h - line_h - h) // 2）。
     line_h = max(2, round(height * COVER_HEADER_LINE_RATIO))

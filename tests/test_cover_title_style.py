@@ -71,6 +71,13 @@ class ClauseTests(unittest.TestCase):
         self.assertIn("LEFT HALF of the header band", clause)
         self.assertIn("示意圖", clause)
 
+    def test_designed_clause_keeps_each_headline_in_its_own_panel(self):
+        """雙切版：解放版位放的是「在自己那格裡的哪個位置」，不是「哪一格」。
+        沒有這一條，模型遲早把左格的標題排過斜切線。"""
+        clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
+        self.assertIn("ENTIRELY INSIDE ITS OWN PANEL", clause)
+        self.assertIn("never crosses the diagonal seam", clause)
+
     def test_designed_clause_repeats_the_verbatim_rule(self):
         """最重要的一條：解放版位以後，模型最容易做的事就是為了版面好看動字。"""
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE

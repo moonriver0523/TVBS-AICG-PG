@@ -116,6 +116,21 @@ class AiHeaderBandMeasureTests(unittest.TestCase):
                 with self.subTest(x=x, y=y):
                     self.assertEqual(out.getpixel((x, y)), (200, 170, 120))
 
+    def test_the_highlight_stamp_follows_the_measured_band_too(self):
+        """精華標籤跟 Logo 同一個根因（它用的還是更大的 COVER_HEADER_RATIO＝10.5%）。
+        使用者沒回報是因為平常不開精華，不是因為它沒事。"""
+        source = (ROOT / "compose.py").read_text(encoding="utf-8")
+        stamp = source[source.index("def paste_cover_highlight_stamp"):]
+        stamp = stamp[:stamp.index("def _cover_panel")]
+        self.assertIn("_draw_cover_highlight_stamp(canvas, measure_ai_header_band(canvas))", stamp)
+
+    def test_the_composite_path_keeps_its_own_band_height(self):
+        """合成版的帶是程式自己畫的，高度一清二楚，不必也不該去量。"""
+        self.assertIn(
+            "def _draw_cover_highlight_stamp(canvas: Image.Image, band_h: int | None = None)",
+            (ROOT / "compose.py").read_text(encoding="utf-8"),
+        )
+
     def test_the_ai_note_also_follows_the_measured_band(self):
         """「AI示意圖」小標貼在帶子下方，用的必須是同一個量出來的高度，
         不然帶薄的時候小標會浮在帶子裡面。"""
