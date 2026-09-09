@@ -310,7 +310,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260909-07</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260909-08</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -466,10 +466,18 @@
                                 <input id="coverAiTitle" type="checkbox" class="accent-red-600" checked onchange="updateCoverTitleStyleButton()" />標題由 AI 生成
                                 <span class="text-[9px] font-normal text-slate-500">（關閉＝程式壓字，零錯字）</span>
                             </label>
-                            <!-- 設計標題（2026-09-08）：只有 AI 整張版有意義，合成版的字是程式壓的 -->
-                            <button id="coverTitleStyleBtn" type="button" onclick="toggleCoverTitleStyle()"
-                                    title="開：配色、版位、字體、邊框、強調全部交給 AI 大膽設計，不套白／黃／紅三行規則（字句仍一字不改）；關：白／黃／紅逐行配色、版位固定"
-                                    class="hidden px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">設計標題 OFF</button>
+                            <!-- 標題創意拉桿（2026-09-08 ON/OFF → 2026-09-09 改 0–4 五段）：
+                                 只有 AI 整張版有意義，合成版的字是程式壓的 -->
+                            <div id="coverTitleStyleBar" class="hidden flex items-center gap-2"
+                                 title="最左＝白／黃／紅逐行配色、版位固定；愈往右愈放給 AI 設計（字句永遠一字不改）">
+                                <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">標題創意</span>
+                                <span class="text-[9px] font-black text-slate-500">規矩</span>
+                                <input id="coverTitleStyleRange" type="range" min="0" max="4" step="1" value="0"
+                                       class="w-24 accent-violet-500 cursor-pointer"
+                                       oninput="setCoverTitleCreativity(this.value)" />
+                                <span class="text-[9px] font-black text-slate-500">奔放</span>
+                                <span id="coverTitleStyleLabel" class="text-[9px] font-black text-violet-300">規矩</span>
+                            </div>
                         </div>
                     </div>
 

@@ -143,20 +143,36 @@ class PromptTests(unittest.TestCase):
 
 
 class FrontendTests(unittest.TestCase):
-    def test_state_defaults_to_plain(self):
-        self.assertRegex(APP_JS, r"coverTitleStyle:\s*'plain'")
+    """2026-09-09 第八批：ON/OFF 按鈕改成 0–4 拉桿（使用者指定仿 AI effort 那一條）。"""
 
-    def test_payload_carries_title_style_on_both_paths(self):
+    def test_state_defaults_to_the_lowest_level(self):
+        """預設仍是最左＝現行排版。設計標題會大改版面，錯字風險較高，要使用者自己拉。"""
+        self.assertRegex(APP_JS, r"coverTitleCreativity:\s*0")
+
+    def test_payload_carries_the_level_on_both_paths(self):
         # 生成本體與 tenCoverFields（追加修改／只改文字）各一處
-        self.assertEqual(len(re.findall(r"title_style:\s*state\.coverTitleStyle", APP_JS)), 2)
+        self.assertEqual(len(re.findall(r"title_creativity:\s*state\.coverTitleCreativity", APP_JS)), 2)
 
-    def test_button_exists_and_is_wired(self):
-        self.assertIn('id="coverTitleStyleBtn"', INDEX_HTML)
-        self.assertIn("toggleCoverTitleStyle()", INDEX_HTML)
-        self.assertIn("updateCoverTitleStyleButton()", INDEX_HTML)
-        self.assertIn("function toggleCoverTitleStyle()", APP_JS)
+    def test_the_slider_exists_and_is_wired(self):
+        self.assertIn('id="coverTitleStyleRange"', INDEX_HTML)
+        self.assertIn('type="range" min="0" max="4" step="1"', INDEX_HTML)
+        self.assertIn("setCoverTitleCreativity(this.value)", INDEX_HTML)
+        self.assertIn("function setCoverTitleCreativity(", APP_JS)
 
-    def test_button_only_shows_for_cover_layout_in_ai_mode(self):
+    def test_the_slider_shows_the_level_name_like_the_effort_bar(self):
+        """使用者要的是 effort 那條的樣子：兩端標示＋當前檔位的名字。"""
+        self.assertIn('id="coverTitleStyleLabel"', INDEX_HTML)
+        self.assertIn(">規矩<", INDEX_HTML)
+        self.assertIn(">奔放<", INDEX_HTML)
+        self.assertEqual(len(re.findall(r"\['[^']+',\s*'[^']+'\]", APP_JS.split(
+            "COVER_TITLE_CREATIVITY = [")[1].split("];")[0])), 5)
+
+    def test_the_old_toggle_is_gone(self):
+        """留著舊按鈕會有兩個真相源：按鈕設 title_style、拉桿設 title_creativity。"""
+        self.assertNotIn("coverTitleStyleBtn", INDEX_HTML)
+        self.assertNotIn("toggleCoverTitleStyle", APP_JS)
+
+    def test_slider_only_shows_for_cover_layout_in_ai_mode(self):
         self.assertIn("editorFormat().inputs !== 'cover' || !aiMode", APP_JS)
 
 

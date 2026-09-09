@@ -3274,7 +3274,19 @@ class TenCoverRequest(BaseModel):
     # 2026-09-08 使用者要求：AI 整張版的標題要有「設計感＋滿框」的選項（像節目片頭字卡）。
     # plain＝現行排版（預設）；designed＝在 TYPOGRAPHY 段追加 COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE。
     # 只影響 mode=ai：合成版的字是 Pillow 畫的，排版由 compose 的常數決定，這個欄位用不到。
-    title_style: Literal["plain", "designed"] = editor_formats.COVER_TITLE_STYLE_PLAIN
+    title_style: Literal["plain", "designed"] | None = None
+    # 2026-09-09 第八批 使用者：「創意奔放程度能不能設好幾個等級，讓使用者自己選」
+    # ——前台改成 0–4 的拉桿（像 AI effort 那條）。上面的 title_style 降級成別名，
+    # 只為了舊呼叫端：沒帶 title_creativity 時 plain→0、designed→4；兩個都帶以本欄為準。
+    title_creativity: int | None = Field(
+        default=None, ge=editor_formats.COVER_AI_TITLE_LEVEL_MIN,
+        le=editor_formats.COVER_AI_TITLE_LEVEL_MAX,
+    )
+
+    def creativity_level(self) -> int:
+        if self.title_creativity is not None:
+            return self.title_creativity
+        return editor_formats.COVER_TITLE_STYLE_LEVELS.get(self.title_style or "", 0)
     # 2026-09-06：十點也收附圖。用途 asis（原圖放置）1 張＝整版鋪滿（使用者裁決，不切格）、
     # 2 張＝左格、右格；有任何 asis 就強制 composite（真照不進生圖模型），也不再生任何底圖。
     # 其他用途（實景／肖像／地圖）當兩格 AI 底圖的生圖參考。
@@ -3648,11 +3660,9 @@ def _cover_ai(
         ]
         return "\n".join([head, *body])
 
-    # 設計標題（2026-09-08）：designed 才在 TYPOGRAPHY 段尾追加一段；plain 留空字串。
-    style_clause = (
-        editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
-        if req.title_style == editor_formats.COVER_TITLE_STYLE_DESIGNED else ""
-    )
+    # 設計標題（2026-09-08 ON/OFF → 2026-09-09 第八批改成 0–4 拉桿）：
+    # 0 完全不追加（維持白／黃／紅排版），1–4 在 TYPOGRAPHY 段尾追加該級的條文。
+    style_clause = editor_formats.cover_ai_title_style_clause(req.creativity_level())
     if req.layout == "full":
         prompt = editor_formats.COVER_AI_FULL_PROMPT_TEMPLATE.format(
             badge_text=badge_text,

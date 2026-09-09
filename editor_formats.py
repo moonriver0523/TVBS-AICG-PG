@@ -301,15 +301,80 @@ COVER_AI_FULL_PROMPT_TEMPLATE = COVER_AI_FULL_PROMPT_TEMPLATE.replace(
 )
 
 
-COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE = """- DESIGNED TITLE — THIS BULLET AND THE TWO BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. The headline is a title card built by a broadcast art director, not body text. Build it the way this show's real covers are built, and go loud — a tame, evenly-set stack is a failure here:
+# ---- 創意拉桿（2026-09-09 第八批）----
+#
+# 使用者：「AI 消化的創意奔放程度，能不能設為好幾個等級，讓使用者自己選擇。前台 UI
+# 做成像調整 AI effort 的拉 bar，最左邊創意最低，最右邊創意最高。」
+#
+# 級距怎麼訂：**每一級都要用命令句描述它長什麼樣**，不能寫成「你可以…」。
+# 第七批才剛證明許可句推不動模型——中間那幾級若寫成許可，成品會跟 0 或 4 長一樣，
+# 拉桿就變成騙人的。所以四級是**由上往下減**：4 是使用者給的那組封面（house style），
+# 往下逐項收回自由。4 以上不再往上加（傾斜、疊字、破格會撞死規則 (c)(d)(g)，
+# 而且使用者沒要）。
+#
+# 不隨等級變的：下面那塊 FIXED (a)–(g)。拉桿調的是**設計自由度**，
+# 內容（一字不改）與版面規約（程式後貼的三塊區域、不得跨格）永遠不動。
+COVER_AI_TITLE_LEVEL_MIN = 0
+COVER_AI_TITLE_LEVEL_MAX = 4
+COVER_AI_TITLE_LEVEL_NAMES = {
+    0: "規矩",
+    1: "微設計",
+    2: "有設計",
+    3: "強設計",
+    4: "最奔放",
+}
+
+# (a)–(g)：每一級（0 以外）都原樣附上。
+_TITLE_FIXED_BLOCK = """- WHAT IS STILL FIXED, AND IS NOT A DESIGN DECISION: (a) the CHARACTERS. Render the listed strings character for character in the listed order — never add, drop, translate, abbreviate, reorder or substitute a single character to make a layout work, and never break a listed line in the middle: a listed line is one unbroken unit, so a date or score written with a slash such as 9/12 stays whole on one row. (b) Traditional Chinese, Taiwan forms, every character correctly formed and legible — no Simplified or Japanese forms, no invented strokes. (c) The header band across the top and the slim navy strip along the bottom stay as described, and NO part of the headline may sit inside them or overlap them. (d) The whole LEFT HALF of the header band and the small area just below its outer top corner stay clean and empty — software pastes the channel logo, the programme tag and the 示意圖 label there afterwards. (e) No text of any kind other than the listed strings: decorative marks are wordless symbols only — no letters, no digits, no country names, no place labels, no flag chips, no map insets, no extra badges or callouts. (f) Nothing touches or is clipped by the frame edge. (g) In the two-panel layout, each headline stays ENTIRELY INSIDE ITS OWN PANEL and never crosses the diagonal seam or strays into the other panel: freeing the placement frees where it sits WITHIN its panel, not which panel it belongs to.
+"""
+
+# 每一級的開頭都帶 DESIGNED TITLE 這個記號＋OVERRIDE 宣告：本 repo 的慣例是
+# 「位置在後＋明文 OVERRIDE」才壓得過前面那整段 TYPOGRAPHY 命令句。
+_L1 = """- DESIGNED TITLE (level 1 of 4 — light) — THIS BULLET AND THE ONE BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. Give the headline a designed display finish, and change NOTHING ELSE about it. Choose the typeface, the outline and shadow treatment, the surface material (a gradient, a soft bevel, a subtle sheen) and any decorative frames or shapes behind or around the words, so the type looks like a broadcast title card rather than a caption. Everything else stays exactly as instructed above: the per-line colours stay EXACTLY as labelled (white / yellow / red), all lines stay at ONE size, and the block stays flush-stacked in the labelled lower corner.
+"""
+
+_L2 = """- DESIGNED TITLE (level 2 of 4 — medium) — THIS BULLET AND THE ONE BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. Give the headline a designed display finish — you choose the typeface, the outline and shadow treatment, the surface material and any decorative frames or shapes behind or around the words — and then make these two moves, which are REQUIRED, not optional:
+  * PULL ONE KEY WORD OUT INSIDE A LINE. In each headline, take the place name, the number, the quoted phrase or the one word that carries the shock, and give it a different treatment from the rest of that same line: another colour, or a vivid block with the word reversed out of it. Quotation marks such as 「」 or 『』 around a phrase are a cue to do exactly this.
+  * MILD SIZE CONTRAST. The line that shouts is set about 1.2 times the height of the others — a visible step, not a dramatic one.
+- WHAT THIS CANCELS: the per-line colour labels (white / yellow / red) still set the base colour of each line, but the pulled-out key word may break them. Nothing else changes: the block stays flush-stacked in the labelled lower corner, and the placement instruction still binds.
+"""
+
+_L3 = """- DESIGNED TITLE (level 3 of 4 — strong) — THIS BULLET AND THE TWO BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. The headline is a title card built by a broadcast art director, not body text. Build it the way this show's real covers are built — a tame, evenly-set stack is a failure here:
+  * SIZE HIERARCHY IS REQUIRED. The lines are not the same size. Set the short punchy line — the one that shouts, usually the one ending in 「！」 — at roughly one and a half to two times the height of the line that explains it, and let the explaining line tuck under it, indented or offset rather than flush-stacked.
+  * PULL A KEY WORD OUT INSIDE A LINE. Within a line, take the place name, the number, the quoted phrase or the one word that carries the shock, and give it a different treatment from the rest of that same line: another colour, a vivid red or black block with the word reversed out of it, a heavier or larger cut. Quotation marks such as 「」 or 『』 around a phrase are a cue to do exactly this. Every line must not be one flat colour.
+  * THE HOUSE PALETTE AND FINISH: saturated FLAT golden yellow, pure white and vivid red, over a thick black outline with a hard offset drop shadow and a tight coloured inner edge — punchy poster colour, high contrast, slight forward lean. Not a soft pastel wash, and not one uniform polished metallic fill across the whole headline.
+  * You still choose the typeface, the exact colours, the outline and shadow treatment, and the decorative frames or shapes behind or around the words. Be bold.
+- WHAT THIS CANCELS: the per-line colour labels (white / yellow / red) are only a hint you may ignore entirely — recolour freely, give one line several colours, reverse a word out of a coloured block, whatever reads best; the fixed one-line-per-row stack no longer binds as a SHAPE — you may stagger the lines, indent them or run one line larger over another (the lines themselves, and how many there are, are still fixed; see below). THE PLACEMENT STILL BINDS: the block stays in the lower-left (or lower-right) area it was assigned. ONE EXCEPTION TO THE SIZE HIERARCHY: when the listed lines are not a hook plus its explanation but one continuous phrase, sentence or proper name simply broken across rows, keep them at ONE size — enlarging half of a single name breaks it apart.
+"""
+
+_L4 = """- DESIGNED TITLE (level 4 of 4 — loudest) — THIS BULLET AND THE TWO BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. The headline is a title card built by a broadcast art director, not body text. Build it the way this show's real covers are built, and go loud — a tame, evenly-set stack is a failure here:
   * SIZE HIERARCHY IS REQUIRED. The lines are not the same size. Set the short punchy line — the one that shouts, usually the one ending in 「！」 — at roughly one and a half to two times the height of the line that explains it, and let the explaining line tuck under it, indented or offset rather than flush-stacked.
   * PULL A KEY WORD OUT INSIDE A LINE. Within a line, take the place name, the number, the quoted phrase or the one word that carries the shock, and give it a different treatment from the rest of that same line: another colour, a vivid red or black block with the word reversed out of it, a heavier or larger cut. Quotation marks such as 「」 or 『』 around a phrase are a cue to do exactly this. Every line must not be one flat colour.
   * THE HOUSE PALETTE AND FINISH: saturated FLAT golden yellow, pure white and vivid red, over a thick black outline with a hard offset drop shadow and a tight coloured inner edge — punchy poster colour, high contrast, slight forward lean. Not a soft pastel wash, and not one uniform polished metallic fill across the whole headline.
   * You may hang ONE OR TWO small flat pictograms on the block — a lightning bolt, a flame, a raincloud, a warning triangle, a siren — picked from what the headline is about, sitting beside or behind a word, never covering a character.
   * You still choose the typeface, the exact colours, the outline and shadow treatment, the decorative frames or shapes behind or around the words, the emphasis, the scale of each part, and where on the frame the block sits. Be bold.
 - WHAT THIS CANCELS: the per-line colour labels (white / yellow / red) are only a hint you may ignore entirely — recolour freely, give one line several colours, reverse a word out of a coloured block, whatever reads best; the instruction to keep the headline in the lower-left (or lower-right) area no longer binds — place the block anywhere that composes well against the photograph; the fixed one-line-per-row stack no longer binds as a SHAPE — you may stagger the lines, indent them, run one line larger over another, or set a short line beside a long one (the lines themselves, and how many there are, are still fixed; see below). ONE EXCEPTION TO THE SIZE HIERARCHY: when the listed lines are not a hook plus its explanation but one continuous phrase, sentence or proper name simply broken across rows, keep them at ONE size — enlarging half of a single name breaks it apart.
-- WHAT IS STILL FIXED, AND IS NOT A DESIGN DECISION: (a) the CHARACTERS. Render the listed strings character for character in the listed order — never add, drop, translate, abbreviate, reorder or substitute a single character to make a layout work, and never break a listed line in the middle: a listed line is one unbroken unit, so a date or score written with a slash such as 9/12 stays whole on one row. (b) Traditional Chinese, Taiwan forms, every character correctly formed and legible — no Simplified or Japanese forms, no invented strokes. (c) The header band across the top and the slim navy strip along the bottom stay as described, and NO part of the headline may sit inside them or overlap them. (d) The whole LEFT HALF of the header band and the small area just below its outer top corner stay clean and empty — software pastes the channel logo, the programme tag and the 示意圖 label there afterwards. (e) No text of any kind other than the listed strings: the pictograms above are wordless symbols only — no letters, no digits, no country names, no place labels, no flag chips, no map insets, no extra badges or callouts. (f) Nothing touches or is clipped by the frame edge. (g) In the two-panel layout, each headline stays ENTIRELY INSIDE ITS OWN PANEL and never crosses the diagonal seam or strays into the other panel: freeing the placement frees where it sits WITHIN its panel, not which panel it belongs to.
 """
+
+COVER_AI_TITLE_LEVEL_BLOCKS = {1: _L1, 2: _L2, 3: _L3, 4: _L4}
+
+
+def cover_ai_title_style_clause(level: int) -> str:
+    """0＝完全不追加（現行白／黃／紅排版）；1–4 追加該級的設計條文＋不變的 FIXED 區塊。"""
+    block = COVER_AI_TITLE_LEVEL_BLOCKS.get(level)
+    if not block:
+        return ""
+    return block + _TITLE_FIXED_BLOCK
+
+
+# 舊的 ON/OFF 兩檔對應到拉桿的兩端（plain=0、designed=4）。舊呼叫端與既有測試靠這個。
+COVER_TITLE_STYLE_LEVELS = {
+    COVER_TITLE_STYLE_PLAIN: 0,
+    COVER_TITLE_STYLE_DESIGNED: COVER_AI_TITLE_LEVEL_MAX,
+}
+
+# 名字留著：第七批以前的呼叫端與測試都指名這一個常數，它就是最高級的條文。
+COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE = cover_ai_title_style_clause(COVER_AI_TITLE_LEVEL_MAX)
 
 
 # 畫面描述留空時由 AI 依標題補（2026-09-03 使用者要求：兩欄改選填）。

@@ -370,7 +370,7 @@ let state = {
     // 十點 AI 整張版的標題設計感（2026-09-08）：plain＝現行排版（白黃紅逐行配色、版位固定）。
     // 2026-09-09 使用者：designed 升級成「完全解放」——配色、版位、字體、邊框、強調全給 AI。
     // 預設仍是 plain——解放後版面與配色都不可預期，要使用者自己開。
-    coverTitleStyle: 'plain',
+    coverTitleCreativity: 0,
     // YT 封面底部壓色框：2026-09-08 晚使用者裁決預設**開**（60% 半透明、第二行上緣起羽化，見 compose）。
     // 整點直播的版面沒有底帶，按鈕不顯示。
     ytBottomBand: true,
@@ -1310,26 +1310,34 @@ function applyCoverLayoutFields() {
     }
 }
 
-// 十點封面「設計標題」開關（2026-09-08）。紫色，與安全框（綠）／蓋章（琥珀）／壓框（青）區分。
-// 只有十點版型＋AI 整張模式看得到：合成版的字是程式用 Pillow 壓的，這個開關對它沒有意義。
+// 十點封面「標題創意」拉桿（2026-09-08 ON/OFF → 2026-09-09 改成 0–4 五段，仿 AI effort 那條）。
+// 只有十點版型＋AI 整張模式看得到：合成版的字是程式用 Pillow 壓的，這條拉桿對它沒有意義。
+const COVER_TITLE_CREATIVITY = [
+    ['規矩', '白／黃／紅逐行配色，版位固定（現行排版）'],
+    ['微設計', '字體、描邊、材質放開；配色、大小、版位不動'],
+    ['有設計', '再加：行內關鍵詞換色、大小小幅落差'],
+    ['強設計', '整組 house style（大小落差、關鍵詞壓框、飽和平塗），版位仍固定'],
+    ['最奔放', '再加：版位自由、可掛小圖示（字句永遠一字不改）'],
+];
+
 function updateCoverTitleStyleButton() {
-    const btn = document.getElementById('coverTitleStyleBtn');
-    if (!btn) return;
+    const bar = document.getElementById('coverTitleStyleBar');
+    if (!bar) return;
     const aiMode = document.getElementById('coverAiTitle')?.checked !== false;
-    btn.classList.toggle('hidden', editorFormat().inputs !== 'cover' || !aiMode);
-    const on = state.coverTitleStyle === 'designed';
-    btn.className = (btn.classList.contains('hidden') ? 'hidden ' : '')
-        + 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
-        + (on ? 'border border-violet-600 bg-violet-600 text-white' : 'border border-violet-600 text-slate-400 hover:text-white');
-    btn.innerText = on ? '設計標題 ON' : '設計標題 OFF';
+    const hidden = editorFormat().inputs !== 'cover' || !aiMode;
+    bar.className = (hidden ? 'hidden ' : '') + 'flex items-center gap-2';
+    const range = document.getElementById('coverTitleStyleRange');
+    if (range) range.value = String(state.coverTitleCreativity);
+    const label = document.getElementById('coverTitleStyleLabel');
+    if (label) label.innerText = COVER_TITLE_CREATIVITY[state.coverTitleCreativity][0];
 }
 
-function toggleCoverTitleStyle() {
-    state.coverTitleStyle = state.coverTitleStyle === 'designed' ? 'plain' : 'designed';
+function setCoverTitleCreativity(value) {
+    const level = Math.min(4, Math.max(0, parseInt(value, 10) || 0));
+    state.coverTitleCreativity = level;
     updateCoverTitleStyleButton();
-    showToast(state.coverTitleStyle === 'designed'
-        ? '設計標題：開（配色、版位、字體全交給 AI，白黃紅規則不套用）'
-        : '設計標題：關（白／黃／紅逐行配色，版位固定）');
+    showToast('標題創意 ' + level + '　' + COVER_TITLE_CREATIVITY[level][0]
+        + '：' + COVER_TITLE_CREATIVITY[level][1]);
 }
 
 // 播出鏡面白色壓框開關（2026-09-07）。青色，與安全框（綠）／蓋章（琥珀）區分。
@@ -1914,7 +1922,7 @@ function tenCoverFields() {
         instruction: coverInstructionForApi(),
         date_text: val('coverDate'),
         badge: document.getElementById('coverBadge')?.value || 'on_air',
-        title_style: state.coverTitleStyle,
+        title_creativity: state.coverTitleCreativity,
         provider: effectiveImageProvider(),
     };
 }
@@ -2020,7 +2028,7 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
                     instruction: coverInstructionForApi(),
                     date_text: val('coverDate'),
                     badge: document.getElementById('coverBadge')?.value || 'on_air',
-                    title_style: state.coverTitleStyle,
+                    title_creativity: state.coverTitleCreativity,
                     mode: composite ? 'composite' : 'ai',
                     provider: effectiveImageProvider(),
                     reference_images: userRefImagesPayload(),
