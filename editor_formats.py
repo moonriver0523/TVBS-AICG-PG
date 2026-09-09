@@ -568,8 +568,30 @@ YT_COVER_TITLE_MODES = (YT_COVER_TITLE_MODE_AI, YT_COVER_TITLE_MODE_COMPOSITE)
 # compose.YT_BAND_TOP_RATIO=0.778，只佔畫面下方 22%，差了將近一倍。改寫成**關係式**
 # 描述（框只在下面那一行字後面，上緣從第一行的基線淡入）：模型跟得動「behind the
 # lower line」，跟不動百分比；比例留著但改成正確的值，只當輔助。
-YT_COVER_BAND_CLAUSE_NEWS_ON = "- A translucent deep-navy band with a subtle circuit-board / tech-block texture sits BEHIND THE LOWER HEADLINE LINE ONLY. Its top edge starts as a soft fade level with the BASELINE of the upper headline line — the upper line therefore still stands on the bare photograph — and reaches full strength just above the top of the lower line, then runs to the bottom edge. It is a shallow band covering only about the bottom fifth of the frame, never the bottom half. It is translucent (about 60% opaque): the photograph stays clearly visible through it."
-YT_COVER_BAND_CLAUSE_HOT_ON = "- A translucent DEEP CRIMSON / near-black band with a subtle red circuit-board / tech-block texture sits BEHIND THE LOWER HEADLINE LINE ONLY. Its top edge starts as a soft fade level with the BASELINE of the upper headline line — the upper line therefore still stands on the bare photograph — and reaches full strength just above the top of the lower line, then runs to the bottom edge. It is a shallow band covering only about the bottom fifth of the frame, never the bottom half. It is translucent (about 60% opaque): the photograph stays clearly visible through it."
+#
+# 2026-09-09（第三批）實測：上面那版改寫還是沒用，成品的框仍從畫面 58% 高度起跳、
+# 兩行字都蓋進去。根因是模板本身——這一條的**下一行**寫著標題「in the lower 40% of
+# the frame」，模型把那個 40% 拿去撐色框；而且色框條排在標題條**前面**，照這個 repo
+# 的慣例（位置在後＋明文 OVERRIDE 才贏）等於被後面的數字壓過去。
+# 兩件事一起改：把 {band_clause} 移到標題那一條之後，並在條文裡明說 40% 是給文字塊
+# 的、不是給色框的，框高改用「兩行標題塊的一半」這種相對量描述。
+_BAND_CLAUSE_TEMPLATE = (
+    "- THE COLOUR BAND (this bullet OVERRIDES the 「lower 40%」 figure above AS FAR AS THE BAND IS "
+    "CONCERNED — that figure sizes the TEXT BLOCK, never the band): a translucent {colour} band with "
+    "a subtle {texture} texture sits BEHIND THE LOWER HEADLINE LINE ONLY. Its top edge is a soft fade "
+    "level with the BASELINE of the UPPER headline line — the upper line therefore still stands on the "
+    "bare photograph, with no band behind it — and it reaches full strength just above the top of the "
+    "lower line, then runs to the bottom edge. The band is therefore only about HALF the height of the "
+    "two-line headline block and no taller: a shallow strip along the bottom of the frame, NOT a panel "
+    "filling the lower half of the frame. It is translucent (about 60% opaque): the photograph stays "
+    "clearly visible through it."
+)
+YT_COVER_BAND_CLAUSE_NEWS_ON = _BAND_CLAUSE_TEMPLATE.format(
+    colour="deep-navy", texture="circuit-board / tech-block"
+)
+YT_COVER_BAND_CLAUSE_HOT_ON = _BAND_CLAUSE_TEMPLATE.format(
+    colour="DEEP CRIMSON / near-black", texture="red circuit-board / tech-block"
+)
 YT_COVER_BAND_CLAUSE_OFF = "- There is NO solid colour band, panel or strip behind the headline: the photograph runs uninterrupted to the bottom edge and stays fully visible. The headline's readability comes from its thick outline and drop shadow alone."
 YT_COVER_BAND_IMAGERY_TAIL_ON = " behind the band"
 YT_COVER_BAND_IMAGERY_TAIL_OFF = ""
@@ -591,8 +613,8 @@ Render EXACTLY these strings, character for character, nothing else:
 - Headline line 2 (lower line): {line2}
 
 === LAYOUT ===
-{band_clause}
 - Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in heavy black-weight (weight, not colour) Chinese display type filling almost the full width, with TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean and separated — the counters (the enclosed white spaces inside characters) must stay open; do not thicken the type until the strokes merge.
+{band_clause}
 - Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
 - Keep the UPPER-LEFT corner (a block about 24% wide and 40% tall) completely free of text or busy detail: a red LIVE badge and a date tab are pasted there afterwards.
 - Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a channel logo tab is pasted there afterwards.
@@ -639,8 +661,8 @@ Render EXACTLY these strings, character for character, nothing else:
 - Headline line 2 (lower line): {line2}
 
 === LAYOUT ===
-{band_clause}
 - Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in heavy black-weight (weight, not colour) Chinese display type filling almost the full width, with TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean and separated — the counters (the enclosed white spaces inside characters) must stay open; do not thicken the type until the strokes merge.
+{band_clause}
 - Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
 - Keep the UPPER-LEFT corner (a block about 30% wide and 16% tall) completely free of text or busy detail: a red-and-white "trending" tag is pasted there afterwards.
 - Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a red channel logo tab is pasted there afterwards.

@@ -35,14 +35,31 @@ class AiBandClauseTests(unittest.TestCase):
         for clause in self.CLAUSES:
             with self.subTest(clause=clause[:40]):
                 self.assertIn("BEHIND THE LOWER HEADLINE LINE ONLY", clause)
-                self.assertIn("BASELINE of the upper headline line", clause)
+                self.assertIn("BASELINE of the UPPER headline line", clause)
 
-    def test_the_old_lower_40_percent_wording_is_gone(self):
-        """0.778 的合成版框只佔畫面下方兩成多；40% 是這次回報的根因。"""
+    def test_the_clause_overrides_the_templates_lower_40_percent_figure(self):
+        """2026-09-09（第三批）實測根因：模板下一行的「lower 40%」被拿去撐色框。
+
+        關係式描述本身不夠——那個數字就在旁邊，模型會照它畫。條文要明說 40% 是給
+        文字塊的，並且框高改用相對量（兩行標題塊的一半）。
+        """
         for clause in self.CLAUSES:
             with self.subTest(clause=clause[:40]):
-                self.assertNotIn("lower 40% of the frame is", clause)
-                self.assertIn("never the bottom half", clause)
+                self.assertIn("OVERRIDES the 「lower 40%」 figure above", clause)
+                self.assertIn("sizes the TEXT BLOCK, never the band", clause)
+                self.assertIn("HALF the height of the two-line headline block", clause)
+                self.assertIn("NOT a panel filling the lower half of the frame", clause)
+
+    def test_the_clause_comes_after_the_headline_bullet_not_before(self):
+        """這個 repo 的慣例是位置在後＋明文 OVERRIDE 才贏；放在 40% 前面等於被壓掉。"""
+        for template in (editor_formats.YT_COVER_FULL_PROMPT_NEWS,
+                         editor_formats.YT_COVER_FULL_PROMPT_HOT):
+            with self.subTest(template=template[:40]):
+                self.assertLess(
+                    template.index("lower 40% of the frame"),
+                    template.index("{band_clause}"),
+                    "色框條必須排在標題那條之後",
+                )
 
     def test_translucency_is_still_spelled_out(self):
         for clause in self.CLAUSES:
@@ -50,11 +67,11 @@ class AiBandClauseTests(unittest.TestCase):
                 self.assertIn("translucent", clause)
                 self.assertIn("about 60% opaque", clause)
 
-    def test_the_percentage_matches_the_composite_band(self):
-        """prompt 寫「下方五分之一」，合成版是 1 - 0.778 = 0.222——同一個量級。"""
+    def test_the_band_stays_the_same_order_as_the_composite_one(self):
+        """合成版框上緣 0.778＝畫面下方兩成多；條文的相對量要落在同一個量級。"""
         self.assertLess(1 - compose.YT_BAND_TOP_RATIO, 0.25)
         for clause in self.CLAUSES:
-            self.assertIn("bottom fifth of the frame", clause)
+            self.assertIn("shallow strip along the bottom of the frame", clause)
 
     def test_off_clause_untouched(self):
         self.assertIn("NO solid colour band", editor_formats.YT_COVER_BAND_CLAUSE_OFF)
