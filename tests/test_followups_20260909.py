@@ -173,17 +173,28 @@ class BroadcastBottomStripTests(unittest.TestCase):
         for key in self.KEYS:
             with self.subTest(key=key):
                 on = editor_formats.digest_rules(key, "編輯", stamp=True)
-                self.assertIn("the one other full-width element", on)
+                self.assertIn("closing <蓋章> banner is the one other full-width element", on)
                 off = editor_formats.digest_rules(key, "編輯", stamp=False)
-                self.assertNotIn("the one other full-width element", off)
+                self.assertIn("last card is the one other full-width element", off)
 
-    def test_stamp_off_still_keeps_everything_in_the_content_half(self):
-        """OFF 沒有橫幅可以放，那條帶仍然空著（已知缺口，記在 plan 文件）。"""
+    def test_stamp_off_fills_the_bottom_strip_with_the_last_card(self):
+        """2026-09-09（第三批）使用者：「沒有開蓋章，其他資訊還是可以放底下」。
+
+        上一批留的缺口：OFF 時沒有橫幅可以放，挖空框底下那條帶整條空著。現在改成
+        最後一張卡下移到底帶並跨全寬——仍然是一般卡片，不是收尾標語。
+        """
         for key in self.KEYS:
             with self.subTest(key=key):
                 rules = editor_formats.digest_rules(key, "編輯", stamp=False)
                 self.assertIn("THERE IS NO STAMP BANNER IN THIS GRAPHIC", rules)
-                self.assertNotIn("RUNS THE FULL WIDTH ALONG THE VERY BOTTOM", rules)
+                self.assertIn("THE LOW STRIP UNDER THE RESERVED AREA IS STILL USED", rules)
+                self.assertIn("LAST of the [內文小標] cards moves down into that strip", rules)
+                self.assertIn("BELOW the reserved area", rules)
+                # 不能被讀成又要生一條蓋章
+                self.assertIn("do not put a <蓋章> line", rules)
+                self.assertIn("not a closing slogan", rules)
+                # 浮水印一樣蓋在右下角，OFF 也要留位
+                self.assertIn("extreme lower-RIGHT corner", rules)
 
     def test_still_no_digits_anywhere(self):
         import re

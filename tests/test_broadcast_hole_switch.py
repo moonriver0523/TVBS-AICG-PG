@@ -34,17 +34,15 @@ class HeadlineRuleTests(unittest.TestCase):
                     self.assertIn(f"sits in the {opposite} half", rules)
                     self.assertNotIn(f"stays inside the {opposite} half", rules)
                     self.assertNotIn("cross the vertical midline", rules)
+                    # 2026-09-09：挖空框底下那條低帶不准空著。蓋章 ON 放蓋章橫幅、
+                    # OFF 放最後一張卡，兩種都有第二個跨全寬的元素，所以第 3 條的
+                    # 「唯一可以跨全寬」都要指回第 5 條，兩條才不會互相衝突。
+                    self.assertIn("the one other full-width element", rules)
+                    self.assertIn("BELOW the reserved area", rules)
                     if stamp:
-                        # 2026-09-09：蓋章改成跨全寬躺在挖空框底下的低帶，所以第 3 條
-                        # 的「唯一可以跨全寬」要指回第 5 條，兩條才不會互相衝突。
-                        self.assertIn("the one other full-width element", rules)
-                        self.assertIn("BELOW the reserved area", rules)
+                        self.assertIn("closing <蓋章> banner", rules)
                     else:
-                        # 蓋章 OFF 沒有第二個跨全寬的元素，第 3 條維持原句
-                        self.assertNotIn("the one other full-width element", rules)
-                        self.assertIn(
-                            "The headline is the one exception: it spans the full width", rules
-                        )
+                        self.assertIn("the last card", rules)
 
     def test_rules_still_carry_no_numbers(self):
         for key in ("broadcast_left", "broadcast_right"):

@@ -123,12 +123,14 @@ class BroadcastStampSwitchTests(unittest.TestCase):
             self.assertEqual(editor_formats.digest_rules(key, "編輯", stamp=None), base)
 
     def test_stamp_off_keeps_sides_straight(self):
+        # 2026-09-09（第三批）：OFF 也要填滿底帶，第 5 條改成把最後一張卡下移跨全寬，
+        # 剩下的卡留在內容半邊——左右不能寫反。
         left = editor_formats.digest_rules("broadcast_left", "編輯", stamp=False)
-        self.assertIn("lowest element of the right half", left)
-        self.assertIn("reserved left area", left)
+        self.assertIn("remaining cards stay stacked in the right half", left)
+        self.assertIn("from the left edge across to the right edge", left)
         right = editor_formats.digest_rules("broadcast_right", "編輯", stamp=False)
-        self.assertIn("lowest element of the left half", right)
-        self.assertIn("reserved right area", right)
+        self.assertIn("remaining cards stay stacked in the left half", right)
+        self.assertIn("from the right edge across to the left edge", right)
 
     def test_off_rules_still_carry_no_digits(self):
         for key in ("broadcast_left", "broadcast_right"):

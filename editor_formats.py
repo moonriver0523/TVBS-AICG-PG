@@ -74,7 +74,7 @@ BROADCAST INSERT LAYOUT ({side_zh}側留給後製) — OVERRIDES THE LAYOUT SENT
 _BROADCAST_STAMP_ON = """5. THE CLOSING <蓋章> BANNER RUNS THE FULL WIDTH ALONG THE VERY BOTTOM IN THIS FORMAT. The reserved video window does not reach the bottom of the frame: it is centred vertically, so a clear horizontal strip is left underneath it. Write into "structure" that the stamp banner is a single full-width bar lying in that low strip, BELOW the reserved area, hugging the bottom of the design and spanning from the {side_en} edge across to the {opposite_en} edge — it is the counterweight to the headline, which spans the full width across the top strip. Nothing of the banner may rise up beside or into the video window, and it stays a single line. Keep the extreme lower-RIGHT corner of that banner clear of essential wording: a small mark is added there afterwards. (It is the lower-right corner whichever half is reserved — the mark's position does not mirror.)
 6. "variable" must be exactly one [標題] line, then exactly {count_word} [內文小標] lines, then one <蓋章> line. {count_word_cap} points, no more and no fewer: this format's card stack has {count_word} rows.{density_rules}
 """
-_BROADCAST_STAMP_OFF = """5. THERE IS NO STAMP BANNER IN THIS GRAPHIC (the user switched it OFF, and that setting wins over every rule above or below that mentions a closing banner). Do NOT write any stamp banner, conclusion strip or closing bar into "structure": the last card is the lowest element of the {opposite_en} half. The headline is the one exception: it spans the full width across the top strip, but nothing of it may hang down into the reserved {side_en} area.
+_BROADCAST_STAMP_OFF = """5. THERE IS NO STAMP BANNER IN THIS GRAPHIC (the user switched it OFF, and that setting wins over every rule above or below that mentions a closing banner). Do NOT write any stamp banner, conclusion strip or closing bar into "structure", and do not put a <蓋章> line in "variable". THE LOW STRIP UNDER THE RESERVED AREA IS STILL USED. The reserved video window does not reach the bottom of the frame: it is centred vertically, so a clear horizontal strip is left underneath it, and leaving that strip empty makes the graphic look unfinished. With no stamp banner to fill it, the LAST of the [內文小標] cards moves down into that strip and widens to span the full width, running from the {side_en} edge across to the {opposite_en} edge, BELOW the reserved area and hugging the bottom of the design — it is the counterweight to the headline, which spans the full width across the top strip. It is still an ordinary card, styled like the ones above it and carrying real content, not a closing slogan. The remaining cards stay stacked in the {opposite_en} half under the headline. Nothing of that bottom card may rise up beside or into the video window, and it stays a single line. Keep the extreme lower-RIGHT corner of it clear of essential wording: a small mark is added there afterwards. (It is the lower-right corner whichever half is reserved — the mark's position does not mirror.)
 6. "variable" must be exactly one [標題] line, then exactly {count_word} [內文小標] lines, and NOTHING after them — no <蓋章> line. {count_word_cap} points, no more and no fewer: this format's card stack has {count_word} rows.{density_rules}
 """
 
@@ -96,7 +96,11 @@ _BROADCAST_DENSITY_STANDARD = """ THIS GRAPHIC IS RUNNING AT THE 字多 DENSITY,
 # 上方的鐵律。
 # 第 3 條的「標題是唯一可以跨全寬的元素」在蓋章 ON 之後不再成立（第 5 條把蓋章條
 # 也放到全寬），兩條會被模型讀成互相衝突，所以 ON 的時候補一句指回第 5 條。
+#
+# 2026-09-09（第三批）使用者：「底下的除了蓋章之外，如果沒有開蓋章，其他資訊還是可以
+# 放底下」。蓋章 OFF 也改成有東西跨全寬（最後一張卡下移到底帶），所以 OFF 同樣要補句。
 _BROADCAST_STAMP_SPAN_NOTE = " (the closing <蓋章> banner is the one other full-width element — rule five lays it along the very bottom, under the reserved area)"
+_BROADCAST_NO_STAMP_SPAN_NOTE = " (the last card is the one other full-width element — rule five moves it down into the strip along the very bottom, under the reserved area)"
 
 
 def _broadcast_point_count(density: str | None) -> dict:
@@ -128,7 +132,9 @@ def _broadcast_rules(
         side_zh="左" if left else "右",
         side_en="left" if left else "right",
         opposite_en="right" if left else "left",
-        stamp_span_note="" if stamp is False else _BROADCAST_STAMP_SPAN_NOTE,
+        stamp_span_note=(
+            _BROADCAST_NO_STAMP_SPAN_NOTE if stamp is False else _BROADCAST_STAMP_SPAN_NOTE
+        ),
     )
 
 
