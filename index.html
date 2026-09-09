@@ -536,6 +536,19 @@
                          刻意不跟 ytCoverInputs 共用——那一塊裡的附圖／AI 消化／只改文字
                          直標一個都不要。五組按鈕的狀態存在 state.vstrip，換版型不重置。 -->
                     <div id="ytVstripInputs" class="hidden mt-3 mb-2 flex flex-col gap-2">
+                        <!-- AI 自動消化（2026-09-09 使用者）：貼一段文字（含外電通稿原文）
+                             → 兩段標題＋判定來源，回填下面三欄；不接生圖，編輯看過再自己按。 -->
+                        <div>
+                            <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">AI 自動消化（選填）</label>
+                            <textarea id="vstripNewsText" rows="3"
+                                      class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
+                                      placeholder="貼新聞內文或外電通稿原文，AI 會生兩段標題並判定畫面來源"></textarea>
+                            <div class="flex items-center gap-2 mt-1">
+                                <button id="vstripDigestBtn" type="button" onclick="handleVstripTitleDigest()"
+                                        class="px-2.5 py-1.5 rounded-lg text-[10px] font-black bg-violet-700 hover:bg-violet-600 text-white transition-all disabled:opacity-40">AI 消化標題</button>
+                                <span class="text-[9px] text-slate-600">回填後看過沒問題再按「生成」</span>
+                            </div>
+                        </div>
                         <div>
                             <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">第一標題（內側欄，最多 12 格）</label>
                             <input id="vstripTitle" type="text" maxlength="60" oninput="onVstripInput()"

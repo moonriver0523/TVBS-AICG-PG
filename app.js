@@ -2109,6 +2109,41 @@ async function handleCoverTitleDigest(target) {
     }
 }
 
+// 直標的自動消化（2026-09-09 使用者）：貼一段文字 → 兩段標題＋判定來源。
+// 與封面那條分開，因為回填的是三個欄位（含來源）、而且不動版面指示器；共用的是
+// 同一個後端端點（target=yt_vstrip）。一樣不接生圖：編輯看過再自己按。
+async function handleVstripTitleDigest() {
+    const newsText = (document.getElementById('vstripNewsText')?.value || '').trim();
+    if (newsText.length < 10) return showToast('先貼一段文字（至少 10 個字）');
+    const btn = document.getElementById('vstripDigestBtn');
+    if (btn) btn.disabled = true;
+    try {
+        showToast('AI 消化標題中，約 10–30 秒…');
+        const res = await fetch(COVER_TITLES_BACKEND_URL, {
+            method: 'POST',
+            headers: _apiHeaders(),
+            body: JSON.stringify({ news_text: newsText, target: 'yt_vstrip' }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(_apiError(data, res.status));
+        document.getElementById('vstripTitle').value = data.title || '';
+        document.getElementById('vstripTitleSecond').value = data.title_second || '';
+        // 來源判不出來時後端回空字串——不要覆蓋掉編輯已經自己填好的那一欄
+        const source = (data.source_text || '').trim();
+        const sourceInput = document.getElementById('vstripSource');
+        if (source) sourceInput.value = source;
+        // 格數提示與來源角落那一列都吃這三個欄位，回填完要重算
+        onVstripInput();
+        showToast(source
+            ? '標題與來源已回填，看過沒問題再按「生成」'
+            : '標題已回填（判不出畫面來源，請自己填），看過沒問題再按「生成」');
+    } catch (err) {
+        showToast(`消化標題失敗：${err.message}`);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
 const YT_COVER_BACKEND_URL = `${API_BASE}/api/editor/yt-cover`;
 
 function ytCoverFields() {

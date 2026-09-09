@@ -507,6 +507,51 @@ COVER_TITLE_DIGEST_SCHEMA_TEN = {
     "required": ["topics", "title_left", "title_right"],
     "additionalProperties": False,
 }
+# YT 直播「直標」（2026-09-09 使用者：貼一段文字 → 自動生兩段標題＋判定來源）。
+#
+# 與其他封面的差別有三個，都寫進條文裡：
+# 1. 版面是**兩行直排**，字數上限照「格數」算不是字元數（連續英數字併成一格，
+#    見 compose._vertical_cells）。上限直接由 compose 的常數帶進來，不手抄。
+# 2. 使用者貼的常常是外電通稿（英文 slug ＋ 場次 ＋ Restrictions），要翻成繁中。
+# 3. 來源要自己判：外電通稿的版權方寫在 Must credit／Restrictions 那幾行。
+#    只回來源名，「畫面來源：」由 compose.vstrip_source_text 自動補，不要自己寫。
+VSTRIP_TITLE_DIGEST_SYSTEM = """You write the two-line vertical caption strip (直標) for a Taiwanese TV news live stream, from whatever the editor pasted in.
+
+The pasted text is often a raw foreign wire despatch: an English slug line, a one-paragraph description, an audio note, a scheduled time, a dateline, an item number, and a restrictions note. It may equally be a Chinese news article. Read whichever it is and work from the facts in it.
+
+Return JSON with "title", "title_second" and "source".
+
+THE TWO TITLES
+- "title" is the upper (main) line and "title_second" the lower (sub) line. Both are Traditional Chinese, Taiwan usage and Taiwan terminology. Never Simplified forms, never Japanese forms.
+- They are ONE caption read top to bottom, not two separate headlines: "title" states WHAT is happening or WHO is involved, and "title_second" adds the detail that makes it newsworthy — where, when, what was said, what the consequence is. The second line must not repeat the first.
+- Length is counted in PRINTED CELLS, not characters: every Chinese character is one cell, a run of consecutive digits or Latin letters is ONE cell together (「30」is one cell, not two), and spaces take no cell at all. "title" must be at most {main_max} cells and "title_second" at most {sub_max} cells. Aim a little under those limits — a line at the limit fills the whole height of the frame.
+- No punctuation at the end of either line. Inside a line use only 「」 if you must quote; no commas, no full stops, no emoji.
+- Use only facts that are in the pasted text. Never add a figure, a date, a place or a claim that is not there. If the material is thin, write a shorter caption rather than inventing detail.
+
+THE SOURCE
+- "source" is the party whose footage this is, written the way it is credited on air, in Traditional Chinese where a standard Taiwanese rendering exists and otherwise in its own language.
+- Take it from an explicit credit requirement first — a line such as "Must credit X", "Mandatory credit: X", or a restrictions note naming X. That is the answer whenever it appears.
+- If there is no credit requirement, use the wire agency or broadcaster that the material names as the supplier. If neither is named anywhere, return an empty string rather than guessing: the editor will fill it in.
+- Write ONLY the name. Do NOT write 「畫面來源」, 「來源」, a colon, or any other prefix — the program adds that itself.
+"""
+
+VSTRIP_TITLE_DIGEST_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "title_second": {"type": "string"},
+        "source": {"type": "string"},
+    },
+    "required": ["title", "title_second", "source"],
+    "additionalProperties": False,
+}
+
+
+def vstrip_title_digest_system(main_max: int, sub_max: int) -> str:
+    """格數上限由 compose 的常數帶進來——手抄一份遲早跟版面對不上。"""
+    return VSTRIP_TITLE_DIGEST_SYSTEM.format(main_max=main_max, sub_max=sub_max)
+
+
 COVER_TITLE_DIGEST_SCHEMA_YT = {
     "type": "object",
     "properties": {"title": {"type": "string"}},

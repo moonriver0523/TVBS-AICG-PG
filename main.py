@@ -133,6 +133,41 @@ GEMINI_DIGEST_MIN_TOKENS = 6000
 DIGEST_MAX_TOKENS = 6000
 MAP_DIGEST_MAX_TOKENS = 10000
 
+# 消化的**思考**上限（2026-09-09 使用者：「播出鏡面消化的時間太長了，偶有失敗，
+# 有精簡空間嗎？這也是先前使用者回報逾時沒有生成的原因」）。
+#
+# 這個 repo 自己量過兩次，結論一致（見上面 DIGEST_MAX_TOKENS 的註解）：真正寫出來
+# 的內容非常穩定（856-1361 token），會爆的是思考（603-4873），而且思考量跟著規則
+# **條數**漲、跟正文無關。播出鏡面又是規則最多的一條線，所以它最慢、最容易逾時。
+# 一次消化最壞情況要五次 attempt（DIGEST_ATTEMPTS），Cloud Run 的請求上限是 300 秒，
+# 實測撞過「重試後 269 秒才回應」——離被硬砍只差一點。
+#
+# 與其繼續刪規則（刪掉的每一條都是使用者驗收過的行為），不如直接把思考封頂：
+# OpenRouter 的統一參數 reasoning.max_tokens，Anthropic 系走的就是這個
+# （OpenAI 系走 effort，這裡不送）。上限必須明顯低於 max_tokens，剩下的才夠寫正文；
+# 觀測到的正文最大 1361，留 DIGEST_REASONING_HEADROOM 這麼多綽綽有餘。
+# 設成 0（或非 OpenRouter 後端）＝完全不送這個欄位，行為與舊版逐字元相同。
+DIGEST_REASONING_MAX_TOKENS = int(os.getenv("DIGEST_REASONING_MAX_TOKENS", "2000"))
+# OpenRouter 文件寫 Anthropic 的思考預算最低 1024，低於這個值等於沒設定
+DIGEST_REASONING_MIN_TOKENS = 1024
+DIGEST_REASONING_HEADROOM = 2500
+
+
+def digest_reasoning_body(max_output_tokens: int) -> dict:
+    """這次呼叫要不要送 reasoning 上限，送多少。不送就回空 dict。"""
+    if DIGEST_BACKEND != "openrouter" or DIGEST_REASONING_MAX_TOKENS <= 0:
+        return {}
+    budget = min(DIGEST_REASONING_MAX_TOKENS, max_output_tokens - DIGEST_REASONING_HEADROOM)
+    if budget < DIGEST_REASONING_MIN_TOKENS:
+        return {}
+    return {"reasoning": {"max_tokens": budget}}
+
+
+# 整個消化迴圈的牆鐘預算（2026-09-09）。Cloud Run 的請求上限是 300 秒，超過就是
+# 連錯誤訊息都沒有的斷線——使用者看到的「逾時沒有生成」。與其讓第五次 attempt 在
+# 第 290 秒才開始，不如在還來得及的時候停手，回一個講得清楚的 503。
+DIGEST_DEADLINE_SECONDS = float(os.getenv("DIGEST_DEADLINE_SECONDS", "230"))
+
 # 「不消化」的輸出長度**由輸入長度決定**——模型要把整篇原文一字不差抄進 variable，
 # 再另外寫 style/structure。固定 1500 等於「原文超過某個長度就一定失敗」。
 # 2026-09-04 實測（正式站）：943 字過關且逐字相符；1850 字連續 5 次
@@ -1198,16 +1233,37 @@ def digest_completion(
         },
     }
     client = openai_client if timeout is None else openai_client.with_options(timeout=timeout)
+    # 思考上限只有 OpenRouter 吃得到，而且不是每個模型都支援；被明確拒絕時原樣重送
+    # 一次不帶這個欄位的請求，換模型不會把整條線弄壞（見 digest_reasoning_body）。
+    reasoning = digest_reasoning_body(max_output_tokens)
+    if reasoning:
+        payload["extra_body"] = reasoning
     try:
         response = client.chat.completions.create(
             **payload, max_tokens=max_output_tokens
         )
     except BadRequestError as exc:
-        if "max_completion_tokens" not in str(exc):
+        message = str(exc)
+        if reasoning and "reasoning" in message:
+            print(f"[digest] 模型不吃 reasoning 上限，改用預設思考量：{message}", flush=True)
+            payload.pop("extra_body", None)
+            reasoning = {}
+            try:
+                response = client.chat.completions.create(
+                    **payload, max_tokens=max_output_tokens
+                )
+            except BadRequestError as retry_exc:
+                if "max_completion_tokens" not in str(retry_exc):
+                    raise
+                response = client.chat.completions.create(
+                    **payload, max_completion_tokens=max_output_tokens
+                )
+        elif "max_completion_tokens" not in message:
             raise
-        response = client.chat.completions.create(
-            **payload, max_completion_tokens=max_output_tokens
-        )
+        else:
+            response = client.chat.completions.create(
+                **payload, max_completion_tokens=max_output_tokens
+            )
     log_digest_usage(site, model, max_output_tokens, response)
     return response
 
@@ -1521,7 +1577,20 @@ def generate(req: GenerateRequest):
     # 輸出上限依類型與消化程度分開給，理由見 digest_token_budget。
     max_output_tokens = digest_token_budget(type_label, req.density, req.news_text)
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
+    deadline = time.monotonic() + DIGEST_DEADLINE_SECONDS
     for attempt in range(DIGEST_ATTEMPTS):
+        # 還沒開始就已經沒時間了：與其讓 Cloud Run 在第 300 秒直接斷線（使用者看到
+        # 的是「沒有生成」，連錯誤都沒有），不如在這裡停手，回一個看得懂的訊息。
+        if attempt and time.monotonic() > deadline:
+            print(
+                f"[generate] 已用掉 {DIGEST_DEADLINE_SECONDS:.0f} 秒預算，"
+                f"停在第 {attempt} 次 attempt 不再重試",
+                flush=True,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="AI 服務這次太久沒有回應，請縮短新聞內容或稍後重試",
+            )
         try:
             response = digest_completion(
                 model=model,
@@ -3756,7 +3825,10 @@ class CoverTitleDigestRequest(BaseModel):
     news_text: str = Field(min_length=10, max_length=20_000)
     # yt_hourly（2026-09-08 WP2）＝整點直播，與十點同款「先判 1／2 主題」；
     # yt_cover＝國內外新聞直播與今日熱搜，維持單標題。
-    target: Literal["ten_cover", "ten_cover_full", "yt_cover", "yt_hourly"] = "ten_cover"
+    # yt_vstrip（2026-09-09）＝直播直標：兩段標題＋自動判來源，見 editor_formats
+    target: Literal[
+        "ten_cover", "ten_cover_full", "yt_cover", "yt_hourly", "yt_vstrip"
+    ] = "ten_cover"
 
 
 TEN_DIGEST_MAX_ATTEMPTS = 2   # 十點三段字數不合格時最多問幾次（含第一次）
@@ -3768,6 +3840,8 @@ class CoverTitleDigestResponse(BaseModel):
     title: str = ""
     # 整點雙則的第二標題（target=yt_hourly；單主題時空）
     title_second: str = ""
+    # 直標（target=yt_vstrip）判出來的畫面來源；只有來源名，「畫面來源：」由 compose 補
+    source_text: str = ""
     # 十點／整點：這篇內文被判定成幾個主題（1＝滿版、2＝雙切）。前端據此更新版面指示器。
     # 一致性以「第二標題有沒有值」為準：模型說 2 卻只給一個標題就退回 1，
     # 說 1 卻多給了第二標題就清掉——回一組自相矛盾的值，前端的指示器會跟欄位打架。
@@ -3791,7 +3865,13 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
     """
     ten = req.target == "ten_cover"
     hourly = req.target == "yt_hourly"
-    if ten:
+    vstrip = req.target == "yt_vstrip"
+    if vstrip:
+        base_prompt = editor_formats.vstrip_title_digest_system(
+            compose.VSTRIP_MAIN_MAX_CELLS, compose.VSTRIP_SUB_MAX_CELLS
+        )
+        schema = editor_formats.VSTRIP_TITLE_DIGEST_SCHEMA
+    elif ten:
         base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_TEN
         schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_TEN
     elif req.target == "ten_cover_full":
@@ -3852,6 +3932,14 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
     title = _clip_title(data.get("title"), 60)
     if not title:
         raise HTTPException(status_code=502, detail="消化標題失敗：模型沒給標題")
+    if vstrip:
+        # 格數超標不在這裡擋：回填後編輯自己看得到格數指示器，也還沒生圖。
+        # 真正的硬上限在 compose.yt_vertical_layout（超過就 400，訊息指名哪一個標題）。
+        return CoverTitleDigestResponse(
+            title=title,
+            title_second=_clip_title(data.get("title_second"), 60),
+            source_text=_clip_title(data.get("source"), 40),
+        )
     if hourly:
         # 整點雙則（2026-09-08 WP2）：判定規則與十點同一套，只是欄位叫 title／title_second
         second = _clip_title(data.get("title_second"), 60)
