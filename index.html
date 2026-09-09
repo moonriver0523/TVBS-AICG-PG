@@ -554,7 +554,8 @@
                             <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">來源句（選填）</label>
                             <input id="vstripSource" type="text" maxlength="40" oninput="onVstripInput()"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
-                                   placeholder="畫面來源：路透社" />
+                                   placeholder="美聯社" />
+                            <p class="text-[9px] text-slate-600 mt-1">只要填來源名，「畫面來源：」會自動補上</p>
                         </div>
 
                         <div class="flex items-center gap-1.5">
@@ -592,15 +593,18 @@
                                     class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">左下</button>
                         </div>
 
-                        <!-- 來源句沒填就整列收起來：那時候「跟誰走」沒有意義 -->
+                        <!-- 來源句沒填就整列收起來：那時候選角落沒有意義。
+                             2026-09-09 使用者：四角可選，跟 Logo 同一角時後端自動讓開。 -->
                         <div id="vstripSourceRow" class="hidden flex items-center gap-1.5">
                             <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">來源句位置</span>
-                            <button type="button" data-vstrip-source data-vstrip-value="live" onclick="setVstripSourceFollow(false)"
-                                    title="橫排貼在 LIVE 章旁邊（截圖的預設做法）"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">跟 LIVE 章</button>
-                            <button type="button" data-vstrip-source data-vstrip-value="logo" onclick="setVstripSourceFollow(true)"
-                                    title="跟著 Logo 走：Logo 在上就排下方、在下就排上方"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">跟 Logo</button>
+                            <button type="button" data-vstrip-source data-vstrip-value="tl" onclick="setVstripSourceCorner('tl')"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">左上</button>
+                            <button type="button" data-vstrip-source data-vstrip-value="tr" onclick="setVstripSourceCorner('tr')"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">右上</button>
+                            <button type="button" data-vstrip-source data-vstrip-value="bl" onclick="setVstripSourceCorner('bl')"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">左下</button>
+                            <button type="button" data-vstrip-source data-vstrip-value="br" onclick="setVstripSourceCorner('br')"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">右下</button>
                         </div>
 
                         <div class="flex items-center gap-2">

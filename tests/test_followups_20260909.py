@@ -1,9 +1,11 @@
 """2026-09-09 使用者回饋批次的守門測試（見 docs/plan-20260909-user-feedback.md）。
 
-三件事，三個類別：
+五件事，五個類別：
 1. AI 生成字的底色框要跟合成版對齊（只在第二行字後面、半透明）。
 2. 「字多」要真的比較多——三檔裡以前只有它沒有 override 區塊。
 3. 播出鏡面：蓋章改成跨全寬躺在挖空框底下那條空白帶。
+4. 直標縮短：總長度有上限、色框置中偏上、欄寬由字級推導、同側下角開放放 Logo。
+5. 畫面來源：「畫面來源：」自動補，位置四角可選且自動避開 Logo。
 """
 import os
 import sys
@@ -184,3 +186,167 @@ class BroadcastBottomStripTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VstripShorterTests(unittest.TestCase):
+    """直標縮短（2026-09-09 使用者：太長、上下貼邊、字級與行距都要縮）。"""
+
+    LONG_MAIN = "明早晚涼中午破30度"
+    LONG_SUB = "北臺灣週三轉濕涼留意日夜溫差"
+
+    def _layout(self, **kw):
+        kw.setdefault("main_title", self.LONG_MAIN)
+        kw.setdefault("sub_title", self.LONG_SUB)
+        return compose.yt_vertical_layout(**kw)
+
+    def test_the_column_can_never_run_the_whole_height(self):
+        """最長的標題也不准從上緣長到下緣——那正是使用者說的「上下都貼邊」。"""
+        height = compose.YT_CANVAS[1]
+        for kw in ({}, {"variant": "original_audio"}, {"logo_corner": "bl"}):
+            with self.subTest(**kw):
+                layout = self._layout(title_side="left", **kw)
+                self.assertLessEqual(
+                    layout["column_height"] / height,
+                    compose.VSTRIP_COLUMN_MAX_RATIO + 1e-9,
+                )
+                # 底緣離畫布底至少留一成
+                self.assertLess(layout["box"][3] / height, 0.90)
+
+    def test_the_block_floats_instead_of_hanging_from_the_top(self):
+        """色框上緣不再釘死在 VSTRIP_TOP_RATIO：短標題會往下浮。"""
+        height = compose.YT_CANVAS[1]
+        short = compose.yt_vertical_layout(main_title="川普宣布關稅", sub_title="美股應聲下挫")
+        self.assertGreater(short["box"][1] / height, compose.VSTRIP_TOP_RATIO)
+        # 但永遠在 LIVE 章之下
+        self.assertGreater(short["box"][1], short["live"][3])
+
+    def test_column_width_follows_the_font_size(self):
+        """行距＝欄寬。字級縮了欄寬要跟著縮，否則兩行之間的空白反而變大。"""
+        long_title = self._layout(title_side="left")
+        short = compose.yt_vertical_layout(main_title="川普宣布關稅", sub_title="美股應聲下挫")
+        self.assertLess(long_title["cell_size"], short["cell_size"])
+        wide = lambda layout: layout["main"][2] - layout["main"][0]  # noqa: E731
+        self.assertLess(wide(long_title), wide(short))
+        for layout in (long_title, short):
+            self.assertEqual(
+                wide(layout),
+                max(1, round(layout["cell_size"] * compose.VSTRIP_COLUMN_WIDTH_EM)),
+            )
+
+    def test_font_is_smaller_than_the_old_fixed_column(self):
+        """舊版欄寬固定 0.0445w≈85px、格距 0.080h；縮小後兩者都要變小。"""
+        width, height = compose.YT_CANVAS
+        layout = self._layout(title_side="left")
+        self.assertLess(layout["main"][2] - layout["main"][0], round(width * 0.0445))
+        self.assertLess(layout["pitch"], height * 0.080)
+
+    def test_logo_bottom_corner_on_the_same_side_shortens_the_column(self):
+        free = self._layout(title_side="left", logo_corner="tr")
+        clashing = self._layout(title_side="left", logo_corner="bl")
+        self.assertLess(clashing["box"][3], clashing["logo"][1])
+        self.assertLessEqual(clashing["box"][3], free["box"][3])
+
+    def test_logo_top_corner_on_the_same_side_is_still_refused(self):
+        for side, corner in (("left", "tl"), ("right", "tr")):
+            with self.subTest(side=side, corner=corner):
+                with self.assertRaises(compose.ComposeError):
+                    compose.compose_yt_overlay(
+                        main_title=self.LONG_MAIN, sub_title=self.LONG_SUB,
+                        title_side=side, logo_corner=corner,
+                    )
+
+    def test_the_longest_allowed_title_still_fits(self):
+        """規格上限 12／14 格，配上最擠的選項組合也不能丟 ComposeError。"""
+        main = "十二個格子滿滿滿的標題"
+        sub = "十四個格子滿滿滿滿滿的標題喔"
+        self.assertEqual(len(compose._vertical_cells(main)), 11)
+        self.assertEqual(len(compose._vertical_cells(sub)), 14)
+        compose.compose_yt_overlay(
+            main_title=main, sub_title=sub, title_side="left",
+            variant="original_audio", logo_corner="bl",
+        )
+
+
+class VstripSourceTests(unittest.TestCase):
+    """畫面來源：自動補前綴＋四角可選（2026-09-09 使用者要求）。"""
+
+    def test_prefix_is_added_to_a_bare_source_name(self):
+        self.assertEqual(compose.vstrip_source_text("美聯社"), "畫面來源：美聯社")
+
+    def test_prefix_is_not_doubled(self):
+        for already in ("畫面來源：美聯社", "畫面來源 美聯社"):
+            with self.subTest(already=already):
+                self.assertEqual(compose.vstrip_source_text(already), already)
+
+    def test_empty_stays_empty(self):
+        for raw in ("", "   ", None):
+            with self.subTest(raw=raw):
+                self.assertEqual(compose.vstrip_source_text(raw), "")
+
+    def test_is_idempotent(self):
+        once = compose.vstrip_source_text("路透社")
+        self.assertEqual(compose.vstrip_source_text(once), once)
+
+    def test_every_corner_is_accepted_and_lands_there(self):
+        width, height = compose.YT_CANVAS
+        for corner in compose.VSTRIP_SOURCE_CORNERS:
+            with self.subTest(corner=corner):
+                layout = compose.yt_vertical_layout(
+                    main_title="川普宣布關稅", sub_title="美股應聲下挫",
+                    title_side="left", logo_corner="tr",
+                    source_text="美聯社", source_corner=corner,
+                )
+                x0, y0, x1, y1 = layout["source"]
+                self.assertEqual(layout["source_corner"], corner)
+                if corner in ("tl", "bl"):
+                    self.assertLess(x0, width / 2)
+                else:
+                    self.assertGreater(x1, width / 2)
+                if corner in ("tl", "tr"):
+                    self.assertLess(y0, height / 2)
+                else:
+                    self.assertGreater(y1, height / 2)
+
+    def test_it_never_overlaps_the_logo_even_in_the_logo_corner(self):
+        for corner in compose.VSTRIP_SOURCE_CORNERS:
+            with self.subTest(corner=corner):
+                layout = compose.yt_vertical_layout(
+                    main_title="川普宣布關稅", sub_title="美股應聲下挫",
+                    title_side="left", logo_corner=corner,
+                    source_text="美聯社", source_corner=corner,
+                )
+                sx0, sy0, sx1, sy1 = layout["source"]
+                lx0, ly0, lx1, ly1 = layout["logo"]
+                overlaps = sx0 < lx1 and sx1 > lx0 and sy0 < ly1 and sy1 > ly0
+                self.assertFalse(overlaps, f"{corner}: 來源句壓到 Logo")
+
+    def test_bad_corner_is_refused_rather_than_silently_ignored(self):
+        with self.assertRaises(compose.ComposeError):
+            compose.vstrip_source_corner(source_corner="middle")
+
+    def test_old_callers_behave_exactly_as_before(self):
+        """沒帶 source_corner 的呼叫端要逐字元不變：跟 LIVE 章／跟 Logo。"""
+        self.assertEqual(
+            compose.vstrip_source_corner(title_side="left", logo_corner="tr"), "tl"
+        )
+        self.assertEqual(
+            compose.vstrip_source_corner(title_side="right", logo_corner="tl"), "tr"
+        )
+        self.assertEqual(
+            compose.vstrip_source_corner(
+                title_side="left", logo_corner="br", source_follow_logo=True
+            ),
+            "br",
+        )
+
+    def test_api_and_ui_carry_the_new_field(self):
+        self.assertIn("source_corner", main.YtOverlayRequest.model_fields)
+        self.assertEqual(main.YtOverlayRequest.model_fields["source_corner"].default, "")
+        app_js = (ROOT / "app.js").read_text(encoding="utf-8")
+        index_html = (ROOT / "index.html").read_text(encoding="utf-8")
+        self.assertIn("source_corner: v.sourceCorner", app_js)
+        for corner in compose.VSTRIP_SOURCE_CORNERS:
+            with self.subTest(corner=corner):
+                self.assertIn(f'data-vstrip-source data-vstrip-value="{corner}"', index_html)
+        # 提示改成只填來源名
+        self.assertIn('placeholder="美聯社"', index_html)

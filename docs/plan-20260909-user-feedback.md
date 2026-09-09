@@ -64,22 +64,38 @@ AI 生成字那條線的底色框還是又高又不透明（見附圖一、二�
 - 兩欄各寬 `0.0445w ≈ 85px`，`VSTRIP_SEAM_RATIO=0` 不留縫。字級卻是由格距算的
   （`pitch × 0.92`），**跟欄寬脫鉤**——所以字級一縮，欄寬不動，兩行之間的空白反而變大。
 
-**做法**：
+**做法（已實作，2026-09-09）**：
 - `VSTRIP_MAIN_PITCH_RATIO` 0.080 → 0.070（字級與長度一起縮）。
+- **新增 `VSTRIP_COLUMN_MAX_RATIO = 0.64`**：色框總長度的硬上限。這一條才是關鍵——
+  光縮格距擋不住最長的標題（14 格 × 0.070 = 0.98h），一定會被可用範圍夾成
+  「從上緣長到下緣」，也就是使用者說的上下貼邊。封住總長度，格距與字級再由它反推。
+- `VSTRIP_MIN_PITCH_RATIO` 0.045 → 0.040（隨總長度上限一起下修，14 格才過得了）。
 - `VSTRIP_BOTTOM_MAX_RATIO` 0.90 → 0.94（這是**可用範圍**上限，不是實際長度）；
   新增 `VSTRIP_VERTICAL_ANCHOR = 0.38`：色框在可用範圍內置中偏上，不再固定貼上緣。
 - 欄寬改成**由字級推導**：`VSTRIP_COLUMN_WIDTH_EM = 1.12`，
-  `col_w = round(size_px × 1.12)`。字級縮 → 欄寬跟著縮 → 行距自動變窄。
+  `col_w = round(cell_size × 1.12)`。字級縮 → 欄寬跟著縮 → 行距自動變窄。
+  字級 `cell_size` 一併回傳給 `compose_yt_overlay` 用，兩邊不會再各算一次。
 - Logo：把「同側一律擋掉」放寬成「同側的**上**角擋掉」。同側下角允許，
-  但色框底緣必須夾在 `logo_y0 − gap` 以上；夾完格距低於 `VSTRIP_MIN_PITCH_RATIO`
-  仍然丟 `ComposeError`（不默默畫壞）。
+  色框底緣夾在 `logo_y0 − gap` 以上；夾完格距低於 `VSTRIP_MIN_PITCH_RATIO`
+  仍然丟 `ComposeError`（不默默畫壞），訊息會註明是 Logo 壓縮了高度。
+
+**實測數值**（1920×1080，主標 9 格／副標 14 格）：
+| 情境 | 色框上緣 | 下緣 | 長度 | 字級 | 欄寬 |
+|---|---|---|---|---|---|
+| 舊版 | 0.181 | 0.940 | 0.759 | 54px | 85px |
+| 新版 | 0.227 | 0.867 | 0.640 | 45px | 50px |
+| 新版＋Logo 左下同側 | 0.199 | 0.839 | 0.640 | 45px | 50px |
+| 新版／短標題 6 格 | 0.310 | 0.731 | 0.420 | 70px | 78px |
 
 **檔案**：`compose.py`、`main.py`（錯誤訊息不變）、`index.html`／`app.js`
 （Logo 角落按鈕的 disabled 條件）；測試 `tests/test_yt_vstrip_ui.py`、
 `tests/test_yt_band_variants_and_overlay.py`。
 
-**待使用者挑**：置中偏上的錨點值、以及 LIVE 章要不要跟著色框一起下移。
-先出兩張樣張讓使用者挑（比照 WP3 底色框的做法），不自己定版。
+**先定版、可回頭調**：錨點取 0.38（置中偏上），LIVE 章與小標維持釘在原位不跟著浮動——
+它們是「頻道固定元素」，跟著標題長短上下跑會很怪。副作用是**短標題**時色框離 LIVE 章
+比舊版遠。樣張：`D:\Downloads\AICG_直標_前後對照_20260909.png`（長短各一，左前右後）與
+`D:\Downloads\AICG_直標_新版四種_20260909.png`（四種選項組合）。
+使用者若覺得短標題離 LIVE 章太遠，把 `VSTRIP_VERTICAL_ANCHOR` 調小即可（0＝貼著章底）。
 
 ---
 
@@ -88,10 +104,10 @@ AI 生成字那條線的底色框還是又高又不透明（見附圖一、二�
 **使用者要求**：使用者只填「美聯社」，上字時自動變成「畫面來源：美聯社」；
 位置開放左上／右上／左下／右下四選一，但都要避開 TVBS Logo 以免打架。
 
-**做法**：
-- `compose.VSTRIP_SOURCE_PREFIX = "畫面來源："`。合成前正規化：字串非空、
-  且**不是**以「畫面來源」開頭時才補前綴（使用者habitual 會整句貼上，補兩次很醜）。
-- `source_follow_logo: bool` → `source_corner: "" | tl | tr | bl | br`。
+**做法（已實作，2026-09-09）**：
+- `compose.VSTRIP_SOURCE_PREFIX = "畫面來源："`，正規化函式 `compose.vstrip_source_text`（冪等）。合成前正規化：字串非空、
+  且**不是**以「畫面來源」開頭時才補前綴（使用者習慣整句貼上，補兩次很醜）。
+- `source_follow_logo: bool` → `source_corner: "" | tl | tr | bl | br`（`compose.vstrip_source_corner`）。
   空字串＝維持舊行為（由 `source_follow_logo` 決定），舊呼叫端逐字元不變。
   `source_follow_logo=True` 等價於 `source_corner = logo_corner`。
 - 避讓規則：來源句貼在指定角落的內縮位置；若該角落**就是 Logo 的角落**，

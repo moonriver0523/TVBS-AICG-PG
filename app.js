@@ -379,7 +379,7 @@ let state = {
         variant: 'normal',        // normal／original_audio／ai_translation
         titleSide: 'left',        // 直標貼哪一側
         logoCorner: 'tr',         // Logo 角落，不能跟直標同側
-        sourceFollowLogo: false,  // false＝來源句跟 LIVE 章、true＝跟 Logo
+        sourceCorner: 'tl',       // 來源句角落（2026-09-09 起四角可選，取代 sourceFollowLogo）
         live: true,               // LIVE 章可取消
     },
     refineStack: []
@@ -2241,10 +2241,12 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
 const YT_OVERLAY_BACKEND_URL = `${API_BASE}/api/editor/yt-overlay`;
 const VSTRIP_MAIN_MAX_CELLS = 12;
 const VSTRIP_SUB_MAX_CELLS = 14;
-// Logo 角落與直標同側就會壓到字：靠左的直標不能放 tl／bl，靠右的不能放 tr／br
-const VSTRIP_BLOCKED_CORNERS = { left: ['tl', 'bl'], right: ['tr', 'br'] };
+// Logo 角落與直標同側的**上**角會壓到 LIVE 章與色框頂：靠左的直標不能放 tl，靠右的不能放 tr。
+// 2026-09-09 使用者裁決：直標縮短後同側的下角（bl／br）開放，色框會自己讓開 Logo。
+const VSTRIP_BLOCKED_CORNERS = { left: ['tl'], right: ['tr'] };
 // 換邊時把 Logo 移到對側**同高**的角落，不是一律回右上
 const VSTRIP_MIRROR_CORNER = { tl: 'tr', bl: 'br', tr: 'tl', br: 'bl' };
+const VSTRIP_CORNER_LABELS = { tl: '左上', tr: '右上', bl: '左下', br: '右下' };
 
 /* 直排的「格數」。與 compose._vertical_cells 等價：連續英數字併成一格（縱中橫）、
    空白不算、其餘一字一格。標點只是換字形不影響數量，所以這裡不做替換。
@@ -2272,7 +2274,7 @@ function vstripFields() {
         variant: v.variant,
         title_side: v.titleSide,
         logo_corner: v.logoCorner,
-        source_follow_logo: !!v.sourceFollowLogo,
+        source_corner: v.sourceCorner,
         live: !!v.live,
     };
 }
@@ -2299,8 +2301,8 @@ function setVstripLogoCorner(corner) {
     updateVstripButtons();
 }
 
-function setVstripSourceFollow(followLogo) {
-    state.vstrip.sourceFollowLogo = !!followLogo;
+function setVstripSourceCorner(corner) {
+    state.vstrip.sourceCorner = corner;
     updateVstripButtons();
 }
 
@@ -2324,13 +2326,20 @@ function updateVstripButtons() {
     _vstripPick('[data-vstrip-variant]', v.variant);
     _vstripPick('[data-vstrip-side]', v.titleSide);
     _vstripPick('[data-vstrip-corner]', v.logoCorner);
-    _vstripPick('[data-vstrip-source]', v.sourceFollowLogo ? 'logo' : 'live');
+    _vstripPick('[data-vstrip-source]', v.sourceCorner);
     const blocked = VSTRIP_BLOCKED_CORNERS[v.titleSide];
     document.querySelectorAll('[data-vstrip-corner]').forEach(btn => {
         const bad = blocked.includes(btn.dataset.vstripValue);
         btn.disabled = bad;
         btn.classList.toggle('opacity-40', bad);
-        btn.title = bad ? '會壓到直標' : 'TVBS NEWS 白色字標放這個角落';
+        btn.title = bad ? '這個角落有 LIVE 章與直標頂，會打架' : 'TVBS NEWS 白色字標放這個角落';
+    });
+    // 來源句四角：跟 Logo 同一角時後端會自動讓開，所以不 disabled，只在提示裡講清楚
+    document.querySelectorAll('[data-vstrip-source]').forEach(btn => {
+        const corner = btn.dataset.vstripValue;
+        btn.title = corner === v.logoCorner
+            ? `跟 Logo 同一角（${VSTRIP_CORNER_LABELS[corner]}）：會自動排在 Logo 的另一邊，不會重疊`
+            : `來源句放${VSTRIP_CORNER_LABELS[corner]}`;
     });
     // 來源句空白時「跟 LIVE 章／跟 Logo」沒有意義，整列收起來
     const sourceRow = document.getElementById('vstripSourceRow');

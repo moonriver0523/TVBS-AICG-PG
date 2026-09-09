@@ -4618,8 +4618,12 @@ class YtOverlayRequest(BaseModel):
     title_side: Literal["left", "right"] = "left"
     # Logo 角落；跟直標同一側會被 compose 擋掉（400）
     logo_corner: Literal["tr", "br", "tl", "bl"] = "tr"
-    # 來源句跟著 Logo 走（False＝貼在 LIVE 章旁邊）
+    # 來源句跟著 Logo 走（False＝貼在 LIVE 章旁邊）。2026-09-09 起被 source_corner
+    # 取代，留著給舊呼叫端；source_corner 有值時完全不看它。
     source_follow_logo: bool = False
+    # 來源句落在哪一角（2026-09-09 使用者要求四角可選）。空字串＝舊行為，
+    # 由 source_follow_logo 決定。同一角有 Logo 或 LIVE 章時 compose 自動讓開。
+    source_corner: Literal["", "tl", "tr", "bl", "br"] = ""
     # LIVE 章可取消（有些直播不掛 LIVE）
     live: bool = True
 
@@ -4652,6 +4656,8 @@ def _yt_overlay_layout_payload(layout: dict) -> dict:
         "label": list(layout["label"]),
         "logo": list(layout["logo"]),
         "source": list(layout["source"]),
+        "source_corner": layout["source_corner"],
+        "cell_size": layout["cell_size"],
     }
 
 
@@ -4675,6 +4681,7 @@ def editor_yt_overlay(req: YtOverlayRequest) -> YtOverlayResponse:
             logo_corner=req.logo_corner,
             title_side=req.title_side,
             source_follow_logo=req.source_follow_logo,
+            source_corner=req.source_corner,
             live=req.live,
         )
         layout = compose.yt_vertical_layout(
@@ -4685,6 +4692,7 @@ def editor_yt_overlay(req: YtOverlayRequest) -> YtOverlayResponse:
             logo_corner=req.logo_corner,
             source_text=req.source_text.strip(),
             source_follow_logo=req.source_follow_logo,
+            source_corner=req.source_corner,
         )
     except compose.ComposeError as exc:
         # 直標的失敗全部是使用者自己改得掉的（字太多、Logo 放錯邊），一律 400，

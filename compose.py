@@ -1498,16 +1498,29 @@ def compose_yt_hot_cover(
 VSTRIP_LEFT_RATIO = 0.0265           # 整組直標離畫面外緣（19/718）
 # 2026-09-08 使用者裁決：兩欄字級一樣大、底色一致、同一個色框不拆開——
 # 所以兩欄同寬（都用主標欄寬）、中間沒有縫、共用一個格距，底色是一整塊。
-VSTRIP_MAIN_WIDTH_RATIO = 0.0445     # 每欄寬（32/718），兩欄同寬
+# 2026-09-09 使用者回饋：整組直標太長、上下都貼邊，要縮短、字級再縮小、兩行之間的
+# 行距也縮小，整體置中偏上。
+#   - 欄寬本來是固定比例（0.0445w≈85px），字級卻是由格距算的，兩者脫鉤——字級一縮，
+#     欄寬不動，兩行之間的空白反而變大。改成由字級推導（VSTRIP_COLUMN_WIDTH_EM），
+#     字級縮 → 欄寬縮 → 行距自動變窄。舊常數留著給還在用它的呼叫端當參考值。
+#   - 上緣本來釘死在 VSTRIP_TOP_RATIO 往下長，長標題就一路長到 BOTTOM_MAX 貼邊。
+#     改成先算出色框長度，再用 VSTRIP_VERTICAL_ANCHOR 在可用範圍內置中偏上。
+VSTRIP_COLUMN_WIDTH_EM = 1.12        # 欄寬＝字級 × 這個值（字左右各留一點）
+VSTRIP_MAIN_WIDTH_RATIO = 0.0445     # 舊的固定欄寬（32/718）；現在只當參考值
 VSTRIP_SUB_WIDTH_RATIO = VSTRIP_MAIN_WIDTH_RATIO
 VSTRIP_SEAM_RATIO = 0.0              # 兩欄之間不留縫：同一個色框
-VSTRIP_TOP_RATIO = 0.166             # 文字欄上緣，一般版（67/404）
+VSTRIP_TOP_RATIO = 0.166             # 色框可用範圍的上緣，一般版（67/404）
 VSTRIP_TOP_WITH_LABEL_RATIO = 0.191  # 有原音呈現／AI即時翻譯小標時（77/404）
 VSTRIP_TOP_GAP_RATIO = 0.014         # 色框上緣與 LIVE 章／小標底之間至少留這麼多（2026-09-08 使用者：頂上的字快被吃掉）
-VSTRIP_BOTTOM_MAX_RATIO = 0.90       # 欄底最多到這裡，再長就縮字
-VSTRIP_MAIN_PITCH_RATIO = 0.080      # 格距上限（291/404/9），兩欄共用
+VSTRIP_BOTTOM_MAX_RATIO = 0.94       # 可用範圍的下緣（不是實際長度，2026-09-09 起色框在範圍內浮動）
+VSTRIP_VERTICAL_ANCHOR = 0.38        # 色框在可用範圍裡的位置：0＝貼上緣、1＝貼下緣，置中偏上
+# 色框總長度的硬上限（佔畫布高）。光縮格距擋不住最長的標題：14 格 × 0.070 = 0.98h，
+# 一定會被可用範圍夾成「從上緣長到下緣」，也就是使用者說的「上下都貼邊」。
+# 直接封住總長度，格距與字級再由它反推，長標題才會真的變短。
+VSTRIP_COLUMN_MAX_RATIO = 0.64
+VSTRIP_MAIN_PITCH_RATIO = 0.070      # 格距上限（2026-09-09 由 0.080 縮小），兩欄共用
 VSTRIP_SUB_PITCH_RATIO = VSTRIP_MAIN_PITCH_RATIO
-VSTRIP_MIN_PITCH_RATIO = 0.045       # 縮到這裡還放不下就丟 ComposeError
+VSTRIP_MIN_PITCH_RATIO = 0.040       # 縮到這裡還放不下就丟 ComposeError（2026-09-09 隨總長度上限一起下修）
 VSTRIP_CELL_TIGHT = 0.92             # 字級佔格距（字距約 0.08em）
 VSTRIP_MAIN_FILL = (27, 41, 74)      # 整塊色框：深藏青（截圖取色）
 VSTRIP_SUB_FILL = VSTRIP_MAIN_FILL   # 2026-09-08 起兩欄同色（保留名字給舊呼叫）
@@ -1522,6 +1535,10 @@ VSTRIP_LABEL_TEXT = (208, 20, 30)
 VSTRIP_LABEL_BORDER = (208, 20, 30)
 VSTRIP_SOURCE_SIZE_RATIO = 0.030     # 來源句字級
 VSTRIP_SOURCE_GAP_RATIO = 0.014      # 來源句與 LIVE 章／Logo 的距離
+# 2026-09-09 使用者：「畫面來源：」這幾個字改成自動補，使用者只填來源名。
+# 已經以「畫面來源」開頭的就不再補（使用者習慣整句貼上，補兩次很醜）。
+VSTRIP_SOURCE_PREFIX = "畫面來源："
+VSTRIP_SOURCE_CORNERS = ("tl", "tr", "bl", "br")
 VSTRIP_LOGO_WIDTH_RATIO = 0.105      # 白色字標寬
 VSTRIP_LOGO_MARGIN_RATIO = 0.018
 VSTRIP_VARIANTS = ("normal", "original_audio", "ai_translation")
@@ -1616,10 +1633,40 @@ def _vertical_column_layer(size: tuple[int, int], fill: tuple[int, int, int], ou
     return column
 
 
+def vstrip_source_text(raw: str) -> str:
+    """來源句正規化：使用者只填來源名，「畫面來源：」自動補上（2026-09-09 使用者要求）。
+
+    已經以「畫面來源」開頭的原樣回傳——使用者習慣整句貼上，補兩次很醜。
+    冪等：對同一個字串套幾次結果都一樣，所以 layout 與 compose 各自呼叫都安全。
+    """
+    text = (raw or "").strip()
+    if not text or text.startswith("畫面來源"):
+        return text
+    return VSTRIP_SOURCE_PREFIX + text
+
+
+def vstrip_source_corner(
+    *, source_corner: str = "", logo_corner: str = "tr", title_side: str = "left",
+    source_follow_logo: bool = False,
+) -> str:
+    """來源句實際落在哪個角。
+
+    source_corner 空字串＝舊呼叫端（沒帶這個欄位）：沿用 source_follow_logo，
+    True 跟 Logo、False 跟 LIVE 章。行為與 2026-09-08 逐字元相同。
+    """
+    if source_corner:
+        if source_corner not in VSTRIP_SOURCE_CORNERS:
+            raise ComposeError(
+                f"source_corner 只能是 {'／'.join(VSTRIP_SOURCE_CORNERS)}，收到 {source_corner!r}"
+            )
+        return source_corner
+    return logo_corner if source_follow_logo else ("tl" if title_side == "left" else "tr")
+
+
 def yt_vertical_layout(
     *, main_title: str, sub_title: str = "", title_side: str = "left",
     variant: str = "normal", logo_corner: str = "tr", source_text: str = "",
-    source_follow_logo: bool = False,
+    source_follow_logo: bool = False, source_corner: str = "",
 ) -> dict:
     """算出直標每一塊的矩形，不畫任何東西。
 
@@ -1637,28 +1684,48 @@ def yt_vertical_layout(
         raise ComposeError(f"第二標題 {len(sub_cells)} 格，超過上限 {VSTRIP_SUB_MAX_CELLS} 格")
 
     labelled = variant in VSTRIP_VARIANT_LABELS
-    top = round(height * (VSTRIP_TOP_WITH_LABEL_RATIO if labelled else VSTRIP_TOP_RATIO))
+    band_top = round(height * (VSTRIP_TOP_WITH_LABEL_RATIO if labelled else VSTRIP_TOP_RATIO))
     # LIVE 章（與小標）先算高度：色框上緣不准貼到它們，至少隔 VSTRIP_TOP_GAP_RATIO
     live_top = round(height * (VSTRIP_LIVE_TOP_WITH_LABEL_RATIO if labelled
                                else VSTRIP_LIVE_TOP_RATIO))
     with Image.open(LIVE_BADGE) as badge:
         live_h = round(badge.height * round(width * VSTRIP_LIVE_WIDTH_RATIO) / badge.width)
     stack_bottom = live_top + live_h + (round(height * VSTRIP_LABEL_HEIGHT_RATIO) if labelled else 0)
-    top = max(top, stack_bottom + round(height * VSTRIP_TOP_GAP_RATIO))
+    band_top = max(band_top, stack_bottom + round(height * VSTRIP_TOP_GAP_RATIO))
+
+    # Logo 要先算：同側下角時色框底緣得讓開它（2026-09-09 放寬下角同側之後的必要條件）
+    logo_w = round(width * VSTRIP_LOGO_WIDTH_RATIO)
+    logo_margin = round(width * VSTRIP_LOGO_MARGIN_RATIO)
+    with Image.open(TVBS_LOGO_WHITE) as logo_file:
+        logo_h = round(logo_file.height * logo_w / logo_file.width)
+    logo_x0 = width - logo_margin - logo_w if logo_corner in ("tr", "br") else logo_margin
+    logo_y0 = logo_margin if logo_corner in ("tr", "tl") else height - logo_margin - logo_h
+    logo = (logo_x0, logo_y0, logo_x0 + logo_w, logo_y0 + logo_h)
+
+    band_bottom = round(height * VSTRIP_BOTTOM_MAX_RATIO)
+    same_side_bottom = logo_corner == ("bl" if title_side == "left" else "br")
+    if same_side_bottom:
+        band_bottom = min(band_bottom, logo_y0 - round(height * VSTRIP_TOP_GAP_RATIO))
+
     # 兩欄同字級（2026-09-08 裁決）：格距由格數多的那欄決定，另一欄用同一個格距、
     # 字少就早點結束；欄高＝格數多的那欄的長度（色框是一整塊，高度取這個）。
     most = max(len(main_cells), len(sub_cells))
-    wanted = most * height * VSTRIP_MAIN_PITCH_RATIO
-    column_h = round(min(wanted, height * VSTRIP_BOTTOM_MAX_RATIO - top))
+    wanted = min(most * height * VSTRIP_MAIN_PITCH_RATIO, height * VSTRIP_COLUMN_MAX_RATIO)
+    column_h = round(min(wanted, band_bottom - band_top))
     pitch = column_h / most
     if pitch < height * VSTRIP_MIN_PITCH_RATIO:
         longer = "第一標題" if len(main_cells) >= len(sub_cells) else "第二標題"
+        hint = "（Logo 放在同一側的下角壓縮了可用高度）" if same_side_bottom else ""
         raise ComposeError(
-            f"{longer} {most} 格，縮到最小字級仍放不進直標（欄高 {column_h}px）"
+            f"{longer} {most} 格，縮到最小字級仍放不進直標（欄高 {column_h}px）{hint}"
         )
+    # 2026-09-09：色框不再從 band_top 往下長到底，改成在可用範圍內置中偏上
+    top = band_top + round((band_bottom - band_top - column_h) * VSTRIP_VERTICAL_ANCHOR)
 
-    main_w = round(width * VSTRIP_MAIN_WIDTH_RATIO)
-    sub_w = round(width * VSTRIP_SUB_WIDTH_RATIO)
+    # 欄寬由字級推導（2026-09-09）：字級縮 → 欄寬縮 → 兩行之間的行距跟著變窄。
+    # 字級與 compose_yt_overlay 畫字時用的是同一個值，所以一併回傳。
+    cell_size = max(1, round(pitch * VSTRIP_CELL_TIGHT))
+    main_w = sub_w = max(1, round(cell_size * VSTRIP_COLUMN_WIDTH_EM))
     seam = round(width * VSTRIP_SEAM_RATIO)
     outer = round(width * VSTRIP_LEFT_RATIO)
     if title_side == "left":
@@ -1682,29 +1749,31 @@ def yt_vertical_layout(
     label_x0 = strip_x0 if title_side == "left" else strip_x1 - label_w
     label = (label_x0, live[3], label_x0 + label_w, live[3] + label_h) if labelled else (0, 0, 0, 0)
 
-    logo_w = round(width * VSTRIP_LOGO_WIDTH_RATIO)
-    logo_margin = round(width * VSTRIP_LOGO_MARGIN_RATIO)
-    with Image.open(TVBS_LOGO_WHITE) as logo_file:
-        logo_h = round(logo_file.height * logo_w / logo_file.width)
-    logo_x0 = width - logo_margin - logo_w if logo_corner in ("tr", "br") else logo_margin
-    logo_y0 = logo_margin if logo_corner in ("tr", "tl") else height - logo_margin - logo_h
-    logo = (logo_x0, logo_y0, logo_x0 + logo_w, logo_y0 + logo_h)
-
     source = (0, 0, 0, 0)
-    source_text = (source_text or "").strip()
+    source_text = vstrip_source_text(source_text)
+    corner = vstrip_source_corner(
+        source_corner=source_corner, logo_corner=logo_corner,
+        title_side=title_side, source_follow_logo=source_follow_logo,
+    )
     if source_text:
         font = _font(round(height * VSTRIP_SOURCE_SIZE_RATIO))
         src_w = font.getbbox(source_text)[2]
         src_h = round(height * VSTRIP_SOURCE_SIZE_RATIO * 1.3)
         gap = round(height * VSTRIP_SOURCE_GAP_RATIO)
-        if source_follow_logo:
+        live_corner = "tl" if title_side == "left" else "tr"
+        if corner == logo_corner:
+            # 同一角：讓開 Logo（Logo 在上→句子在下、在下→在上）
             source = _vstrip_source_box_follow_logo(logo, logo_corner, src_w, src_h, gap)
-        else:
+        elif corner == live_corner:
+            # LIVE 章那一角：貼在章旁邊（截圖的預設做法）
             source = _vstrip_source_box(live, logo, logo_corner, title_side, src_w, src_h, gap)
+        else:
+            source = _vstrip_source_box_corner(corner, src_w, src_h, logo_margin)
 
     return {"live": live, "label": label, "main": main, "sub": sub, "box": box,
             "source": source, "logo": logo, "main_cells": main_cells,
-            "sub_cells": sub_cells, "column_height": column_h, "pitch": pitch}
+            "sub_cells": sub_cells, "column_height": column_h, "pitch": pitch,
+            "cell_size": cell_size, "source_corner": corner}
 
 
 def _vstrip_source_box(live, logo, logo_corner, title_side, src_w, src_h, gap):
@@ -1715,6 +1784,14 @@ def _vstrip_source_box(live, logo, logo_corner, title_side, src_w, src_h, gap):
     else:
         x0 = live[0] - gap - src_w
     y0 = live[1] + (live[3] - live[1] - src_h) // 2
+    return (x0, y0, x0 + src_w, y0 + src_h)
+
+
+def _vstrip_source_box_corner(corner, src_w, src_h, margin):
+    """來源句自己佔一個空角落（既沒有 Logo 也沒有 LIVE 章）：貼著該角內縮 margin。"""
+    width, height = YT_CANVAS
+    x0 = margin if corner in ("tl", "bl") else width - margin - src_w
+    y0 = margin if corner in ("tl", "tr") else height - margin - src_h
     return (x0, y0, x0 + src_w, y0 + src_h)
 
 
@@ -1734,6 +1811,7 @@ def compose_yt_overlay(
     logo_corner: str = "tr",
     title_side: str = "left",
     source_follow_logo: bool = False,
+    source_corner: str = "",
     logo_tab: bool = False,
     live: bool = True,
     fill: tuple[int, int, int] = VSTRIP_MAIN_FILL,
@@ -1744,8 +1822,10 @@ def compose_yt_overlay(
     main_title 是主標（內側欄），sub_title 是副標（外側欄）；2026-09-08 起兩欄**同字級、
     同底色、同一塊色框**（fill 一個顏色畫整塊），字少的那欄早點結束。
     variant：normal／original_audio／ai_translation，後兩者在 LIVE 章下方多一枚白底小標。
-    source_text 例「畫面來源：路透社」，預設橫排貼在 LIVE 章旁邊；source_follow_logo=True
-    改成跟著 Logo 走（Logo 在上→下方，在下→上方）。
+    source_text 只要填來源名（例「美聯社」），「畫面來源：」由 vstrip_source_text 自動補。
+    source_corner 指定它落在哪一角（tl／tr／bl／br），空字串＝舊行為
+    （source_follow_logo=True 跟 Logo、False 跟 LIVE 章）。同一角有 Logo 或 LIVE 章時
+    自動讓開，不會打架。
     logo_tab=True 才畫 YT 封面那塊藍色斜標籤；預設是截圖裡的白色字標。
 
     size 目前只支援 1920×1080，其他尺寸直接擋掉而不是默默畫錯。
@@ -1758,9 +1838,11 @@ def compose_yt_overlay(
         raise ComposeError(f"title_side 只能是 left／right，收到 {title_side!r}")
     if tuple(size) != YT_CANVAS:
         raise ComposeError(f"直標目前只支援 {YT_CANVAS[0]}×{YT_CANVAS[1]}，收到 {size}")
-    same_side = (title_side == "left" and logo_corner in ("tl", "bl")) or \
-                (title_side == "right" and logo_corner in ("tr", "br"))
-    if same_side:
+    # 2026-09-09 使用者裁決：直標縮短之後，同一側的**下**角空出來了，左下／右下一律
+    # 開放；同一側的**上**角仍然會壓在直標上（LIVE 章與色框頂都在那裡），照舊擋掉。
+    # 下角的實際避讓由 yt_vertical_layout 夾住色框底緣負責，不是靠這裡放行就沒事。
+    same_side_top = logo_corner == ("tl" if title_side == "left" else "tr")
+    if same_side_top:
         raise ComposeError(
             f"Logo 放 {logo_corner} 會壓在 {title_side} 側的直標上，請把 Logo 換到另一邊"
         )
@@ -1769,7 +1851,8 @@ def compose_yt_overlay(
     layout = yt_vertical_layout(main_title=main_title, sub_title=sub_title,
                                title_side=title_side, variant=variant,
                                logo_corner=logo_corner, source_text=source_text,
-                               source_follow_logo=source_follow_logo)
+                               source_follow_logo=source_follow_logo,
+                               source_corner=source_corner)
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
 
     # ---- 底色：一整塊色框（兩欄不拆開），由外緣往內一道很淡的漸層 ----
@@ -1783,7 +1866,9 @@ def compose_yt_overlay(
         if not cells:
             continue
         x0, y0, x1, _ = layout[key]
-        size_px = min(round(pitch * VSTRIP_CELL_TIGHT), round((x1 - x0) * 0.94))
+        # 欄寬 2026-09-09 起由字級推導，字級直接用 layout 算好的那個；仍夾一次欄寬
+        # 當保險，免得哪天欄寬改回固定值又忘了這裡。
+        size_px = min(layout["cell_size"], round((x1 - x0) * 0.94))
         font = _font(size_px)
         for index, cell in enumerate(cells):
             cell_y0 = y0 + round(index * pitch)
@@ -1813,8 +1898,8 @@ def compose_yt_overlay(
     logo = layout["logo"]
     _paste_logo(canvas, (logo[0], logo[1]), logo[2] - logo[0])
 
-    # ---- 來源句 ----
-    source_text = (source_text or "").strip()
+    # ---- 來源句（「畫面來源：」自動補，見 vstrip_source_text）----
+    source_text = vstrip_source_text(source_text)
     if source_text:
         font = _font(round(height * VSTRIP_SOURCE_SIZE_RATIO))
         box = layout["source"]

@@ -96,12 +96,18 @@ class OverlayEndpointTests(unittest.TestCase):
         self.assertEqual(res.status_code, 400, res.text)
         self.assertIn("第二標題", res.json()["detail"])
 
-    def test_logo_on_the_same_side_as_the_strip_is_rejected(self):
-        for side, corner in (("left", "tl"), ("left", "bl"), ("right", "tr"), ("right", "br")):
+    def test_logo_on_the_same_side_top_corner_is_rejected(self):
+        for side, corner in (("left", "tl"), ("right", "tr")):
             with self.subTest(side=side, corner=corner):
                 res = _post(title_side=side, logo_corner=corner)
                 self.assertEqual(res.status_code, 400, res.text)
                 self.assertIn("直標", res.json()["detail"])
+
+    def test_logo_on_the_same_side_bottom_corner_is_accepted(self):
+        """2026-09-09 使用者：直標縮短後左下／右下開放同側，色框自己讓開 Logo。"""
+        for side, corner in (("left", "bl"), ("right", "br")):
+            with self.subTest(side=side, corner=corner):
+                self.assertEqual(_post(title_side=side, logo_corner=corner).status_code, 200)
 
     def test_logo_on_the_far_side_is_accepted(self):
         for side, corner in (("left", "tr"), ("left", "br"), ("right", "tl"), ("right", "bl")):
@@ -197,7 +203,8 @@ class MarkupTests(unittest.TestCase):
             ("data-vstrip-variant", ("normal", "original_audio", "ai_translation")),
             ("data-vstrip-side", ("left", "right")),
             ("data-vstrip-corner", ("tr", "br", "tl", "bl")),
-            ("data-vstrip-source", ("live", "logo")),
+            # 2026-09-09 使用者：來源句從「跟 LIVE 章／跟 Logo」改成四角可選
+            ("data-vstrip-source", ("tl", "tr", "bl", "br")),
         ):
             for value in values:
                 with self.subTest(attribute=attribute, value=value):

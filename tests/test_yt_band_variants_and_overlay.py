@@ -211,15 +211,19 @@ class VerticalLayoutTests(unittest.TestCase):
         layout = self._layout(title_side="left")
         strip_x0, strip_x1 = layout["sub"][0], layout["main"][2]
         self.assertAlmostEqual(strip_x0 / width, 19 / 718, delta=0.006)
-        # 兩欄同寬之後整組比截圖（32+26+1）寬一點：19 + 32×2 = 83
-        self.assertAlmostEqual(strip_x1 / width, 83 / 718, delta=0.006)
-        # 上緣：截圖 67/404 是貼著 LIVE 章的；2026-09-08 起要在章底下留空隙，所以只驗不高於截圖＋空隙
-        gap = compose.VSTRIP_TOP_GAP_RATIO
+        # 2026-09-09 使用者要求「兩行之間的行距縮小」：欄寬改由字級推導，整組比截圖窄。
+        # 外緣不動，右緣只驗「不寬於截圖的 19+32×2」與「還放得下字」。
+        self.assertLessEqual(strip_x1 / width, 83 / 718 + 1e-9)
+        self.assertGreater(strip_x1, strip_x0)
+        # 2026-09-09：色框不再貼著 LIVE 章往下長，而是在可用範圍內置中偏上，
+        # 所以上緣一定低於截圖的 67/404，但仍在 LIVE 章之下、可用範圍之內。
         self.assertGreaterEqual(layout["main"][1] / height, 67 / 404 - 0.006)
-        self.assertLessEqual(layout["main"][1] / height, 67 / 404 + gap + 0.006)
-        # 兩欄同格距之後 12 格撐到欄底上限（0.90），比截圖的 358/404 略長；上限本身不能破
+        self.assertGreater(layout["main"][1], layout["live"][3])
+        # 總長度有硬上限（VSTRIP_COLUMN_MAX_RATIO），底緣不得破可用範圍下緣
         self.assertLessEqual(layout["main"][3] / height, compose.VSTRIP_BOTTOM_MAX_RATIO + 1e-9)
-        self.assertGreaterEqual(layout["main"][3] / height, 358 / 404 - 0.006)
+        self.assertLessEqual(
+            layout["column_height"] / height, compose.VSTRIP_COLUMN_MAX_RATIO + 1e-9
+        )
 
     def test_the_strip_sits_on_the_side_it_was_told_to(self):
         width = compose.YT_CANVAS[0]
@@ -340,12 +344,26 @@ class VerticalCanvasTests(unittest.TestCase):
             heights[key] = ink[3] - ink[1]
         self.assertLessEqual(abs(heights["main"] - heights["sub"]), 2, heights)
 
-    def test_a_logo_on_the_same_side_as_the_strip_is_refused_rather_than_drawn_over_it(self):
-        for side, corner in (("left", "tl"), ("left", "bl"), ("right", "tr"), ("right", "br")):
+    def test_a_logo_on_the_same_side_top_corner_is_refused_rather_than_drawn_over_it(self):
+        """同側的**上**角有 LIVE 章與色框頂，照舊擋掉（2026-09-09 起只擋上角）。"""
+        for side, corner in (("left", "tl"), ("right", "tr")):
             with self.subTest(side=side, corner=corner):
                 with self.assertRaises(compose.ComposeError):
                     compose.compose_yt_overlay(main_title=MAIN, sub_title=SUB,
                                                title_side=side, logo_corner=corner)
+
+    def test_a_logo_on_the_same_side_bottom_corner_is_allowed_and_the_strip_makes_room(self):
+        """2026-09-09 使用者：直標縮短後左下／右下要能跟直標同側，色框自己讓開。"""
+        for side, corner in (("left", "bl"), ("right", "br")):
+            with self.subTest(side=side, corner=corner):
+                layout = compose.yt_vertical_layout(
+                    main_title=MAIN, sub_title=SUB, title_side=side, logo_corner=corner
+                )
+                self.assertLess(layout["box"][3], layout["logo"][1], "色框壓到同側下角的 Logo")
+                # 真的畫得出來，不是只有幾何算得過
+                self.assertTrue(compose.compose_yt_overlay(
+                    main_title=MAIN, sub_title=SUB, title_side=side, logo_corner=corner
+                ))
 
     def test_it_refuses_sizes_and_options_it_cannot_draw(self):
         for kw in ({"size": (3840, 2160)}, {"variant": "karaoke"},
