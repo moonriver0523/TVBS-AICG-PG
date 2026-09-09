@@ -1534,7 +1534,11 @@ VSTRIP_LABEL_FILL = (255, 255, 255)
 VSTRIP_LABEL_TEXT = (208, 20, 30)
 VSTRIP_LABEL_BORDER = (208, 20, 30)
 VSTRIP_SOURCE_SIZE_RATIO = 0.030     # 來源句字級
-VSTRIP_SOURCE_GAP_RATIO = 0.014      # 來源句與 LIVE 章／Logo 的距離
+VSTRIP_SOURCE_GAP_RATIO = 0.014      # 來源句與 LIVE 章的距離（截圖就是貼著章排）
+# 來源句落在 Logo 那一角時，與 Logo 的水平間距（2026-09-09 使用者：都選右下會黏在一起）。
+# 舊做法是疊在 Logo 正上／正下、只隔 15px，左右範圍又完全重疊，看起來像 Logo 的說明文字；
+# 左版還會撞到 LIVE 章（left/tl/tl 實測重疊）。改成排在 Logo 的「內側」同一列、垂直置中對齊。
+VSTRIP_SOURCE_LOGO_GAP_RATIO = 0.018  # 佔畫面寬（＝Logo 自己的外緣留白，35px @1920）
 # 2026-09-09 使用者：「畫面來源：」這幾個字改成自動補，使用者只填來源名。
 # 已經以「畫面來源」開頭的就不再補（使用者習慣整句貼上，補兩次很醜）。
 VSTRIP_SOURCE_PREFIX = "畫面來源："
@@ -1707,15 +1711,9 @@ def yt_vertical_layout(
     if same_side_bottom:
         gap = round(height * VSTRIP_TOP_GAP_RATIO)
         band_bottom = min(band_bottom, logo_y0 - gap)
-        # 來源句也落在同一個下角時它排在 Logo 上方，等於又墊高了一層——色框要再讓一次，
-        # 不然 14 格的長標題底緣會壓到那行字（實測 left/bl/bl 差 11px 就撞上）。
-        landing = vstrip_source_corner(
-            source_corner=source_corner, logo_corner=logo_corner,
-            title_side=title_side, source_follow_logo=source_follow_logo,
-        )
-        if (source_text or "").strip() and landing == logo_corner:
-            src_h = round(height * VSTRIP_SOURCE_SIZE_RATIO * 1.3)
-            band_bottom -= src_h + round(height * VSTRIP_SOURCE_GAP_RATIO)
+        # 2026-09-09（第三批）：來源句與 Logo 同角時改排在 Logo「內側」的同一列，
+        # 垂直範圍完全落在 Logo 之內，所以 logo_y0 這一刀已經涵蓋它，不用再多讓一層
+        # （上一版為此扣掉的 src_h 白白吃掉了色框長度）。
 
     # 兩欄同字級（2026-09-08 裁決）：格距由格數多的那欄決定，另一欄用同一個格距、
     # 字少就早點結束；欄高＝格數多的那欄的長度（色框是一整塊，高度取這個）。
@@ -1805,11 +1803,25 @@ def _vstrip_source_box_corner(corner, src_w, src_h, margin):
     return (x0, y0, x0 + src_w, y0 + src_h)
 
 
-def _vstrip_source_box_follow_logo(logo, logo_corner, src_w, src_h, gap):
-    """source_follow_logo=True：Logo 在上→句子在 Logo 下方，在下→在上方。"""
-    x1 = logo[2] if logo_corner in ("tr", "br") else logo[0] + src_w
-    y0 = logo[3] + gap if logo_corner in ("tr", "tl") else logo[1] - gap - src_h
-    return (x1 - src_w, y0, x1, y0 + src_h)
+def _vstrip_source_box_follow_logo(logo, logo_corner, src_w, src_h, gap=None):
+    """來源句與 Logo 同一角：排在 Logo 內側的同一列，垂直置中對齊。
+
+    2026-09-09 使用者：「都選右下會黏在一起」。舊做法上下疊、只隔 15px 且左右完全重疊，
+    像 Logo 的附屬說明；而且左版 Logo 在左上時句子會壓進 LIVE 章。改成往畫面中央讓開一個
+    Logo 留白的寬度——Logo 位置一律不動（使用者指定），只動來源句。
+
+    gap 參數保留給舊呼叫端，實際用 VSTRIP_SOURCE_LOGO_GAP_RATIO；傳進來的值忽略。
+    """
+    width, _ = YT_CANVAS
+    pad = round(width * VSTRIP_SOURCE_LOGO_GAP_RATIO)
+    if logo_corner in ("tr", "br"):      # Logo 靠右 → 句子往左讓
+        x1 = logo[0] - pad
+        x0 = x1 - src_w
+    else:                                 # Logo 靠左 → 句子往右讓
+        x0 = logo[2] + pad
+        x1 = x0 + src_w
+    y0 = logo[1] + (logo[3] - logo[1] - src_h) // 2
+    return (x0, y0, x1, y0 + src_h)
 
 
 def compose_yt_overlay(

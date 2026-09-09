@@ -336,13 +336,23 @@ class VstripSourceTests(unittest.TestCase):
                 overlaps = sx0 < lx1 and sx1 > lx0 and sy0 < ly1 and sy1 > ly0
                 self.assertFalse(overlaps, f"{corner}: 來源句壓到 Logo")
 
-    def test_nothing_overlaps_in_any_combination(self):
-        """來源句 × Logo × 色框，三者兩兩都不准疊——窮舉所有合法組合。"""
+    def test_nothing_crowds_anything_in_any_combination(self):
+        """來源句 × Logo × 色框 × LIVE 章，兩兩都要留出可見的距離——窮舉所有合法組合。
+
+        2026-09-09（第三批）升級：舊版只驗「沒有像素重疊」，所以 Logo 與來源句同角時
+        只隔 15px、左右完全對齊也算過關，使用者一眼就看出「黏在一起」。現在改驗最小淨距。
+        """
         import itertools
 
-        def hits(a, b):
-            return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+        def clearance(a, b):
+            """兩個矩形的最小淨距；有重疊回傳負值。"""
+            dx = max(a[0] - b[2], b[0] - a[2])
+            dy = max(a[1] - b[3], b[1] - a[3])
+            return max(dx, dy) if (dx >= 0 or dy >= 0) else -1
 
+        # 來源句貼在 LIVE 章旁邊是截圖本來的做法，門檻低一點；其餘要看得出是兩個元素
+        limits = (("source", "logo", 30), ("source", "box", 20),
+                  ("logo", "box", 20), ("source", "live", 12))
         titles = [("明早晚涼中午破30度", "北臺灣週三轉濕涼留意日夜溫差"),
                   ("十二個格子滿滿滿滿的標題", "十四個格子滿滿滿滿滿的標題喔"),
                   ("川普宣布關稅", "")]
@@ -360,9 +370,10 @@ class VstripSourceTests(unittest.TestCase):
                         logo_corner=logo, variant=variant,
                         source_text="美聯社", source_corner=corner,
                     )
-                    self.assertFalse(hits(layout["source"], layout["box"]), "來源句壓到色框")
-                    self.assertFalse(hits(layout["logo"], layout["box"]), "Logo 壓到色框")
-                    self.assertFalse(hits(layout["source"], layout["logo"]), "來源句壓到 Logo")
+                    for a, b, floor in limits:
+                        self.assertGreaterEqual(
+                            clearance(layout[a], layout[b]), floor,
+                            f"{a} 與 {b} 太近（{layout[a]} vs {layout[b]}）")
 
     def test_bad_corner_is_refused_rather_than_silently_ignored(self):
         with self.assertRaises(compose.ComposeError):

@@ -457,23 +457,28 @@ class VerticalSourceTextTests(unittest.TestCase):
         return compose.yt_vertical_layout(main_title=MAIN, sub_title=SUB,
                                           source_text=SOURCE, **kw)
 
-    def test_following_a_top_logo_puts_it_under_the_logo(self):
-        for corner, side in (("tr", "left"), ("tl", "right")):
-            with self.subTest(corner=corner):
-                drawn = self._box(logo_corner=corner, title_side=side, source_follow_logo=True)
-                layout = self._layout(logo_corner=corner, title_side=side,
-                                      source_follow_logo=True)
-                self.assertGreaterEqual(drawn[1], layout["logo"][3])
-                # 幾何跟畫出來的要對得上，不能一個算一套
-                self.assertAlmostEqual(drawn[1], layout["source"][1], delta=8)
+    def test_sharing_the_logo_corner_stands_beside_it_not_stacked(self):
+        """2026-09-09（第三批）使用者：「都選右下會黏在一起」。
 
-    def test_following_a_bottom_logo_puts_it_above_the_logo(self):
-        for corner, side in (("br", "left"), ("bl", "right")):
+        舊做法是疊在 Logo 正上／正下、只隔 15px 而且左右完全重疊。現在改成排在 Logo
+        內側的同一列，中間至少讓開一個 Logo 留白的寬度——Logo 一律不動。
+        """
+        pad = round(compose.YT_CANVAS[0] * compose.VSTRIP_SOURCE_LOGO_GAP_RATIO)
+        for corner, side in (("tr", "left"), ("tl", "right"),
+                             ("br", "left"), ("bl", "right")):
             with self.subTest(corner=corner):
                 drawn = self._box(logo_corner=corner, title_side=side, source_follow_logo=True)
                 layout = self._layout(logo_corner=corner, title_side=side,
                                       source_follow_logo=True)
-                self.assertLessEqual(drawn[3], layout["logo"][1])
+                logo = layout["logo"]
+                if corner in ("tr", "br"):   # Logo 靠右 → 句子在它左邊
+                    self.assertAlmostEqual(logo[0] - drawn[2], pad, delta=8)
+                else:                        # Logo 靠左 → 句子在它右邊
+                    self.assertAlmostEqual(drawn[0] - logo[2], pad, delta=8)
+                # 同一列：垂直範圍落在 Logo 之內（所以色框只要讓開 Logo 就夠）
+                self.assertGreaterEqual(drawn[1], logo[1] - 8)
+                self.assertLessEqual(drawn[3], logo[3] + 8)
+                # 幾何跟畫出來的要對得上，不能一個算一套
                 self.assertAlmostEqual(drawn[1], layout["source"][1], delta=8)
 
     def test_the_two_modes_put_the_line_in_different_places(self):
