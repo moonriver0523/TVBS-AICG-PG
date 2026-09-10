@@ -509,7 +509,40 @@ COVER_TITLE_BRIEF_SPECS = {
 }
 
 
-def cover_design_brief(level: int, titles=(), seed=None) -> str:
+def _headline_has_hook(title: str, *, full_width: bool) -> bool:
+    """這條標題拆出來的行裡，有沒有一行以 ！／？ 收尾。"""
+    lines = compose.cover_title_lines((title or "").strip(), full_width=full_width)
+    return any(_COVER_HOOK_RE.search(line) for line in lines)
+
+
+def _size_hierarchy_line(ratio: str, titles, full_width: bool) -> str:
+    """字級落差那一行：鉤子最大／由上往下遞增／兩者都有。"""
+    flags = [
+        _headline_has_hook(title, full_width=full_width)
+        for title in titles
+        if (title or "").strip()
+    ]
+    hook_rule = (
+        f"the row ending in ！or ？ is the largest, about {ratio} times the height of the"
+        " smallest row, and the row that explains it tucks under it"
+    )
+    grow_rule = (
+        f"the rows GROW FROM TOP TO BOTTOM — the last row is about {ratio} times the height of"
+        " the first, the middle row sitting between them"
+    )
+    if flags and all(flags):
+        body = hook_rule
+    elif flags and not any(flags):
+        body = grow_rule
+    else:
+        body = (
+            f"in a headline that HAS a row ending in ！or ？, {hook_rule}; in a headline with NO"
+            f" such row, {grow_rule}"
+        )
+    return f"- Row sizes differ: {body}."
+
+
+def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = False) -> str:
     """CANVAS 正後方那塊。純數字，愈短愈好——這是模型真的會讀的位置。"""
     spec = COVER_TITLE_BRIEF_SPECS.get(level)
     if not spec:
@@ -519,10 +552,7 @@ def cover_design_brief(level: int, titles=(), seed=None) -> str:
         f"- Headline block height: about {spec['height']} of the frame height (per panel). It dominates the picture.",
     ]
     if spec["ratio"]:
-        rows.append(
-            f"- Row sizes differ: the largest row is about {spec['ratio']} times the height of the"
-            " smallest row. The row marked HOOK ROW in the list below is the large one."
-        )
+        rows.append(_size_hierarchy_line(spec["ratio"], titles, full_width))
     else:
         rows.append("- Every row is the SAME size at this setting.")
     rows.append(
@@ -659,6 +689,7 @@ Rules for every description:
 - If a headline is about a specific named real person (a head of state, a politician, a celebrity), the photograph should be a portrait-style shot of that person as its subject, face towards the camera. Otherwise use anonymous figures, back views, crowds, objects or places.
 - If a headline is about data, money or policy, choose a real-world scene that stands for it (a building, a counter, hands, equipment), never a graph.
 - If a side's description is already supplied, repeat it back unchanged — but still list the named real people it shows.
+- END EVERY DESCRIPTION YOU WRITE with one short clause naming the light and the palette, chosen by what the story is: disaster, crime, war and accidents get dark, desaturated, high-contrast light; health, family, education and human-interest stories get warm, soft, low-contrast light; weather, sea, cold and environment stories get cool blue-grey light; money, technology and industry get clean, hard, slightly cold light. Never write the same clause for both sides when the two stories differ in kind.
 
 Also return, per side, "portrait_subjects_left" / "portrait_subjects_right": every specific named real person whose face that side's photograph would show, names exactly as the headline writes them (no title, no organisation), at most three per side; an empty array when the scene shows no named real person. "portrait_subjects_left_en" / "portrait_subjects_right_en": the same people, same order, as the name Wikipedia uses in English (e.g. 梅爾茨 → "Friedrich Merz"); empty string when unsure.
 """

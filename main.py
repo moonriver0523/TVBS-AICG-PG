@@ -4016,7 +4016,9 @@ def _cover_ai(
     # 放在 TYPOGRAPHY 段尾，實拍四級長得一模一樣——L4 的 prompt 14K 字元，條文坐在
     # 第 8,000 字元之後，模型只讀得進前面那幾段（斜切線的數字就是寫在 CANVAS 才生效的）。
     titles = (req.title_left, req.title_right)
-    design_brief = editor_formats.cover_design_brief(level, titles=titles)
+    design_brief = editor_formats.cover_design_brief(
+        level, titles=titles, full_width=(req.layout == "full")
+    )
     colour_rule = editor_formats.cover_title_colour_rule(level)
     # 3 級起才把反色底字釘在行清單上（條文本身也是 3 級起才要求）。
     reverse_out = req.creativity_level() >= 3

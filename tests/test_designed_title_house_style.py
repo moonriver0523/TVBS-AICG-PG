@@ -35,7 +35,13 @@ class HouseStyleTests(unittest.TestCase):
         """截圖裡最明顯的落差：短鉤子比解釋句大一大截。
         寫成「你可以放大某一行」等於沒寫——上一版就是這樣寫的，成品兩行照樣等大。"""
         self.assertIn("Row sizes differ", BRIEF)
-        self.assertIn("times the height of the smallest row", BRIEF)
+        # 2026-09-11 第三輪：沒有鉤子行的標題改走「由上往下遞增」（範本 03／06 那招），
+        # 有鉤子行才是「鉤子最大」。BRIEF 這條標題沒有 ！／？，所以是遞增那句。
+        self.assertIn("GROW FROM TOP TO BOTTOM", BRIEF)
+        hook = editor_formats.cover_design_brief(
+            editor_formats.COVER_AI_TITLE_LEVEL_MAX, titles=("不放棄！ 數百人困隧道",), seed=0)
+        self.assertIn("times the height of the smallest row", hook)
+        self.assertNotIn("GROW FROM TOP TO BOTTOM", hook)
 
     def test_a_key_word_gets_pulled_out_inside_the_line(self):
         """「街道成河」、"致命漏洞"、名古屋、東京——關鍵詞在同一行裡換色／進紅框。
