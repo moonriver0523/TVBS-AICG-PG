@@ -106,6 +106,40 @@ class GenerateRetryTests(unittest.TestCase):
         self.assertEqual(create.call_count, 1)
         self.assertEqual(exc.status_code, 503)
 
+    def test_every_call_carries_a_timeout(self):
+        """單次呼叫一定要有上限（2026-09-10 線上事故）。
+
+        沒有的話走 SDK 預設 600 秒——比整體死線 230 秒與 Cloud Run 的 300 秒都長，
+        一通卡住的上游請求就會讓前端停在 35%（消化階段的上限值）永遠不動，
+        連錯誤訊息都沒有。死線只在兩次 attempt 之間檢查，擋不住第一通就卡死。
+        """
+        _, _, create = self.call_with([ok_response()])
+        timeout = create.call_args.kwargs.get("timeout")
+        self.assertIsNotNone(timeout, "消化呼叫沒帶 timeout，卡住就會拖到 Cloud Run 斷線")
+        self.assertLessEqual(timeout, main.DIGEST_DEADLINE_SECONDS)
+
+    def test_a_hung_upstream_still_returns_an_error_in_time(self):
+        """每一通都跑滿 timeout 時，要在 Cloud Run 的 300 秒之前回一個看得懂的錯誤。
+
+        用假時鐘讓每次 attempt 真的花掉 DIGEST_TIMEOUT_SECONDS，才驗得到死線有沒有
+        在「這一次跑滿也來不及」的時候停手——DIGEST_ATTEMPTS(5) × 90 秒是 450 秒，
+        照跑就會撞上 Cloud Run 的 300 秒斷線，使用者看到的就是進度條卡在 35%。
+        """
+        from openai import APITimeoutError
+
+        now = [0.0]
+
+        def tick(*_args, **_kwargs):
+            now[0] += main.DIGEST_TIMEOUT_SECONDS
+            raise APITimeoutError(request=httpx.Request("POST", "https://openrouter.ai/api/v1"))
+
+        with patch.object(main.time, "monotonic", lambda: now[0]):
+            result, exc, create = self.call_with(tick)
+        self.assertIsNone(result)
+        self.assertIsNotNone(exc)
+        self.assertLess(now[0], 300, "重試跑太久，會撞上 Cloud Run 的 300 秒斷線")
+        self.assertLess(create.call_count, main.DIGEST_ATTEMPTS, "死線沒有提早停手")
+
     def test_success_on_first_try_does_not_sleep(self):
         result, exc, create = self.call_with([ok_response()])
         self.assertIsNone(exc)

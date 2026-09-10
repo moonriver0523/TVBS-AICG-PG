@@ -1588,7 +1588,13 @@ def compose_yt_hourly_cover(
 # 中線兩側各一段寬羽化，接縫再疊一層很淡的深色暈讓過渡自然。
 YT_SEAM_FEATHER_RATIO = 0.07     # 羽化半寬佔畫面寬（中線兩側各 7%，使用者說 6–8%）
 YT_SEAM_SHADE_ALPHA = 56         # 接縫深色暈的最深值（56/255 ≈ 22%，使用者上限 25%）
-YT_SEAM_CENTRE_RATIO = 0.5       # 接縫中心，預設正中
+# 接縫中心。**不是 0.5**：羽化帶是中心兩側各 ±feather_ratio，中心放正中時羽化帶的
+# 右緣會落在 0.5+0.07=0.57，右圖在那裡才完全不透明——肉眼讀到的分界就在 0.57，明顯偏右
+# （2026-09-10 使用者實拍指出：成品量到 1090/1920=0.568）。
+# 0.43（＝0.5-feather）只是「剛好不偏右」的下限；使用者要的是**明確偏左**，
+# 讓右格拿到多一點寬度，主體才不會被擠到最右邊撞上右上角的 LIVE／時間章。
+# 定 0.40：羽化帶 0.33–0.47，分界穩穩在左半邊，右格佔畫面 67%。
+YT_SEAM_CENTRE_RATIO = 0.40
 
 
 def blend_backgrounds_lr(
@@ -1602,14 +1608,18 @@ def blend_backgrounds_lr(
 ) -> bytes:
     """左右兩張底圖羽化拼成一張，回 PNG bytes。沒有分隔線、沒有硬邊。
 
-    seam_ratio＝接縫中心佔畫面寬，預設正中（0.5），限 0.35–0.65。使用者範例裡接縫偏左
-    是因為右圖主體剛好擋到才挪的，屬個案微調，所以留成參數但 API／UI 先不暴露。
+    seam_ratio＝接縫中心佔畫面寬，限 0.35–0.5，且會再被夾到 0.5-feather_ratio 以內。
+    **分界絕對不可以偏右**（2026-09-10 使用者裁決）：肉眼讀到的分界是羽化帶的右緣
+    （右圖在那裡才完全不透明），所以要限的是 seam+band ≤ 0.5，不是 seam ≤ 0.5。
+    超過就夾回去而不是報錯——這是版面規矩，不是呼叫端寫錯參數。
 
     每一格各自 COVER 裁切到「自己那半再加上羽化帶」的尺寸（不變形）；羽化用 smoothstep
     而不是線性，線性的兩端會留下看得出來的折線。
     """
-    if not 0.35 <= seam_ratio <= 0.65:
-        raise ComposeError(f"接縫位置要在 0.35–0.65 之間：{seam_ratio}")
+    if not 0.35 <= seam_ratio <= 0.5:
+        raise ComposeError(f"接縫位置要在 0.35–0.5 之間（分界不可偏右）：{seam_ratio}")
+    # 羽化帶右緣不得越過正中：肉眼讀到的分界就在那裡
+    seam_ratio = min(seam_ratio, 0.5 - feather_ratio)
     width, height = size
     seam = round(width * seam_ratio)
     band = max(2, round(width * feather_ratio))
