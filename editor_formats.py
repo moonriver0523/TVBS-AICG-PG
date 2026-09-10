@@ -904,11 +904,25 @@ Render EXACTLY these strings, character for character, nothing else:
 === IMAGERY ===
 {visual}
 Photographic, news-documentary quality, filling the frame.
-
+{split_note}
 === HARD CONSTRAINTS ===
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
 - No other text anywhere: no captions, no dates, no times, no LIVE word, no logos, no watermark, no tickers, no 示意圖 label.
 - Nothing may touch or be clipped by any edge.
+"""
+
+# 雙則的兩景分割（2026-09-10 使用者實拍指出）：模板原本對分割位置**一個字都沒有講**，
+# 兩段畫面描述只是用「｜」串起來丟給模型，切在哪裡全憑它自己高興——實拍兩張分別落在
+# 畫面 59% 與 64%，都偏右，而且兩張還不一樣。
+# 偏右的具體壞處：右景被壓窄，主體被擠到最右邊，剛好撞上程式後貼的 LIVE／整點時間章。
+# 注意這只是「用文字要求」，不是幾何保證——真的要精準，得走程式拼接那條路
+# （compose.blend_backgrounds_lr，接縫定在 0.40）。
+YT_COVER_DUAL_SPLIT_NOTE = """
+=== TWO SCENES, ONE FRAME ===
+- The frame shows TWO SEPARATE NEWS SCENES side by side. The description above lists them in order, separated by "｜": the FIRST belongs to headline line 1, the SECOND belongs to headline line 2.
+- The FIRST scene occupies the LEFT part of the frame, the SECOND occupies the RIGHT part.
+- THE DIVIDING LINE SITS AT ABOUT 40% OF THE FRAME WIDTH MEASURED FROM THE LEFT EDGE — clearly LEFT of centre, so the right-hand scene is the WIDER of the two (about 60% of the width). NEVER place the division at or right of the centre line: the upper-right corner carries a badge that is pasted on afterwards, and a narrow right-hand scene pushes its subject straight under that badge.
+- The join is a soft blend, not a drawn border: no line, no frame, no gap, no gutter, no split-screen bar.
 """
 
 YT_COVER_FULL_PROMPT_HOT = """Design a complete Taiwanese TV news "trending topics" thumbnail (YouTube cover), 16:9. It is NOT a live stream: no date, no time, no LIVE word.

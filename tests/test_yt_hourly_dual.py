@@ -194,6 +194,45 @@ class HourlyLineLimitTests(unittest.TestCase):
         self.assertIn("請縮短這一行", str(ctx.exception))
 
 
+class DualSplitPromptTests(unittest.TestCase):
+    """AI 標題模式的兩景分割靠 prompt 講（2026-09-10 使用者實拍指出）。
+
+    這條線**不會**經過 compose.blend_backgrounds_lr：editor_yt_cover 裡
+    `elif ai_title:` 排在 `elif dual and not background:` 前面，整張圖連標題都是模型畫的。
+    模板原本對分割位置一個字都沒講，實拍兩張分別落在 59% 與 64%，都偏右又互不一致。
+    """
+
+    @staticmethod
+    def _prompt(**extra):
+        seen = {}
+
+        def fake_raw(image_req):
+            seen["prompt"] = image_req.prompt
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(_png((1920, 1080))).decode("ascii"),
+                mime_type="image/png", model="fake",
+            )
+
+        with patch.object(main, "generate_image_raw", fake_raw):
+            main._yt_cover_full_image(
+                main.YtCoverRequest(**_payload(**extra)),
+                (FIRST, SECOND), "左景｜右景", [], [],
+            )
+        return seen["prompt"]
+
+    def test_dual_prompt_pins_the_division_left_of_centre(self):
+        prompt = self._prompt()
+        self.assertIn("TWO SCENES, ONE FRAME", prompt)
+        self.assertIn("40%", prompt)
+        self.assertIn("LEFT of centre", prompt)
+        self.assertIn("NEVER place the division at or right of the centre line", prompt)
+
+    def test_single_prompt_says_nothing_about_a_division(self):
+        """單則是一個場景，講了分割反而會逼它硬切成兩半。"""
+        prompt = self._prompt(title_second="")
+        self.assertNotIn("TWO SCENES, ONE FRAME", prompt)
+
+
 class DualPanelSplitTests(unittest.TestCase):
     @staticmethod
     def _req(**extra):
