@@ -2197,6 +2197,25 @@ def _split_data_url(data_url: str) -> tuple[str, str, str]:
     return mime_type or "image/jpeg", encoding, encoded
 
 
+def supports_map_basemap(provider: str) -> bool:
+    """這次的路徑能不能把真實地圖底圖送進生圖模型。
+
+    2026-09-10 決定性實測：同一份 4000 字元的地圖 prompt，只差有沒有附底圖——
+    無底圖時澎湖被畫到臺灣北方，附底圖時全部就位。座標寫在文字裡模型當參考，
+    座標畫成圖釘在畫面上模型才照著擺（與 safe_frame.py 同一條原則）。
+
+    所以底圖不能只在 OpenRouter 那條路才附：原生 OpenAI 走 images.edit 一樣送得出去
+    （generate_gpt_image 依 reference_images 自動改走 edit 端點）。
+    刻意與 supports_multiple_reference_images() 分開一支：那條同時管肖像參考照，
+    順手放寬會連多人肖像的行為一起改掉，不在這次的範圍內。
+    """
+    if os.getenv("IMAGE_BACKEND", "openrouter") == "openrouter" and os.getenv(
+        "OPENROUTER_API_KEY"
+    ):
+        return True
+    return provider == "gpt"
+
+
 def supports_reference_image(provider: str) -> bool:
     """這次的生圖後端能不能真的把參考圖送出去。
 
@@ -2544,6 +2563,31 @@ NATIVE_GPT_IMAGE_SIZES = {
 }
 
 
+def _native_reference_files(req: ImageGenerateRequest) -> list[tuple[str, io.BytesIO, str]]:
+    """把這次請求的參考圖轉成 images.edit 收得下的檔案清單（順序：肖像照、使用者上傳）。
+
+    上限沿用 MAX_INPUT_REFERENCES（模型端 0–16，這裡本來就抓得更保守）。
+    解不開的 data URL 直接略過——參考圖是加分項，不能讓一張壞圖擋掉整次成圖。
+    """
+    files: list[tuple[str, io.BytesIO, str]] = []
+    sources = []
+    if req.reference_image_data_url:
+        sources.append(req.reference_image_data_url)
+    sources.extend(ref.data_url for ref in req.reference_images)
+    for index, data_url in enumerate(sources[:MAX_INPUT_REFERENCES]):
+        mime, _, encoded = _split_data_url(data_url)
+        if not encoded:
+            continue
+        try:
+            raw = base64.b64decode(encoded)
+        except Exception as exc:  # noqa: BLE001 — 壞圖只略過，不擋成圖
+            print(f"[GPT image] 參考圖 {index} 解碼失敗，略過：{type(exc).__name__}", flush=True)
+            continue
+        ext = "png" if "png" in (mime or "") else "jpg"
+        files.append((f"reference-{index}.{ext}", io.BytesIO(raw), mime or "image/png"))
+    return files
+
+
 def generate_gpt_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
     model = os.getenv("OPENAI_IMAGE_MODEL", NATIVE_GPT_IMAGE_MODEL)
     quality = os.getenv("OPENAI_IMAGE_QUALITY", "medium")
@@ -2559,14 +2603,28 @@ def generate_gpt_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
             ),
         )
 
+    # 有參考圖就改走 images.edit（2026-09-10）：原生路徑的 images.generate 沒有參考圖
+    # 通道，以前只能把圖丟掉。地圖底圖正是非送不可的那一種——實測同一份 prompt，
+    # 有底圖地理全對、沒底圖澎湖被畫到臺灣北方。edit 端點吃得下同一個模型與尺寸。
+    edit_images = _native_reference_files(req)
     try:
-        result = openai_client.images.generate(
-            model=model,
-            prompt=req.prompt,
-            size=size,
-            quality=quality,
-            output_format="png",
-        )
+        if edit_images:
+            print(f"[GPT image] 附 {len(edit_images)} 張參考圖，改走 images.edit", flush=True)
+            result = openai_client.images.edit(
+                model=model,
+                image=edit_images,
+                prompt=req.prompt,
+                size=size,
+                quality=quality,
+            )
+        else:
+            result = openai_client.images.generate(
+                model=model,
+                prompt=req.prompt,
+                size=size,
+                quality=quality,
+                output_format="png",
+            )
     except AuthenticationError as exc:
         raise HTTPException(
             status_code=503,
@@ -3042,11 +3100,11 @@ def apply_map_reference_to_image_request(
     """
     if not req.map_points:
         return req
-    if not supports_multiple_reference_images():
-        # 2026-09-10：原本只是安靜略過，但 prompt 仍照舊要求一張地理準確的地圖——
-        # 等於在零定位資料的情況下叫模型畫真實地理，而它只能憑記憶畫、一畫就錯
-        # （原生 OpenAI 路徑必然走到這裡，本機實測四則地圖新聞全中）。
-        # 拿不到底圖就明講拿不到，把這張圖降級成示意，不留「假裝有依據」的空間。
+    if not supports_map_basemap(req.provider):
+        # 2026-09-10：拿不到底圖就明講拿不到，把這張圖降級成示意，不留「假裝有依據」
+        # 的空間。零定位資料還照樣要求地理準確的地圖，模型只能憑記憶畫、一畫就錯。
+        # 原生 OpenAI 的 gpt 路徑已改走 images.edit（送得出底圖），所以現在只有
+        # 原生 Gemini 會落到這裡。
         print(
             "[map] 目前的生圖後端送不出參考圖，略過自動底圖（改注入無底圖降級條文）",
             flush=True,
@@ -3102,7 +3160,13 @@ def apply_user_references_to_image_request(
     """
     if not req.reference_images:
         return req
-    if not supports_multiple_reference_images():
+    # 2026-09-10：程式自己貼的地圖底圖不受這道 400 管——它不是使用者上傳的東西，
+    # 而且原生 GPT 已改走 images.edit 送得出去（見 supports_map_basemap）。
+    # 使用者親自上傳的參考圖仍照舊擋：那條路的措辭與能力必須一致。
+    only_auto_basemap = all(ref.purpose == "map" for ref in req.reference_images)
+    if not supports_multiple_reference_images() and not (
+        only_auto_basemap and supports_map_basemap(req.provider)
+    ):
         raise HTTPException(
             status_code=400,
             detail="目前的生圖後端無法附上上傳的參考圖（僅 OpenRouter 路徑支援多張參考圖），"
@@ -3851,7 +3915,7 @@ def _cover_ai(
     # 模型就得自己猜 "red, white outline" 是不是圖例裡那個 (red)。
     _LINE_COLOUR_NAMES = ("white", "yellow", "red")
 
-    def _lines_block(title: str, *, full_width: bool) -> str:
+    def _lines_block(title: str, *, full_width: bool, reverse_out: bool = False) -> str:
         lines = compose.cover_title_lines(title.strip(), full_width=full_width)
         if not lines:
             return ""
@@ -3860,16 +3924,27 @@ def _cover_ai(
             f"  Line {i} ({_LINE_COLOUR_NAMES[min(i - 1, len(_LINE_COLOUR_NAMES) - 1)]}): {text}"
             for i, text in enumerate(lines, start=1)
         ]
+        # 反色底字（2026-09-10 第二輪）：3 級起條文已經寫成「必做」，實拍卻仍然沒出現——
+        # 那條規則離行清單太遠，模型讀到行清單時只看到顏色標記。改成把指示釘在**這一行上**，
+        # 與顏色標記同一個位置，模型想漏掉都難。挑第一行：程式拆行時它就是那句鉤子。
+        if reverse_out and body:
+            body[0] += (
+                "  ← SET THIS LINE KNOCKED OUT OF A SOLID COLOUR BLOCK: draw a filled shape"
+                " (vivid red, black or gold, edge torn or slanted) and let these characters be"
+                " the empty space inside it. This is required, not a suggestion."
+            )
         return "\n".join([head, *body])
 
     # 設計標題（2026-09-08 ON/OFF → 2026-09-09 第八批改成 0–4 拉桿）：
     # 0 完全不追加（維持白／黃／紅排版），1–4 在 TYPOGRAPHY 段尾追加該級的條文。
     style_clause = editor_formats.cover_ai_title_style_clause(req.creativity_level())
+    # 3 級起才把反色底字釘在行清單上（條文本身也是 3 級起才要求）。
+    reverse_out = req.creativity_level() >= 3
     if req.layout == "full":
         prompt = editor_formats.COVER_AI_FULL_PROMPT_TEMPLATE.format(
             badge_text=badge_text,
             date_text=date_text,
-            title_left_lines=_lines_block(req.title_left, full_width=True),
+            title_left_lines=_lines_block(req.title_left, full_width=True, reverse_out=reverse_out),
             visual_left=visuals[0],
             title_style_clause=style_clause,
         )
@@ -3877,8 +3952,8 @@ def _cover_ai(
         prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE.format(
             badge_text=badge_text,
             date_text=date_text,
-            title_left_lines=_lines_block(req.title_left, full_width=False),
-            title_right_lines=_lines_block(req.title_right, full_width=False),
+            title_left_lines=_lines_block(req.title_left, full_width=False, reverse_out=reverse_out),
+            title_right_lines=_lines_block(req.title_right, full_width=False, reverse_out=reverse_out),
             visual_left=visuals[0],
             visual_right=visuals[1],
             title_style_clause=style_clause,

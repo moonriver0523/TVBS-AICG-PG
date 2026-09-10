@@ -760,7 +760,12 @@ def _draw_cover_ai_note(canvas: Image.Image, x_anchor: int, y0: int, align_right
 
 
 # 拆行點偏好：切在「數量詞結尾」之後（5年｜各自…、184億元｜提升…），比純粹對半自然得多。
-_SPLIT_AFTER_CHARS = set("年月日元億萬千人次件位家戶%％度歲倍")
+_SPLIT_AFTER_CHARS = set("年月日元億萬千人次件位家戶%％度歲倍條棟艘架台場波班組隊起成")
+
+# 虛詞邊界（2026-09-10）：切在這些字**之後**很少會腰斬一個詞——「容易被忽略的｜前兆」。
+_SPLIT_AFTER_PARTICLES = set("的了與和及至到後前中上下內外時起才又也都就再")
+# 切在這些字**之前**同理——「容易｜被忽略的前兆」。
+_SPLIT_BEFORE_PARTICLES = set("被把將對於為讓使與和及因但而且或如若從向往自")
 
 
 # 一段「數字」不是只有連續數字：9/12、5.5、20:00 中間的符號也在數字裡面，從那裡斷行
@@ -778,8 +783,9 @@ def _number_inner_indices(text: str) -> set[int]:
 def _split_line_near_middle(text: str) -> tuple[str, str]:
     """把一行從中間附近切成兩行。
 
-    優先切在中點附近（±3 字）緊接數量詞結尾的位置；沒有就取最靠近中點、且不切在數字
-    中間的位置（184億元 不能變 18／4億元）。
+    偏好順序：數量詞結尾 → 虛詞結尾 → 虛詞開頭 → 最靠近中點且不切在數字中間。
+    最後那條是保底，切出來的詞可能被腰斬（184億元 不能變 18／4億元 已由 inner 擋掉，
+    但「忽略」這種實詞沒有規則擋得住），所以前三條要盡量先命中。
     """
     n = len(text)
     mid = n // 2
@@ -787,6 +793,19 @@ def _split_line_near_middle(text: str) -> tuple[str, str]:
     for offset in range(0, 4):
         for i in (mid - offset, mid + offset):
             if 2 <= i <= n - 2 and text[i - 1] in _SPLIT_AFTER_CHARS and not text[i].isdigit():
+                return text[:i], text[i:]
+    # 虛詞邊界（2026-09-10）：純粹取中點會把詞腰斬——使用者回報「容易被忽略的前兆」
+    # 被切成「容易被忽／略的前兆」。沒有斷詞器可用（本機與 Cloud Run 都沒裝），
+    # 但中文裡「的了在與和…」幾乎不會是一個詞的中間，切在它們前後就安全得多。
+    # 掃描範圍放寬到中點 ±(n//4+1)：只在 ±3 內找，多數句子根本掃不到虛詞。
+    reach = n // 4 + 1
+    for offset in range(0, reach + 1):
+        for i in (mid - offset, mid + offset):
+            if 2 <= i <= n - 2 and text[i - 1] in _SPLIT_AFTER_PARTICLES and not text[i].isdigit():
+                return text[:i], text[i:]
+    for offset in range(0, reach + 1):
+        for i in (mid - offset, mid + offset):
+            if 2 <= i <= n - 2 and text[i] in _SPLIT_BEFORE_PARTICLES and i not in inner:
                 return text[:i], text[i:]
     for offset in range(0, n):
         for i in (mid + offset, mid - offset):

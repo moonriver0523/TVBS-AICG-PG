@@ -42,7 +42,9 @@ def _png(size=(640, 640), colour=(30, 60, 90)) -> bytes:
 class SplitRuleTests(unittest.TestCase):
     def test_reported_pair_splits_the_way_the_user_asked_for(self):
         self.assertEqual(compose.cover_title_lines(LEFT), ["澳洲擬立新法", "民眾可關閉社", "群媒體演算法"])
-        self.assertEqual(compose.cover_title_lines(RIGHT), ["菲律賓前眾", "議長涉貪被捕", "與總統小馬可仕為表兄弟"])
+        # 2026-09-10 虛詞邊界上線後改成「菲律賓前／眾議長涉貪被捕」：舊切法把「眾議長」
+        # 腰斬成「眾／議長」，新切法保住那個詞，代價是兩行字數更不平均。
+        self.assertEqual(compose.cover_title_lines(RIGHT), ["菲律賓前", "眾議長涉貪被捕", "與總統小馬可仕為表兄弟"])
 
     def test_segment_index_is_recorded_but_does_not_pick_the_colour(self):
         """段索引仍跟著行走（記錄出處），取色一律用行序（2026-09-08 第三輪裁決）。"""

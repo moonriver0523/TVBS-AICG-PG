@@ -8,10 +8,12 @@
 這一串的紅線全是「不要把加分項變成故障」：
 1. 非地圖類的 schema 必須與過去逐位元組相同（記者 frozen 快照＋既有行為）。
 2. 查不到座標、圖磚抓不到、範圍太大——一律安靜退回原本的純 prompt 路徑。
-3. 送不出參考圖的後端（原生 OpenAI）絕不可以因為自動底圖而丟 400：
-   那是使用者什麼都沒做錯卻收到的錯誤。
+3. 送不出參考圖的後端絕不可以因為自動底圖而丟 400：那是使用者什麼都沒做錯卻收到的錯誤。
+   2026-09-10 起原生 OpenAI 的 gpt 路徑改走 images.edit，送得出底圖了；
+   仍送不出去的是原生 Gemini，那條改成在 prompt 裡明講「沒有底圖」並降級成示意。
 """
 
+import base64
 import os
 import unittest
 from unittest import mock
@@ -176,12 +178,21 @@ class AttachBasemapTests(unittest.TestCase):
 class BackendGuardTests(unittest.TestCase):
     """送不出參考圖的後端不可以因為自動底圖而丟 400。"""
 
-    def test_native_backend_skips_the_basemap_but_says_so_in_the_prompt(self):
-        """2026-09-10：原本是安靜略過，但 prompt 仍照舊要求地理準確的地圖——
-        零定位資料下叫模型畫真實地理，它只能憑記憶畫，四則實測全錯。
-        拿不到底圖就要明講拿不到，並把這張圖降級成示意。
+    def test_native_gpt_now_gets_the_basemap_through_the_edit_endpoint(self):
+        """2026-09-10 決定性實測：同一份 prompt，附底圖地理全對、沒附底圖澎湖跑到臺灣北方。
+        原生 GPT 走 images.edit 送得出底圖，所以這條路不再降級。
         """
-        with mock.patch.object(main, "supports_multiple_reference_images", return_value=False):
+        with mock.patch.dict(os.environ, {"IMAGE_BACKEND": "native"}, clear=False):
+            with mock.patch.object(main.map_lookup, "render_basemap", return_value=b"PNG"):
+                out = apply_map_reference_to_image_request(_req())
+        self.assertEqual([ref.purpose for ref in out.reference_images], ["map"])
+        self.assertNotIn("NO VERIFIED BASEMAP", out.prompt)
+
+    def test_a_backend_that_still_cannot_attach_says_so_in_the_prompt(self):
+        """原生 Gemini 仍然送不出去：拿不到底圖就要明講，把圖降級成示意，
+        不留「零定位資料卻照樣要求地理準確地圖」這個組合。
+        """
+        with mock.patch.object(main, "supports_map_basemap", return_value=False):
             with mock.patch.object(main.map_lookup, "render_basemap") as render:
                 out = apply_map_reference_to_image_request(_req())
         self.assertEqual(out.reference_images, [])
@@ -193,9 +204,23 @@ class BackendGuardTests(unittest.TestCase):
     def test_the_degraded_block_is_not_added_when_there_is_nothing_to_map(self):
         """非地圖類（沒有 map_points）不該被塞一段講地圖的條文。"""
         req = ImageGenerateRequest(prompt="p", aspect_ratio="21:9")
-        with mock.patch.object(main, "supports_multiple_reference_images", return_value=False):
+        with mock.patch.object(main, "supports_map_basemap", return_value=False):
             out = apply_map_reference_to_image_request(req)
         self.assertNotIn("NO VERIFIED BASEMAP", out.prompt)
+
+    def test_native_reference_files_carry_every_attached_image(self):
+        """images.edit 的檔案清單：肖像照在前、使用者上傳在後，壞圖略過不擋成圖。"""
+        good = "data:image/png;base64," + base64.b64encode(b"PNG").decode("ascii")
+        req = ImageGenerateRequest(
+            prompt="p", provider="gpt", reference_image_data_url=good,
+            reference_images=[
+                UserReferenceImage(data_url=good, purpose="map"),
+                UserReferenceImage(data_url="data:image/png;base64,!!broken!!", purpose="scene"),
+            ],
+        )
+        files = main._native_reference_files(req)
+        self.assertEqual(len(files), 2)
+        self.assertTrue(all(name.endswith(".png") for name, _, _ in files))
 
     def test_the_attached_map_block_tells_the_model_not_to_move_the_dots(self):
         # 實測：底圖沒有標點時模型自己猜位置，西定路被放到廟口南邊（實際在西北西）

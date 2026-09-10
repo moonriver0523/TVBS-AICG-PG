@@ -159,3 +159,27 @@ class OverflowMessageTests(unittest.TestCase):
                                       title_left=title, title_right="右邊 標題 三段", date_text="9/8")
         self.assertIn("請縮短這一段", str(cm.exception))
         self.assertNotIn("分段", str(cm.exception))
+
+
+class ParticleBoundarySplitTests(unittest.TestCase):
+    """2026-09-10 使用者回報：「容易被忽略的前兆」被切成「容易被忽／略的前兆」。
+
+    沒有斷詞器可用（本機與 Cloud Run 都沒裝），但中文的虛詞幾乎不會落在一個詞的中間，
+    所以斷點優先找虛詞邊界，找不到才退回中點。這條測試盯的是「不再把常見詞腰斬」，
+    不是「斷得跟人一樣好」——後者要斷詞器，見 TODO。
+    """
+
+    def test_the_reported_case_no_longer_splits_a_word(self):
+        head, tail = compose._split_line_near_middle("容易被忽略的前兆")
+        self.assertEqual((head, tail), ("容易被忽略的", "前兆"))
+
+    def test_a_measure_word_still_wins_over_a_particle(self):
+        """量詞結尾優先序仍在前：3100條 不該切成 3100／條。"""
+        head, tail = compose._split_line_near_middle("全球3100條躍動冰川")
+        self.assertEqual((head, tail), ("全球3100條", "躍動冰川"))
+
+    def test_a_number_is_never_cut_in_half(self):
+        for text in ("投資產業184億元計畫", "古羅馬浴場9/12開放參觀"):
+            with self.subTest(text=text):
+                head, tail = compose._split_line_near_middle(text)
+                self.assertNotRegex(head, r"\d$")
