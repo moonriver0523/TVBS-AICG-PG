@@ -56,7 +56,7 @@ class LadderTests(unittest.TestCase):
                                "never break a listed line in the middle",
                                "9/12",
                                "NO part of the headline may sit inside them or overlap them",
-                               "LEFT HALF of the header band",
+                               "WHOLE header band",
                                "示意圖",
                                "ENTIRELY INSIDE ITS OWN PANEL",
                                "never crosses the diagonal seam"):
@@ -108,14 +108,24 @@ class LadderTests(unittest.TestCase):
         原因是每一級只多給一項自由、而且都落在字的表面。每一級都要有一個
         看得見形狀改變的必做項，否則相鄰兩級的成品又會長一樣。
         """
-        # 1 級：底板（跟「沒設計」拉開）
-        self.assertIn("DEFINED BLOCK BEHIND THE WORDS", _clause(1))
-        # 2 級起：錯位排列＋每行各自的底板
+        # 1 級：每行各自的底板＋整塊放大（2026-09-10 第二輪：使用者說 1 太像 0，
+        # 原本 1 只多了一塊方底板，形狀跟 0 幾乎一樣，所以把「每行各自的形狀」下放到 1）
+        self.assertIn("EACH ROW SITS ON ITS OWN SHAPE", _clause(1))
+        self.assertIn("MARKEDLY BIGGER", _clause(1))
+        # 2 級起：錯位排列＋每行底板互不相同
         self.assertNotIn("THE STACK IS NO LONGER FLUSH", _clause(1))
+        self.assertNotIn("THE ROWS NO LONGER MATCH", _clause(1))
         for level in (2, 3, 4):
             with self.subTest(level=level):
                 self.assertIn("THE STACK IS NO LONGER FLUSH", _clause(level))
-                self.assertIn("EACH ROW SITS ON ITS OWN SHAPE", _clause(level))
+                self.assertIn("THE ROWS NO LONGER MATCH", _clause(level))
+        # 3 級起：字級落差再拉一階（2→2.5 倍），4 級再到 2.5–3 倍
+        for level in (1, 2):
+            with self.subTest(level=level):
+                self.assertNotIn("two to two and a half times", _clause(level))
+        for level in (3, 4):
+            with self.subTest(level=level):
+                self.assertIn("two to two and a half times", _clause(level))
         # 3 級起：多層描邊立體＋與照片主體交錯（原本是 4 級獨有，往下放一級）
         for level in (1, 2):
             with self.subTest(level=level):

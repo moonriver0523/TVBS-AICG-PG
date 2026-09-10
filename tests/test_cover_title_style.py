@@ -68,7 +68,7 @@ class ClauseTests(unittest.TestCase):
         標頭帶左半與 AI示意圖 那個角落要留空（compose 後貼 Logo／節目標籤／小標）。"""
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
         self.assertIn("NO part of the headline may sit inside them or overlap them", clause)
-        self.assertIn("LEFT HALF of the header band", clause)
+        self.assertIn("WHOLE header band", clause)
         self.assertIn("示意圖", clause)
 
     def test_designed_clause_keeps_each_headline_in_its_own_panel(self):
