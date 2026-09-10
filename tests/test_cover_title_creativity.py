@@ -129,9 +129,10 @@ class LadderTests(unittest.TestCase):
                 self.assertIn(count, _brief(level))
         # 綱要要短，模型才讀得進去。第一輪 L4 條文 7.7KB、坐在第 8,000 字元後，實拍全被無視。
         # 量最壞的那個 seed：招式是隨機抽的，只量一個 seed 會讓長的那幾件溜過去。
-        # 2026-09-11 第三輪每件招式各掛一句幾何 ←（實拍證明共用條文擋不住），
-        # 上限從 2,200 放到 2,600，同時把池子裡重複的禁令收短。
-        # 2,600 仍是失效那版（7.7KB、坐在第 8,000 字元後）的三分之一。
+        # 上限一路放寬的理由都記在這：2,200 →（第三輪，每件招式各掛一句幾何）2,600
+        # →（第四輪，加進字體／落點兩條變化軸）3,000。
+        # 3,000 仍是失效那版（7.7KB、坐在第 8,000 字元後）的不到一半，而且照樣坐在
+        # CANVAS 正後方——真正決定生死的是位置，長度只是別把自己稀釋掉。
         for level in range(1, 5):
             with self.subTest(level=level):
                 worst = max(
@@ -139,7 +140,7 @@ class LadderTests(unittest.TestCase):
                     for s in range(40)
                     for f in (False, True)
                 )
-                self.assertLess(worst, 2600)
+                self.assertLess(worst, 3000)
 
     def test_each_step_changes_a_visible_shape_not_only_a_finish(self):
         """2026-09-10 使用者：「好像沒有這麼抖，尤其是 1、2 之間」。
@@ -180,7 +181,11 @@ class LadderTests(unittest.TestCase):
         # 色數也跟著爬
         self.assertIn("TWO colours only", _brief(1))
         self.assertIn("THREE colours", _brief(2))
-        self.assertIn("plus ONE accent drawn from the subject", _brief(3))
+        # 2026-09-11 第四輪：色數仍然照級距爬，但「哪幾個顏色」改由 COVER_PALETTES 抽。
+        # 原本 3 級那句「accent drawn from the subject（天氣配冰藍…）」跟抽出來的
+        # 配色互相矛盾，矛盾要拆掉不是覆蓋——留著模型只會認那一句。
+        self.assertIn("plus ONE accent", _brief(3))
+        self.assertNotIn("drawn from the subject", _brief(3))
         self.assertIn("palette is fully open", _brief(4))
         # 模板裡那條逐行配色也要跟著解除，不能只靠後面 OVERRIDE：顏色標記拿掉後
         # 它會變成孤兒，模型就照 Line 1/2/3 硬套白黃紅（2026-09-11 第一輪實拍）。
@@ -201,8 +206,8 @@ class LadderTests(unittest.TestCase):
         交給模型自己選，四級會塌回同一種。
         """
         self.assertNotIn("KNOCKED OUT", _brief(1))
-        self.assertIn("1 word of the headline sit KNOCKED OUT", _brief(2))
-        self.assertIn("1 word of the headline sit KNOCKED OUT", _brief(3))
+        self.assertIn("1 word of the headline sits KNOCKED OUT", _brief(2))
+        self.assertIn("1 word of the headline sits KNOCKED OUT", _brief(3))
         self.assertIn("2 words of the headline sit KNOCKED OUT", _brief(4))
         self.assertIn("each block a different colour", _brief(4))
         for level in (2, 3, 4):
@@ -557,3 +562,120 @@ class InfoChipTests(unittest.TestCase):
         for field in ("coverSideLabels", "coverInfoChips"):
             with self.subTest(field=field):
                 self.assertIn(f"'{field}'", app_js)
+
+
+class VariationAxisTests(unittest.TestCase):
+    """變化池（2026-09-11 第四輪）。使用者：「除了配件之外，字型、底色框的形狀、
+    標題配色……是不是都可以放進 RNG 池？」
+
+    可以，而且理由跟形狀那次一樣：**許可句推不動模型**。「You choose the typeface」
+    「PLACEMENT IS FREED」寫了七批，成品每次都同一種黑體、同一個左下角——
+    模型沒有偏好，它有預設值。要它變就要每次給一個不一樣的命令，而命令由程式抽。
+    """
+
+    #: 軸名 → (池子, 從綱要裡撈出該軸用字的函式)
+    AXES = {
+        "plate": (lambda: editor_formats.COVER_PLATE_SHAPES, 4),
+        "stagger": (lambda: editor_formats.COVER_STAGGER_PATTERNS, 4),
+        "typeface": (lambda: editor_formats.COVER_TYPEFACES, 4),
+        "anchor": (lambda: editor_formats.COVER_ANCHORS, 4),
+    }
+
+    def _seen(self, pool, level, seeds=60):
+        found = set()
+        for seed in range(seeds):
+            brief = editor_formats.cover_design_brief(level, seed=seed)
+            for item in pool:
+                if item in brief:
+                    found.add(item)
+        return found
+
+    def test_every_axis_actually_rotates(self):
+        """一軸只要退化成固定值，這一級的成品就又會每次長一樣。"""
+        for name, (pool, level) in self.AXES.items():
+            with self.subTest(axis=name):
+                seen = self._seen(pool(), level)
+                self.assertGreater(len(seen), 2, (name, seen))
+
+    def test_one_seed_reproduces_the_whole_look(self):
+        """所有軸共用同一顆 rng：同一個 seed 一定重現，否則出了事沒得追。"""
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                self.assertEqual(editor_formats.cover_design_brief(level, seed=11),
+                                 editor_formats.cover_design_brief(level, seed=11))
+        self.assertNotEqual(editor_formats.cover_design_brief(4, seed=11),
+                            editor_formats.cover_design_brief(4, seed=12))
+
+    def test_the_rng_changes_style_never_loudness(self):
+        """**梯子不准被抽掉**。塊高％／字級落差／招式件數／反白字數是使用者剛認可的
+        梯度；只要其中一樣進了池子，L2 偶爾就會比 L3 還吵，四級又糊在一起。
+        """
+        fixed = {
+            1: ("about 25% of the frame height", "Every row is the SAME size"),
+            2: ("about 35% of the frame height", "about 1.8 times", "EXACTLY 1 piece",
+                "1 word of the headline sits KNOCKED OUT"),
+            3: ("about 45% of the frame height", "about 2.5 times", "EXACTLY 2 pieces",
+                "1 word of the headline sits KNOCKED OUT"),
+            4: ("about 55% of the frame height", "about 3 times", "EXACTLY 3 pieces",
+                "2 words of the headline sit KNOCKED OUT"),
+        }
+        for level, pinned in fixed.items():
+            for seed in range(30):
+                brief = editor_formats.cover_design_brief(level, seed=seed)
+                for text in pinned:
+                    with self.subTest(level=level, seed=seed, text=text):
+                        self.assertIn(text, brief)
+
+    def test_the_quiet_levels_stay_quiet(self):
+        """1 級是「規矩」那一端：不抽字體、不抽落點、不傾斜，板形整排統一。
+        這裡放進去等於把 1 級推向 2 級，梯子最左邊就不見了。"""
+        for seed in range(20):
+            brief = editor_formats.cover_design_brief(1, seed=seed)
+            self.assertNotIn("Letterforms:", brief)
+            self.assertNotIn("The headline block sits", brief)
+            self.assertNotIn("rotated 5 to 8 degrees", brief)
+            self.assertIn("all cut the same way", brief)
+        # 2 級開字體、還不開落點（落點要等 3 級條文 PLACEMENT IS FREED）
+        two = editor_formats.cover_design_brief(2, seed=0)
+        self.assertIn("Letterforms:", two)
+        self.assertNotIn("The headline block sits", two)
+
+    def test_no_pool_smuggles_in_a_number_or_a_font_name(self):
+        """數字：延續「招式不宣稱數字」——程式算得出來的數，模型畫不準。
+        字體名：給名字模型會直接拿英文字體來套，中文標題就崩了，所以只描述字形骨架。"""
+        pools = (editor_formats.COVER_PLATE_SHAPES, editor_formats.COVER_STAGGER_PATTERNS,
+                 editor_formats.COVER_TYPEFACES, editor_formats.COVER_ANCHORS,
+                 editor_formats.COVER_ACCESSORY_SHAPES)
+        for pool in pools:
+            for item in pool:
+                with self.subTest(item=item):
+                    self.assertNotRegex(item, r"\d")
+        for face in editor_formats.COVER_TYPEFACES:
+            with self.subTest(face=face):
+                for named in ("Helvetica", "Impact", "Arial", "Noto", "思源", "微軟"):
+                    self.assertNotIn(named, face)
+
+    def test_the_anchor_pool_never_sends_the_block_up_top(self):
+        """上緣是 compose 後貼 示意圖 的位置——放大鏡那次已經踩過一遍。"""
+        for anchor in editor_formats.COVER_ANCHORS:
+            with self.subTest(anchor=anchor):
+                self.assertNotIn("top", anchor)
+                self.assertTrue("low" in anchor or "middle" in anchor, anchor)
+
+    def test_the_palette_rolls_but_the_meaning_rule_still_picks_the_word(self):
+        """池子決定用哪幾色，意義決定顏色落在誰身上。少了後半段就會退回白→黃→紅。"""
+        seen = set()
+        for seed in range(60):
+            brief = editor_formats.cover_design_brief(3, seed=seed)
+            self.assertIn("on the word that carries the news", brief)
+            self.assertIn("COLOUR FOLLOWS MEANING, NEVER ROW ORDER", brief)
+            for palette in editor_formats.COVER_PALETTES:
+                if f"{palette[0]} dominant" in brief:
+                    seen.add(palette)
+        self.assertGreater(len(seen), 2, seen)
+
+    def test_house_style_is_not_in_the_pool(self):
+        """描邊＋硬投影＋平塗是台裡的招牌長相，不是每次可以換的東西。"""
+        clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
+        self.assertIn("saturated FLAT poster colour", clause)
+        self.assertIn("hard offset drop shadow", clause)

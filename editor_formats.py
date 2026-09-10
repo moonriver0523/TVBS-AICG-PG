@@ -488,6 +488,68 @@ def cover_line_annotation(text: str, level: int) -> str:
     return "  ← " + "; ".join(notes) + "."
 
 
+# ---- 變化池（2026-09-11 第四輪）----
+# 每一池都只描述**形狀或做法**，不帶數字（延續「招式不宣稱數字」那條），
+# 而且每一條都是命令句：模型讀到的是「就是這個」，不是「你可以選」。
+
+# 底板形狀。原本只有「每行各自一塊板」，形狀交給模型 → 每次都是同一種圓角矩形。
+COVER_PLATE_SHAPES: tuple[str, ...] = (
+    "square-cut, hard right angles",
+    "fully rounded, pill-ended",
+    "clipped across one corner",
+    "slanted into parallelograms",
+    "torn-edged, like strips ripped out of paper",
+    "painted brush strokes with ragged ends",
+    "ribbons with folded-back ends",
+    "open bracket frames, outline only, the photograph showing through",
+)
+
+# 錯位方式。原本只寫「錯開」，模型一律交同一種左階梯。
+COVER_STAGGER_PATTERNS: tuple[str, ...] = (
+    "each row stepped further right than the one above",
+    "each row stepped further left than the one above",
+    "alternating left and right, a zig-zag down the block",
+    "the middle row pushed out well past the others",
+    "a short row set beside the end of a long one",
+)
+
+# 字體個性。只描述字形骨架，不給字體名——給名字模型會拿英文字體來套。
+# 每一條都要能用中文黑體體系畫得出來，而且可讀性是硬底線。
+COVER_TYPEFACES: tuple[str, ...] = (
+    "a heavy rounded gothic, thick strokes with softened corners",
+    "a tall condensed gothic, narrow and vertical",
+    "a wide poster gothic, squat and square-shouldered",
+    "a heavy Ming with thick slab serifs and sharp entry strokes",
+    "an angular technical cut, corners sliced off on the diagonal",
+    "a heavy brush-written hand, strokes tapering as they lift off",
+)
+
+# 配色。四個位置＝主色／次色／重點色／備用色，全部是播出安全的高彩度色。
+# 「哪個字拿重點色」仍然由 COLOUR FOLLOWS MEANING 那句決定——池子決定用哪幾色，
+# 意義決定落在誰身上。這樣才不會回到白→黃→紅的行序配色。
+COVER_PALETTES: tuple[tuple[str, str, str, str], ...] = (
+    ("white", "deep navy", "vivid red", "bright golden yellow"),
+    ("white", "black", "bright golden yellow", "vivid red"),
+    ("bright golden yellow", "white", "vivid red", "deep navy"),
+    ("icy white-blue", "deep teal", "hot orange", "white"),
+    ("white", "electric cyan", "magenta", "black"),
+    ("black", "white", "lime green", "electric cyan"),
+    ("white", "royal purple", "bright golden yellow", "hot orange"),
+    ("pale gold", "deep crimson", "white", "black"),
+    ("white", "hot orange", "electric cyan", "deep navy"),
+)
+
+# 標題區落點（3 級起才解放）。全部限中段以下：上緣是 compose 後貼 示意圖 的位置。
+COVER_ANCHORS: tuple[str, ...] = (
+    "low in its own panel, hard against the left edge",
+    "low in its own panel, hard against the right edge",
+    "across the middle band of its own panel",
+    "low and centred in its own panel",
+)
+
+COVER_TILT_DIRECTIONS: tuple[str, ...] = ("clockwise", "anticlockwise")
+
+
 # 招式池。每一條都是**無字**的，而且都是命令句。件數由等級決定，抽哪幾件由程式抽——
 # 交給模型自己選，四級會塌回同一種（許可句推不動模型，第七批已證明）。
 # 小配件的外框形狀。2026-09-11 使用者：「不一定只有圓形可以用吧。」
@@ -544,12 +606,17 @@ def _accessory_geometry_note(full_width: bool) -> str:
     return note + "."
 
 
-def cover_accessories(level: int, titles=(), seed=None, full_width: bool = False) -> list[str]:
-    """該級要畫的招式（無字），形狀與幾何都已經填好。"""
+def cover_accessories(level: int, titles=(), seed=None, full_width: bool = False,
+                      rng=None) -> list[str]:
+    """該級要畫的招式（無字），形狀與幾何都已經填好。
+
+    `rng` 由 cover_design_brief 傳進來，讓所有變化軸共用同一顆——一個 seed
+    就決定整張的長相，才重現得出來。單獨呼叫時退回自己開一顆。
+    """
     want = COVER_ACCESSORY_COUNTS.get(level, 0)
     if want <= 0:
         return []
-    rng = random.Random(seed)
+    rng = rng if rng is not None else random.Random(seed)
     pool = [text for _key, text in COVER_ACCESSORY_POOL]
     rng.shuffle(pool)
     note = _accessory_geometry_note(full_width)
@@ -574,11 +641,18 @@ def cover_accessories(level: int, titles=(), seed=None, full_width: bool = False
 #
 # 所以數字全部搬到這裡，而且只有數字：塊高％、落差倍數、錯位、傾斜、反白字數、招式件數、
 # 配色鐵則。後面 TYPOGRAPHY 段尾那塊條文只留「怎麼做」的質感描述，不再重複數字。
+# 幅度（塊高％／落差倍數／招式件數／反白字數）各級固定——那是使用者認可的梯度，
+# RNG 一律不碰。配色改成模板，由 COVER_PALETTES 抽色填進去：換的是「哪幾個顏色」，
+# 不是「用幾個顏色」。
 COVER_TITLE_BRIEF_SPECS = {
-    1: dict(height="25%", ratio=None, stagger=False, tilt=False, knockouts=0, colours="TWO colours only, one dominant and one for emphasis"),
-    2: dict(height="35%", ratio="1.8", stagger=True, tilt=False, knockouts=1, colours="THREE colours, chosen to suit the story"),
-    3: dict(height="45%", ratio="2.5", stagger=True, tilt=False, knockouts=1, colours="THREE colours plus ONE accent drawn from the subject (icy blue for weather and cold, electric cyan or violet for technology and markets, warm pink or amber for family and health)"),
-    4: dict(height="55%", ratio="3", stagger=True, tilt=True, knockouts=2, colours="the palette is fully open — as many colours as the design needs, on any word"),
+    1: dict(height="25%", ratio=None, stagger=False, tilt=False, knockouts=0, typeface=False, anchor=False,
+            colours="TWO colours only: {0} dominant, {2} for emphasis"),
+    2: dict(height="35%", ratio="1.8", stagger=True, tilt=False, knockouts=1, typeface=True, anchor=False,
+            colours="THREE colours: {0} dominant, {1} second, {2} on the word that carries the news"),
+    3: dict(height="45%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True, anchor=True,
+            colours="THREE colours plus ONE accent: {0} dominant, {1} second, {2} on the word that carries the news, {3} as the accent"),
+    4: dict(height="55%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True, anchor=True,
+            colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open"),
 }
 
 
@@ -616,10 +690,26 @@ def _size_hierarchy_line(ratio: str, titles, full_width: bool) -> str:
 
 
 def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = False) -> str:
-    """CANVAS 正後方那塊。純數字，愈短愈好——這是模型真的會讀的位置。"""
+    """CANVAS 正後方那塊。愈短愈好——這是模型真的會讀的位置。
+
+    2026-09-11 第四輪起，這裡同時是**變化池的出口**：底板形狀、錯位方式、字體骨架、
+    配色、標題落點、傾斜方向、招式，全部由同一顆 rng 依固定順序抽。
+    一顆 seed ＝ 一種長相，重現得出來。
+
+    幅度（塊高％／落差倍數／招式件數／反白字數）不在池子裡：那是梯子本身。
+    """
     spec = COVER_TITLE_BRIEF_SPECS.get(level)
     if not spec:
         return ""
+    # 抽籤順序固定，動了順序就換掉所有既有 seed 的長相（測試會抓到）。
+    rng = random.Random(seed)
+    plate = rng.choice(COVER_PLATE_SHAPES)
+    stagger = rng.choice(COVER_STAGGER_PATTERNS)
+    typeface = rng.choice(COVER_TYPEFACES)
+    palette = rng.choice(COVER_PALETTES)
+    anchor = rng.choice(COVER_ANCHORS)
+    tilt_dir = rng.choice(COVER_TILT_DIRECTIONS)
+
     rows = [
         "=== HEADLINE DESIGN BRIEF — THESE NUMBERS ARE AS FIXED AS THE SEAM GEOMETRY ABOVE, AND THEY OVERRIDE ANY TYPOGRAPHY WORDING FURTHER DOWN ===",
         f"- Headline block height: about {spec['height']} of the frame height (per panel). It dominates the picture.",
@@ -629,25 +719,39 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
     else:
         rows.append("- Every row is the SAME size at this setting.")
     rows.append(
-        "- Rows are STAGGERED: indented or offset against each other, no two sharing a left edge."
+        f"- Rows are STAGGERED: {stagger}. No two rows share a left edge."
         if spec["stagger"]
         else "- Rows stay flush with one another, aligned in the corner they are assigned."
     )
-    rows.append("- Each row sits on its OWN plate, bar or ribbon — never one rectangle behind the whole block.")
+    # 板形：1 級整排同一種（跟 _L1 那句「share ONE corner treatment」對齊），
+    # 2 級起同一種語彙下各行自己變化。
+    rows.append(
+        "- Each row sits on its OWN plate, bar or ribbon — never one rectangle behind the whole"
+        f" block. The plates are {plate}"
+        + (", all cut the same way." if level < 2 else ", and no two are cut alike.")
+    )
+    if spec["typeface"]:
+        # 「You choose the typeface」寫了七批，成品每次都同一種黑體：許可句推不動模型。
+        rows.append(f"- Letterforms: {typeface}. Every character stays fully legible.")
+    if spec["anchor"]:
+        # 3 級起條文說 PLACEMENT IS FREED——解放之後總得有人決定放哪，
+        # 交給模型它就放回左下角，所以由程式指定。
+        rows.append(f"- The headline block sits {anchor}.")
     if spec["tilt"]:
-        rows.append("- The whole block is rotated 5 to 8 degrees off horizontal.")
+        rows.append(f"- The whole block is rotated 5 to 8 degrees off horizontal, {tilt_dir}.")
     if spec["knockouts"]:
-        word = "word" if spec["knockouts"] == 1 else "words"
+        word, verb = ("word", "sits") if spec["knockouts"] == 1 else ("words", "sit")
         rows.append(
-            f"- {spec['knockouts']} {word} of the headline sit KNOCKED OUT of a filled colour"
+            f"- {spec['knockouts']} {word} of the headline {verb} KNOCKED OUT of a filled colour"
             " block (the characters are the empty space inside the shape)"
             + (", each block a different colour." if spec["knockouts"] > 1 else ".")
         )
     rows.append(
         "- COLOUR FOLLOWS MEANING, NEVER ROW ORDER. Colouring row 1 white, row 2 yellow and row 3"
-        f" red is BANNED. Use {spec['colours']}. A colour switch may happen part-way through a row."
+        f" red is BANNED. Use {spec['colours'].format(*palette)}."
+        " A colour switch may happen part-way through a row."
     )
-    picked = cover_accessories(level, titles=titles, seed=seed, full_width=full_width)
+    picked = cover_accessories(level, titles=titles, full_width=full_width, rng=rng)
     if picked:
         rows.append(
             f"- Draw EXACTLY {len(picked)} piece{'' if len(picked) == 1 else 's'} of supporting artwork, listed here and no"
@@ -687,18 +791,18 @@ _L1 = """- DESIGNED TITLE (level 1 of 4 — light) — OVERRIDE EVERY TYPOGRAPHY
 _L2 = """- DESIGNED TITLE (level 2 of 4 — designed) — OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE, and follow the DESIGN BRIEF near the top of this prompt. This is a broadcast title card, not body text; a tame, evenly-set stack is a failure. Required, not offered:
   * THE PLATES NO LONGER MATCH EACH OTHER: one row reversed out of a solid colour, another on an open outline, another on a slanted ribbon — assembled parts, not a paragraph on a rectangle.
   * FINISH: saturated FLAT poster colour over a thick black outline, a hard offset drop shadow and a tight coloured inner edge. High contrast, slight forward lean. Not a soft pastel wash, and not one uniform polished metallic fill.
-  * You choose the typeface, the exact colours, the outline and shadow treatment, and the decorative frames or shapes behind or around the words. Be bold.
+  * THE DESIGN BRIEF NEAR THE TOP OF THIS PROMPT ALREADY FIXES the letterforms and the colours — follow it exactly, do not substitute your own. What is left to you: the outline and shadow treatment, and the decorative frames or shapes behind or around the words. Be bold with those.
 - WHAT THIS CANCELS: one-line-per-row no longer binds as a SHAPE — stagger the rows, indent them, run one row larger over another (the rows themselves, and how many there are, are still fixed; see below). THE PLACEMENT STILL BINDS: the block stays in the lower-left (or lower-right) area it was assigned. ONE EXCEPTION TO THE SIZE HIERARCHY: when the listed rows are one continuous phrase, sentence or proper name simply broken across rows, keep them at ONE size — enlarging half of a single name breaks it apart.
 """
 
 _L3 = """- DESIGNED TITLE (level 3 of 4 — loud) — OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE, and follow the DESIGN BRIEF near the top of this prompt. This is a broadcast title card and it goes loud; a tame, evenly-set stack is a failure. Required, not offered:
   * THE PLATES NO LONGER MATCH EACH OTHER: one row reversed out of a solid colour, another on an open outline, another on a slanted ribbon.
-  * PLACEMENT IS FREED: the block no longer has to sit in the lower corner it was assigned — put it high, low or across the middle of its own panel, wherever it composes best.
+  * PLACEMENT IS FREED: the block no longer has to sit in the lower corner it was assigned. THE DESIGN BRIEF SAYS WHERE IT GOES INSTEAD — obey that line, and keep the whole block inside its own panel.
   * THE BLOCK INTERLOCKS WITH THE PHOTOGRAPH instead of sitting in a clear corner: let a plate pass BEHIND the main subject, or let the subject's silhouette break across the edge of a plate. Not one character may be hidden by doing this.
   * MULTI-LAYER EDGES AND DEPTH: stack outlines (a thick black one, then a white or coloured one outside it) and give the characters a three-dimensional extrusion with a surface picked from the story — molten metal, neon, cracked stone, wet chrome.
   * The knocked-out word's block has a TORN, BRUSHED OR SLANTED edge, and it is the word that carries the shock: the illness, the place, the figure, the verdict.
   * FINISH: saturated FLAT poster colour over a thick black outline and a hard offset drop shadow. Not a soft pastel wash, and not one uniform polished metallic fill.
-  * You choose the typeface, the exact colours, the outline and shadow treatment, the decorative frames or shapes behind or around the words, the emphasis, the scale of each part, and where on the frame the block sits (anywhere inside its OWN panel). Be bold.
+  * THE DESIGN BRIEF NEAR THE TOP OF THIS PROMPT ALREADY FIXES the letterforms, the colours and where the block sits — follow it exactly, do not substitute your own. What is left to you: the outline and shadow treatment, the decorative frames or shapes behind or around the words, the emphasis, and the scale of each part. Be bold with those.
 - WHAT THIS CANCELS: the instruction to keep the headline in the lower-left (or lower-right) area no longer binds; one-line-per-row no longer binds as a SHAPE — stagger the rows, indent them, run one row larger over another, or set a short row beside a long one (the rows themselves, and how many there are, are still fixed; see below). ONE EXCEPTION TO THE SIZE HIERARCHY: when the listed rows are one continuous phrase, sentence or proper name simply broken across rows, keep them at ONE size — enlarging half of a single name breaks it apart.
 """
 

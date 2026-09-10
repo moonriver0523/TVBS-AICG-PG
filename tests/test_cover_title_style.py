@@ -48,12 +48,29 @@ class ClauseTests(unittest.TestCase):
 
         字體、顏色、邊框、強調、版位五樣都要明文交出去——只寫「你可以設計」而不
         逐項點名，模型會照前面那幾條保守規則辦，等於沒解放。
+
+        2026-09-11 第四輪改了「交給誰」：字體、配色、版位三樣改由**程式每次抽**
+        （COVER_TYPEFACES／COVER_PALETTES／COVER_ANCHORS），寫進 CANVAS 後面的綱要。
+        因為「你自己決定」這種許可句實測推不動模型——七批下來成品永遠同一種黑體、
+        同一個左下角。解放的意思沒變（不再綁死那幾條保守規則），變的是由誰下決定。
+        邊框與強調仍然留給模型。
         """
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
-        for freed in ("typeface", "colours", "decorative frames", "emphasis",
-                      "where on the frame the block sits"):
+        # 仍然留給模型的兩樣
+        for freed in ("decorative frames", "emphasis"):
             with self.subTest(freed=freed):
                 self.assertIn(freed, clause)
+        # 改由綱要下令的三樣：條文區要明講「照綱要辦、不要自己另外挑」，
+        # 否則就是今天踩過的孤兒規則——模型會挑最寬鬆的那句遵守。
+        self.assertIn("ALREADY FIXES", clause)
+        for pinned in ("letterforms", "the colours", "where the block sits"):
+            with self.subTest(pinned=pinned):
+                self.assertIn(pinned, clause)
+        self.assertIn("do not substitute your own", clause)
+        self.assertNotIn("You choose the typeface", clause)
+        # 而綱要真的每次都給不一樣的命令
+        briefs = {editor_formats.cover_design_brief(4, seed=s) for s in range(8)}
+        self.assertGreater(len(briefs), 1)
 
     def test_designed_clause_cancels_the_white_yellow_red_rule_explicitly(self):
         """本 repo 的慣例：位置在後**加上**明文 OVERRIDE 才壓得過前面的規則。
