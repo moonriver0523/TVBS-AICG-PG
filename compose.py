@@ -542,10 +542,15 @@ def paste_cover_header_right(
     )
 
     if date_text:
+        # 黑色字框（2026-09-10 使用者裁決）：模型畫的藍帶厚度會飄，帶一薄，白色日期就
+        # 落在照片上、亮背景下直接看不見。加一圈黑描邊後，落在帶上或落在照片上都讀得到——
+        # 比「把帶補到剛好」穩，因為帶厚是模型決定的、我們控制不了。
+        # 紅標不需要：它自己有紅底。Logo 與節目標籤是圖檔，本來就不受影響。
         date_font = _font(round(band_h * 0.40))
         _draw_text(
             draw, (badge_x1 - badge_w - round(width * 0.02), dot_cy), date_text,
-            date_font, stroke_width=0, anchor="rm",
+            date_font, stroke=(0, 0, 0), stroke_width=max(2, round(band_h * 0.05)),
+            anchor="rm",
         )
 
 

@@ -198,6 +198,31 @@ class ComposeTests(unittest.TestCase):
         # 而且整塊都在補完後的帶內，照片區不得有殘影
         self.assertLess(rows[-1], band_h, "紅標掉出標頭帶外")
 
+    def test_the_date_carries_a_black_outline_so_a_thin_band_cannot_hide_it(self):
+        """2026-09-10 使用者裁決：模型畫的藍帶厚度會飄，帶一薄，白色日期就落在照片上。
+        與其追著把帶補到剛好（帶厚是模型決定的），不如給日期一圈黑描邊：
+        落在帶上或落在亮照片上都讀得到。
+        """
+        w, h = 1536, 864
+        canvas = Image.new("RGB", (w, h), (235, 235, 235))     # 整張亮底＝最壞情況
+        buf = io.BytesIO(); canvas.save(buf, format="PNG")
+        out = Image.open(io.BytesIO(
+            compose.paste_cover_logo(buf.getvalue(), date_text="2026/09/10")
+        )).convert("RGB")
+        band_h = round(h * compose.COVER_AI_HEADER_RATIO)
+        px = list(out.getdata())
+        # 日期在紅標左側：取紅標左緣以左、帶內的那塊
+        red_x = min(
+            (x for y in range(band_h) for x in range(w // 2, w)
+             if px[y * w + x][0] > 150 and px[y * w + x][1] < 90 and px[y * w + x][2] < 90),
+            default=w,
+        )
+        dark = sum(
+            1 for y in range(band_h) for x in range(w // 2, red_x)
+            if max(px[y * w + x]) < 60
+        )
+        self.assertGreater(dark, 100, "日期沒有黑色字框，薄帶時會消失在亮照片上")
+
     def test_highlight_badge_pastes_red_brush_tag_in_the_header_band(self):
         """精華：標頭仍 ON AIR，標頭帶中段貼紅色刷筆標籤（模板），非精華時該區維持深藍。
 
