@@ -503,10 +503,58 @@ def ensure_ai_header_band(canvas: Image.Image) -> int:
     return target
 
 
-def paste_cover_logo(image_bytes: bytes) -> bytes:
-    """在 AI 畫好的封面標頭帶左半貼上正版白色 Logo 與節目標籤模板。
+def paste_cover_header_right(
+    canvas: Image.Image, band_h: int, date_text: str, badge: str
+) -> None:
+    """標頭帶右端的日期與 ON AIR 紅標，改由程式畫（2026-09-10）。
 
-    prompt 已明令模型不准畫任何電視台標誌／節目名、並把標頭帶左半留白（見
+    為什麼搬過來：這兩樣本來寫在 prompt 裡讓模型畫，而 ensure_ai_header_band 會把
+    模型畫得太薄的帶補厚——補法是「帶底那條邊往下搬、中間用帶身填滿」。填進去的那幾列
+    正好蓋掉模型畫的日期與紅標的上半，被往下搬的邊又把下半重新貼出來，成品就是
+    使用者看到的「日期與 ON AIR 被切斷、下面還留一層殘影」。
+
+    根因不是補帶算錯，是**這兩樣東西本來就不該交給模型**：它們是固定素材，
+    和 Logo、節目標籤同一類。畫在補帶之後，補多厚都不影響。
+
+    幾何沿用合成版 _draw_cover_header 的那一套（同一個視覺，兩條路徑不該長不一樣）。
+    """
+    draw = ImageDraw.Draw(canvas)
+    width = canvas.size[0]
+    margin = round(width * COVER_AI_LEFT_RATIO)
+    tag_h = max(1, round(band_h * 0.80))
+    tag_y0 = (band_h - tag_h) // 2
+
+    badge_text, badge_colour = COVER_BADGES[badge]
+    badge_font = _font(round(band_h * 0.42))
+    badge_w = badge_font.getbbox(badge_text)[2] + round(band_h * 0.9)
+    badge_x1 = width - margin
+    _rounded(draw, (badge_x1 - badge_w, tag_y0, badge_x1, tag_y0 + tag_h), 8, badge_colour)
+    dot_r = max(1, round(tag_h * 0.14))
+    dot_cx = badge_x1 - badge_w + round(band_h * 0.32)
+    dot_cy = tag_y0 + tag_h // 2
+    draw.ellipse(
+        (dot_cx - dot_r, dot_cy - dot_r, dot_cx + dot_r, dot_cy + dot_r),
+        fill=(255, 255, 255),
+    )
+    _draw_text(
+        draw, (badge_x1 - round(band_h * 0.28), dot_cy), badge_text, badge_font,
+        stroke_width=0, anchor="rm",
+    )
+
+    if date_text:
+        date_font = _font(round(band_h * 0.40))
+        _draw_text(
+            draw, (badge_x1 - badge_w - round(width * 0.02), dot_cy), date_text,
+            date_font, stroke_width=0, anchor="rm",
+        )
+
+
+def paste_cover_logo(
+    image_bytes: bytes, date_text: str = "", badge: str = COVER_DEFAULT_BADGE
+) -> bytes:
+    """在 AI 畫好的封面標頭帶貼上正版白色 Logo、節目標籤模板、日期與 ON AIR 紅標。
+
+    prompt 已明令模型不准畫任何電視台標誌／節目名／日期／紅標，整條標頭帶留白（見
     editor_formats.COVER_AI_PROMPT_TEMPLATE）。就算模型沒聽話畫了東西，
     貼上去也會蓋掉——與播出鏡面挖空框同一個原則：不靠模型自律。
     """
@@ -523,6 +571,8 @@ def paste_cover_logo(image_bytes: bytes) -> bytes:
     _paste_logo(canvas, (logo_x, (band_h - logo_h) // 2), logo_w)
     tag_h = max(1, round(band_h * 0.80))
     _paste_template(canvas, TEN_SHOW_TAG, (logo_x + logo_w + round(width * 0.02), (band_h - tag_h) // 2), tag_h)
+    # 右端的日期與 ON AIR 也在補帶之後才畫，理由見 paste_cover_header_right。
+    paste_cover_header_right(canvas, band_h, date_text, badge)
 
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")

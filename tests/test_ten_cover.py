@@ -147,7 +147,9 @@ class ComposeTests(unittest.TestCase):
         w, h = 1536, 864
         base = Image.new("RGB", (w, h), (12, 20, 60))          # 整張深藍，模擬模型留白的標頭帶
         buf = io.BytesIO(); base.save(buf, format="PNG")
-        out = Image.open(io.BytesIO(compose.paste_cover_logo(buf.getvalue()))).convert("RGB")
+        out = Image.open(io.BytesIO(
+            compose.paste_cover_logo(buf.getvalue(), date_text="2026/09/10")
+        )).convert("RGB")
         band_h = round(h * compose.COVER_AI_HEADER_RATIO)
         px = list(out.getdata())
         def count(box, pred):
@@ -155,13 +157,46 @@ class ComposeTests(unittest.TestCase):
             return sum(1 for y in range(y0, y1) for x in range(x0, x1) if pred(px[y * w + x]))
         white = lambda p: p[0] > 220 and p[1] > 220 and p[2] > 220
         gold = lambda p: p[0] > 170 and p[1] > 120 and p[2] < 110
+        red = lambda p: p[0] > 150 and p[1] < 90 and p[2] < 90
         # 帶內左半有 Logo 白點與標籤金「十」
         self.assertGreater(count((0, 0, w // 2, band_h), white), 800)
         self.assertGreater(count((0, 0, w // 2, band_h), gold), 100)
         # 帶下方（照片區）完全沒被貼到
         self.assertEqual(count((0, band_h + 2, w, h), lambda p: p != (12, 20, 60)), 0)
-        # 右半帶（日期／ON AIR 由模型畫）不動
-        self.assertEqual(count((w // 2, 0, w, band_h), lambda p: p != (12, 20, 60)), 0)
+        # 右半帶：2026-09-10 起日期與 ON AIR 紅標也由程式貼（原本交給模型畫，
+        # 補帶會把它們切成上下兩截），所以這一半現在該有紅底與白字
+        self.assertGreater(count((w // 2, 0, w, band_h), red), 500)
+        self.assertGreater(count((w // 2, 0, w, band_h), white), 200)
+
+    def test_thickening_a_thin_band_no_longer_slices_the_date_and_on_air(self):
+        """使用者回報：十點封面的 ON AIR 與日期被切斷，下面還留一截殘影。
+
+        機制：模型畫的帶太薄時 ensure_ai_header_band 會把帶補厚——帶底那條邊往下搬、
+        中間用帶身填滿。日期與紅標若是模型畫在薄帶裡的，就會被填進去的那幾列切掉上半，
+        被往下搬的邊再把下半重新貼出來。改成程式在補帶「之後」才畫，補多厚都不影響。
+        這條測試盯的就是那個順序：紅標必須是一整塊、不得有橫向斷層。
+        """
+        w, h = 1536, 864
+        photo = (90, 90, 90)
+        canvas = Image.new("RGB", (w, h), photo)
+        thin = round(h * compose.COVER_AI_HEADER_RATIO) // 2   # 模型只畫了一半厚的帶
+        canvas.paste(Image.new("RGB", (w, thin), (12, 20, 60)), (0, 0))
+        canvas.paste(Image.new("RGB", (w, 3), (40, 160, 255)), (0, thin - 3))  # 帶底亮藍細線
+        buf = io.BytesIO(); canvas.save(buf, format="PNG")
+
+        out = Image.open(io.BytesIO(
+            compose.paste_cover_logo(buf.getvalue(), date_text="2026/09/10")
+        )).convert("RGB")
+        band_h = round(h * compose.COVER_AI_HEADER_RATIO)
+        px = list(out.getdata())
+        red = lambda p: p[0] > 150 and p[1] < 90 and p[2] < 90
+
+        rows = [y for y in range(h) if any(red(px[y * w + x]) for x in range(w // 2, w))]
+        self.assertTrue(rows, "標頭帶右端找不到 ON AIR 紅標")
+        # 一整塊：紅色列必須連續，中間不得有被填掉的空檔（那就是「被切斷」）
+        self.assertEqual(rows, list(range(rows[0], rows[-1] + 1)), f"紅標被切斷：{rows}")
+        # 而且整塊都在補完後的帶內，照片區不得有殘影
+        self.assertLess(rows[-1], band_h, "紅標掉出標頭帶外")
 
     def test_highlight_badge_pastes_red_brush_tag_in_the_header_band(self):
         """精華：標頭仍 ON AIR，標頭帶中段貼紅色刷筆標籤（模板），非精華時該區維持深藍。

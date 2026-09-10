@@ -3825,7 +3825,9 @@ def _cover_ai(
     防呆拆），比照 YT ai-title 的 line1／line2。
     """
     def _post_paste(raw: bytes) -> bytes:
-        cover = compose.paste_cover_logo(raw)
+        # 日期與 ON AIR 紅標從 2026-09-10 起也由程式貼（原本寫在 prompt 給模型畫，
+        # 而補帶會把模型畫的那兩樣切成上下兩截，見 compose.paste_cover_header_right）。
+        cover = compose.paste_cover_logo(raw, date_text=date_text, badge=req.badge)
         # 「AI示意圖」小標改由程式壓（2026-09-07）：模板要模型自己畫時，只要使用者附了
         # 實景參考圖，apply_user_references_to_image_request 的「Do NOT render any 示意圖
         # label」就會把它壓掉。整張都是 AI 生的，這個標籤不能取決於模型聽不聽話。

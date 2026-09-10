@@ -293,12 +293,24 @@ class CoverPromptTests(unittest.TestCase):
     def test_every_user_string_reaches_the_prompt(self):
         prompt = self.render()
         for needle in (
-            "十點不一樣", "ON AIR", "2026/09/03", "AI示意圖",
+            "十點不一樣", "AI示意圖",
             "政府明年勞保撥補", "上看1300億", "病理醫師月薪65萬", "仍缺工",
             "政府大樓與金幣", "病理科實驗室",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, prompt)
+
+    def test_the_date_and_on_air_tag_are_no_longer_asked_of_the_model(self):
+        """2026-09-10：兩者改由程式貼（compose.paste_cover_header_right）。
+
+        原本寫在 prompt 給模型畫，而 ensure_ai_header_band 補厚標頭帶時會把模型畫的
+        日期與紅標切成上下兩截、下面留一層殘影——固定素材本來就不該交給模型。
+        prompt 這邊要一併拿掉，否則模型照畫、程式再蓋，等於白花 token 又多一個變因。
+        """
+        prompt = self.render()
+        self.assertNotIn("2026/09/03", prompt)
+        self.assertIn("Draw NOTHING in the header band", prompt)
+        self.assertIn("keep the WHOLE band clean empty navy", prompt)
 
     def test_prompt_forbids_the_model_drawing_a_logo(self):
         prompt = self.render()
