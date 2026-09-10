@@ -128,9 +128,18 @@ class LadderTests(unittest.TestCase):
             with self.subTest(level=level):
                 self.assertIn(count, _brief(level))
         # 綱要要短，模型才讀得進去。第一輪 L4 條文 7.7KB、坐在第 8,000 字元後，實拍全被無視。
+        # 量最壞的那個 seed：招式是隨機抽的，只量一個 seed 會讓長的那幾件溜過去。
+        # 2026-09-11 第三輪每件招式各掛一句幾何 ←（實拍證明共用條文擋不住），
+        # 上限從 2,200 放到 2,600，同時把池子裡重複的禁令收短。
+        # 2,600 仍是失效那版（7.7KB、坐在第 8,000 字元後）的三分之一。
         for level in range(1, 5):
             with self.subTest(level=level):
-                self.assertLess(len(_brief(level)), 2200)
+                worst = max(
+                    len(editor_formats.cover_design_brief(level, seed=s, full_width=f))
+                    for s in range(40)
+                    for f in (False, True)
+                )
+                self.assertLess(worst, 2600)
 
     def test_each_step_changes_a_visible_shape_not_only_a_finish(self):
         """2026-09-10 使用者：「好像沒有這麼抖，尤其是 1、2 之間」。
@@ -235,6 +244,44 @@ class LadderTests(unittest.TestCase):
         brief = _brief(4)
         self.assertIn("NONE OF THEM MAY SIT IN EITHER OUTER TOP CORNER", brief)
         self.assertIn("TOP THIRD OF THE FRAME", brief)
+
+    def test_every_accessory_carries_its_own_placement_note(self):
+        """2026-09-11 實拍（創意梯子-260911-ef）：E_L4 的放大鏡貼在右格右上角、
+        壓到 AI示意圖 貼紙；F_L3 的箭頭頂進上三分之一。排除區條文**當時已經寫在**
+        共用那條 bullet 裡了，模型照樣犯——它坐在一長串否定句中間。
+        顏色那邊已經證過同一件事：指示要釘在編號清單那幾行後面。"""
+        for level in (2, 3, 4):
+            with self.subTest(level=level):
+                for text in editor_formats.cover_accessories(level, seed=1):
+                    self.assertIn("MIDDLE OR LOWER AREA ONLY", text)
+                    self.assertIn("never the top third", text)
+
+    def test_the_seam_note_only_appears_on_the_split_layout(self):
+        """E_L2 那排圖示橫跨切線正中央，兩格共用一排。切線是雙切才有的東西，
+        版面是程式知道的事——不該叫模型自己判斷這張有沒有切線。"""
+        split = editor_formats.cover_accessories(4, seed=1, full_width=False)
+        full = editor_formats.cover_accessories(4, seed=1, full_width=True)
+        self.assertTrue(all("never across the centre seam" in x for x in split))
+        self.assertTrue(all("centre seam" not in x for x in full))
+        # 滿版仍然要擋上三分之一（F_L3 的箭頭就是這樣頂上去的）
+        self.assertTrue(all("MIDDLE OR LOWER AREA ONLY" in x for x in full))
+
+    def test_accessory_shapes_rotate_instead_of_always_being_circles(self):
+        """2026-09-11 使用者：「配件圖示的形狀也不一定只有圓形可以用吧。」
+        原本 magnifier／bubbles／iconrow 三件把 CIRCULAR／ROUND 寫死，
+        同一級重生只換配色不換形狀。形狀跟招式共用同一個 seeded RNG。"""
+        self.assertNotIn("{shape}", " ".join(editor_formats.cover_accessories(4, seed=0)))
+        shaped = set()
+        for seed in range(40):
+            for text in editor_formats.cover_accessories(4, seed=seed):
+                for shape in editor_formats.COVER_ACCESSORY_SHAPES:
+                    if shape in text:
+                        shaped.add(shape)
+        self.assertGreater(len(shaped), 3, shaped)
+        # 形狀池不准夾帶數字——延續「招式不宣稱數字」那條
+        for shape in editor_formats.COVER_ACCESSORY_SHAPES:
+            with self.subTest(shape=shape):
+                self.assertNotRegex(shape, r"\d")
 
     def test_line_annotations_pin_the_treatment_on_the_data_row(self):
         """顏色與強調的指示釘在**那一行後面**，不是寫在條文區——

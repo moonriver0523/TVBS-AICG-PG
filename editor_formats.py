@@ -490,16 +490,32 @@ def cover_line_annotation(text: str, level: int) -> str:
 
 # 招式池。每一條都是**無字**的，而且都是命令句。件數由等級決定，抽哪幾件由程式抽——
 # 交給模型自己選，四級會塌回同一種（許可句推不動模型，第七批已證明）。
+# 小配件的外框形狀。2026-09-11 使用者：「不一定只有圓形可以用吧。」
+# 跟招式用同一個 seeded RNG 抽，所以同一級重生換招式時形狀也跟著換。
+# 一律只描述輪廓，不給數字——延續「招式不宣稱數字」那條。
+COVER_ACCESSORY_SHAPES: tuple[str, ...] = (
+    "circular",
+    "rounded-square",
+    "hexagonal",
+    "diamond-shaped (stood on its corner)",
+    "shield-shaped",
+    "torn-edged",
+    "pentagonal",
+    "capsule-shaped",
+    "starburst-edged",
+)
+
+
 COVER_ACCESSORY_POOL: tuple[tuple[str, str], ...] = (
-    ("icon", "A flat WORDLESS PICTOGRAM taken from the subject (raincloud, flame, house, siren, warning triangle, syringe), hung at the end or the start of one row at that row's cap height, never covering a stroke."),
-    ("magnifier", "A CIRCULAR MAGNIFIER INSET: a clean circle cut from the photograph enlarging one telling detail, ringed in a bright colour, with a short heavy arrow pointing back to where it came from."),
-    ("bubbles", "A CLUSTER OF THREE TO FIVE SMALL ROUND INSETS arcing over or beside the main subject, each holding one wordless pictogram or tiny photographic detail, shrinking as they trail away."),
+    ("icon", "A flat WORDLESS PICTOGRAM taken from the subject (raincloud, flame, siren, warning triangle, syringe), hung at one row's start or end at that row's cap height, never covering a stroke."),
+    ("magnifier", "A {shape} MAGNIFIER INSET: a clean window cut from the photograph enlarging one telling detail, ringed in a bright colour, with a short heavy arrow pointing back to where it came from."),
+    ("bubbles", "A CLUSTER OF SMALL {shape} INSETS arcing beside the main subject, each holding one wordless pictogram or tiny photographic detail, shrinking as they trail away."),
     ("brush", "A ROUGH BRUSH-STROKE OR TORN BAR of flat saturated colour behind or directly under ONE row — painted edges, not a neat rectangle."),
-    ("material", "ONE WORD FILLED WITH A MATERIAL FROM THE STORY instead of flat colour (denim weave, molten metal, cracked stone, ice, banknote paper), the rest of that row staying flat and every character still legible."),
+    ("material", "ONE WORD FILLED WITH A MATERIAL FROM THE STORY instead of flat colour (molten metal, cracked stone, ice, banknote paper), the rest of that row staying flat."),
     ("cutout", "THE MAIN SUBJECT CUT OUT of its background and stood beside or in front of the headline block, rim-lit or thinly outlined so it reads as a separate layer."),
     ("burst", "A WORDLESS BURST behind the block: radiating speed lines, sparks, shards or a torn splash of saturated colour."),
     ("arrow", "ONE HEAVY WORDLESS ARROW in a saturated colour, thick and slightly angled, driving from the photograph towards the headline."),
-    ("iconrow", "A SHORT ROW OF SMALL ROUND WORDLESS ICON CHIPS along the lower edge of the frame, just ABOVE the navy bottom strip and never inside it, evenly spaced and equal in size, each holding one flat pictogram from the story. Do not write a number, a letter or a label on or beside them."),
+    ("iconrow", "A SHORT ROW OF SMALL {shape} WORDLESS ICON CHIPS along the lower edge, just ABOVE the navy bottom strip and never inside it, evenly spaced and equal in size, each holding one flat pictogram from the story."),
 )
 
 
@@ -512,20 +528,37 @@ COVER_ACCESSORY_POOL: tuple[tuple[str, str], ...] = (
 COVER_ACCESSORY_COUNTS = {0: 0, 1: 0, 2: 1, 3: 2, 4: 3}
 
 
-def cover_accessories(level: int, titles=(), seed=None) -> list[str]:
-    """該級要畫的招式（無字）。標題裡有「N種／N大」時，第一件固定是數量呼應的圖示列。"""
+def _accessory_geometry_note(full_width: bool) -> str:
+    """釘在每一件招式後面的幾何。
+
+    共用那條總則 bullet 一直都寫著同樣的話，實拍照樣犯規（放大鏡貼上右角、
+    圖示列橫跨切線）——因為它坐在一長串否定句中間。顏色那邊已經證明過：
+    模型讀的是編號清單那幾行，指示就要釘在那幾行後面。
+    """
+    # 短到不能再短：DESIGN BRIEF 靠的就是位置與短，每行拖長等於把自己稀釋掉。
+    # “貼紙在那裡”的理由寫在上面那條總則，這裡只下命令。
+    note = "  ← MIDDLE OR LOWER AREA ONLY, never the top third"
+    if not full_width:
+        # 雙切才有切線。版面是程式知道的事，別叫模型自己判斷。
+        note += ", never across the centre seam"
+    return note + "."
+
+
+def cover_accessories(level: int, titles=(), seed=None, full_width: bool = False) -> list[str]:
+    """該級要畫的招式（無字），形狀與幾何都已經填好。"""
     want = COVER_ACCESSORY_COUNTS.get(level, 0)
     if want <= 0:
         return []
-    picked: list[str] = []
     rng = random.Random(seed)
     pool = [text for _key, text in COVER_ACCESSORY_POOL]
     rng.shuffle(pool)
-    for text in pool:
-        if len(picked) >= want:
-            break
-        picked.append(text)
-    return picked[:want]
+    note = _accessory_geometry_note(full_width)
+    picked: list[str] = []
+    for text in pool[:want]:
+        if "{shape}" in text:
+            text = text.replace("{shape}", rng.choice(COVER_ACCESSORY_SHAPES))
+        picked.append(text + note)
+    return picked
 
 
 # ---- 設計綱要：插在 CANVAS 正後方（2026-09-11 第二輪）----
@@ -614,16 +647,14 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
         "- COLOUR FOLLOWS MEANING, NEVER ROW ORDER. Colouring row 1 white, row 2 yellow and row 3"
         f" red is BANNED. Use {spec['colours']}. A colour switch may happen part-way through a row."
     )
-    picked = cover_accessories(level, titles=titles, seed=seed)
+    picked = cover_accessories(level, titles=titles, seed=seed, full_width=full_width)
     if picked:
         rows.append(
             f"- Draw EXACTLY {len(picked)} piece{'' if len(picked) == 1 else 's'} of supporting artwork, listed here and no"
             " others. They are pictures, never captions: not one carries a letter, a digit or a"
-            " label, none covers a character, enters the top band or bottom strip, crosses the"
-            " seam or touches an edge. NONE OF THEM MAY SIT IN EITHER OUTER TOP CORNER OR IN THE"
-            " TOP THIRD OF THE FRAME: software pastes the 示意圖 label just under the outer top"
-            " corner afterwards, and artwork drawn up there comes out with that label printed"
-            " across it."
+            " label, none covers a character, enters the top band or the bottom strip, or touches"
+            " an edge. NONE OF THEM MAY SIT IN EITHER OUTER TOP CORNER OR IN THE TOP THIRD OF THE"
+            " FRAME: a label is pasted there afterwards. Obey each piece's own placement note."
         )
         rows.extend(f"  {i}. {text}" for i, text in enumerate(picked, start=1))
     return "\n".join(rows) + "\n\n"
