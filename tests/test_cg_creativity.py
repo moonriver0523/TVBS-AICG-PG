@@ -80,9 +80,40 @@ class LadderTests(unittest.TestCase):
                 self.assertLess(clause.index("VISUAL CREATIVITY"),
                                 clause.index("THIS PARAGRAPH OUTRANKS THE ONE ABOVE IT"))
 
+    def test_the_ladder_moves_structure_not_only_finish(self):
+        """2026-09-10 實拍：第一版只調美術（字重／描邊／陰影／立體），0–4 五張看不出級距，
+        1、2 抽到的版面反而比「最狂」還敢。結構槓桿才是階梯，這幾條掉了就會平回去。
+        """
+        self.assertIn("LAYOUT", _rules(1))
+        for level in (2, 3, 4):
+            with self.subTest(level=level):
+                self.assertIn("HERO ZONE", _rules(level))
+                self.assertIn("SHAPE LANGUAGE", _rules(level))
+        self.assertNotIn("HERO ZONE", _rules(1))
+        for level in (3, 4):
+            with self.subTest(level=level):
+                self.assertIn("BREAK THE GRID", _rules(level))
+        self.assertNotIn("BREAK THE GRID", _rules(2))
+        self.assertIn("NO LONGER ORTHOGONAL", _rules(4))
+        self.assertNotIn("NO LONGER ORTHOGONAL", _rules(3))
+
+    def test_no_level_takes_back_the_structural_freedom_it_just_granted(self):
+        """第一版每級結尾都寫「排列與卡片數維持上面所述」，與結構槓桿自相矛盾，
+        模型會往限制較嚴的那句收斂——這正是階梯平掉的機制，不准再出現。
+        """
+        for level in range(1, 5):
+            with self.subTest(level=level):
+                self.assertNotIn("arrangement, the number of cards", _rules(level))
+
+    def test_every_level_bans_a_real_geography_map_as_the_hero(self):
+        """等級叫模型挑一個主視覺，而它最愛挑地圖；行政區界一律憑記憶畫、一律錯。"""
+        for level in range(1, 5):
+            with self.subTest(level=level):
+                self.assertIn("NEVER A MAP OF REAL GEOGRAPHY", _rules(level))
+
     def test_higher_levels_repeat_the_lower_level_requirements_verbatim(self):
         """模型看不到別份 prompt，「照 level 2 那樣做」等於沒寫。"""
-        for pinned in ("pulled out visually", "Cards and panels get a defined edge"):
+        for pinned in ("pulled out visually", "SHAPE LANGUAGE"):
             for level in (2, 3, 4):
                 with self.subTest(level=level, pinned=pinned):
                     self.assertIn(pinned, _rules(level))

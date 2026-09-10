@@ -745,10 +745,26 @@ MAXIMUM_DENSITY_RULES = """
 # 整段條文都在講標題塊。播出鏡面／記者版沒有那種標題塊，它們是一整張資訊圖，
 # 而且身上綁著安全框、卡片列數、標題強制拆兩行這些硬規則。照抄只會被忽略。
 #
-# 所以這一套調的是**美術處理**：標題與關鍵數字的字體、描邊、壓框、立體、裝飾。
-# 版面骨架（幾張卡、幾個點、放哪裡、安全留白）不在這條拉桿上——那些是上鏡規約，
-# 由前面的區塊決定。第一版刻意保守：使用者說「你先做一版給我看」，
-# 寧可先交一條不會炸掉上鏡規則的拉桿，再依實拍梯子往上加。
+# 所以這一套調的是標題與關鍵數字的字體、描邊、壓框、立體、裝飾，外加**版面結構**。
+#
+# 2026-09-10 第二版：第一版只調美術、明文寫「排列與卡片數維持上面所述」，實拍 0–4
+# 五張（記者版／高溫熱傷害）證明那條拉桿是平的——0、3、4 都是同一種橫幅條列卡，
+# 1、2 抽到地圖版反而比「最狂」還敢，級數之間不成單調。diff 五級的 structure 文字
+# 看得很清楚：五級第一句一字不差，差異全部落在標題的表面加工形容詞
+# （heavier cut → thick outline → hard drop shadow → chrome extrusion），
+# 而真正拉開差距的結構變數（幾欄、有沒有數字英雄區、卡片形狀語言、去背主體）
+# 完全不受等級控制、由消化模型自由發揮。教訓與十點那條同一句：
+# **形容詞會被圖模平均掉，結構才有階梯。**
+#
+# 所以第二版把槓桿換成結構性的：L1 分區、L2 英雄區＋形狀語言、L3 破格排列＋
+# 去背主體越界、L4 斜切分割＋英雄元素跨區（傾斜從「可以」改成「必須」）。
+# 每一級尾巴那句「排列與卡片數維持上面所述」全部刪掉——留著等於自相矛盾，
+# 模型會往限制較嚴的那句收斂，這正是第一版平掉的機制。
+#
+# 仍然不准碰的是 _CG_CREATIVITY_FIXED：點數／[內文小標] 行數（上鏡規約）、
+# 安全留白、禁數字幾何、不准新增文字。結構拉桿改的是「怎麼排」，不是「排幾個」。
+# FIXED (g) 是這一版新加的：等級叫模型挑一個主視覺，而地圖是它最愛挑的——
+# 但行政區界一律畫錯（見 docs/error-cases/2026-09-10-台灣行政區界-錯誤-分析.md）。
 #
 # 注入點在 editor_formats.digest_rules 之後（本 repo 慣例：位置在後＋明文 OVERRIDE
 # 才壓得住），但條文自己第一句就聲明「只覆蓋美術，不覆蓋版面與內容」。
@@ -771,25 +787,30 @@ WHAT THE CREATIVITY SETTING NEVER CHANGES — THIS PARAGRAPH OUTRANKS THE ONE AB
 (d) NO NEW TEXT OF ANY KIND. Decorative marks are wordless: no letters, no digits, no invented badges, no watermark, no signature, no extra labels. Icons carry no writing.
 (e) EVERY CHARACTER STAYS COMPLETE, UNOBSTRUCTED AND LEGIBLE at broadcast distance. A decoration that crosses a stroke, a shadow that swallows a stroke, or type squeezed until the counters close, is a defect — not a style.
 (f) Traditional Chinese, Taiwan forms throughout.
+(g) A HERO ELEMENT IS NEVER A MAP OF REAL GEOGRAPHY UNLESS THE CHART TYPE IS THE MAP TYPE. The levels above invite you to pick one dominant subject image; a map is not available for that job here. Do not ask for a national or regional outline with internal county, state or district boundaries, and do not ask for one place to be highlighted inside another — the renderer draws those borders from memory and gets them wrong, which is a factual error on air, not a styling flaw. Where the story is about places, a wordless silhouette with no internal divisions, or a schematic locator described plainly as schematic, is the most this setting allows.
 """
 
 _CG_L1 = """
 
-VISUAL CREATIVITY — LEVEL 1 OF 4 (LIGHT). This paragraph overrides the earlier typography wording ONLY where they disagree about how the text LOOKS; it changes nothing about what the text SAYS or where the elements SIT.
-In "structure", specify a designed display finish for the headline and for the key figures: a heavier display cut, a clean outline, a soft drop shadow, and one accent colour used consistently. Everything else — the arrangement, the number of cards, the colour system, the spacing — stays as described above.
+VISUAL CREATIVITY — LEVEL 1 OF 4 (LIGHT). This paragraph overrides the earlier wording ONLY where they disagree about how the graphic is ARRANGED and how the text LOOKS; it changes nothing about what the text SAYS, how many points there are, or the reserved broadcast margin.
+In "structure", require both:
+- LAYOUT: the content area is divided into a clearly dominant visual zone and a clearly subordinate text zone. Say which side each occupies. One of them leads; they are not two halves of equal weight.
+- FINISH: a designed display treatment for the headline and the key figures — a heavier display cut, a clean outline, a soft drop shadow, and one accent colour used consistently.
 """
 
 _CG_L2 = """
 
-VISUAL CREATIVITY — LEVEL 2 OF 4 (DESIGNED). This paragraph overrides the earlier typography wording ONLY where they disagree about how the text LOOKS; it changes nothing about what the text SAYS or where the elements SIT.
+VISUAL CREATIVITY — LEVEL 2 OF 4 (DESIGNED). This paragraph overrides the earlier wording ONLY where they disagree about how the graphic is ARRANGED and how the text LOOKS; it changes nothing about what the text SAYS, how many points there are, or the reserved broadcast margin.
 In "structure", require all of the following, not as options:
+- HERO ZONE: one single element — the most important figure, the most important short phrase, or the one subject image the story is about — is given a zone of its own that dominates the content area, and every remaining point is laid out around it as clearly smaller supporting material. Name in "structure" which element is the hero. A layout where every point gets the same weight is under-designed at this setting.
+- SHAPE LANGUAGE: the cards and panels share one deliberate shape — all softly rounded, or all hard-cornered, or all cut on the same slant — and each one carries a defined edge (a thin bright rule, a subtle inner glow, or a soft outer shadow) so it reads as an object rather than a rectangle of colour.
 - The headline carries a designed display treatment: heavy cut, thick outline, hard drop shadow.
-- IN EVERY CARD OR POINT, the figure or key phrase already marked with angle brackets is pulled out visually — set larger than the words around it and given a contrasting colour, or reversed out of a solid colour block. A card whose text is one flat colour is under-designed at this setting.
-- Cards and panels get a defined edge: a thin bright rule, a subtle inner glow or a soft outer shadow, so each one reads as an object rather than a rectangle of colour.
-The arrangement, the number of cards and the safe area stay exactly as described above.
+- IN EVERY CARD OR POINT, the figure or key phrase already marked with angle brackets is pulled out visually — set larger than the words around it and given a contrasting colour, or reversed out of a solid colour block.
 """
 
-_CG_L3_EXTRA = """- SIZE HIERARCHY INSIDE THE TYPE: the headline and the single most important figure are set far larger than the supporting lines — a clear step, not a nudge — while the supporting lines stay at one consistent size as each other.
+_CG_L3_EXTRA = """- BREAK THE GRID: the supporting points stop being a stack of equal rows. Arrange them asymmetrically — stepped down a diagonal, split into a short column beside the hero zone, or wrapped around the hero element on two sides — and say in "structure" which arrangement you chose. The number of points does not change; only how they sit.
+- THE SUBJECT IMAGE BECOMES AN OBJECT, NOT A BACKDROP: cut the main subject out and let it overlap the edge of a panel or the hero zone, instead of sitting flat behind everything as a full-frame photograph.
+- SIZE HIERARCHY INSIDE THE TYPE: the headline and the single most important figure are set far larger than the supporting lines — a clear step, not a nudge — while the supporting lines stay at one consistent size as each other.
 - One or two flat wordless pictograms, chosen from what the story is about, sit beside the headline or the leading card.
 - The background carries a themed texture or gradient related to the subject (circuitry, water, smoke, topography), kept dark and low-contrast behind the text so nothing competes with the words.
 """
@@ -798,12 +819,14 @@ _CG_L3_EXTRA = """- SIZE HIERARCHY INSIDE THE TYPE: the headline and the single 
 # prompt，引用等於沒寫。（十點那條拉桿是同一個做法。）
 _CG_L3 = _CG_L2.replace("LEVEL 2 OF 4 (DESIGNED)", "LEVEL 3 OF 4 (LOUD)") + _CG_L3_EXTRA
 
-_CG_L4_EXTRA = """- GO FURTHER — THIS IS THE LOUDEST SETTING. Everything above still applies; now push the ART, and only the art, to the edge of what still reads:
+_CG_L4_EXTRA = """- GO FURTHER — THIS IS THE LOUDEST SETTING. Everything above still applies; now push both the arrangement and the art to the edge of what still reads:
+- THE DIVISION OF THE FRAME IS NO LONGER ORTHOGONAL: the boundary between the hero zone and the supporting material is a slant, a sweep or a torn edge running across the content area, and the panels follow that same angle. Straight horizontal bands stacked one above another are the thing this setting exists to get away from.
+- THE HERO ELEMENT BREAKS ITS OWN ZONE: it overlaps the dividing edge and sits partly over the supporting side, so the two zones interlock instead of abutting.
 - Stack outlines on the headline and the hero figure (a thick dark one, then a bright one outside it) and give them a deep three-dimensional extrusion with a treatment drawn from the story — molten metal, neon, cracked stone, wet chrome.
-- The headline block may TILT or ARC very slightly (a few degrees, never more than about eight) and its characters may step up and down instead of sitting on one baseline.
+- THE HEADLINE BLOCK TILTS OR ARCS — this is required at this setting, not offered (a few degrees, never more than about eight) — and its characters step up and down instead of sitting on one baseline.
 - Add energy around the hero element: radiating lines, sparks, shards, a splashed or torn colour shape, a burst of glow. Up to three wordless pictograms.
 - The background may darken further so all of this still reads.
-- LOUD IS NOT THE SAME AS BROKEN: nothing tilts far enough to touch or overrun the reserved empty margin, no decoration crosses a stroke, and every card still sits where the arrangement above puts it.
+- LOUD IS NOT THE SAME AS BROKEN: nothing tilts far enough to touch or overrun the reserved empty margin, no decoration crosses a stroke, every point the material supports is still present and still legible at broadcast distance, and no card is dropped, merged or duplicated to make an angle work.
 """
 
 _CG_CREATIVITY_BLOCKS = {
