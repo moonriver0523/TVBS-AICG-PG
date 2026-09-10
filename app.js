@@ -435,7 +435,7 @@ const EDITOR_FORMATS = {
     // （coverLayout: 'auto'，實際值一律問 coverLayoutNow()）。
     ten_cover: {
         label: '十點不一樣',
-        hint: '只填第一標題＝滿版一張圖；再填第二標題＝左右雙切、兩格各一個標題與附圖位。有附圖的格直接上版，沒附圖的格 AI 生底圖。預設整張由生圖模型設計；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。Logo 與節目標籤一律由程式貼正版檔。',
+        hint: '只填第一標題＝滿版一張圖；再填第二標題＝左右雙切、兩格各一個標題與附圖位。有附圖的格直接上版，沒附圖的格 AI 生底圖。預設整張由生圖模型設計；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。標頭帶整條由程式貼：Logo、節目標籤、日期與 ON AIR／精華都是正版檔，AI 只負責底圖與標題。',
         coverLayout: 'auto',
         inputs: 'cover',
         coverMode: 'ai',
@@ -973,6 +973,14 @@ function applyEditorFormatInputs() {
     // 直標沒有底圖也沒有生圖，附圖無處可去，整區收起來（hides.refUpload）。
     if (refBox) {
         refBox.classList.toggle('hidden', !!(editorFormat().hides || {}).refUpload);
+        // 十點的照片走上面兩顆附圖位，這一區不收原圖放置——說明文字要跟著改，
+        // 否則使用者照著字面找不到那個用途。
+        const refHint = document.getElementById('refUploadHint');
+        if (refHint) {
+            refHint.textContent = coverAsisOnlyInSlots()
+                ? '地圖底稿／實景參考／肖像照片，單張 ≤1.5MB，最多 3 張（要直接上版的照片請用上面的附圖位）'
+                : '地圖底稿／實景參考／肖像照片／原圖放置，單張 ≤1.5MB，最多 3 張';
+        }
         const host = wantsVstrip ? vstrip : (wantsYt ? yt : (wantsCover ? cover : news));
         if (host && refBox.previousElementSibling !== host) host.insertAdjacentElement('afterend', refBox);
     }
@@ -1044,13 +1052,15 @@ function updateDigestDensityBar() {
 }
 
 // CG 美術創意 0–4（2026-09-10 使用者要求：播出鏡面與記者版也要）。
-// 調的只有美術處理，版面骨架／卡片數／安全留白／字句都不歸它管（見 main.py 的條文）。
+// 2026-09-10 改成結構性槓桿：形容詞會被圖模平均掉，所以調的是版面怎麼排
+// （分區、英雄區、破格、傾斜、字級落差），不是加幾層描邊（見 main.py 的 _CG_L1–_CG_L4_EXTRA）。
+// 不歸它管的只有：字句、重點的數量、安全留白，以及「不准拿真實地圖當主視覺」。
 const CG_CREATIVITY = [
     ['規矩', '現行成品，完全不加設計指示'],
-    ['微設計', '標題與關鍵數字給描邊、陰影、單一強調色'],
-    ['有設計', '再加：關鍵數字挖出來換色／反白，卡片給邊光'],
-    ['奔放', '再加：字級落差、無字小圖示、主題化背景質感'],
-    ['最狂', '再加：多層描邊立體、輕微傾斜錯落、爆裂與速度線'],
+    ['微設計', '畫面分成一個主視覺區與一個文字區，收邊做乾淨'],
+    ['有設計', '再加：挑一個英雄元素獨佔一區，卡片統一形狀語言'],
+    ['奔放', '再加：破格排列、去背主體越出卡片、字級落差拉大'],
+    ['最狂', '再加：斜切分割、英雄破自己的框、標題必須微傾斜'],
 ];
 
 function updateCgCreativityBar() {
@@ -2852,6 +2862,11 @@ async function handleRefFilesSelected(input) {
     }
 }
 
+// 十點不一樣：原圖放置只走第一／第二附圖那兩顆，通用上傳區不收。
+function coverAsisOnlyInSlots() {
+    return editorFormat().inputs === 'cover';
+}
+
 function renderRefUploads() {
     const list = document.getElementById('refUploadList');
     if (!list) return;
@@ -2867,10 +2882,13 @@ function renderRefUploads() {
         name.textContent = ref.name;
         const select = document.createElement('select');
         select.className = 'bg-slate-900 border border-slate-700 rounded text-[10px] text-slate-200 px-1.5 py-1';
+        // 十點封面有自己的左右附圖位（2026-09-07 加的，2026-09-10 收乾淨）：照片一律走那兩顆，
+        // 通用清單完全不提供「原圖放置」。以前留了「本來就是 asis 就保留」的後門，結果是
+        // 在別的版型設成原圖放置、再切到十點，那張仍會被後端當 asis——上面兩顆沒填時
+        // 它就悄悄變成底圖。這裡直接把用途改掉，讓「哪張圖放哪一格」只有一個答案。
+        if (coverAsisOnlyInSlots() && ref.purpose === 'asis') ref.purpose = 'scene';
         for (const [value, label] of Object.entries(REF_PURPOSES)) {
-            // 十點封面有自己的左右附圖位（2026-09-07），通用清單不再提供「原圖放置」，
-            // 免得又出現分不清左右的附圖
-            if (value === 'asis' && editorFormat().inputs === 'cover' && ref.purpose !== 'asis') continue;
+            if (value === 'asis' && coverAsisOnlyInSlots()) continue;
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
