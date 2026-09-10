@@ -353,6 +353,8 @@ let state = {
     userRefImages: [],
     // 十點封面左右上傳位（2026-09-07）：{left:{dataUrl,name}|null, right:...}
     coverAsis: { left: null, right: null },
+    // 整點直播的一標一附圖（2026-09-10，對齊十點）。單則只用 left。
+    ytAsis: { left: null, right: null },
     // ③ 追加修改用：**置框前**原圖（不是顯示中的成品——成品餵回去會二次拉伸）
     // refineSource = {base64, mimeType}；refineDisplay = 顯示中成品的原始回傳；
     // refineStack 供「退回上一版」
@@ -442,7 +444,11 @@ const EDITOR_FORMATS = {
         // 封面沒有消化這道程序：/api/editor/cover 不收 density／stamp／safe_frame／tone，
         // 留著只會是四顆按了沒反應的按鈕，所以收起來而不是鎖起來
         locks: {},
-        hides: { digestControls: true, safeFrame: true, stamp: true },
+        // 2026-09-10 使用者裁決：通用「附參考圖」那一區在十點整個收起來。它就貼在創意拉桿
+        // 底下，跟第一／第二標題下面那兩顆附圖位功能重疊——同一張照片有兩個入口，而且上面
+        // 兩顆有填時後端就完全不看下面那區（見 main.py editor_cover 的 slots 判定），
+        // 使用者放了卻沒作用。十點的照片一律走上面那兩顆（含原圖放置）。
+        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
         hole: null,
     },
     // YT 直播封面：底圖來自附圖（原圖放置）或 AI，LIVE 章／日期／Logo／兩行標題全由程式疊。
@@ -472,11 +478,14 @@ const EDITOR_FORMATS = {
     // 紅底日期、沒有副標）。
     yt_hourly_cover: {
         label: 'YT整點直播',
-        hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。第二標題填了就是「雙則」：上白＝第一則、下黃＝第二則，每行一整句不拆、最多 18 字，底圖左右兩張羽化拼成一張。附圖與底圖規則同國內外新聞直播。',
+        hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。第二標題填了就是「雙則」：上白＝第一則、下黃＝第二則，每行一整句不拆、最多 18 字，底圖左右兩張羽化拼成一張。附圖跟十點一樣一標一張：每個標題底下各有自己的附圖位，沒放圖的那格由 AI 生底圖。',
         inputs: 'yt_cover',
         ytLayout: 'hourly',
         locks: {},
-        hides: { digestControls: true, safeFrame: true, stamp: true },
+        // 2026-09-10：整點改成一標一附圖（對齊十點），共用「附參考圖」那一區整個收起來。
+        // 國內外新聞直播與今日熱搜**不收**——那兩個支援 1 張整版／2 張左右雙切／3 張三切，
+        // 改成一標一圖會把雙切與三切砍掉。
+        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
         hole: null,
     },
     // YT 今日熱搜（2026-09-06 型錄 H 類）：紅色系「今日熱搜」標籤＋紅色 Logo 斜標，
@@ -968,17 +977,20 @@ function applyEditorFormatInputs() {
     if (yt) yt.classList.toggle('hidden', !wantsYt);
     if (vstrip) vstrip.classList.toggle('hidden', !wantsVstrip);
     updateVstripButtons();
+    // 附圖位只有整點有，換到別的版型要收起來——updateYtLayoutIndicator 只在整點時才跑到底，
+    // 靠它收不掉（2026-09-10）
+    updateYtAsisSlots();
     // 附圖上傳區：主流程、YT 直播封面、十點不一樣（2026-09-06 起收原圖放置）都用。
     // 封面版型時把它搬到該組欄位下面——留在原位會跑到角色鈕正下方，看起來像消失了。
     // 直標沒有底圖也沒有生圖，附圖無處可去，整區收起來（hides.refUpload）。
     if (refBox) {
         refBox.classList.toggle('hidden', !!(editorFormat().hides || {}).refUpload);
-        // 十點的照片走上面兩顆附圖位，這一區不收原圖放置——說明文字要跟著改，
-        // 否則使用者照著字面找不到那個用途。
+        // 國內外新聞直播與今日熱搜的原圖放置是「張數決定版面」，說明要寫明白，
+        // 否則使用者不知道多放一張會變成雙切（2026-09-10）。
         const refHint = document.getElementById('refUploadHint');
         if (refHint) {
-            refHint.textContent = coverAsisOnlyInSlots()
-                ? '地圖底稿／實景參考／肖像照片，單張 ≤1.5MB，最多 3 張（要直接上版的照片請用上面的附圖位）'
+            refHint.textContent = ['news', 'hot'].includes(editorFormat().ytLayout || '')
+                ? '地圖底稿／實景參考／肖像照片／原圖放置，單張 ≤1.5MB。原圖放置依張數決定版面：1 張整版、2 張左右雙切、3 張三切，順序就是由左到右'
                 : '地圖底稿／實景參考／肖像照片／原圖放置，單張 ≤1.5MB，最多 3 張';
         }
         const host = wantsVstrip ? vstrip : (wantsYt ? yt : (wantsCover ? cover : news));
@@ -1327,6 +1339,7 @@ function updateYtLayoutIndicator() {
             + (active ? 'border border-red-600 bg-red-600 text-white'
                       : 'border border-red-600 text-slate-500 hover:text-white');
     });
+    updateYtAsisSlots();
     // 雙則的底圖是拼好的一張，「只改文字」與追加修改都跟單則走同一條路
     const recompose = document.getElementById('ytCoverRecomposeBtn');
     if (recompose) recompose.disabled = !state.refineSource;
@@ -1887,9 +1900,34 @@ function _apiHeaders() {
     return { "Content-Type": "application/json", "X-API-Key": _INTERNAL_API_KEY };
 }
 
+/* 前端這一側的保險絲（2026-09-10 線上事故）：後端現在每一次消化呼叫都有 90 秒上限、
+   整體 230 秒死線，所以正常情況一定會回一個看得懂的錯誤。但只要中間有任何一層
+   （Cloud Run、公司測試環境前面的反向代理）把連線吊著不回，fetch 沒有預設逾時，
+   進度條就會停在 35%（消化階段的上限值）永遠不動——使用者只看得到「卡住」。
+   時間設在 Cloud Run 的 300 秒之內，讓後端的訊息永遠有機會先回來。 */
+const DIGEST_FETCH_TIMEOUT_MS = 290_000;
+
 async function digestNewsText(input) {
+    const abort = new AbortController();
+    const fuse = setTimeout(() => abort.abort(), DIGEST_FETCH_TIMEOUT_MS);
+    let response;
+    try {
+        response = await _digestFetch(input, abort.signal);
+    } catch (err) {
+        if (err.name === 'AbortError') {
+            throw new Error('消化超過 5 分鐘沒有回應，已中止。請縮短新聞內容或稍後再試');
+        }
+        throw err;
+    } finally {
+        clearTimeout(fuse);
+    }
+    return response;
+}
+
+async function _digestFetch(input, signal) {
     const response = await fetch(AI_BACKEND_URL, {
         method: "POST",
+        signal,
         headers: _apiHeaders(),
         body: JSON.stringify({
             news_text: input,
@@ -2081,7 +2119,9 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
                     title_creativity: state.coverTitleCreativity,
                     mode: composite ? 'composite' : 'ai',
                     provider: effectiveImageProvider(),
-                    reference_images: userRefImagesPayload(),
+                    // 十點把通用附圖區整個收起來（hides.refUpload），照片一律走上面那兩顆
+                    // 附圖位。那一區殘留的圖不能偷偷跟著送出去，否則使用者看不到卻會影響成圖。
+                    reference_images: (editorFormat().hides || {}).refUpload ? [] : userRefImagesPayload(),
                     asis_left: state.coverAsis.left?.dataUrl || '',
                     asis_right: fullLayout ? '' : (state.coverAsis.right?.dataUrl || ''),
                 }),
@@ -2220,6 +2260,10 @@ function ytCoverFields() {
         date_text: val('ytCoverDate'),
         time_text: layout === 'hourly' ? val('ytCoverTime') : '',
         bottom_band: layout !== 'hourly' && state.ytBottomBand,
+        // 一標一附圖（2026-09-10，對齊十點）：只有整點有；其餘版型送空字串，
+        // 後端就會走原本的 reference_images 原圖放置清單（1 張整版／2 張雙切／3 張三切）
+        asis_left: ytUsesAsisSlots() ? (state.ytAsis.left?.dataUrl || '') : '',
+        asis_right: ytUsesAsisSlots() && ytLayoutNow() === 'dual' ? (state.ytAsis.right?.dataUrl || '') : '',
         // 指令欄（2026-09-08 WP1）：餵給底圖推導當畫面提示
         instruction: coverInstructionForApi(),
     };
@@ -2313,7 +2357,8 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
                     ...fields,
                     provider: effectiveImageProvider(),
                     image_size: state.imageSize,
-                    reference_images: userRefImagesPayload(),
+                    // 整點把共用附圖區收起來（hides.refUpload），那裡殘留的圖不能偷偷送出去
+                    reference_images: (editorFormat().hides || {}).refUpload ? [] : userRefImagesPayload(),
                 }),
             });
             data = await res.json().catch(() => ({}));
@@ -2862,11 +2907,6 @@ async function handleRefFilesSelected(input) {
     }
 }
 
-// 十點不一樣：原圖放置只走第一／第二附圖那兩顆，通用上傳區不收。
-function coverAsisOnlyInSlots() {
-    return editorFormat().inputs === 'cover';
-}
-
 function renderRefUploads() {
     const list = document.getElementById('refUploadList');
     if (!list) return;
@@ -2882,13 +2922,7 @@ function renderRefUploads() {
         name.textContent = ref.name;
         const select = document.createElement('select');
         select.className = 'bg-slate-900 border border-slate-700 rounded text-[10px] text-slate-200 px-1.5 py-1';
-        // 十點封面有自己的左右附圖位（2026-09-07 加的，2026-09-10 收乾淨）：照片一律走那兩顆，
-        // 通用清單完全不提供「原圖放置」。以前留了「本來就是 asis 就保留」的後門，結果是
-        // 在別的版型設成原圖放置、再切到十點，那張仍會被後端當 asis——上面兩顆沒填時
-        // 它就悄悄變成底圖。這裡直接把用途改掉，讓「哪張圖放哪一格」只有一個答案。
-        if (coverAsisOnlyInSlots() && ref.purpose === 'asis') ref.purpose = 'scene';
         for (const [value, label] of Object.entries(REF_PURPOSES)) {
-            if (value === 'asis' && coverAsisOnlyInSlots()) continue;
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
@@ -2966,6 +3000,79 @@ async function handleCoverAsisSelected(side, input) {
 function clearCoverAsis(side) {
     state.coverAsis[side] = null;
     renderCoverAsis();
+}
+
+// 整點直播的附圖位（2026-09-10）：與十點同一組動作，只是存在 state.ytAsis。
+async function handleYtAsisSelected(side, input) {
+    const file = (input.files || [])[0];
+    input.value = '';
+    if (!file) return;
+    try {
+        let dataUrl;
+        if (file.size <= REF_MAX_BYTES) {
+            dataUrl = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(new Error('圖片讀取失敗'));
+                reader.readAsDataURL(file);
+            });
+        } else {
+            dataUrl = await compressImageFile(file, REF_MAX_BYTES);
+            if (dataUrlByteLength(dataUrl) > REF_MAX_BYTES) return showToast(`「${file.name}」壓縮後仍過大，請換一張較小的圖`);
+            showToast(`「${file.name}」已自動壓縮上傳`);
+        }
+        state.ytAsis[side] = { dataUrl, name: file.name };
+    } catch (err) {
+        return showToast(`「${file.name}」讀取失敗：${err.message}`);
+    }
+    renderYtAsis();
+}
+
+function clearYtAsis(side) {
+    state.ytAsis[side] = null;
+    renderYtAsis();
+}
+
+function renderYtAsis() {
+    for (const [side, cap] of [['left', 'Left'], ['right', 'Right']]) {
+        const ref = state.ytAsis[side];
+        const preview = document.getElementById(`ytAsis${cap}Preview`);
+        if (!preview) continue;
+        preview.classList.toggle('hidden', !ref);
+        preview.classList.toggle('flex', !!ref);
+        if (ref) {
+            document.getElementById(`ytAsis${cap}Img`).src = ref.dataUrl;
+            document.getElementById(`ytAsis${cap}Name`).textContent = ref.name;
+        }
+    }
+}
+
+/* 附圖位只有整點直播有：國內外新聞直播與今日熱搜仍走共用附圖區，因為那兩個支援
+   1 張整版／2 張左右雙切／3 張三切——改成一標一圖會把雙切與三切砍掉。
+   第二個附圖位再多一層條件：判定成雙則（第二標題有填）時才出現，比照十點的滿版／雙切。 */
+function ytUsesAsisSlots() {
+    return (editorFormat().ytLayout || '') === 'hourly';
+}
+
+function updateYtAsisSlots() {
+    const slots = ytUsesAsisSlots();
+    const dual = slots && ytLayoutNow() === 'dual';
+    const leftRow = document.getElementById('ytAsisLeftRow');
+    const rightRow = document.getElementById('ytAsisRightRow');
+    if (leftRow) {
+        leftRow.classList.toggle('hidden', !slots);
+        leftRow.classList.toggle('flex', slots);
+    }
+    if (rightRow) {
+        rightRow.classList.toggle('hidden', !dual);
+        rightRow.classList.toggle('flex', dual);
+    }
+    // 單則時左邊那顆就是整版的附圖位，字要跟著改（比照十點的滿版）
+    const leftBtn = document.getElementById('ytAsisLeftBtn');
+    if (leftBtn) leftBtn.textContent = dual ? '📁 ＋ 第一附圖（選填）' : '📁 ＋ 附圖（選填）';
+    // 從雙則退回單則時，右邊那格的圖不能留著偷偷送出去
+    if (!dual && state.ytAsis.right) state.ytAsis.right = null;
+    renderYtAsis();
 }
 
 function renderCoverAsis() {

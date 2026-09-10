@@ -171,6 +171,12 @@ def digest_reasoning_body(max_output_tokens: int) -> dict:
 # 連錯誤訊息都沒有的斷線——使用者看到的「逾時沒有生成」。與其讓第五次 attempt 在
 # 第 290 秒才開始，不如在還來得及的時候停手，回一個講得清楚的 503。
 DIGEST_DEADLINE_SECONDS = float(os.getenv("DIGEST_DEADLINE_SECONDS", "230"))
+# 單次消化呼叫的上限（2026-09-10 線上事故）。沒有這個上限時，一通卡住的上游請求會用掉
+# SDK 預設的 600 秒——比 DIGEST_DEADLINE_SECONDS(230) 與 Cloud Run 的 300 秒都長。
+# 死線只在「兩次 attempt 之間」檢查，所以擋不住第一通就卡死的情況：使用者看到的是
+# 進度條停在 35%（消化階段的上限值）永遠不動，連錯誤訊息都沒有。
+# 實測正常消化 22–26 秒，90 秒給到 3.5 倍餘裕；卡住時 90 秒就換下一次 attempt。
+DIGEST_TIMEOUT_SECONDS = float(os.getenv("DIGEST_TIMEOUT_SECONDS", "90"))
 
 # 「不消化」的輸出長度**由輸入長度決定**——模型要把整篇原文一字不差抄進 variable，
 # 再另外寫 style/structure。固定 1500 等於「原文超過某個長度就一定失敗」。
@@ -1507,8 +1513,11 @@ def digest_completion(
     """呼叫 Chat Completions 取結構化消化結果。
 
     raw_user_message：呼叫端已自行組好 user 訊息（分類器要把指令欄一起帶上），
-    不再套 News Source Material 包裝。timeout：只有分類呼叫會給——它必須快、
-    失敗就退回舊路徑；主消化維持 client 預設，行為不變。
+    不再套 News Source Material 包裝。
+
+    timeout：不給就用 DIGEST_TIMEOUT_SECONDS。**不可以是 None**——SDK 預設 600 秒，
+    比 Cloud Run 的 300 秒還長，一通卡住的請求就會讓前端停在 35% 永遠不動
+    （2026-09-10 線上事故）。分類呼叫自己給更短的值，因為它必須快、失敗就退回舊路徑。
 
     輸出長度上限的參數名兩邊不同：OpenRouter 吃 max_tokens，OpenAI 原生的新模型
     （如 gpt-5.6-terra）只吃 max_completion_tokens，送錯直接 400。因此先送
@@ -1536,7 +1545,10 @@ def digest_completion(
             "json_schema": {"name": schema_name, "strict": True, "schema": schema},
         },
     }
-    client = openai_client if timeout is None else openai_client.with_options(timeout=timeout)
+    # 逾時走 payload 而不是 with_options：with_options 會複製出**另一個 client**，
+    # 呼叫端與測試對 openai_client 的 patch 就都失效了。
+    payload["timeout"] = DIGEST_TIMEOUT_SECONDS if timeout is None else timeout
+    client = openai_client
     # 思考上限只有 OpenRouter 吃得到，而且不是每個模型都支援；被明確拒絕時原樣重送
     # 一次不帶這個欄位的請求，換模型不會把整條線弄壞（見 digest_reasoning_body）。
     reasoning = digest_reasoning_body(max_output_tokens)
@@ -1898,7 +1910,10 @@ def generate(req: GenerateRequest):
     for attempt in range(DIGEST_ATTEMPTS):
         # 還沒開始就已經沒時間了：與其讓 Cloud Run 在第 300 秒直接斷線（使用者看到
         # 的是「沒有生成」，連錯誤都沒有），不如在這裡停手，回一個看得懂的訊息。
-        if attempt and time.monotonic() > deadline:
+        # 看的是「這一次跑滿也來不及」而不是「現在超過死線沒」（2026-09-10）：
+        # 每次 attempt 最久跑 DIGEST_TIMEOUT_SECONDS，在死線前一刻才起跑的那次
+        # 會整整超出一個 timeout，剛好把 Cloud Run 的 300 秒吃掉。
+        if attempt and time.monotonic() + DIGEST_TIMEOUT_SECONDS > deadline:
             print(
                 f"[generate] 已用掉 {DIGEST_DEADLINE_SECONDS:.0f} 秒預算，"
                 f"停在第 {attempt} 次 attempt 不再重試",
@@ -4714,11 +4729,27 @@ class YtCoverRequest(BaseModel):
     reference_images: list[UserReferenceImage] = Field(
         default_factory=list, max_length=MAX_INPUT_REFERENCES
     )
+    # 整點直播的「一標一附圖」欄位（2026-09-10，對齊十點不一樣）。
+    # 在此之前整點只能靠共用附圖區的**上傳順序**決定哪張進哪格，使用者看不出來也指不了；
+    # 現在第一／第二標題底下各有自己的附圖位，前端也把共用區收起來（hides.refUpload）。
+    # 空字串＝那一格沒附圖＝那一格由 AI 生底圖。單則只有 asis_left（＝整版鋪滿）。
+    # 舊呼叫端（LINE、國內外新聞直播、今日熱搜）不送這兩欄，仍走 reference_images 的
+    # 原圖放置清單，1 張整版／2 張左右雙切／3 張三切一字不變。
+    asis_left: str = Field(default="", max_length=2_800_000)
+    asis_right: str = Field(default="", max_length=2_800_000)
     # 已有底圖時只重疊文字（追加修改後、或只改標題／副標／日期）。base64，不是 data URL。
     background_image_base64: str = Field(default="", max_length=28_000_000)
     background_mime_type: str = "image/png"
     # 那張底圖是不是 AI 生的——決定要不要疊「AI示意圖」。前端原樣帶回上一次的回應值。
     background_is_ai: bool = False
+
+    def asis_slots(self) -> tuple[str, str]:
+        """兩個附圖位的內容（可能其中一格或兩格是空字串）。"""
+        return (self.asis_left.strip(), self.asis_right.strip())
+
+    def uses_asis_slots(self) -> bool:
+        """有沒有用新的一標一附圖欄位——沒有就走舊的 reference_images 清單。"""
+        return any(self.asis_slots())
 
 
 class YtCoverResponse(ImageGenerateResponse):
@@ -4950,6 +4981,9 @@ def _yt_cover_full_image(
 
 
 def yt_cover_asis_count(req: "YtCoverRequest") -> int:
+    if req.uses_asis_slots():
+        # 用附圖位時，共用清單裡的原圖放置不算數（前端已把那一區收起來）
+        return sum(1 for slot in req.asis_slots() if slot)
     return sum(1 for ref in req.reference_images if ref.purpose == "asis")
 
 
@@ -4969,18 +5003,28 @@ def yt_dual_panel_requests(req: "YtCoverRequest") -> tuple["YtCoverRequest", "Yt
     **附圖一定要先拆**：resolve_yt_cover_plan 的 has_asis 看的是整份清單，
     不拆的話左格附了一張圖會讓右格也以為自己有底圖，右格的畫面推導就被跳過。
     """
-    asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
     others = [ref for ref in req.reference_images if ref.purpose != "asis"]
-    if len(asis) > 2:
-        print(f"[yt-cover:dual] 原圖放置附圖 {len(asis)} 張，雙則只有兩格，只取前 2 張", flush=True)
+    if req.uses_asis_slots():
+        # 一標一附圖（2026-09-10）：哪張進哪格是使用者指定的，不再靠上傳順序猜。
+        # 只填右邊那格也不會被誤送到左格——這正是舊寫法會出的錯。
+        slot_left, slot_right = req.asis_slots()
+        asis_left = [UserReferenceImage(data_url=slot_left, purpose="asis")] if slot_left else []
+        asis_right = [UserReferenceImage(data_url=slot_right, purpose="asis")] if slot_right else []
+    else:
+        asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
+        if len(asis) > 2:
+            print(f"[yt-cover:dual] 原圖放置附圖 {len(asis)} 張，雙則只有兩格，只取前 2 張", flush=True)
+        asis_left, asis_right = asis[:1], asis[1:2]
     left = req.model_copy(update={
         "title": req.title.strip(), "title_second": "",
-        "reference_images": others + asis[:1],
+        "reference_images": others + asis_left,
+        "asis_left": "", "asis_right": "",
         "background_image_base64": "",
     })
     right = req.model_copy(update={
         "title": req.title_second.strip(), "title_second": "",
-        "reference_images": others + asis[1:2],
+        "reference_images": others + asis_right,
+        "asis_left": "", "asis_right": "",
         "background_image_base64": "",
     })
     return left, right
@@ -5061,6 +5105,17 @@ def yt_dual_background(
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     dual = editor_formats.yt_cover_is_dual(req.layout, req.title_second)
+    if not dual and req.uses_asis_slots():
+        # 單則只有一格，附圖位的那張就是整版底圖：正規化成舊的原圖放置清單，
+        # 下游 1 張＝整版鋪滿那條路完全不用改。雙則不走這裡——它要保留左右格身分，
+        # 由 yt_dual_panel_requests 各歸各格。
+        slot = next(s for s in req.asis_slots() if s)
+        req = req.model_copy(update={
+            "reference_images": [
+                ref for ref in req.reference_images if ref.purpose != "asis"
+            ] + [UserReferenceImage(data_url=slot, purpose="asis")],
+            "asis_left": "", "asis_right": "",
+        })
     if yt_cover_asis_count(req) >= 1 and req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI:
         # 有原圖放置一律程式壓字（2026-09-07 使用者裁決，與十點封面同一原則）：
         # 原圖放置＝真實新聞照直接上版，交給模型重畫會走樣；原本只在 ≥2 張時強制，

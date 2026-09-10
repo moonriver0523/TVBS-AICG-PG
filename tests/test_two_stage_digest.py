@@ -292,28 +292,30 @@ class RawUserMessageTests(unittest.TestCase):
                                    raw_user_message=True)
         self.assertEqual(captured["messages"][1]["content"], "RAW")
 
-    def test_timeout_uses_with_options_only_when_given(self):
-        seen = {"with_options": []}
+    def test_every_call_carries_a_timeout(self):
+        """逾時走 payload，而且**不給也要有**（2026-09-10 線上事故）。
+
+        以前不給就沿用 client 預設的 600 秒，比整體死線 230 秒與 Cloud Run 的 300 秒
+        都長，一通卡住的上游請求會讓前端停在 35% 永遠不動。
+        另外刻意不走 with_options：那會複製出另一個 client，呼叫端與測試對
+        openai_client 的 patch 全部失效（改法當天就先被這件事咬過一次）。
+        """
+        seen = []
 
         class FakeCompletions:
             def create(self, **kw):
+                seen.append(kw.get("timeout"))
                 return _resp("{}")
 
-        class FakeClient:
-            chat = SimpleNamespace(completions=FakeCompletions())
-
-            def with_options(self, **kw):
-                seen["with_options"].append(kw)
-                return self
-
-        with patch.object(main, "openai_client", FakeClient()):
+        fake = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+        with patch.object(main, "openai_client", fake):
             main.digest_completion(model="m", system_prompt="s", news_text="X",
                                    max_output_tokens=10, schema_name="n", schema={})
-            self.assertEqual(seen["with_options"], [])
+            self.assertEqual(seen, [main.DIGEST_TIMEOUT_SECONDS])
             main.digest_completion(model="m", system_prompt="s", news_text="X",
                                    max_output_tokens=10, schema_name="n", schema={},
                                    timeout=20.0)
-            self.assertEqual(seen["with_options"], [{"timeout": 20.0}])
+            self.assertEqual(seen[-1], 20.0)
 
 
 if __name__ == "__main__":

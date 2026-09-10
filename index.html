@@ -312,7 +312,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260910-18</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260910-19</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -499,6 +499,20 @@
                             <input id="ytCoverTitle" type="text" maxlength="60"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                    placeholder="挪威國王哈拉德辭世 開放公眾瞻仰遺容" />
+                            <!-- 整點直播的附圖位（2026-09-10，對齊十點不一樣）：一標一附圖。
+                                 只有整點會顯示；國內外新聞直播與今日熱搜仍走共用附圖區，
+                                 因為那兩個支援 1 張整版／2 張左右雙切／3 張三切。 -->
+                            <div id="ytAsisLeftRow" class="hidden mt-1 items-center gap-2">
+                                <button type="button" id="ytAsisLeftBtn" onclick="document.getElementById('ytAsisLeftInput').click()"
+                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 附圖（選填）</button>
+                                <input id="ytAsisLeftInput" type="file" accept="image/*" class="hidden" onchange="handleYtAsisSelected('left', this)" />
+                                <div id="ytAsisLeftPreview" class="hidden items-center gap-2">
+                                    <img id="ytAsisLeftImg" class="w-10 h-10 object-cover rounded border border-slate-700" alt="" />
+                                    <span id="ytAsisLeftName" class="text-[10px] text-slate-400 truncate max-w-[140px]"></span>
+                                    <button type="button" onclick="clearYtAsis('left')" class="text-[10px] font-black text-slate-500 hover:text-red-400 px-1">✕</button>
+                                </div>
+                                <span class="text-[9px] text-slate-600">沒圖＝這格由 AI 生底圖</span>
+                            </div>
                         </div>
                         <!-- 整點直播的第二標題（2026-09-08 WP2）：填了就是「雙則」，做法對齊十點不一樣 -->
                         <div id="ytCoverTitleSecondRow" class="hidden">
@@ -507,6 +521,17 @@
                                    oninput="updateYtLayoutIndicator()"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                    placeholder="直播帶貨美國爆紅砸數十億" />
+                            <div id="ytAsisRightRow" class="hidden mt-1 items-center gap-2">
+                                <button type="button" onclick="document.getElementById('ytAsisRightInput').click()"
+                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 第二附圖（選填）</button>
+                                <input id="ytAsisRightInput" type="file" accept="image/*" class="hidden" onchange="handleYtAsisSelected('right', this)" />
+                                <div id="ytAsisRightPreview" class="hidden items-center gap-2">
+                                    <img id="ytAsisRightImg" class="w-10 h-10 object-cover rounded border border-slate-700" alt="" />
+                                    <span id="ytAsisRightName" class="text-[10px] text-slate-400 truncate max-w-[140px]"></span>
+                                    <button type="button" onclick="clearYtAsis('right')" class="text-[10px] font-black text-slate-500 hover:text-red-400 px-1">✕</button>
+                                </div>
+                                <span class="text-[9px] text-slate-600">沒圖＝這格由 AI 生底圖</span>
+                            </div>
                             <div id="ytLayoutIndicator" class="hidden flex items-center gap-1.5 mt-1.5">
                                 <span class="text-[9px] font-black text-slate-600">版面</span>
                                 <button type="button" data-yt-layout="single" onclick="focusYtLayoutField()"

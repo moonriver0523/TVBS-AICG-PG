@@ -132,17 +132,36 @@ class SeamBlendTests(unittest.TestCase):
         self.assertLess(sum(shaded.getpixel((seam, row))), sum(plain.getpixel((seam, row))))
         self.assertLessEqual(compose.YT_SEAM_SHADE_ALPHA, 64, "深色暈不得超過 25%")
 
-    def test_seam_centre_defaults_to_the_middle(self):
-        self.assertEqual(compose.YT_SEAM_CENTRE_RATIO, 0.5)
+    def test_the_seam_never_leans_right(self):
+        """分界絕對不可以偏右（2026-09-10 使用者實拍指出）。
 
-    def test_seam_centre_is_adjustable_within_bounds(self):
+        原本接縫中心放正中 0.5，但羽化帶是中心兩側各 ±7%，右圖要到 0.57 才完全不透明——
+        肉眼讀到的分界就在那裡。使用者那張成品量到 1090/1920 = 0.568，正好是 0.5+0.07。
+        所以要限的是**羽化帶右緣** seam+band ≤ 0.5，不是 seam ≤ 0.5。
+        """
+        self.assertLessEqual(
+            compose.YT_SEAM_CENTRE_RATIO + compose.YT_SEAM_FEATHER_RATIO,
+            0.5,
+            "羽化帶右緣不得越過正中，否則肉眼讀到的分界就偏右了",
+        )
+        # 2026-09-10 使用者裁決：不只是「不偏右」，要明確偏左，右格才拿得到多的寬度
+        self.assertEqual(compose.YT_SEAM_CENTRE_RATIO, 0.40)
+        row = HEIGHT // 2
+        blended = self._blended()
+        # 正中那一欄必須已經完全是右圖的顏色：分界在它左邊
+        self.assertEqual(blended.getpixel((WIDTH // 2, row)), (200, 150, 60))
+
+    def test_seam_centre_is_adjustable_but_clamped_left(self):
         left_ish = self._blended(seam_ratio=0.4)
         row = HEIGHT // 2
-        # 接縫左移之後，正中間那一欄已經完全是右圖的顏色
+        # 接縫再左移，正中間那一欄一樣完全是右圖的顏色
         self.assertEqual(left_ish.getpixel((WIDTH // 2, row)), (200, 150, 60))
-        for bad in (0.2, 0.8):
+        # 偏右的值一律拒絕（0.5 以上就出局），太左的也擋
+        for bad in (0.2, 0.55, 0.8):
             with self.subTest(bad=bad), self.assertRaises(compose.ComposeError):
                 self._blended(seam_ratio=bad)
+        # 傳 0.5 不報錯但會被夾回來——版面規矩不是呼叫端的筆誤
+        self.assertEqual(self._blended(seam_ratio=0.5).getpixel((WIDTH // 2, row)), (200, 150, 60))
 
 
 class HourlyLineLimitTests(unittest.TestCase):
@@ -198,6 +217,42 @@ class DualPanelSplitTests(unittest.TestCase):
         ])
         left, right = main.yt_dual_panel_requests(req)
         self.assertNotEqual(left.reference_images[0].data_url, right.reference_images[0].data_url)
+
+    def test_asis_slots_keep_their_own_cell(self):
+        """一標一附圖（2026-09-10，對齊十點）：只填右邊那格不會被送到左格。
+
+        舊寫法靠 reference_images 的**順序**分格，只附一張就一律進左格——使用者想給
+        第二則配圖時會配錯邊，而且畫面上完全看不出來。
+        """
+        only_right = self._req(asis_right=_data_url(_png(colour=(9, 9, 9))))
+        left, right = main.yt_dual_panel_requests(only_right)
+        self.assertEqual(left.reference_images, [])
+        self.assertEqual([r.purpose for r in right.reference_images], ["asis"])
+
+        only_left = self._req(asis_left=_data_url(_png(colour=(9, 9, 9))))
+        left, right = main.yt_dual_panel_requests(only_left)
+        self.assertEqual([r.purpose for r in left.reference_images], ["asis"])
+        self.assertEqual(right.reference_images, [])
+
+    def test_asis_slots_are_not_passed_down_to_the_panels(self):
+        """拆完就該只剩 reference_images：欄位留著會讓單格那條路再正規化一次。"""
+        req = self._req(
+            asis_left=_data_url(_png(colour=(1, 1, 1))),
+            asis_right=_data_url(_png(colour=(2, 2, 2))),
+        )
+        for panel in main.yt_dual_panel_requests(req):
+            self.assertFalse(panel.uses_asis_slots())
+
+    def test_slots_win_over_the_shared_asis_list(self):
+        """兩個入口同時有值時以附圖位為準——前端在整點已把共用區收起來。"""
+        req = self._req(
+            asis_left=_data_url(_png(colour=(3, 3, 3))),
+            reference_images=[{"data_url": _data_url(_png(colour=(250, 250, 250))), "purpose": "asis"}],
+        )
+        self.assertEqual(main.yt_cover_asis_count(req), 1)
+        left, right = main.yt_dual_panel_requests(req)
+        self.assertEqual(len(left.reference_images), 1)
+        self.assertEqual(right.reference_images, [])
 
     def test_non_asis_references_are_shared(self):
         req = self._req(reference_images=[{"data_url": _data_url(_png()), "purpose": "scene"}])
