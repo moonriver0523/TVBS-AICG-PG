@@ -176,12 +176,26 @@ class AttachBasemapTests(unittest.TestCase):
 class BackendGuardTests(unittest.TestCase):
     """送不出參考圖的後端不可以因為自動底圖而丟 400。"""
 
-    def test_native_backend_skips_silently(self):
+    def test_native_backend_skips_the_basemap_but_says_so_in_the_prompt(self):
+        """2026-09-10：原本是安靜略過，但 prompt 仍照舊要求地理準確的地圖——
+        零定位資料下叫模型畫真實地理，它只能憑記憶畫，四則實測全錯。
+        拿不到底圖就要明講拿不到，並把這張圖降級成示意。
+        """
         with mock.patch.object(main, "supports_multiple_reference_images", return_value=False):
             with mock.patch.object(main.map_lookup, "render_basemap") as render:
                 out = apply_map_reference_to_image_request(_req())
         self.assertEqual(out.reference_images, [])
         render.assert_not_called()
+        self.assertIn("NO VERIFIED BASEMAP IS ATTACHED", out.prompt)
+        self.assertIn("draw NO administrative boundaries", out.prompt)
+        self.assertTrue(out.prompt.rstrip().endswith(main.NO_VERIFIED_BASEMAP_BLOCK))
+
+    def test_the_degraded_block_is_not_added_when_there_is_nothing_to_map(self):
+        """非地圖類（沒有 map_points）不該被塞一段講地圖的條文。"""
+        req = ImageGenerateRequest(prompt="p", aspect_ratio="21:9")
+        with mock.patch.object(main, "supports_multiple_reference_images", return_value=False):
+            out = apply_map_reference_to_image_request(req)
+        self.assertNotIn("NO VERIFIED BASEMAP", out.prompt)
 
     def test_the_attached_map_block_tells_the_model_not_to_move_the_dots(self):
         # 實測：底圖沒有標點時模型自己猜位置，西定路被放到廟口南邊（實際在西北西）

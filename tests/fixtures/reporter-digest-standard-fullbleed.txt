@@ -56,6 +56,9 @@ DIRECTIONAL COLOUR CONVENTION (Taiwan convention — the Western one is wrong he
 4. In a graphic that shows a rise or a fall, do not use red or green decoratively for anything unrelated, so the pairing cannot be misread.
 
 
+MAP SCOPE GUARD (the chart type above was chosen for you and is NOT a map): if the graphic you end up specifying would put real, named places on a map or show them in their true relative positions — a locator, a coastline, a road or district layout, a route, or markers pinned to real geography — that is a map, and drawing one under this chart type is the exact failure this block exists to prevent. Do not ask for one. Where the story genuinely needs a sense of place, ask instead for a schematic locator or a plain coordinate grid with the place names as labels, say plainly in "structure" that the layout is schematic, and never invent coastlines, islands, landmasses or borders.
+
+
 字多 MODE (THE USER ASKED FOR THE DENSE VERSION) — THIS BLOCK OVERRIDES THE LENGTH AND COUNT LIMITS STATED ABOVE:
 1. This is the densest of the three digestion settings, and the user chose it because the graphic was coming back carrying too little information. Your job here is to fill the graphic, not to summarise it down.
 2. POINT COUNT: carry every distinct point the source material genuinely supports, up to six [內文小標] lines. Do not stop at three out of habit. Two facts that belong to different aspects of the story are two points, not one merged line.

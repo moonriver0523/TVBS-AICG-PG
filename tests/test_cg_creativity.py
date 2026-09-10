@@ -105,6 +105,19 @@ class LadderTests(unittest.TestCase):
             with self.subTest(level=level):
                 self.assertNotIn("arrangement, the number of cards", _rules(level))
 
+    def test_the_levers_defer_to_the_density_blocks_instead_of_fighting_them(self):
+        """字極少檔規定「就一個點、其餘留白、不准卡片堆」，結構槓桿卻在講
+        支撐卡片、破格排列、分割線另一側的材料——不點名讓路，模型會為了滿足槓桿
+        自己生出支撐材料，而那正是 2026-09-10 實拍看到的「憑空多一條警示帶」。
+        """
+        for level in range(1, 5):
+            with self.subTest(level=level):
+                clause = _rules(level)
+                self.assertIn("THESE LEVERS ADAPT TO THE POINT COUNT", clause)
+                self.assertIn("fixed the graphic at ONE point", clause)
+                self.assertIn("six or more", clause)
+                self.assertIn("THE LEVER LOSES", clause)
+
     def test_every_level_bans_a_real_geography_map_as_the_hero(self):
         """等級叫模型挑一個主視覺，而它最愛挑地圖；行政區界一律憑記憶畫、一律錯。"""
         for level in range(1, 5):

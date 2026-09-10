@@ -103,6 +103,34 @@ class LadderTests(unittest.TestCase):
                 self.assertNotIn("GO FURTHER", _clause(level))
         self.assertIn("GO FURTHER", _clause(4))
 
+    def test_each_step_changes_a_visible_shape_not_only_a_finish(self):
+        """2026-09-10 使用者：「好像沒有這麼抖，尤其是 1、2 之間」。
+        原因是每一級只多給一項自由、而且都落在字的表面。每一級都要有一個
+        看得見形狀改變的必做項，否則相鄰兩級的成品又會長一樣。
+        """
+        # 1 級：底板（跟「沒設計」拉開）
+        self.assertIn("DEFINED BLOCK BEHIND THE WORDS", _clause(1))
+        # 2 級起：錯位排列＋每行各自的底板
+        self.assertNotIn("THE STACK IS NO LONGER FLUSH", _clause(1))
+        for level in (2, 3, 4):
+            with self.subTest(level=level):
+                self.assertIn("THE STACK IS NO LONGER FLUSH", _clause(level))
+                self.assertIn("EACH ROW SITS ON ITS OWN SHAPE", _clause(level))
+        # 3 級起：多層描邊立體＋與照片主體交錯（原本是 4 級獨有，往下放一級）
+        for level in (1, 2):
+            with self.subTest(level=level):
+                self.assertNotIn("MULTI-LAYER EDGES", _clause(level))
+                self.assertNotIn("ENGAGES THE PHOTOGRAPH", _clause(level))
+        for level in (3, 4):
+            with self.subTest(level=level):
+                self.assertIn("MULTI-LAYER EDGES", _clause(level))
+                self.assertIn("ENGAGES THE PHOTOGRAPH", _clause(level))
+
+    def test_the_loudest_level_makes_the_tilt_mandatory(self):
+        """「可以傾斜」在第七批就證明推不動模型：許可句＝不會發生。"""
+        self.assertIn("THE BLOCK TILTS OR ARCS — required here, not offered", _clause(4))
+        self.assertIn("two and a half to three times", _clause(4))
+
     def test_level_two_says_out_loud_that_placement_still_binds(self):
         """2 級解放的是排法不是位置。只是「不提位置」不夠——
         前面 TYPOGRAPHY 有位置規則，但這一段整體宣告 OVERRIDE，不點名就會被順手當成解除。"""

@@ -488,3 +488,26 @@ class HedgeIsNotAddedEitherTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BoundaryAndInventedLandTests(unittest.TestCase):
+    """2026-09-10 四則臺灣地圖實測，三種都會上鏡的錯：
+
+    A（全台縣市停班停課）：縣市被填色分區、界線形狀不對，海面上多出不存在的小島，
+      整座島被裁掉南半部又轉了角度塞進寬幅。
+    D（台北市各行政區）：十二個行政區只畫出七個，形狀也不對。
+    共同點都不是「畫得醜」，是**畫錯的事實**會直接播出去。
+    """
+
+    def test_administrative_shading_is_banned(self):
+        rules = main.MAP_ACCURACY_RULES
+        self.assertIn("NEVER SHADE ADMINISTRATIVE AREAS", rules)
+        self.assertIn("do not ask for their boundary lines at all", rules)
+
+    def test_inventing_or_cropping_land_is_banned(self):
+        rules = main.MAP_ACCURACY_RULES
+        self.assertIn("DRAW NO LAND THAT THE STORY DID NOT NAME", rules)
+        self.assertIn("do not slice off one end", rules)
+
+    def test_a_partial_set_of_units_is_banned(self):
+        self.assertIn("EVERY UNIT OR NONE", main.MAP_ACCURACY_RULES)

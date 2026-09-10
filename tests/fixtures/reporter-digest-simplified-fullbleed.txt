@@ -56,6 +56,9 @@ DIRECTIONAL COLOUR CONVENTION (Taiwan convention — the Western one is wrong he
 4. In a graphic that shows a rise or a fall, do not use red or green decoratively for anything unrelated, so the pairing cannot be misread.
 
 
+MAP SCOPE GUARD (the chart type above was chosen for you and is NOT a map): if the graphic you end up specifying would put real, named places on a map or show them in their true relative positions — a locator, a coastline, a road or district layout, a route, or markers pinned to real geography — that is a map, and drawing one under this chart type is the exact failure this block exists to prevent. Do not ask for one. Where the story genuinely needs a sense of place, ask instead for a schematic locator or a plain coordinate grid with the place names as labels, say plainly in "structure" that the layout is schematic, and never invent coastlines, islands, landmasses or borders.
+
+
 SIMPLIFIED MODE OVERRIDE — THESE RULES OVERRIDE ANY EARLIER STANDARD-MODE LENGTH OR FORMAT REQUIREMENT:
 1. From the source material, dynamically select only 1 to 3 key points. Do not force three points when one or two are enough.
 2. Each point must communicate one fact in a short, scan-friendly line. Do not repeat the same fact in the title, points, or conclusion.

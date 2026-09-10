@@ -788,6 +788,8 @@ WHAT THE CREATIVITY SETTING NEVER CHANGES — THIS PARAGRAPH OUTRANKS THE ONE AB
 (e) EVERY CHARACTER STAYS COMPLETE, UNOBSTRUCTED AND LEGIBLE at broadcast distance. A decoration that crosses a stroke, a shadow that swallows a stroke, or type squeezed until the counters close, is a defect — not a style.
 (f) Traditional Chinese, Taiwan forms throughout.
 (g) A HERO ELEMENT IS NEVER A MAP OF REAL GEOGRAPHY UNLESS THE CHART TYPE IS THE MAP TYPE. The levels above invite you to pick one dominant subject image; a map is not available for that job here. Do not ask for a national or regional outline with internal county, state or district boundaries, and do not ask for one place to be highlighted inside another — the renderer draws those borders from memory and gets them wrong, which is a factual error on air, not a styling flaw. Where the story is about places, a wordless silhouette with no internal divisions, or a schematic locator described plainly as schematic, is the most this setting allows.
+(h) THESE LEVERS ADAPT TO THE POINT COUNT THE BLOCKS ABOVE SET — THEY NEVER CREATE MATERIAL TO FEED THEMSELVES. If a block above fixed the graphic at ONE point, the hero element simply IS the graphic: every instruction here about supporting cards, stepped rows, a grid to break, or material on the other side of a dividing edge does not apply, and the empty space stays empty. If a block above raised the count to six or more, grouping and legibility outrank the arrangement instructions here: keep the groups or columns that block asked for, and apply the slant, the stagger or the overlap only as far as every line still reads at broadcast distance.
+(i) IF A LEVER CANNOT BE SATISFIED WITHOUT ADDING WORDS, THE LEVER LOSES. Never invent a banner line, a warning strip, a slogan, a caption or a repeated phrase to fill a zone, balance a composition or complete a shape — an empty area is always the correct answer, and a design that needs new text to work is the wrong design.
 """
 
 _CG_L1 = """
@@ -822,6 +824,9 @@ _CG_L3 = _CG_L2.replace("LEVEL 2 OF 4 (DESIGNED)", "LEVEL 3 OF 4 (LOUD)") + _CG_
 _CG_L4_EXTRA = """- GO FURTHER — THIS IS THE LOUDEST SETTING. Everything above still applies; now push both the arrangement and the art to the edge of what still reads:
 - THE DIVISION OF THE FRAME IS NO LONGER ORTHOGONAL: the boundary between the hero zone and the supporting material is a slant, a sweep or a torn edge running across the content area, and the panels follow that same angle. Straight horizontal bands stacked one above another are the thing this setting exists to get away from.
 - THE HERO ELEMENT BREAKS ITS OWN ZONE: it overlaps the dividing edge and sits partly over the supporting side, so the two zones interlock instead of abutting.
+- THE SUPPORTING PANELS FOLLOW THE ANGLE THEMSELVES: each is cut on the same slant and set at a different offset from its neighbour, stepping along the dividing edge instead of sitting in a tidy column.
+- THE HERO FIGURE OR PHRASE IS SET AT LEAST TWICE THE HEIGHT of anything else on the graphic — a gap nobody could mistake for ordinary emphasis.
+- ONE SIDE OF THE FRAME IS GIVEN TO A SINGLE DRAMATIC IMAGE running the full height of the content area, so the graphic reads as picture-and-panels rather than as text over a background.
 - Stack outlines on the headline and the hero figure (a thick dark one, then a bright one outside it) and give them a deep three-dimensional extrusion with a treatment drawn from the story — molten metal, neon, cracked stone, wet chrome.
 - THE HEADLINE BLOCK TILTS OR ARCS — this is required at this setting, not offered (a few degrees, never more than about eight) — and its characters step up and down instead of sitting on one baseline.
 - Add energy around the hero element: radiating lines, sparks, shards, a splashed or torn colour shape, a burst of glow. Up to three wordless pictograms.
@@ -1040,6 +1045,9 @@ MAP ACCURACY RULES (SCOPE IS SET BY WHAT YOU ASK FOR, NOT BY THE LABEL YOU REPOR
 9. THE MARKERS ARE THE PLACE LABELS — NEVER BUILD A LEGEND. Every marked place already carries its name beside its marker. Do not repeat those names as a 內文小標 line, caption list, key, legend, 圖例 panel or marker index, and never ask for a legend box, key panel or colour-code panel of any kind: on screen that is a separate box repeating what the map already says, eating the space the map needs. 內文小標 lines are for the news itself (what happened at those places, when, how serious), never for a list of places.
 10. "map_places" IS A LOOKUP QUERY, NOT A CAPTION. Put every place that should carry a marker into "map_places", one entry each, in reading order; leave the array empty if the graphic is not a map. The program geocodes these names against a real gazetteer and may attach a real basemap with the markers already drawn, so each entry must be a findable real name with the city and district that disambiguate it (「基隆市 西定路」, not 「西定路」 — a bare street or hill name matches dozens of places nationwide). Nothing you write in this field is ever printed on the graphic. ONLY LOOKUPABLE POINTS BELONG HERE: a gazetteer holds named points and named administrative areas, nothing else. Never put in a loose region or direction (「北海岸」「南部」「東海岸」「北台灣」「市區」「低窪地區」) or a position along a road (「楊梅路段北向68公里」「國道1號中壢路段」) — it returns nothing or, worse, matches an unrelated shop sharing the words, and that wrong point gets drawn. Name the district instead (「桃園市 楊梅區」) or leave it out and describe it in "structure" as a schematic position: leaving it out costs a marker, a wrong lookup puts a marker on the wrong town. A NAMED FACILITY IS LOOKED UP BY ITS OWN NAME, NOT BY THE ROAD IT SITS ON: write 「中壢交流道」, never 「國道1號中壢交流道」 — the road prefix makes it unfindable; if the bare name is ambiguous, prefix city and district instead (「桃園市 中壢區 中壢交流道」).
 11. ONE PLACE, ONE NAME ON SCREEN, AND NEVER LET AN INSTRUCTION WORD BECOME PRINTED TEXT. "map_places" may need the gazetteer's official full form (「基隆市 基隆廟口夜市」) to be findable, but everything the viewer reads — in "structure" and "variable" alike — must use the short name the story itself uses (「基隆廟口」), the same in both fields; carrying the gazetteer form into either is how one graphic labels the same place 基隆廟口夜市 on the map and 基隆廟口 in the text. Likewise 標示, 標出, 請標, 標記, 位置如下 and the like are directions about what to do with the map, not wording to display: the renderer prints "variable" verbatim, so an instruction word left there comes out as a caption reading 「標示 基隆廟口」. Write the place name on its own, with no verb in front of it.
+12. NEVER SHADE ADMINISTRATIVE AREAS — MARK POINTS INSTEAD. Do not ask for counties, cities, districts, prefectures, states or any other administrative units to be drawn as filled, tinted or colour-coded shapes, and do not ask for their boundary lines at all. The renderer draws those borders from memory: 2026-09-10 實測 both a whole-Taiwan county map and a single-city district map came back with the wrong boundary shapes and with several units simply missing. A wrong border is a factual error on air. Where the story groups places, put a dot on each named place and group them with the CALLOUT wording and the callout's colour — that is what the directional colour convention is for — over a plain terrain or single-tone base.
+13. DRAW NO LAND THAT THE STORY DID NOT NAME, AND CROP NO LAND THAT IT DID. Never add islands, islets, reefs, sandbars or coastline that you are filling space with — 2026-09-10 實測 an all-Taiwan graphic came back with invented islands scattered across the sea. Equally, when the subject is a whole country or island, the whole of it stays in frame at a true shape: do not slice off one end, do not rotate it to fit a wide canvas, and do not stretch it. If the full shape will not fit the frame, zoom out until it does, or say plainly in "structure" that the view is a schematic locator rather than a map.
+14. EVERY UNIT OR NONE. If the graphic shows a set that the viewer will read as complete — the districts of one city, the counties of one region — either every member of that set is present and correctly placed, or you do not draw the set at all. A map showing seven of a city's twelve districts tells the viewer the other five do not exist.
 """
 
 
@@ -1213,11 +1221,19 @@ def build_digest_instructions(
     instructions += CHILD_DEPICTION_STYLE_RULES
     instructions += DIRECTIONAL_COLOR_RULES
     # 自動判斷模式組 prompt 時還不知道 AI 會選哪一類，也要注入；
-    # 區塊開頭自我限縮「非地圖類整段忽略」。明確指定非地圖類型時完全不注入。
+    # 區塊開頭自我限縮「非地圖類整段忽略」。
+    #
+    # 2026-09-10：明確指定非地圖類型時，原本兩塊都不注入（map_scope_guard 只有
+    # 兩段式分類才會是 True，而 DIGEST_TWO_STAGE 預設關）——等於那條路徑上一條
+    # 地理約束都沒有。實例：type_label=資訊卡 的高溫新聞，消化端寫出
+    # "geographically accurate Taiwan map"，成品縣市界全錯（見
+    # docs/error-cases/2026-09-10-台灣行政區界-錯誤-分析.md）。
+    # 「明確指定非地圖類型」不等於「這張圖不會畫地圖」，所以守門條文改成一律有。
     if type_label in (MAP_TYPE_LABEL, AUTO_TYPE_LABEL):
         instructions += MAP_ACCURACY_RULES
-    elif map_scope_guard:
-        # 只有兩段式把自動判斷分類成非地圖時才會是 True（見 resolve_effective_type_label）
+    else:
+        # 兩段式把自動判斷分類成非地圖（map_scope_guard=True，見 resolve_effective_type_label）
+        # 與使用者自己指定非地圖類型，走的是同一條守門：兩者的前提都是「這張圖不畫地圖」。
         instructions += MAP_SCOPE_GUARD_RULES
     if density in ("standard", "maximum"):
         instructions += STANDARD_DENSITY_RULES.format(**_STANDARD_LIMIT_CLAUSES[is_editor])
@@ -2973,6 +2989,15 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
     )
 
 
+# 拿不到真實底圖時貼在 prompt 尾巴的降級條文（2026-09-10）。位置在最後＝優先權最高，
+# 與 attach_map_basemap 附上底圖時貼 verified_dots_block 的位置相同，兩者互斥。
+NO_VERIFIED_BASEMAP_BLOCK = """NO VERIFIED BASEMAP IS ATTACHED TO THIS REQUEST — THIS PARAGRAPH OUTRANKS ANY EARLIER WORDING THAT ASKS FOR AN ACCURATE MAP.
+Nothing in this request carries verified geography, so you have no source for real coastlines, real borders or real relative positions, and drawing them from memory produces a factually wrong map on air.
+Therefore: draw NO administrative boundaries of any kind, do NOT tint or colour-fill any county, city, district or region, do NOT invent islands, coastline or landmasses, and do NOT crop, rotate or stretch a country or island to fit the frame.
+Show place names as labelled markers over a plain, clearly schematic base — a flat tone, a soft terrain texture or a simple grid — and keep any land shape you do draw to one wordless silhouette with no internal divisions.
+The wording rendered on the graphic still comes only from the supplied text; this paragraph changes the picture, never the words."""
+
+
 def verified_dots_block(points: list[MapPoint]) -> str:
     """把「這張底圖上有哪幾個點」寫成一段由程式產生的事實陳述。
 
@@ -3018,8 +3043,17 @@ def apply_map_reference_to_image_request(
     if not req.map_points:
         return req
     if not supports_multiple_reference_images():
-        print("[map] 目前的生圖後端送不出參考圖，略過自動底圖", flush=True)
-        return req
+        # 2026-09-10：原本只是安靜略過，但 prompt 仍照舊要求一張地理準確的地圖——
+        # 等於在零定位資料的情況下叫模型畫真實地理，而它只能憑記憶畫、一畫就錯
+        # （原生 OpenAI 路徑必然走到這裡，本機實測四則地圖新聞全中）。
+        # 拿不到底圖就明講拿不到，把這張圖降級成示意，不留「假裝有依據」的空間。
+        print(
+            "[map] 目前的生圖後端送不出參考圖，略過自動底圖（改注入無底圖降級條文）",
+            flush=True,
+        )
+        return req.model_copy(
+            update={"prompt": f"{req.prompt.rstrip()}\n\n{NO_VERIFIED_BASEMAP_BLOCK}"}
+        )
     if any(ref.purpose == "map" for ref in req.reference_images):
         print("[map] 使用者已自行附上地圖底稿，不再自動產生", flush=True)
         return req
