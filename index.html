@@ -312,7 +312,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260910-14</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260910-15</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -373,7 +373,7 @@
                         <div class="flex items-center gap-2">
                             <button type="button" onclick="document.getElementById('refFileInput').click()"
                                     class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 附參考圖（選填）</button>
-                            <span class="text-[9px] text-slate-600">地圖底稿／實景參考／肖像照片／原圖放置，單張 ≤1.5MB，最多 3 張</span>
+                            <span id="refUploadHint" class="text-[9px] text-slate-600">地圖底稿／實景參考／肖像照片／原圖放置，單張 ≤1.5MB，最多 3 張</span>
                         </div>
                         <input id="refFileInput" type="file" accept="image/*" multiple class="hidden"
                                onchange="handleRefFilesSelected(this)" />
@@ -513,7 +513,7 @@
                                         title="只填第一標題＝單則（標題用半形空格拆成兩行）"
                                         class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-500 hover:text-white">單則</button>
                                 <button type="button" data-yt-layout="dual" onclick="focusYtLayoutField()"
-                                        title="兩個標題都填＝雙則（上白＝第一則、下黃＝第二則，每行一整句最多 14 字，底圖左右兩張羽化拼成）；點這裡只會把游標移到第二標題"
+                                        title="兩個標題都填＝雙則（上白＝第一則、下黃＝第二則，每行一整句最多 18 字，底圖左右兩張羽化拼成）；點這裡只會把游標移到第二標題"
                                         class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-500 hover:text-white">雙則</button>
                                 <span class="text-[9px] text-slate-600">判定結果，不是開關</span>
                             </div>
@@ -657,7 +657,7 @@
                         <!-- CG 美術創意（2026-09-10）：記者版與編輯各版型（含播出鏡面）共用。
                              YT 封面與十點封面走另一個端點，各有自己的拉桿，不吃這一條。 -->
                         <div id="cgCreativityBar" class="flex items-center gap-2 bg-black/40 px-2 py-1.5 rounded-lg"
-                             title="0＝現行成品；愈往右，標題與關鍵數字的美術處理愈重（描邊、壓框、立體、圖示、裝飾）。版面骨架、卡片數與安全留白不受影響，字句也一字不改。">
+                             title="0＝現行成品；愈往右，版面排法愈放（分區→英雄區→破格→斜切傾斜），美術處理也跟著加重。重點的數量、安全留白與字句不受影響；不會拿真實地圖當主視覺。">
                             <span class="text-[9px] font-black text-slate-500">規矩</span>
                             <input id="cgCreativityRange" type="range" min="0" max="4" step="1" value="0"
                                    class="flex-1 accent-violet-500 cursor-pointer"
