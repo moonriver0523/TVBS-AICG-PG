@@ -197,10 +197,16 @@ Requirements:
 #
 # 代價講在前面：模型畫中文有機率出錯字，而封面上的錯字是對外事故。合成版仍留在
 # EDITOR_FORMATS 裡（ten_cover_composite）當備援與對照，隨時可以切回去比。
+# 斜切線的幾何 2026-09-10 釘死（使用者實拍：切線整條偏左、右格被壓窄）。
+# 舊寫法只說「稍微傾斜、頂端偏右一點、底端偏左一點」，沒說中線在哪、也沒說能斜多少——
+# 換成 gpt-image-2.5 之後模型把「稍微」畫成整條左移，成品底端量到約畫面 43%。
+# 這**跟整點直播的接縫 0.40 無關**：YT_SEAM_CENTRE_RATIO 只有 yt_dual_background 一個呼叫端，
+# 十點兩條路都是正中（合成版 compose_ten_cover 的 mid＝width//2、split_canvas 的 width*i/n）。
+# 數字直接借合成版的 YT_SPLIT_SLANT_RATIO＝0.05（總斜距佔寬），所以上下各偏 2.5%。
 COVER_AI_PROMPT_TEMPLATE = """Design a complete, broadcast-quality Chinese-language news programme cover image (YouTube thumbnail style) for a Taiwanese prime-time news show.
 
 === CANVAS ===
-16:9 horizontal. Two photographs fill the ENTIRE frame edge to edge, split by ONE thin white DIAGONAL seam (slightly leaning: its top end sits a little right of centre, its bottom end a little left of centre) into a LEFT panel and a RIGHT panel. No borders, no gutters, no letterboxing. Across the very top runs a deep-navy header band (%HEADER_BAND% of the frame height) with a bright blue hairline along its bottom edge; along the very bottom runs a slim deep-navy strip with one thin glowing straight blue light line (no waves, no text). Everything else is photograph.
+16:9 horizontal. Two photographs fill the ENTIRE frame edge to edge, split by ONE thin white DIAGONAL seam into a LEFT panel and a RIGHT panel. THE SEAM GEOMETRY IS FIXED AND IS NOT A DESIGN DECISION: at mid-height the seam crosses the EXACT HORIZONTAL CENTRE of the frame, so the two panels are the SAME WIDTH. It leans only slightly — its top end sits about 2.5% of the frame width RIGHT of centre, its bottom end about 2.5% of the frame width LEFT of centre. Never move the seam as a whole to the left or to the right of centre, and never lean it harder than that: neither panel may end up visibly wider than the other. No borders, no gutters, no letterboxing. Across the very top runs a deep-navy header band (%HEADER_BAND% of the frame height) with a bright blue hairline along its bottom edge; along the very bottom runs a slim deep-navy strip with one thin glowing straight blue light line (no waves, no text). Everything else is photograph.
 
 === TEXT TO RENDER (Traditional Chinese, Taiwan) ===
 Render EXACTLY these strings, character for character. Do not translate them, do not rewrite them, do not shorten them, and do not add any other words, letters or numbers anywhere in the image.

@@ -410,6 +410,30 @@ class PromptSyncTests(unittest.TestCase):
         self.assertIn("deep-navy header band", prompt)
         self.assertIn("glowing straight blue light line", prompt)
 
+    def test_the_seam_stays_in_the_middle(self):
+        """2026-09-10 使用者實拍：切線整條偏左、右格被壓窄（換 gpt-image-2.5 之後）。
+
+        十點雙切的分界**永遠在正中**，跟整點直播那條偏左 0.40 的接縫無關——
+        那個常數（compose.YT_SEAM_CENTRE_RATIO）只有 yt_dual_background 一個呼叫端。
+        模板只寫「稍微傾斜」不夠：要把中線與斜距都寫成數字，模型才不會自己詮釋。
+        """
+        prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE
+        self.assertIn("EXACT HORIZONTAL CENTRE", prompt)
+        self.assertIn("SAME WIDTH", prompt)
+        self.assertIn("2.5% of the frame width RIGHT of centre", prompt)
+        self.assertIn("2.5% of the frame width LEFT of centre", prompt)
+        # 斜距借合成版的常數：上下各偏半個 slant。
+        self.assertAlmostEqual(compose.YT_SPLIT_SLANT_RATIO / 2, 0.025)
+
+    def test_the_composite_seam_is_dead_centre(self):
+        """合成版那條路也守住：分隔線中心＝畫面正中，不跟直播的 0.40 連動。"""
+        width, height = compose.COVER_CANVAS
+        self.assertEqual(width // 2, round(width * 0.5))
+        slant = round(width * compose.YT_SPLIT_SLANT_RATIO)
+        top = width / 2 + slant / 2 - slant * 0.0
+        bottom = width / 2 + slant / 2 - slant * 1.0
+        self.assertAlmostEqual((top + bottom) / 2 / width, 0.5)
+
     def test_prompt_colour_names_match_the_composite_table(self):
         """2026-09-08：顏色改成逐行標記（white／yellow／red），模板只講怎麼讀標記。"""
         prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE
