@@ -1390,6 +1390,13 @@ function updateCoverTitleStyleButton() {
     if (range) range.value = String(state.coverTitleCreativity);
     const label = document.getElementById('coverTitleStyleLabel');
     if (label) label.innerText = COVER_TITLE_CREATIVITY[state.coverTitleCreativity][0];
+    // 側邊標籤與畫面小籤只有 3 級起才畫得出來（後端同一條線），所以前台也只有 3 級起才露。
+    // 2026-09-10 先藏是因為功能還在測；2026-09-11 使用者裁決兩個一起打開。
+    const chipsOn = !hidden && state.coverTitleCreativity >= 3;
+    ['coverSideLabels', 'coverInfoChips'].forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) el.classList.toggle('hidden', !chipsOn);
+    });
 }
 
 function setCoverTitleCreativity(value) {
@@ -2011,6 +2018,7 @@ function tenCoverFields() {
         title_creativity: state.coverTitleCreativity,
         // 側邊標籤（2026-09-10）：使用者自己打的短詞，後端原樣畫成一排小籤
         side_labels: val('coverSideLabels'),
+        info_chips: val('coverInfoChips'),
         provider: effectiveImageProvider(),
     };
 }

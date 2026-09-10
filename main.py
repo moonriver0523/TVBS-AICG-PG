@@ -3602,6 +3602,9 @@ class TenCoverRequest(BaseModel):
     # 側邊標籤（2026-09-10）：使用者自己打的幾個短詞，畫成一排小籤。空白＝不畫。
     # 刻意由使用者填而不是讓 AI 想——理由見 editor_formats.cover_side_labels_block。
     side_labels: str = Field(default="", max_length=120)
+    # 畫面小籤（2026-09-11）：地點籤、數據徽章、危險標示那種散落在畫面上的小牌。
+    # 同樣由使用者自己填——理由與側邊標籤相同，見 editor_formats.cover_info_chips_block。
+    info_chips: str = Field(default="", max_length=120)
 
     def creativity_level(self) -> int:
         if self.title_creativity is not None:
@@ -4024,8 +4027,11 @@ def _cover_ai(
     reverse_out = req.creativity_level() >= 3
     # 側邊標籤只在 3 級起才畫（2026-09-10 使用者裁決）：0–2 是「規矩」到「有設計」，
     # 版面本來就滿，多一排籤會擠掉標題；功能也還在測試期，先只開給高創意。
+    # 側邊標籤與畫面小籤共用模板上那個插槽：兩者都是「清單以外、由使用者負責的字」，
+    # 也都只在 3 級起才畫（2026-09-10 裁決：0–2 級版面本來就滿，多一排籤會擠掉標題）。
     side_labels_block = (
         editor_formats.cover_side_labels_block(req.side_labels)
+        + editor_formats.cover_info_chips_block(req.info_chips)
         if req.creativity_level() >= 3
         else ""
     )

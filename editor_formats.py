@@ -370,6 +370,46 @@ def cover_side_labels_block(raw: str) -> str:
     )
 
 
+COVER_INFO_CHIP_MAX = 4
+COVER_INFO_CHIP_CHARS = 10
+_INFO_CHIP_SPLIT = re.compile(r"[\s、,，|｜]+")
+
+
+def cover_info_chips(raw: str) -> list[str]:
+    """把使用者填的一串字拆成小籤清單（空白、頓號、逗號、直線都算分隔）。
+
+    這裡**不拿斜線當分隔**：小籤最常見的內容就是「日本・名古屋」「降41%」「5萬/月」，
+    斜線是內容的一部分（側邊標籤那支拆斜線，是因為那是症狀短語，不會帶斜線）。
+    """
+    parts = [p.strip() for p in _INFO_CHIP_SPLIT.split(raw or "") if p.strip()]
+    return [p[:COVER_INFO_CHIP_CHARS] for p in parts[:COVER_INFO_CHIP_MAX]]
+
+
+def cover_info_chips_block(raw: str) -> str:
+    """畫面小籤那一段條文。沒填就整段不出現。"""
+    chips = cover_info_chips(raw)
+    if not chips:
+        return ""
+    listed = "\n".join(f"    - {text}" for text in chips)
+    return (
+        "- SMALL FREE-STANDING INFORMATION CHIPS, laid on the photographs. Render EXACTLY these"
+        " strings, character for character, one chip each, in this order — they are part of the"
+        " listed text, not decoration you may edit, drop or add to:\n"
+        + listed
+        + "\n  Each chip is a small rounded plate — a solid dark or saturated panel with a thin"
+        " bright edge, or a bright panel with dark characters — carrying its characters small but"
+        " crisp, with an optional wordless pictogram at its left end (a map pin for a place, an"
+        " arrow for a change, a warning triangle for a risk). They do NOT form a column and they"
+        " do NOT share one size: each chip sits on its own, near whatever it refers to — a place"
+        " chip low in its panel, a figure chip beside the subject it measures.\n"
+        "  PLACEMENT IS CONSTRAINED: no chip may cover a headline character, sit inside the navy"
+        " header band or the bottom strip, cross the diagonal seam, or touch a frame edge. NO CHIP"
+        " MAY SIT IN EITHER OUTER TOP CORNER OR IN THE TOP THIRD OF THE FRAME — software pastes"
+        " the 示意圖 label just under the outer top corner afterwards, and a chip drawn up there"
+        " comes out with that label printed across it.\n"
+    )
+
+
 COVER_AI_TITLE_LEVEL_MIN = 0
 COVER_AI_TITLE_LEVEL_MAX = 4
 COVER_AI_TITLE_LEVEL_NAMES = {

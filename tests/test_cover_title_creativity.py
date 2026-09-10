@@ -411,3 +411,102 @@ class SideLabelTests(unittest.TestCase):
                     ))
                 self.assertNotIn("食慾不振", seen["prompt"])
                 self.assertNotIn("COLUMN OF SMALL LABEL CHIPS", seen["prompt"])
+
+class InfoChipTests(unittest.TestCase):
+    """畫面小籤（2026-09-11）：地點籤、數據徽章、危險標示那種散落在畫面上的小牌。
+
+    範本裡的來源：03「日本・名古屋」、11「日本」「印尼」、10「52.3%」、
+    15「門檻擬調高至5萬」、04「致命漏洞?」。全是**清單以外的中文字**，
+    所以做法完全比照側邊標籤：字由使用者填，模型只負責畫。
+
+    國旗刻意不做：使用者打「日本」畫的是那兩個字的小籤，不是叫模型畫國旗——
+    FIXED (e) 擋國旗籤的理由是模型會自己編一面旗，那個理由沒有改變。
+    """
+
+    def test_empty_input_changes_nothing(self):
+        self.assertEqual(editor_formats.cover_info_chips_block(""), "")
+        self.assertEqual(editor_formats.cover_info_chips_block("   "), "")
+
+    def test_slash_is_content_not_a_separator(self):
+        """側邊標籤那支拆斜線（症狀短語不會帶斜線），小籤不能拆——
+        「5萬/月」「降41%」「日本・名古屋」的斜線與間隔號都是內容的一部分。"""
+        chips = editor_formats.cover_info_chips("日本・名古屋 5萬/月 降41%")
+        self.assertEqual(chips, ["日本・名古屋", "5萬/月", "降41%"])
+
+    def test_separators_and_caps(self):
+        chips = editor_formats.cover_info_chips(
+            "日本・名古屋 降41%、致命漏洞|門檻五萬,第五個"
+        )
+        self.assertEqual(len(chips), editor_formats.COVER_INFO_CHIP_MAX)
+        self.assertTrue(all(len(c) <= editor_formats.COVER_INFO_CHIP_CHARS for c in chips))
+
+    def test_the_block_lists_them_as_listed_text_not_decoration(self):
+        block = editor_formats.cover_info_chips_block("日本・名古屋 降41%")
+        self.assertIn("日本・名古屋", block)
+        self.assertIn("降41%", block)
+        self.assertIn("character for character", block)
+        self.assertIn("not decoration you may edit, drop or add to", block)
+
+    def test_chips_are_not_a_column_and_keep_out_of_the_pasted_label_corner(self):
+        """側邊標籤是右側一整欄等寬小籤，畫面小籤是各自獨立的小牌——
+        兩者共用同一個插槽，措辭要分得開，不然模型會把兩組排成同一欄。
+        角落那條幾何則兩者相同：AI示意圖 是 compose 後貼的。"""
+        block = editor_formats.cover_info_chips_block("日本・名古屋")
+        self.assertIn("do NOT form a column", block)
+        self.assertIn("NO CHIP MAY SIT IN EITHER OUTER TOP CORNER", block)
+        self.assertIn("示意圖", block)
+
+    def test_the_request_carries_the_field_through_to_the_prompt(self):
+        seen = {}
+
+        def fake_raw(image_req):
+            seen["prompt"] = image_req.prompt
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(_png_for(image_req.aspect_ratio)).decode("ascii"),
+                mime_type="image/png", model="fake",
+            )
+
+        with patch.object(main, "generate_image_raw", fake_raw):
+            main.editor_cover(main.TenCoverRequest(
+                title_left="日破紀錄豪雨 街道成河", title_right="胰臟癌6大 致命前兆",
+                layout="split", mode="ai", provider="gpt", title_creativity=4,
+                info_chips="日本・名古屋 降41%",
+            ))
+        self.assertIn("日本・名古屋", seen["prompt"])
+        self.assertIn("INFORMATION CHIPS", seen["prompt"])
+
+    def test_low_creativity_does_not_draw_the_chips(self):
+        """與側邊標籤同一條線：0–2 級版面本來就滿，多一排籤會擠掉標題。"""
+        for level in (0, 1, 2):
+            with self.subTest(level=level):
+                seen = {}
+
+                def fake_raw(image_req):
+                    seen["prompt"] = image_req.prompt
+                    return main.ImageGenerateResponse(
+                        image_data_base64=base64.b64encode(
+                            _png_for(image_req.aspect_ratio)
+                        ).decode("ascii"),
+                        mime_type="image/png", model="fake",
+                    )
+
+                with patch.object(main, "generate_image_raw", fake_raw):
+                    main.editor_cover(main.TenCoverRequest(
+                        title_left="日破紀錄豪雨 街道成河", title_right="胰臟癌6大 致命前兆",
+                        layout="split", mode="ai", provider="gpt", title_creativity=level,
+                        info_chips="日本・名古屋",
+                    ))
+                self.assertNotIn("日本・名古屋", seen["prompt"])
+                self.assertNotIn("INFORMATION CHIPS", seen["prompt"])
+
+    def test_both_chip_fields_exist_and_are_wired(self):
+        """2026-09-11 使用者裁決：側邊標籤與畫面小籤兩個一起打開，3 級起才顯示。
+        09-10 先藏是因為功能還在測，現在兩者都驗過了。"""
+        app_js = (Path(__file__).resolve().parent.parent / "app.js").read_text(encoding="utf-8")
+        index_html = (Path(__file__).resolve().parent.parent / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="coverInfoChips"', index_html)
+        self.assertIn("info_chips: val('coverInfoChips')", app_js)
+        self.assertIn("state.coverTitleCreativity >= 3", app_js)
+        for field in ("coverSideLabels", "coverInfoChips"):
+            with self.subTest(field=field):
+                self.assertIn(f"'{field}'", app_js)
