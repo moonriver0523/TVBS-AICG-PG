@@ -1289,8 +1289,8 @@ function updateCoverLayoutIndicator() {
         row.querySelectorAll('[data-cover-layout]').forEach(btn => {
             const active = btn.dataset.coverLayout === layout;
             btn.className = 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
-                + (active ? 'border border-violet-600 bg-violet-600 text-white'
-                          : 'border border-violet-600 text-slate-500 hover:text-white');
+                + (active ? 'border border-red-600 bg-red-600 text-white'
+                          : 'border border-red-600 text-slate-500 hover:text-white');
         });
     }
     if (isCover) applyCoverLayoutFields();
@@ -1314,8 +1314,8 @@ function updateYtLayoutIndicator() {
     row.querySelectorAll('[data-yt-layout]').forEach(btn => {
         const active = btn.dataset.ytLayout === layout;
         btn.className = 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
-            + (active ? 'border border-violet-600 bg-violet-600 text-white'
-                      : 'border border-violet-600 text-slate-500 hover:text-white');
+            + (active ? 'border border-red-600 bg-red-600 text-white'
+                      : 'border border-red-600 text-slate-500 hover:text-white');
     });
     // 雙則的底圖是拼好的一張，「只改文字」與追加修改都跟單則走同一條路
     const recompose = document.getElementById('ytCoverRecomposeBtn');
@@ -1338,7 +1338,7 @@ function applyCoverLayoutFields() {
     const fullLayout = coverLayoutNow() === 'full';
     document.querySelectorAll('.cover-split-only').forEach(el => el.classList.toggle('hidden', fullLayout));
     const leftBtn = document.getElementById('coverAsisLeftBtn');
-    if (leftBtn) leftBtn.textContent = fullLayout ? '＋ 附圖（選填）' : '＋ 第一附圖（選填）';
+    if (leftBtn) leftBtn.textContent = fullLayout ? '📁 ＋ 附圖（選填）' : '📁 ＋ 第一附圖（選填）';
     // 「只改文字」只有滿版合成版有：雙切的成品是左右兩張底圖拼的，拼完分不回去。
     const recompose = document.getElementById('coverRecomposeBtn');
     if (recompose) {
@@ -2408,7 +2408,7 @@ function toggleVstripLive(checkbox) {
 function _vstripPick(selector, value) {
     document.querySelectorAll(selector).forEach(btn => {
         const on = btn.dataset.vstripValue === value;
-        btn.classList.toggle('bg-violet-600', on);
+        btn.classList.toggle('bg-red-600', on);
         btn.classList.toggle('text-white', on);
         btn.classList.toggle('text-slate-400', !on);
     });

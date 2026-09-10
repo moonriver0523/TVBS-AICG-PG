@@ -310,7 +310,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260910-12</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260910-13</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -370,7 +370,7 @@
                     <div id="refUploadBox" class="mt-2">
                         <div class="flex items-center gap-2">
                             <button type="button" onclick="document.getElementById('refFileInput').click()"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">＋ 附參考圖（選填）</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 附參考圖（選填）</button>
                             <span class="text-[9px] text-slate-600">地圖底稿／實景參考／肖像照片／原圖放置，單張 ≤1.5MB，最多 3 張</span>
                         </div>
                         <input id="refFileInput" type="file" accept="image/*" multiple class="hidden"
@@ -399,7 +399,7 @@
                                    placeholder="勞保撥補 上看1300億（半形空格分行，最多 3 段、每段 ≤ 8 字）" />
                             <div class="mt-1 flex items-center gap-2">
                                 <button type="button" id="coverAsisLeftBtn" onclick="document.getElementById('coverAsisLeftInput').click()"
-                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">＋ 附圖（選填）</button>
+                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 附圖（選填）</button>
                                 <input id="coverAsisLeftInput" type="file" accept="image/*" class="hidden" onchange="handleCoverAsisSelected('left', this)" />
                                 <div id="coverAsisLeftPreview" class="hidden items-center gap-2">
                                     <img id="coverAsisLeftImg" class="w-10 h-10 object-cover rounded border border-slate-700" alt="" />
@@ -418,7 +418,7 @@
                                    placeholder="留空＝滿版；填了＝雙切（例：病理醫師 月薪65萬仍缺工）" />
                             <div class="mt-1 flex items-center gap-2 cover-split-only">
                                 <button type="button" onclick="document.getElementById('coverAsisRightInput').click()"
-                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">＋ 第二附圖（選填）</button>
+                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 第二附圖（選填）</button>
                                 <input id="coverAsisRightInput" type="file" accept="image/*" class="hidden" onchange="handleCoverAsisSelected('right', this)" />
                                 <div id="coverAsisRightPreview" class="hidden items-center gap-2">
                                     <img id="coverAsisRightImg" class="w-10 h-10 object-cover rounded border border-slate-700" alt="" />
@@ -434,10 +434,10 @@
                             <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">版面</span>
                             <button type="button" data-cover-layout="full" onclick="focusCoverLayoutField()"
                                     title="只填第一標題＝滿版一張圖"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-500 hover:text-white">滿版</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-500 hover:text-white">滿版</button>
                             <button type="button" data-cover-layout="split" onclick="focusCoverLayoutField()"
                                     title="第二標題填了就是雙切；點這裡會把游標移到第二標題"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-500 hover:text-white">雙切</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-500 hover:text-white">雙切</button>
                             <span class="text-[9px] text-slate-600">依第二標題自動判定</span>
                         </div>
 
@@ -446,7 +446,7 @@
                                       class="w-full bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-300 input-focus-ring resize-y"
                                       placeholder="新聞內文（選填）——貼上後按「AI 消化標題」，標題會回填到上方欄位，看過再按生成"></textarea>
                             <button type="button" onclick="handleCoverTitleDigest('ten_cover')"
-                                    class="self-start px-2.5 py-1 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all">AI 消化標題</button>
+                                    class="self-start px-2.5 py-1 rounded-lg text-[10px] font-black bg-violet-700 hover:bg-violet-600 text-white transition-all">AI 消化標題</button>
                         </div>
                         <div class="flex items-center gap-2">
                             <input id="coverDate" type="text" maxlength="20"
@@ -507,10 +507,10 @@
                                 <span class="text-[9px] font-black text-slate-600">版面</span>
                                 <button type="button" data-yt-layout="single" onclick="focusYtLayoutField()"
                                         title="只填第一標題＝單則（標題用半形空格拆成兩行）"
-                                        class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-500 hover:text-white">單則</button>
+                                        class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-500 hover:text-white">單則</button>
                                 <button type="button" data-yt-layout="dual" onclick="focusYtLayoutField()"
                                         title="兩個標題都填＝雙則（上白＝第一則、下黃＝第二則，每行一整句最多 14 字，底圖左右兩張羽化拼成）；點這裡只會把游標移到第二標題"
-                                        class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-500 hover:text-white">雙則</button>
+                                        class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-500 hover:text-white">雙則</button>
                                 <span class="text-[9px] text-slate-600">判定結果，不是開關</span>
                             </div>
                         </div>
@@ -519,7 +519,7 @@
                                       class="w-full bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-300 input-focus-ring resize-y"
                                       placeholder="新聞內文（選填）——貼上後按「AI 消化標題」，標題會回填到上方欄位，看過再按生成"></textarea>
                             <button type="button" onclick="handleCoverTitleDigest(ytCoverDigestTarget())"
-                                    class="self-start px-2.5 py-1 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all">AI 消化標題</button>
+                                    class="self-start px-2.5 py-1 rounded-lg text-[10px] font-black bg-violet-700 hover:bg-violet-600 text-white transition-all">AI 消化標題</button>
                         </div>
                         <div class="flex items-center gap-2">
                             <div id="ytCoverFlags" class="flex items-center gap-2 text-[10px] font-black text-slate-300">
@@ -595,35 +595,35 @@
                             <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">小標</span>
                             <button type="button" data-vstrip-variant data-vstrip-value="normal" onclick="setVstripVariant('normal')"
                                     title="LIVE 章下方不掛小標"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">一般</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">一般</button>
                             <button type="button" data-vstrip-variant data-vstrip-value="original_audio" onclick="setVstripVariant('original_audio')"
                                     title="LIVE 章下方掛白底紅字「原音呈現」"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">原音呈現</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">原音呈現</button>
                             <button type="button" data-vstrip-variant data-vstrip-value="ai_translation" onclick="setVstripVariant('ai_translation')"
                                     title="LIVE 章下方掛白底紅字「AI即時翻譯」"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">AI即時翻譯</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">AI即時翻譯</button>
                         </div>
 
                         <div class="flex items-center gap-1.5">
                             <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">直標位置</span>
                             <button type="button" data-vstrip-side data-vstrip-value="left" onclick="setVstripTitleSide('left')"
                                     title="直標貼畫面左緣"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">靠左</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">靠左</button>
                             <button type="button" data-vstrip-side data-vstrip-value="right" onclick="setVstripTitleSide('right')"
                                     title="直標貼畫面右緣（整組鏡射）"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">靠右</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">靠右</button>
                         </div>
 
                         <div class="flex items-center gap-1.5">
                             <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">Logo 角落</span>
                             <button type="button" data-vstrip-corner data-vstrip-value="tl" onclick="setVstripLogoCorner('tl')"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">左上</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">左上</button>
                             <button type="button" data-vstrip-corner data-vstrip-value="bl" onclick="setVstripLogoCorner('bl')"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">左下</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">左下</button>
                             <button type="button" data-vstrip-corner data-vstrip-value="tr" onclick="setVstripLogoCorner('tr')"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">右上</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">右上</button>
                             <button type="button" data-vstrip-corner data-vstrip-value="br" onclick="setVstripLogoCorner('br')"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">右下</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">右下</button>
                         </div>
 
                         <!-- 來源句沒填就整列收起來：那時候選角落沒有意義。
@@ -631,13 +631,13 @@
                         <div id="vstripSourceRow" class="hidden flex items-center gap-1.5">
                             <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">來源句位置</span>
                             <button type="button" data-vstrip-source data-vstrip-value="tl" onclick="setVstripSourceCorner('tl')"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">左上</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">左上</button>
                             <button type="button" data-vstrip-source data-vstrip-value="bl" onclick="setVstripSourceCorner('bl')"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">左下</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">左下</button>
                             <button type="button" data-vstrip-source data-vstrip-value="tr" onclick="setVstripSourceCorner('tr')"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">右上</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">右上</button>
                             <button type="button" data-vstrip-source data-vstrip-value="br" onclick="setVstripSourceCorner('br')"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-violet-600 text-slate-400 hover:text-white">右下</button>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">右下</button>
                         </div>
 
                         <div class="flex items-center gap-2">
@@ -739,7 +739,7 @@
                                        class="flex-1 bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                        placeholder="追加修改，如：把標題改成紅色／左邊那張圖換成長條圖" />
                                 <button id="refineBtn" onclick="handleRefine()"
-                                        class="px-3 py-2 rounded-lg text-[10px] font-black bg-violet-600 hover:bg-violet-500 text-white transition-all active:scale-95 disabled:opacity-50 flex items-center gap-1.5">
+                                        class="px-3 py-2 rounded-lg text-[10px] font-black bg-red-600 hover:bg-red-500 text-white transition-all active:scale-95 disabled:opacity-50 flex items-center gap-1.5">
                                     <span id="refineBtnText">修改</span>
                                     <div id="refineLoading" class="hidden w-3.5 h-3.5 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
                                 </button>
@@ -906,7 +906,7 @@
                         </div>
 
                         <button id="btnBg"
-                                class="mt-4 w-full py-3 bg-violet-600 hover:bg-violet-500 rounded-lg text-xs font-black transition-all shadow-lg shadow-violet-600/10 active:scale-95 disabled:opacity-50 uppercase tracking-widest">
+                                class="mt-4 w-full py-3 bg-red-600 hover:bg-red-500 rounded-lg text-xs font-black transition-all shadow-lg shadow-red-600/10 active:scale-95 disabled:opacity-50 uppercase tracking-widest">
                             生成 AI 背景
                         </button>
                         <button id="btnExport"
@@ -989,7 +989,7 @@
                     </span>
                 </label>
                 <button id="generateImageBtn" onclick="handleImageGeneration()" disabled
-                        class="mt-4 w-full py-3 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed rounded-lg text-xs font-black transition-all flex items-center justify-center gap-2 shadow-lg shadow-violet-600/10 active:scale-95">
+                        class="mt-4 w-full py-3 bg-red-600 hover:bg-red-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed rounded-lg text-xs font-black transition-all flex items-center justify-center gap-2 shadow-lg shadow-red-600/10 active:scale-95">
                     <span id="generateImageBtnText">使用 GPT 生成圖片</span>
                     <div id="generateImageLoading" class="hidden w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
                 </button>
