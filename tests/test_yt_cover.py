@@ -298,8 +298,9 @@ class BackgroundPathTests(unittest.TestCase):
 
         def fake_generate(image_req):
             captured["req"] = image_req
+            # 16:9：底圖路徑會驗成圖比例（2026-09-07），4:3 會被當成模型降級而 502
             return main.ImageGenerateResponse(
-                image_data_base64=base64.b64encode(_png_bytes()).decode("ascii"),
+                image_data_base64=base64.b64encode(_png_bytes(size=(1280, 720))).decode("ascii"),
                 mime_type="image/png", model="fake-image",
             )
 
@@ -612,7 +613,8 @@ class HotCoverTests(unittest.TestCase):
         self.assertGreater(len(whites), len(pixels) * 0.05, "標籤應有白色文字")
 
     def test_band_is_crimson_not_navy(self):
-        img = self._cover()
+        # 2026-09-08：底帶改成開關且預設關，要看顏色得自己打開（見 test_yt_bottom_band.py）
+        img = self._cover(bottom_band=True)
         w, h = img.size
         r, g, b = img.getpixel((w // 2, round(h * 0.995)))
         self.assertGreater(r, b, "底帶應偏紅")

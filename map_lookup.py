@@ -70,8 +70,19 @@ def _get(url: str, *, timeout: int = _TIMEOUT) -> bytes:
 # building／healthcare 這些**單一營業場所**——它們是店家名稱撞名的主要來源。
 GEOGRAPHIC_CLASSES = frozenset({
     "place", "boundary", "landuse", "highway", "waterway", "natural",
-    "leisure", "tourism", "aeroway", "railway", "military",
+    "leisure", "tourism", "aeroway", "railway", "military", "public_transport",
 })
+# 2026-09-08 使用者回報「路竹車站」六次都查不到：OSM 把它標成 class=building／type=train_station，
+# 整個 building 類被上面的白名單擋掉。building 仍不整類放行（店家撞名的主因），只放行
+# 車站類 type——它是地理地標，不是單一營業場所。
+GEOGRAPHIC_BUILDING_TYPES = frozenset({"train_station", "station", "railway_station", "bus_station", "airport", "terminal"})
+
+
+def _is_geographic(hit: dict) -> bool:
+    cls, typ = hit.get("class") or "", hit.get("type") or ""
+    if cls in GEOGRAPHIC_CLASSES:
+        return True
+    return cls == "building" and typ in GEOGRAPHIC_BUILDING_TYPES
 
 
 def _looks_like_the_place_asked_for(query: str, hit: dict) -> bool:
@@ -85,7 +96,7 @@ def _looks_like_the_place_asked_for(query: str, hit: dict) -> bool:
          完全找不到。
     importance 不能當門檻：正確的「廟口夜市牌樓」是 0.000。
     """
-    if (hit.get("class") or "") not in GEOGRAPHIC_CLASSES:
+    if not _is_geographic(hit):
         return False
     # 名稱對應。中文沒有詞界，整串比對會誤殺正確結果——查「基隆廟口」、
     # Nominatim 回「廟口夜市（…基隆市…）」是對的，但「基隆廟口」四個字並不

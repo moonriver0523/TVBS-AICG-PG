@@ -398,12 +398,14 @@ class UserReferenceImageTests(unittest.TestCase):
                     "OVERRIDE 區塊必須是 prompt 的最後一段",
                 )
 
-    def test_backend_without_reference_channel_rejects_uploads(self):
+    def test_native_gpt_now_accepts_a_map_reference(self):
+        """2026-09-10：原生 GPT 改走 images.edit，參考圖通道從「沒有」變成「有」，
+        所以這條路不再 400。措辭與能力仍然一致——補上來的是能力，不是放寬措辭。
+        """
         req = self.openrouter_request(reference_images=[self.MAP_REF])
         with patch.dict(os.environ, {"IMAGE_BACKEND": "native"}):
-            with self.assertRaises(main.HTTPException) as ctx:
-                main.apply_user_references_to_image_request(req)
-        self.assertEqual(ctx.exception.status_code, 400)
+            updated = main.apply_user_references_to_image_request(req)
+        self.assertIn(news_prompt.USER_REFERENCE_MAP_RULES.strip()[:40], updated.prompt)
 
     def test_native_gemini_also_rejects_uploads(self):
         """native-gemini 送得出單張肖像照，但送不出 reference_images 陣列。

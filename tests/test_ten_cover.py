@@ -40,6 +40,17 @@ def _data_url(raw: bytes) -> str:
     return "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
 
 
+def _highlight_tag_box(w: int, h: int) -> tuple[int, int, int, int]:
+    """「精華」紅刷筆標籤在畫布上的方框（與 compose._draw_cover_highlight_stamp 同一套推導）。"""
+    band_h = round(h * compose.COVER_HEADER_RATIO)
+    line_h = max(2, round(h * compose.COVER_HEADER_LINE_RATIO))
+    tag_h = round(band_h * compose.COVER_STAMP_BAND_RATIO)
+    with Image.open(compose.TEN_HIGHLIGHT_TAG) as tpl:
+        tag_w = round(tpl.width * tag_h / tpl.height)
+    y0 = (band_h - line_h - tag_h) // 2
+    return ((w - tag_w) // 2, y0, (w - tag_w) // 2 + tag_w, y0 + tag_h)
+
+
 def _ai_note_region_is_plate(img: Image.Image, align_right: bool) -> bool:
     """「AI示意圖」小標位置是否有半透明黑底（比底圖暗很多）。"""
     w, h = img.size
@@ -136,7 +147,9 @@ class ComposeTests(unittest.TestCase):
         w, h = 1536, 864
         base = Image.new("RGB", (w, h), (12, 20, 60))          # 整張深藍，模擬模型留白的標頭帶
         buf = io.BytesIO(); base.save(buf, format="PNG")
-        out = Image.open(io.BytesIO(compose.paste_cover_logo(buf.getvalue()))).convert("RGB")
+        out = Image.open(io.BytesIO(
+            compose.paste_cover_logo(buf.getvalue(), date_text="2026/09/10")
+        )).convert("RGB")
         band_h = round(h * compose.COVER_AI_HEADER_RATIO)
         px = list(out.getdata())
         def count(box, pred):
@@ -144,22 +157,82 @@ class ComposeTests(unittest.TestCase):
             return sum(1 for y in range(y0, y1) for x in range(x0, x1) if pred(px[y * w + x]))
         white = lambda p: p[0] > 220 and p[1] > 220 and p[2] > 220
         gold = lambda p: p[0] > 170 and p[1] > 120 and p[2] < 110
+        red = lambda p: p[0] > 150 and p[1] < 90 and p[2] < 90
         # 帶內左半有 Logo 白點與標籤金「十」
         self.assertGreater(count((0, 0, w // 2, band_h), white), 800)
         self.assertGreater(count((0, 0, w // 2, band_h), gold), 100)
         # 帶下方（照片區）完全沒被貼到
         self.assertEqual(count((0, band_h + 2, w, h), lambda p: p != (12, 20, 60)), 0)
-        # 右半帶（日期／ON AIR 由模型畫）不動
-        self.assertEqual(count((w // 2, 0, w, band_h), lambda p: p != (12, 20, 60)), 0)
+        # 右半帶：2026-09-10 起日期與 ON AIR 紅標也由程式貼（原本交給模型畫，
+        # 補帶會把它們切成上下兩截），所以這一半現在該有紅底與白字
+        self.assertGreater(count((w // 2, 0, w, band_h), red), 500)
+        self.assertGreater(count((w // 2, 0, w, band_h), white), 200)
 
-    def test_highlight_badge_pastes_round_stamp_mid_bottom(self):
-        """精華：標頭仍 ON AIR，畫面中下方貼藍光圓章（模板），非精華時該區不出現亮藍環。"""
+    def test_thickening_a_thin_band_no_longer_slices_the_date_and_on_air(self):
+        """使用者回報：十點封面的 ON AIR 與日期被切斷，下面還留一截殘影。
+
+        機制：模型畫的帶太薄時 ensure_ai_header_band 會把帶補厚——帶底那條邊往下搬、
+        中間用帶身填滿。日期與紅標若是模型畫在薄帶裡的，就會被填進去的那幾列切掉上半，
+        被往下搬的邊再把下半重新貼出來。改成程式在補帶「之後」才畫，補多厚都不影響。
+        這條測試盯的就是那個順序：紅標必須是一整塊、不得有橫向斷層。
+        """
+        w, h = 1536, 864
+        photo = (90, 90, 90)
+        canvas = Image.new("RGB", (w, h), photo)
+        thin = round(h * compose.COVER_AI_HEADER_RATIO) // 2   # 模型只畫了一半厚的帶
+        canvas.paste(Image.new("RGB", (w, thin), (12, 20, 60)), (0, 0))
+        canvas.paste(Image.new("RGB", (w, 3), (40, 160, 255)), (0, thin - 3))  # 帶底亮藍細線
+        buf = io.BytesIO(); canvas.save(buf, format="PNG")
+
+        out = Image.open(io.BytesIO(
+            compose.paste_cover_logo(buf.getvalue(), date_text="2026/09/10")
+        )).convert("RGB")
+        band_h = round(h * compose.COVER_AI_HEADER_RATIO)
+        px = list(out.getdata())
+        red = lambda p: p[0] > 150 and p[1] < 90 and p[2] < 90
+
+        rows = [y for y in range(h) if any(red(px[y * w + x]) for x in range(w // 2, w))]
+        self.assertTrue(rows, "標頭帶右端找不到 ON AIR 紅標")
+        # 一整塊：紅色列必須連續，中間不得有被填掉的空檔（那就是「被切斷」）
+        self.assertEqual(rows, list(range(rows[0], rows[-1] + 1)), f"紅標被切斷：{rows}")
+        # 而且整塊都在補完後的帶內，照片區不得有殘影
+        self.assertLess(rows[-1], band_h, "紅標掉出標頭帶外")
+
+    def test_the_date_carries_a_black_outline_so_a_thin_band_cannot_hide_it(self):
+        """2026-09-10 使用者裁決：模型畫的藍帶厚度會飄，帶一薄，白色日期就落在照片上。
+        與其追著把帶補到剛好（帶厚是模型決定的），不如給日期一圈黑描邊：
+        落在帶上或落在亮照片上都讀得到。
+        """
+        w, h = 1536, 864
+        canvas = Image.new("RGB", (w, h), (235, 235, 235))     # 整張亮底＝最壞情況
+        buf = io.BytesIO(); canvas.save(buf, format="PNG")
+        out = Image.open(io.BytesIO(
+            compose.paste_cover_logo(buf.getvalue(), date_text="2026/09/10")
+        )).convert("RGB")
+        band_h = round(h * compose.COVER_AI_HEADER_RATIO)
+        px = list(out.getdata())
+        # 日期在紅標左側：取紅標左緣以左、帶內的那塊
+        red_x = min(
+            (x for y in range(band_h) for x in range(w // 2, w)
+             if px[y * w + x][0] > 150 and px[y * w + x][1] < 90 and px[y * w + x][2] < 90),
+            default=w,
+        )
+        dark = sum(
+            1 for y in range(band_h) for x in range(w // 2, red_x)
+            if max(px[y * w + x]) < 60
+        )
+        self.assertGreater(dark, 100, "日期沒有黑色字框，薄帶時會消失在亮照片上")
+
+    def test_highlight_badge_pastes_red_brush_tag_in_the_header_band(self):
+        """精華：標頭仍 ON AIR，標頭帶中段貼紅色刷筆標籤（模板），非精華時該區維持深藍。
+
+        2026-09-08 使用者兩次裁決：先是原本的深藍圓章跨在底部標題區上會壓到標題，
+        接著整個樣式換成紅色刷筆底＋白字的橫式標籤，位置改到標頭帶中段。
+        """
         on_air = self._cover(badge="on_air")
         highlight = self._cover(badge="highlight")
         w, h = highlight.size
-        stamp_h = round(h * compose.COVER_STAMP_HEIGHT_RATIO)
-        top = round(h * compose.COVER_STAMP_TOP_RATIO)
-        box = (w // 2 - stamp_h // 2, top, w // 2 + stamp_h // 2, top + stamp_h)
+        box = _highlight_tag_box(w, h)
 
         def pixels(img):
             raw = img.crop(box).tobytes()
@@ -167,14 +240,36 @@ class ComposeTests(unittest.TestCase):
 
         hi, base = pixels(highlight), pixels(on_air)
         changed = sum(1 for a, b in zip(hi, base) if a != b) / len(hi)
-        self.assertGreater(changed, 0.5)          # 圓章確實蓋在這個區域
-        yellow = sum(1 for r, g, b in hi if r > 200 and g > 170 and b < 90) / len(hi)
-        self.assertGreater(yellow, 0.02)          # 「十點／精華」黃字
+        self.assertGreater(changed, 0.5)          # 標籤確實蓋在這個區域
+        red = sum(1 for r, g, b in hi if r > 140 and g < 90 and b < 90) / len(hi)
+        self.assertGreater(red, 0.2)              # 紅色刷筆底
+        white = sum(1 for r, g, b in hi if r > 225 and g > 225 and b > 225) / len(hi)
+        self.assertGreater(white, 0.01)           # 白字「精華」
+        # 非精華時同一塊是標頭帶的深藍
+        self.assertEqual(on_air.getpixel((w // 2, round(h * compose.COVER_HEADER_RATIO * 0.5))), compose.COVER_HEADER_FILL)
         # 標頭右側仍是 ON AIR 紅標（精華不再是標頭紅字）
         band_h = round(h * compose.COVER_HEADER_RATIO)
         head = highlight.crop((w - 300, 0, w, band_h)).tobytes()
         reds = sum(1 for r, g, b in zip(head[0::3], head[1::3], head[2::3]) if r > 180 and g < 60)
         self.assertGreater(reds, 500)
+
+    def test_highlight_tag_clears_the_title_area_and_the_header_contents(self):
+        """標籤只能待在標頭帶中段：標題區與標頭帶左右兩端都不能被動到。
+
+        使用者實測回報的正是「壓到標題」；標頭帶左半是 Logo＋節目標籤、右端是日期＋ON AIR。
+        """
+        on_air, highlight = self._cover(badge="on_air"), self._cover(badge="highlight")
+        w, h = highlight.size
+        band_h = round(h * compose.COVER_HEADER_RATIO)
+        x0, _, x1, y1 = _highlight_tag_box(w, h)
+        for name, box in (
+            ("標題區", (0, round(h * 0.55), w, h)),
+            ("標頭帶以下", (0, band_h + 2, w, h)),
+            ("標頭帶左半（Logo／節目標籤）", (0, 0, x0 - 2, band_h)),
+            ("標頭帶右端（日期／ON AIR）", (x1 + 2, 0, w, band_h)),
+        ):
+            with self.subTest(zone=name):
+                self.assertEqual(highlight.crop(box).tobytes(), on_air.crop(box).tobytes())
 
 
 class EndpointTests(unittest.TestCase):
@@ -304,19 +399,23 @@ class TitleDigestTests(unittest.TestCase):
 
 
 class PromptSyncTests(unittest.TestCase):
-    """純 AI 版的 prompt 要跟合成版畫的同一個版面（斜切全幅、薄標頭帶、白黃紅逐行）。"""
+    """純 AI 版的 prompt 要跟合成版畫的同一個版面（斜切全幅、標頭帶、白黃紅逐行）。"""
 
     def test_prompt_describes_diagonal_full_bleed_layout(self):
+        # 2026-09-09（第二輪）使用者：「藍框區域稍微變大一點點」——帶不再叫 THIN，
+        # 高度也不再手寫，改成從 compose.COVER_AI_HEADER_RATIO 推（見
+        # test_followups_20260909c.HeaderBandPromptTests）。
         prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE
         self.assertIn("DIAGONAL seam", prompt)
-        self.assertIn("THIN deep-navy header band", prompt)
+        self.assertIn("deep-navy header band", prompt)
         self.assertIn("glowing straight blue light line", prompt)
 
-    def test_prompt_colour_order_matches_composite_table(self):
+    def test_prompt_colour_names_match_the_composite_table(self):
+        """2026-09-08：顏色改成逐行標記（white／yellow／red），模板只講怎麼讀標記。"""
         prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE
-        self.assertIn("FIRST line solid white", prompt)
-        self.assertIn("SECOND line bright golden yellow", prompt)
-        self.assertIn("THIRD line (if any) vivid red", prompt)
+        self.assertIn("(white) = solid white", prompt)
+        self.assertIn("(yellow) = bright golden yellow", prompt)
+        self.assertIn("(red) = vivid red with a white outline", prompt)
         self.assertEqual(compose.COVER_TITLE_LINE_COLOURS[0], (255, 255, 255))
 
 

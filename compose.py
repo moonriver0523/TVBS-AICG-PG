@@ -22,6 +22,8 @@
 import functools
 import io
 import pathlib
+import re
+import unicodedata
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -34,7 +36,10 @@ TVBS_LOGO_WHITE = BRAND_DIR / "tvbs-logo-white.png"
 TEN_SHOW_TAG = BRAND_DIR / "ten-show-tag.png"  # 2026-09-07 換成正版樣式：藍色斜切、金「十」＋白字、NEWS NIGHT
 HOT_SEARCH_TAG = BRAND_DIR / "hot-search-tag.png"  # 「今日｜熱搜🔍」紅色三格標籤
 TEN_BOTTOM_LINE = BRAND_DIR / "ten-bottom-line.png"  # 十點封面底部：深藍帶＋發光直線（依 0901／0902 原版）
-TEN_HIGHLIGHT_STAMP = BRAND_DIR / "ten-highlight-stamp.png"  # 精華圓章：深藍圓＋藍光環＋「十點不一樣／精華」（依 0819 原版）
+# 2026-09-08 使用者裁決：「精華」改成紅色刷筆底＋白字的橫式標籤，貼在標頭帶中段。
+# 舊的圓章檔保留不刪（0819 原版樣式，之後要對照或還原時還在），但已經沒有程式碼引用它。
+TEN_HIGHLIGHT_TAG = BRAND_DIR / "ten-highlight-tag.png"      # 精華標籤：紅色刷筆底＋白字「精華」，左右有刷痕
+TEN_HIGHLIGHT_STAMP = BRAND_DIR / "ten-highlight-stamp.png"  # 舊版精華圓章（2026-09-08 起停用，檔案保留）
 
 # 中文字型：Pillow 不吃系統字型後備，必須指名檔案。依序找，第一個存在的就用。
 #
@@ -284,9 +289,27 @@ COVER_HEADER_LINE = (40, 150, 245)  # 標頭帶底一條亮藍細線
 COVER_HEADER_LINE_RATIO = 0.004
 COVER_MARGIN = 26                    # 內容離左右畫框的距離
 COVER_ONAIR_FILL = (206, 26, 32)
-COVER_TITLE_SIZE_RATIO = 0.085       # 標題起始字級（佔畫面高）
+# 2026-09-07 使用者回報「字明顯太小」：起始字級 0.085 → 0.11、版位 0.90。
+#
+# 顏色一律**依行序**：第 1 行白、第 2 行黃、第 3 行紅（`COVER_TITLE_LINE_COLOURS`）。
+# 2026-09-08 一度改成依段落（空格分段），同日使用者看了樣張後改回依行——要的是
+# 「白黃紅三行」的固定視覺，兩段標題被拆成 3 行時第 3 行也要紅。段索引仍跟著行走
+# （`cover_title_line_pairs` 的第二個元素），但**只記錄出處，不決定顏色**。
+#
+# 2026-09-08 使用者看了正式站成品後再裁決（雙切）：**兩格同一字級**。逐行各自撐滿的做法
+# 讓「左格三行 6 字都最大、右格第三行 11 字被壓小」變成兩邊字大小差一截，看起來像兩張圖
+# 拼的。改成：每格先各自算出逐行都塞得進的字級，再取兩格的全域最小值當所有行的字級
+# （所以 COVER_TITLE_LINE_SIZE_SPREAD 退場）。配套是把行拆得夠短——只要一行超過
+# COVER_TITLE_FILL_MIN_CHARS 就再拆，但總行數上限 3（白／黃／紅，使用者裁決不能四行）
+# ——不然共同字級會被最長那行拖垮。
+# 滿版是單一標題、沒有另一格可比，維持逐行各自撐滿。
+# 2026-09-08 晚使用者：雙切合成版「字級還是不夠大」。起始字級 0.11→0.135、可用寬 0.90→0.94；
+# 配套是消化標題每段 4–7 字（見 editor_formats），一行 11 字的那種段會把共同字級拖到 0.07。
+COVER_TITLE_SIZE_RATIO = 0.135       # 標題起始字級（佔畫面高）
 COVER_TITLE_MIN_SIZE_RATIO = 0.045
-COVER_TITLE_WIDTH_RATIO = 0.84       # 標題最寬佔該格寬的比例
+COVER_TITLE_WIDTH_RATIO = 0.94       # 標題最寬佔該格寬的比例
+COVER_TITLE_FILL_MIN_CHARS = 7       # 雙切：長度超過這個字數的行就再拆（拆到夠短，共同字級才大）
+COVER_TITLE_TOP_CLEARANCE_RATIO = 0.01   # 標題最上一行的字頂與標頭帶之間留的空隙
 COVER_TITLE_LINE_GAP = 1.06          # 行距（字級倍數）
 COVER_TITLE_BOTTOM_RATIO = 0.085     # 最後一行字底離畫面底的距離
 # 滿版（單一標題，2026-09-07 使用者裁決）：比照今日熱搜，標題橫跨整個畫面寬、置中，
@@ -294,6 +317,7 @@ COVER_TITLE_BOTTOM_RATIO = 0.085     # 最後一行字底離畫面底的距離
 COVER_FULL_TITLE_SIZE_RATIO = 0.15    # 每行各自撐滿寬（比照今日熱搜逐行 fit），此為字級上限
 COVER_FULL_TITLE_WIDTH_RATIO = 0.90
 COVER_TITLE_STROKE_RATIO = 0.055
+COVER_TITLE_BOLD_RATIO = 0.012       # 假粗體（2026-09-08 晚使用者「十點雙切字還可再粗一點點」），做法同 YT
 # 逐行配色：第 1 行白、第 2 行黃、第 3 行紅（紅字用白描邊，其餘深色描邊）。
 # 這張表同時是 editor_formats.COVER_AI_PROMPT_TEMPLATE 對模型描述的配色規則，改要一起改。
 COVER_TITLE_LINE_COLOURS = ((255, 255, 255), (250, 215, 0), (228, 28, 40))
@@ -304,37 +328,247 @@ COVER_SHADE_ALPHA = 190
 
 COVER_SHOW_NAME = "十點不一樣"
 COVER_AI_NOTE = "AI示意圖"
-# 2026-09-07：精華不再是標頭紅標；原版做法（0819／0805）是標頭照樣 ON AIR，
-# 另在畫面中下方貼一枚「十點不一樣 精華」圓章（模板 TEN_HIGHLIGHT_STAMP）。
+# 2026-09-07：精華不再是標頭紅標；標頭照樣 ON AIR，另貼一枚「精華」標籤。
+# 2026-09-08 使用者裁決：從 0819 原版的深藍圓章改成**紅色刷筆底＋白字的橫式標籤**
+# （模板 TEN_HIGHLIGHT_TAG），位置從畫面中下方（會壓到標題）改到標頭帶中段。
 COVER_BADGES = {
     "on_air": ("ON AIR", (206, 26, 32)),
     "highlight": ("ON AIR", (206, 26, 32)),
 }
 COVER_DEFAULT_BADGE = "on_air"
-COVER_STAMP_HEIGHT_RATIO = 0.23      # 精華圓章直徑佔畫布高（量自 0819：約 140/612）
-COVER_STAMP_TOP_RATIO = 0.67         # 圓章頂端位置（0819：底部文字帶上緣附近，跨在帶上）
-COVER_MAX_TITLE_LINES = 3
+# 幾何比照 paste_cover_logo／節目標籤：以標頭帶高為準，佔帶高 80%，水平與垂直都置中。
+# 標頭帶只有左半（Logo＋節目標籤）與右端（日期＋ON AIR）有東西，中段本來就空。
+COVER_STAMP_BAND_RATIO = 0.80        # 精華標籤高度佔標頭帶高的比例
+COVER_MAX_TITLE_LINES = 3            # 滿版
+# 2026-09-08 第二輪裁決：雙切一度放寬到 4 行，使用者看了樣張後改回 3 行——
+# 「白黃紅三行」是固定的視覺，第四行沒有顏色可配。拆行規則不變，只是到 3 行就停。
+COVER_MAX_TITLE_LINES_SPLIT = 3      # 雙切
 
 
 # 純 prompt 版的後製：把正版白色 Logo＋「十點不一樣」節目標籤貼進模型留空的標頭帶左半。
 # 位置與大小用畫布比例算，模型回什麼解析度都對得上。
 # 2026-09-07：原本 Logo 寬佔 18.5%（量自舊範例），在一成高的標頭帶裡整個爆出來壓到照片；
 # 改成跟合成版同一套幾何——以標頭帶高為準，Logo 佔帶高 70%、標籤佔 80%，垂直置中。
-COVER_AI_HEADER_RATIO = 0.10          # prompt 寫「about one tenth」，貼圖以此為準
+# 這一個數字同時是三件事，故意只留一個：prompt 要求模型畫多高、量不到時的退路、
+# 以及模型畫太薄時程式補到的目標。分成兩個數字遲早會各走各的。
+# 2026-09-09（第二輪）使用者改裁：「應該要藍框區域稍微變大一點點，你現在變成把 LOGO
+# 那些縮太小才是問題。」——上一版量到帶薄（實測 58/720 = 8.1%）就把 Logo 縮小去遷就，
+# 方向反了。改成**把帶補厚**而不是把 Logo 縮小，帶高直接借合成版那一個：
+# 合成版的帶就是 COVER_HEADER_RATIO，Logo 佔帶高 70%、標籤 80%、垂直置中，
+# 那是使用者早就看習慣的比例；AI 版另外訂一個數字只會讓兩版長得不一樣。
+COVER_AI_HEADER_RATIO = COVER_HEADER_RATIO
 COVER_AI_LEFT_RATIO = 0.015
+COVER_AI_HEADER_MIN_RATIO = 0.055     # 量到的帶高低於這個就是量錯（誤把帶內的字當邊界）
+COVER_AI_HEADER_MAX_RATIO = 0.145
+COVER_AI_HEADER_DELTA = 90            # 判定「離開標頭帶」的 RGB 曼哈頓距離
+COVER_AI_HEADER_GLOW_MAX_RATIO = 0.030   # 帶底輝光往上最多這麼厚
+COVER_AI_HEADER_RULE_MAX_RATIO = 0.012   # 帶底那條亮藍細線往下最多這麼厚
+COVER_AI_HEADER_FLAT_DELTA = 6           # 與帶身顏色差這麼多以內＝還算帶身（不是輝光）
 
 
-def paste_cover_logo(image_bytes: bytes) -> bytes:
-    """在 AI 畫好的封面標頭帶左半貼上正版白色 Logo 與節目標籤模板。
+def _ai_band_columns(width: int) -> range:
+    """取樣用的直行：畫面中段。左邊是 Logo／節目標籤、右邊是日期／紅標，中間本來就空。"""
+    return range(round(width * 0.40), round(width * 0.60), max(1, width // 64))
 
-    prompt 已明令模型不准畫任何電視台標誌／節目名、並把標頭帶左半留白（見
+
+def _is_band_edge(pixel) -> bool:
+    """帶底的輝光與亮藍細線：藍色壓倒性、而且紅幾乎是 0（實測 r ≤ 13）。
+
+    只寫「藍比紅多、藍夠亮」會把天空也算進去（淡藍天 135,206,235 就過關），
+    掃描一路衝進照片裡，帶底就量得太深——最後又變成標籤壓在亮線上，繞回原本的災情。
+    """
+    r, g, b = pixel[:3]
+    return r < 40 and b > r + 40 and b > 80
+
+
+def _probe_ai_header_band(canvas: Image.Image) -> tuple[int, int] | None:
+    """量模型畫的標頭帶：回傳 (帶身結束的那一列, 含底部輝光與亮線在內的帶底)。
+
+    量不到（帶跟照片同色、或量到離譜的值）回 None——這時候**不准動手畫**：
+    連帶在哪裡都不知道，往下補一塊深藍很可能蓋掉模型畫的東西。
+    """
+    width, height = canvas.size
+    limit = round(height * COVER_AI_HEADER_MAX_RATIO)
+    rgb = canvas.convert("RGB")
+    px = rgb.load()
+    tops: list[int] = []
+    for x in _ai_band_columns(width):
+        base = px[x, 0]
+        for y in range(1, limit + 1):
+            if sum(abs(px[x, y][i] - base[i]) for i in range(3)) > COVER_AI_HEADER_DELTA:
+                tops.append(y)
+                break
+    if not tops:
+        return None
+    tops.sort()
+    top = tops[len(tops) // 2]
+    if not (round(height * COVER_AI_HEADER_MIN_RATIO) <= top <= limit):
+        return None
+
+    edge_cap = round(height * COVER_AI_HEADER_RULE_MAX_RATIO)
+    depths: list[int] = []
+    for x in _ai_band_columns(width):
+        depth = 0
+        while depth < edge_cap and top + depth < height and _is_band_edge(px[x, top + depth]):
+            depth += 1
+        depths.append(depth)
+    depths.sort()
+    return top, top + depths[len(depths) // 2]
+
+
+def measure_ai_header_band(canvas: Image.Image) -> int:
+    """標頭帶（含底部亮線）到哪一列結束——後面要壓「AI示意圖」小標與精華圓章的都用這個。
+
+    量不到就退回 prompt 要求的高度。注意這裡量的是**帶底**而不是帶身結束處，
+    所以 `paste_cover_logo` 把帶補厚之後再量，拿到的就是補完的新帶底。
+    """
+    probe = _probe_ai_header_band(canvas)
+    if probe is None:
+        return round(canvas.size[1] * COVER_AI_HEADER_RATIO)
+    return probe[1]
+
+
+COVER_AI_HEADER_FILL_WINDOW = 41         # 填充列的水平中位濾波窗（要比字的筆畫寬得多）
+COVER_AI_HEADER_FILL_CLAMP = 60          # 濾完仍離帶身主色這麼遠的直行＝寬色塊，改用主色
+
+
+def _band_fill_row(canvas: Image.Image, top: int) -> Image.Image:
+    """做一列拿來往下填的帶身：保留左右的細微漸層，但濾掉帶裡的字。
+
+    取三列（避開單一列剛好穿過某個筆畫），逐行取中位數，再做一次水平中位濾波——
+    日期與紅標的筆畫寬度遠小於濾波窗，會被整個吃掉；漸層是慢變化，濾波前後幾乎一樣。
+    只把「明顯太亮」的換掉是不夠的：字邊的抗鋸齒像素比帶身還**暗**，
+    一路拉下去就是一條深色直線（2026-09-09 第一版的實測災情）。
+    """
+    width = canvas.size[0]
+    rgb = canvas.convert("RGB")
+    px = rgb.load()
+    rows = sorted({max(1, round(top * r)) for r in (0.33, 0.5, 0.67)})
+    columns = [
+        tuple(sorted(px[x, y][i] for y in rows)[len(rows) // 2] for i in range(3))
+        for x in range(width)
+    ]
+    half = COVER_AI_HEADER_FILL_WINDOW // 2
+    body = tuple(sorted(c[i] for c in columns)[width // 2] for i in range(3))
+    out = Image.new("RGB", (width, 1))
+    op = out.load()
+    for x in range(width):
+        window = columns[max(0, x - half):x + half + 1]
+        here = tuple(sorted(c[i] for c in window)[len(window) // 2] for i in range(3))
+        # 濾波窗整個落在紅標裡的時候，中位數就是紅的——寬色塊只能靠這一道擋。
+        if sum(abs(here[i] - body[i]) for i in range(3)) > COVER_AI_HEADER_FILL_CLAMP:
+            here = body
+        op[x, 0] = here
+    return out.convert("RGBA")
+
+
+def ensure_ai_header_band(canvas: Image.Image) -> int:
+    """把模型畫得太薄的標頭帶補到 COVER_AI_HEADER_RATIO，回傳補完後的帶底。
+
+    做法是把帶底那組「輝光＋亮藍細線」整條原封不動往下搬，中間空出來的部分用帶身
+    的一列填滿——不是把 Logo 縮小去遷就薄帶（那是 2026-09-09 第一版的錯誤方向）。
+    照片被吃掉最上面那幾列，那正是「藍框變大一點點」的意思。
+    """
+    height = canvas.size[1]
+    target = round(height * COVER_AI_HEADER_RATIO)
+    probe = _probe_ai_header_band(canvas)
+    if probe is None:
+        return target
+    top, bottom = probe
+    if bottom >= target:
+        return bottom
+
+    rgb = canvas.convert("RGB")          # 要留住這個參照，px 是它的 buffer
+    px = rgb.load()
+    x_mid = round(canvas.size[0] * 0.5)
+    body = px[x_mid, max(1, top // 2)]
+    glow_cap = round(height * COVER_AI_HEADER_GLOW_MAX_RATIO)
+    glow_top = top
+    while (
+        top - glow_top < glow_cap
+        and glow_top > 1
+        and sum(abs(px[x_mid, glow_top - 1][i] - body[i]) for i in range(3))
+        > COVER_AI_HEADER_FLAT_DELTA
+    ):
+        glow_top -= 1
+
+    edge = canvas.crop((0, glow_top, canvas.size[0], bottom))
+    fill_to = target - edge.size[1]
+    if fill_to > glow_top:
+        canvas.paste(
+            _band_fill_row(canvas, top).resize((canvas.size[0], fill_to - glow_top)),
+            (0, glow_top),
+        )
+    canvas.paste(edge, (0, max(glow_top, fill_to)))
+    return target
+
+
+def paste_cover_header_right(
+    canvas: Image.Image, band_h: int, date_text: str, badge: str
+) -> None:
+    """標頭帶右端的日期與 ON AIR 紅標，改由程式畫（2026-09-10）。
+
+    為什麼搬過來：這兩樣本來寫在 prompt 裡讓模型畫，而 ensure_ai_header_band 會把
+    模型畫得太薄的帶補厚——補法是「帶底那條邊往下搬、中間用帶身填滿」。填進去的那幾列
+    正好蓋掉模型畫的日期與紅標的上半，被往下搬的邊又把下半重新貼出來，成品就是
+    使用者看到的「日期與 ON AIR 被切斷、下面還留一層殘影」。
+
+    根因不是補帶算錯，是**這兩樣東西本來就不該交給模型**：它們是固定素材，
+    和 Logo、節目標籤同一類。畫在補帶之後，補多厚都不影響。
+
+    幾何沿用合成版 _draw_cover_header 的那一套（同一個視覺，兩條路徑不該長不一樣）。
+    """
+    draw = ImageDraw.Draw(canvas)
+    width = canvas.size[0]
+    margin = round(width * COVER_AI_LEFT_RATIO)
+    tag_h = max(1, round(band_h * 0.80))
+    tag_y0 = (band_h - tag_h) // 2
+
+    badge_text, badge_colour = COVER_BADGES[badge]
+    badge_font = _font(round(band_h * 0.42))
+    badge_w = badge_font.getbbox(badge_text)[2] + round(band_h * 0.9)
+    badge_x1 = width - margin
+    _rounded(draw, (badge_x1 - badge_w, tag_y0, badge_x1, tag_y0 + tag_h), 8, badge_colour)
+    dot_r = max(1, round(tag_h * 0.14))
+    dot_cx = badge_x1 - badge_w + round(band_h * 0.32)
+    dot_cy = tag_y0 + tag_h // 2
+    draw.ellipse(
+        (dot_cx - dot_r, dot_cy - dot_r, dot_cx + dot_r, dot_cy + dot_r),
+        fill=(255, 255, 255),
+    )
+    _draw_text(
+        draw, (badge_x1 - round(band_h * 0.28), dot_cy), badge_text, badge_font,
+        stroke_width=0, anchor="rm",
+    )
+
+    if date_text:
+        # 黑色字框（2026-09-10 使用者裁決）：模型畫的藍帶厚度會飄，帶一薄，白色日期就
+        # 落在照片上、亮背景下直接看不見。加一圈黑描邊後，落在帶上或落在照片上都讀得到——
+        # 比「把帶補到剛好」穩，因為帶厚是模型決定的、我們控制不了。
+        # 紅標不需要：它自己有紅底。Logo 與節目標籤是圖檔，本來就不受影響。
+        date_font = _font(round(band_h * 0.40))
+        _draw_text(
+            draw, (badge_x1 - badge_w - round(width * 0.02), dot_cy), date_text,
+            date_font, stroke=(0, 0, 0), stroke_width=max(2, round(band_h * 0.05)),
+            anchor="rm",
+        )
+
+
+def paste_cover_logo(
+    image_bytes: bytes, date_text: str = "", badge: str = COVER_DEFAULT_BADGE
+) -> bytes:
+    """在 AI 畫好的封面標頭帶貼上正版白色 Logo、節目標籤模板、日期與 ON AIR 紅標。
+
+    prompt 已明令模型不准畫任何電視台標誌／節目名／日期／紅標，整條標頭帶留白（見
     editor_formats.COVER_AI_PROMPT_TEMPLATE）。就算模型沒聽話畫了東西，
     貼上去也會蓋掉——與播出鏡面挖空框同一個原則：不靠模型自律。
     """
     with Image.open(io.BytesIO(image_bytes)) as opened:
         canvas = opened.convert("RGBA")
     width, height = canvas.size
-    band_h = round(height * COVER_AI_HEADER_RATIO)
+    # 2026-09-09（第二輪）：帶太薄就把帶補厚（見 ensure_ai_header_band），
+    # Logo 照補完的帶高算——第一版是反過來把 Logo 縮小去遷就薄帶，使用者退回。
+    band_h = ensure_ai_header_band(canvas)
     logo_h = max(1, round(band_h * 0.70))
     with Image.open(TVBS_LOGO_WHITE) as logo_file:
         logo_w = max(1, round(logo_h * logo_file.width / logo_file.height))
@@ -342,6 +576,52 @@ def paste_cover_logo(image_bytes: bytes) -> bytes:
     _paste_logo(canvas, (logo_x, (band_h - logo_h) // 2), logo_w)
     tag_h = max(1, round(band_h * 0.80))
     _paste_template(canvas, TEN_SHOW_TAG, (logo_x + logo_w + round(width * 0.02), (band_h - tag_h) // 2), tag_h)
+    # 右端的日期與 ON AIR 也在補帶之後才畫，理由見 paste_cover_header_right。
+    paste_cover_header_right(canvas, band_h, date_text, badge)
+
+    buffer = io.BytesIO()
+    canvas.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def paste_cover_ai_note(image_bytes: bytes, *, split: bool) -> bytes:
+    """在純 AI 版封面壓上「AI示意圖」小標（2026-09-07）。
+
+    為什麼改由程式壓：模板本來要模型自己畫這個小標，但只要使用者附了實景參考圖，
+    `apply_user_references_to_image_request` 就會追加「Do NOT render any 示意圖 label」，
+    位置在後、又是明文 OVERRIDE，模型會照做——標籤整個消失。合成版的標籤本來就是
+    程式畫的，這裡改成同一套，標籤在不在就不再取決於模型聽不聽話。做法比照 YT
+    ai-title：文字類固定元素一律後貼。
+
+    split=True（雙切）左右格外側各一枚；False（滿版）只有左上一枚。位置與合成版
+    `compose_ten_cover` 一致：標頭帶下方 2.5% 畫面高處。
+    """
+    with Image.open(io.BytesIO(image_bytes)) as opened:
+        canvas = opened.convert("RGBA")
+    width, height = canvas.size
+    # AI 版的標頭帶高由模型畫多少決定，不是 prompt 說的一成（2026-09-09），所以量出來再往下讓
+    note_y = measure_ai_header_band(canvas) + round(height * 0.025)
+    margin = round(width * COVER_MARGIN / COVER_CANVAS[0])
+    _draw_cover_ai_note(canvas, margin, note_y, align_right=False)
+    if split:
+        _draw_cover_ai_note(canvas, width - margin, note_y, align_right=True)
+
+    buffer = io.BytesIO()
+    canvas.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def paste_cover_highlight_stamp(image_bytes: bytes) -> bytes:
+    """在純 AI 版封面貼上「精華」圓章（2026-09-07 使用者回報：AI 整張版選精華沒反應）。
+
+    根因：合成版由 `compose_ten_cover` 在 `badge == "highlight"` 時貼圓章，AI 版只把
+    `COVER_BADGES[badge][0]`（兩種標籤都是 "ON AIR"，標頭刻意維持 ON AIR）塞進 prompt，
+    圓章從沒貼過。這裡重用 `_draw_cover_highlight_stamp`，位置與比例與合成版完全相同。
+    """
+    with Image.open(io.BytesIO(image_bytes)) as opened:
+        canvas = opened.convert("RGBA")
+    # 2026-09-09：帶高量出來再貼，理由同 paste_cover_logo
+    _draw_cover_highlight_stamp(canvas, measure_ai_header_band(canvas))
 
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")
@@ -392,13 +672,30 @@ def _draw_cover_bottom_line(canvas: Image.Image) -> None:
         canvas.alpha_composite(tpl, (0, height - strip_h))
 
 
-def _draw_cover_highlight_stamp(canvas: Image.Image) -> None:
-    """精華圓章：貼模板於畫面水平正中、中下方（跨在底部標題區上），照 0819 原版。"""
-    width, height = COVER_CANVAS
-    stamp_h = round(height * COVER_STAMP_HEIGHT_RATIO)
-    with Image.open(TEN_HIGHLIGHT_STAMP) as tpl:
-        stamp_w = round(tpl.width * stamp_h / tpl.height)
-    _paste_template(canvas, TEN_HIGHLIGHT_STAMP, ((width - stamp_w) // 2, round(height * COVER_STAMP_TOP_RATIO)), stamp_h)
+def _draw_cover_highlight_stamp(canvas: Image.Image, band_h: int | None = None) -> None:
+    """精華標籤：紅色刷筆模板，貼在標頭帶中段（水平置中、垂直置中於帶內）。
+
+    2026-09-08 使用者兩次裁決：先是實測回報原本的深藍圓章跨在底部標題區上（TOP_RATIO 0.67）
+    會壓到標題，接著把樣式整個換成紅色刷筆底＋白字的橫式標籤（TEN_HIGHLIGHT_TAG）。
+    標頭帶只有左半與右端有東西，中段本來就空，兩邊都不打架。
+
+    幾何以**傳進來的畫布**的尺寸為準，不是 COVER_CANVAS：純 AI 版直接貼在模型回來的
+    原圖上，那張的解析度是模型決定的（2026-09-07 起 paste_cover_highlight_stamp 共用這支）。
+
+    band_h：合成版的帶是程式自己畫的，帶多高一清二楚（None＝用 COVER_HEADER_RATIO）；
+    AI 版的帶是模型畫的，實測只有 8%上下，照 10.5% 貼這枚標籤會跟 Logo 一樣戳出帶外
+    （2026-09-09 使用者回報的就是 Logo 那一個），所以 AI 那條線要把量到的帶高傳進來。
+    """
+    width, height = canvas.size
+    if band_h is None:
+        band_h = round(height * COVER_HEADER_RATIO)
+    # 垂直置中要扣掉帶底那條亮藍細線，才跟 Logo 與節目標籤同一條中線
+    # （`_draw_cover_header` 兩者都是 (band_h - line_h - h) // 2）。
+    line_h = max(2, round(height * COVER_HEADER_LINE_RATIO))
+    tag_h = round(band_h * COVER_STAMP_BAND_RATIO)
+    with Image.open(TEN_HIGHLIGHT_TAG) as tpl:
+        tag_w = round(tpl.width * tag_h / tpl.height)
+    _paste_template(canvas, TEN_HIGHLIGHT_TAG, ((width - tag_w) // 2, (band_h - line_h - tag_h) // 2), tag_h)
 
 
 def _draw_cover_header(draw: ImageDraw.ImageDraw, canvas: Image.Image, date_text: str, badge: str) -> int:
@@ -442,8 +739,12 @@ def _draw_cover_header(draw: ImageDraw.ImageDraw, canvas: Image.Image, date_text
 
 
 def _draw_cover_ai_note(canvas: Image.Image, x_anchor: int, y0: int, align_right: bool) -> None:
-    """格內「AI示意圖」小標（半透明黑底白字）。"""
-    height = COVER_CANVAS[1]
+    """格內「AI示意圖」小標（半透明黑底白字）。
+
+    幾何一律以**傳進來的畫布**的高為準，不是 COVER_CANVAS：純 AI 版直接畫在模型
+    回來的原圖上，那張的解析度是模型決定的（2026-09-07 起 paste_cover_ai_note 共用這支）。
+    """
+    height = canvas.size[1]
     font = _font(round(height * 0.03))
     text_w = font.getbbox(COVER_AI_NOTE)[2]
     pad = round(height * 0.012)
@@ -458,37 +759,201 @@ def _draw_cover_ai_note(canvas: Image.Image, x_anchor: int, y0: int, align_right
     _draw_text(ImageDraw.Draw(canvas), ((x0 + x1) // 2, y0 + note_h // 2), COVER_AI_NOTE, font, stroke_width=0, anchor="mm")
 
 
-def _draw_cover_title(
-    canvas: Image.Image, lines: list[str], panel_x0: int, panel_x1: int, align_right: bool, *, full_width: bool = False
-) -> None:
-    """一格的標題：2–3 行由下往上堆，全部同一字級（以最寬那行決定），逐行白／黃／紅。
+# 拆行點偏好：切在「數量詞結尾」之後（5年｜各自…、184億元｜提升…），比純粹對半自然得多。
+_SPLIT_AFTER_CHARS = set("年月日元億萬千人次件位家戶%％度歲倍條棟艘架台場波班組隊起成")
 
-    full_width=True（滿版單一標題）：橫跨整個畫面、置中、字級起點放大，比照今日熱搜。
+# 虛詞邊界（2026-09-10）：切在這些字**之後**很少會腰斬一個詞——「容易被忽略的｜前兆」。
+_SPLIT_AFTER_PARTICLES = set("的了與和及至到後前中上下內外時起才又也都就再")
+# 切在這些字**之前**同理——「容易｜被忽略的前兆」。
+_SPLIT_BEFORE_PARTICLES = set("被把將對於為讓使與和及因但而且或如若從向往自")
+
+
+# 一段「數字」不是只有連續數字：9/12、5.5、20:00 中間的符號也在數字裡面，從那裡斷行
+# 會把日期切成兩截（2026-09-09 使用者回報 9/12）。回傳所有**不准當斷點**的索引。
+_NUMBER_TOKEN_RE = re.compile(r"\d+(?:[/.:]\d+)+|\d+")
+
+
+def _number_inner_indices(text: str) -> set[int]:
+    inner: set[int] = set()
+    for match in _NUMBER_TOKEN_RE.finditer(text):
+        inner.update(range(match.start() + 1, match.end()))
+    return inner
+
+
+def _split_line_near_middle(text: str) -> tuple[str, str]:
+    """把一行從中間附近切成兩行。
+
+    偏好順序：數量詞結尾 → 虛詞結尾 → 虛詞開頭 → 最靠近中點且不切在數字中間。
+    最後那條是保底，切出來的詞可能被腰斬（184億元 不能變 18／4億元 已由 inner 擋掉，
+    但「忽略」這種實詞沒有規則擋得住），所以前三條要盡量先命中。
+    """
+    n = len(text)
+    mid = n // 2
+    inner = _number_inner_indices(text)
+    for offset in range(0, 4):
+        for i in (mid - offset, mid + offset):
+            if 2 <= i <= n - 2 and text[i - 1] in _SPLIT_AFTER_CHARS and not text[i].isdigit():
+                return text[:i], text[i:]
+    # 虛詞邊界（2026-09-10）：純粹取中點會把詞腰斬——使用者回報「容易被忽略的前兆」
+    # 被切成「容易被忽／略的前兆」。沒有斷詞器可用（本機與 Cloud Run 都沒裝），
+    # 但中文裡「的了在與和…」幾乎不會是一個詞的中間，切在它們前後就安全得多。
+    # 掃描範圍放寬到中點 ±(n//4+1)：只在 ±3 內找，多數句子根本掃不到虛詞。
+    reach = n // 4 + 1
+    for offset in range(0, reach + 1):
+        for i in (mid - offset, mid + offset):
+            if 2 <= i <= n - 2 and text[i - 1] in _SPLIT_AFTER_PARTICLES and not text[i].isdigit():
+                return text[:i], text[i:]
+    for offset in range(0, reach + 1):
+        for i in (mid - offset, mid + offset):
+            if 2 <= i <= n - 2 and text[i] in _SPLIT_BEFORE_PARTICLES and i not in inner:
+                return text[:i], text[i:]
+    for offset in range(0, n):
+        for i in (mid + offset, mid - offset):
+            if 1 <= i < n and i not in inner:
+                return text[:i], text[i:]
+    return text[:mid], text[mid:]
+
+
+def _wrap_pairs(pairs: list[tuple[str, int]], max_w: int, size: int, max_lines: int) -> list[tuple[str, int]]:
+    """超寬防呆（2026-09-07）：在起始字級塞不進格寬的行，從中間切成兩行（最長的先切）。
+
+    行帶著段落索引一起走（拆出來的兩行都繼承原本那一段的索引），只是那個索引現在
+    **只記錄出處、不決定顏色**——2026-09-08 同日第二輪裁決把配色改回依行序。
+    """
+    pairs = list(pairs)
+    font = _font(size)
+    while len(pairs) < max_lines:
+        widths = [font.getbbox(text)[2] for text, _ in pairs]
+        idx = max(range(len(pairs)), key=widths.__getitem__)
+        text, seg = pairs[idx]
+        if widths[idx] <= max_w or len(text) < 4:
+            break
+        head, tail = _split_line_near_middle(text)
+        pairs[idx : idx + 1] = [(head, seg), (tail, seg)]
+    return pairs
+
+
+def _fill_pairs(pairs: list[tuple[str, int]], max_lines: int) -> list[tuple[str, int]]:
+    """雙切專用的字數拆行（2026-09-08）：只要一行超過 COVER_TITLE_FILL_MIN_CHARS 就再拆。
+
+    為什麼要在寬度規則之外再來一條：雙切改成**兩格同一字級**之後，共同字級由最長的那一行
+    決定。一格三行 6 字、另一格有一行 11 字，兩格就一起被壓到那個 11 字的字級。把行拆到
+    都夠短（≤ 7 字），共同字級才撐得起來。滿版不套——它沒有另一格要遷就。
+    """
+    pairs = list(pairs)
+    while len(pairs) < max_lines:
+        idx = max(range(len(pairs)), key=lambda i: len(pairs[i][0]))
+        text, seg = pairs[idx]
+        if len(text) <= COVER_TITLE_FILL_MIN_CHARS:
+            break
+        head, tail = _split_line_near_middle(text)
+        if not head.strip() or not tail.strip():
+            break
+        pairs[idx : idx + 1] = [(head, seg), (tail, seg)]
+    return pairs
+
+
+def wrap_cover_title_lines(lines: list[str], max_w: int, size: int, max_lines: int = COVER_MAX_TITLE_LINES) -> list[str]:
+    """`_wrap_pairs` 的純文字版（不帶段落索引的呼叫端與測試用）。"""
+    return [text for text, _ in _wrap_pairs([(ln, 0) for ln in lines], max_w, size, max_lines)]
+
+
+def _fill_cover_title_lines(lines: list[str], max_lines: int = COVER_MAX_TITLE_LINES_SPLIT) -> list[str]:
+    """`_fill_pairs` 的純文字版。"""
+    return [text for text, _ in _fill_pairs([(ln, 0) for ln in lines], max_lines)]
+
+
+def _cover_title_metrics(panel_w: int, full_width: bool) -> tuple[int, int, int]:
+    """一格標題的 (可用寬, 起始字級, 最小字級)。合成版與 AI 版共用同一套推導。"""
+    height = COVER_CANVAS[1]
+    width_ratio = COVER_FULL_TITLE_WIDTH_RATIO if full_width else COVER_TITLE_WIDTH_RATIO
+    size = round(height * (COVER_FULL_TITLE_SIZE_RATIO if full_width else COVER_TITLE_SIZE_RATIO))
+    return round(panel_w * width_ratio), size, round(height * COVER_TITLE_MIN_SIZE_RATIO)
+
+
+def cover_max_title_lines(full_width: bool) -> int:
+    """滿版、雙切都最多 3 行（2026-09-08 裁決：白／黃／紅三行，不能四行）。"""
+    return COVER_MAX_TITLE_LINES if full_width else COVER_MAX_TITLE_LINES_SPLIT
+
+
+def cover_title_panel_width(full_width: bool) -> int:
+    """一格標題的版位寬。滿版＝整寬；雙切＝左格安全內框扣掉邊界（見 compose_ten_cover）。"""
+    width = COVER_CANVAS[0]
+    if full_width:
+        return width
+    slant = round(width * YT_SPLIT_SLANT_RATIO)
+    return (width // 2 - slant // 2) - COVER_MARGIN
+
+
+def cover_title_segments(title: str) -> list[tuple[str, int]]:
+    """使用者用空白分出來的段落，配上段落索引（0＝白、1＝黃、2＝紅）。"""
+    from editor_formats import split_cover_title
+
+    segments = [seg for seg in split_cover_title(title) if seg.strip()]
+    return [(seg, i) for i, seg in enumerate(segments)]
+
+
+def cover_title_line_pairs(title: str, *, full_width: bool = False) -> list[tuple[str, int]]:
+    """標題分行的單一來源，回 (行, 段落索引)。合成版與 AI 版共用，斷句與配色都不分歧。"""
+    pairs = cover_title_segments(title)
+    if not pairs:
+        return []
+    max_lines = cover_max_title_lines(full_width)
+    max_w, size, _ = _cover_title_metrics(cover_title_panel_width(full_width), full_width)
+    pairs = _wrap_pairs(pairs, max_w, size, max_lines)
+    return pairs if full_width else _fill_pairs(pairs, max_lines)
+
+
+def cover_title_lines(title: str, *, full_width: bool = False) -> list[str]:
+    """`cover_title_line_pairs` 的純文字版（純 AI 版組 prompt、前端顯示用）。"""
+    return [text for text, _ in cover_title_line_pairs(title, full_width=full_width)]
+
+
+def _cover_title_vertical_cap(line_count: int, start_size: int) -> int:
+    """行數 × 行距要塞在標頭帶以下、底部標題基線以上，否則整體縮字（2026-09-08，上限 3 行）。"""
+    height = COVER_CANVAS[1]
+    baseline = height - round(height * COVER_TITLE_BOTTOM_RATIO)
+    top_limit = round(height * COVER_HEADER_RATIO) + round(height * COVER_TITLE_TOP_CLEARANCE_RATIO)
+    span = 1 + (line_count - 1) * COVER_TITLE_LINE_GAP
+    return max(1, min(start_size, int((baseline - top_limit) / span)))
+
+
+def cover_panel_title_size(pairs: list[tuple[str, int]], panel_w: int) -> int | None:
+    """雙切一格的字級：所有行都塞得進格寬、且整疊塞得進版面高度的最大共同字級。
+
+    回 None＝這格沒有標題。兩格取全域最小值才是最終字級（見 compose_ten_cover）。
+    """
+    if not pairs:
+        return None
+    max_w, size, min_size = _cover_title_metrics(panel_w, False)
+    fitted = min(_fit_font(text, max_w, size, min_size).size for text, _ in pairs)
+    return min(fitted, _cover_title_vertical_cap(len(pairs), size))
+
+
+def _draw_cover_title(
+    canvas: Image.Image, pairs: list[tuple[str, int]], panel_x0: int, panel_x1: int, align_right: bool,
+    *, full_width: bool = False, size_override: int | None = None,
+) -> None:
+    """一格的標題：由下往上堆，配色**依行序**（第 1 行白、第 2 行黃、第 3 行紅白邊）。
+
+    雙切：字級由 size_override 給（兩格同一個值，2026-09-08 使用者裁決「兩邊字不一樣大」不行）。
+    full_width=True（滿版單一標題）：橫跨整個畫面、置中、逐行各自撐滿，比照今日熱搜。
+    拆完縮到最小字級仍塞不進就整支失敗，不出超線的圖。
     """
     width, height = COVER_CANVAS
-    lines = [ln for ln in lines if ln.strip()][:COVER_MAX_TITLE_LINES]
-    if not lines:
+    pairs = [(text, seg) for text, seg in pairs if text.strip()][: cover_max_title_lines(full_width)]
+    if not pairs:
         return
     panel_w = panel_x1 - panel_x0
-    width_ratio = COVER_FULL_TITLE_WIDTH_RATIO if full_width else COVER_TITLE_WIDTH_RATIO
-    max_w = round(panel_w * width_ratio)
-    size = round(height * (COVER_FULL_TITLE_SIZE_RATIO if full_width else COVER_TITLE_SIZE_RATIO))
-    min_size = round(height * COVER_TITLE_MIN_SIZE_RATIO)
-    font = None
-    while size > min_size:
-        font = _font(size)
-        if max(font.getbbox(ln)[2] for ln in lines) <= max_w:
-            break
-        size -= 2
+    max_w, size, min_size = _cover_title_metrics(panel_w, full_width)
+    if size_override is not None:
+        fonts = [_font(size_override)] * len(pairs)
     else:
-        font = _font(min_size)
-        size = min_size
-    # 滿版：逐行各自 fit 到整寬（短行放大、長行縮小），比照今日熱搜；雙切：全部同字級
-    if full_width:
-        fonts = [_fit_font(ln, max_w, size, min_size) for ln in lines]
-    else:
-        fonts = [font] * len(lines)
-    stroke = max(3, round(size * COVER_TITLE_STROKE_RATIO))
+        fonts = [_fit_font(text, max_w, size, min_size) for text, _ in pairs]
+    for (text, _), font in zip(pairs, fonts):
+        if font.getbbox(text)[2] > max_w:
+            hint = "請縮短這一段" if len(pairs) >= cover_max_title_lines(full_width) else "請用半形空格分段或縮短"
+            raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{text}」（{hint}；最多 {cover_max_title_lines(full_width)} 行）")
     baseline = height - round(height * COVER_TITLE_BOTTOM_RATIO)
     if full_width:
         x, anchor = panel_x0 + panel_w // 2, "ms"
@@ -497,21 +962,26 @@ def _draw_cover_title(
     else:
         x, anchor = panel_x0 + round(panel_w * (1 - COVER_TITLE_WIDTH_RATIO) / 2), "ls"
     draw = ImageDraw.Draw(canvas)
-    # 由最後一行往上畫，配色照行序（第 1 行白…）
-    for idx in range(len(lines) - 1, -1, -1):
+    # 由最後一行往上畫；顏色看**行序**（第 1 行白、第 2 行黃、第 3 行紅），不是段落索引
+    for idx in range(len(pairs) - 1, -1, -1):
+        text, _ = pairs[idx]
         font = fonts[idx]
-        stroke = max(3, round(font.size * COVER_TITLE_STROKE_RATIO))
+        bold = round(font.size * COVER_TITLE_BOLD_RATIO)
+        # 描邊先加上假粗體會吃掉的寬度，加粗完外框才不會只剩一兩個像素（同 _draw_yt_title_line）
+        stroke = max(3, round(font.size * COVER_TITLE_STROKE_RATIO)) + bold
         colour = COVER_TITLE_LINE_COLOURS[min(idx, len(COVER_TITLE_LINE_COLOURS) - 1)]
         is_red = colour == COVER_TITLE_LINE_COLOURS[2]
         # 陰影一層再正字，字壓在照片上才立得住
-        _draw_text(draw, (x + 4, baseline + 4), lines[idx], font, fill=(0, 0, 0), stroke=(0, 0, 0), stroke_width=stroke, anchor=anchor)
+        _draw_text(draw, (x + 4, baseline + 4), text, font, fill=(0, 0, 0), stroke=(0, 0, 0), stroke_width=stroke, anchor=anchor)
         _draw_text(
-            draw, (x, baseline), lines[idx], font, fill=colour,
+            draw, (x, baseline), text, font, fill=colour,
             stroke=COVER_TITLE_STROKE_LIGHT if is_red else COVER_TITLE_STROKE_DARK,
             stroke_width=stroke, anchor=anchor,
         )
-        # 往上一行：用上一行（畫面上方那行）的字級算行距
-        baseline -= round((fonts[idx - 1].size if idx > 0 else font.size) * COVER_TITLE_LINE_GAP)
+        if bold > 0:
+            _draw_text(draw, (x, baseline), text, font, fill=colour, stroke=colour, stroke_width=bold, anchor=anchor)
+        # 往上一行：行距用**這一行**的字級算（滿版逐行不同字級時，大字行才不會壓到上面的小字行）
+        baseline -= round(font.size * COVER_TITLE_LINE_GAP)
 
 
 def compose_ten_cover(
@@ -536,8 +1006,6 @@ def compose_ten_cover(
     """
     if badge not in COVER_BADGES:
         raise ComposeError(f"未知的標籤：{badge!r}（可用：{list(COVER_BADGES)}）")
-    from editor_formats import split_cover_title
-
     width, height = COVER_CANVAS
     mid = width // 2
     if right_image is None:
@@ -565,11 +1033,24 @@ def compose_ten_cover(
 
     _draw_cover_bottom_line(canvas)
     if right_image is None and not title_right.strip():
-        # 滿版單一標題：橫跨整寬、置中（2026-09-07）
-        _draw_cover_title(canvas, split_cover_title(title_left), 0, width, align_right=False, full_width=True)
+        # 滿版單一標題：橫跨整寬、置中、逐行各自撐滿（2026-09-07）
+        _draw_cover_title(canvas, cover_title_line_pairs(title_left, full_width=True), 0, width,
+                          align_right=False, full_width=True)
     else:
-        _draw_cover_title(canvas, split_cover_title(title_left), left_box[0] + COVER_MARGIN, left_box[2], align_right=False)
-        _draw_cover_title(canvas, split_cover_title(title_right), right_box[0], right_box[2] - COVER_MARGIN, align_right=True)
+        # 雙切：兩格同一字級（2026-09-08 使用者裁決「兩邊字不一樣大」不行）。
+        # 先各自算出這一格塞得下的最大字級，再取兩格的最小值當兩格所有行的字級。
+        left_pairs = cover_title_line_pairs(title_left)
+        right_pairs = cover_title_line_pairs(title_right)
+        left_x0, left_x1 = left_box[0] + COVER_MARGIN, left_box[2]
+        right_x0, right_x1 = right_box[0], right_box[2] - COVER_MARGIN
+        candidates = [
+            size for size in (cover_panel_title_size(left_pairs, left_x1 - left_x0),
+                              cover_panel_title_size(right_pairs, right_x1 - right_x0))
+            if size is not None
+        ]
+        shared = min(candidates) if candidates else None
+        _draw_cover_title(canvas, left_pairs, left_x0, left_x1, align_right=False, size_override=shared)
+        _draw_cover_title(canvas, right_pairs, right_x0, right_x1, align_right=True, size_override=shared)
     if badge == "highlight":
         _draw_cover_highlight_stamp(canvas)
 
@@ -626,16 +1107,39 @@ YT_TOP_LINE_TOP = (27, 122, 222)
 YT_TOP_LINE_BOTTOM = (32, 165, 218)
 YT_LOGO_LEFT_RATIO = 0.844
 YT_LOGO_TOP_RATIO = 0.014
-YT_BAND_TOP_RATIO = 0.60             # 深藍科技底帶起點
-YT_BAND_FADE_RATIO = 0.06            # 頂端漸入高度
-YT_BAND_FILL = (8, 25, 70)
-YT_BAND_ALPHA = 205
-YT_BAND_BLOCK_FILL = (60, 130, 230)
-YT_LINE1_BASELINE_RATIO = 0.764      # 第一行字底
+# 2026-09-08 使用者回饋「字體再粗一點、行距略縮」（國內外新聞直播與今日熱搜共用這組）：
+# 行距 0.194 → 0.180（縮約 7%），第二行貼底不動、第一行往下靠；
+# 加粗用「同色描邊」做假粗體（字型檔只有台北黑體 Bold 一個字重，沒有更粗的可換）。
+# 2026-09-09 使用者「非 AI 的雙行標行距可以再縮減」：0.180 → 0.168，一樣只動第一行。
+YT_LINE1_BASELINE_RATIO = 0.790      # 第一行字底（原 0.778）
 YT_LINE2_BASELINE_RATIO = 0.958      # 第二行字底
 YT_TITLE_SIZE_RATIO = 0.145          # 標題起始字級（字高約 100/720）
+# 2026-09-08 使用者定版（三個位置樣張挑第 3 個「第二行」）：底帶從第一行字底（基線）開始
+# 羽化，到第二行字的墨水上緣才到全濃度——漸層落在兩行標題之間的空隙，
+# 不糊第一行、也不把第二行切成兩截。原本 0.60／0.06 把照片下半整片吃掉。
+#
+# 2026-09-09 使用者「底色框的邊緣可以再多一點漸層羽化」。這跟上面的行距縮減互相擠：
+# 空隙變小，羽化沒地方長。做法是讓斜坡**往上多起跑一段**（LEAD）——smoothstep 在
+# t 很小的時候幾乎是 0（t=0.13 → 濃度 4.6%），那一段藏在白字腳下看不出來，
+# 卻讓整條斜坡從 3.65% 拉長到 6% 畫面高，硬邊感消失。全濃度仍然壓在黃字墨水上緣。
+YT_BAND_LEAD_RATIO = 0.020           # 斜坡起點比第一行基線再高一點點（幾乎透明的那段）
+YT_BAND_TOP_RATIO = YT_LINE1_BASELINE_RATIO - YT_BAND_LEAD_RATIO   # 0.770
+# 結尾仍然壓在黃字墨水上緣之上（0.8231，見 _yt_title_ink_top_ratio）——2026-09-08
+# 那條「不超過第二行標題」的裁決沒有被這批取消，所以羽化只能長到 0.822 為止。
+YT_BAND_FADE_RATIO = 0.052           # 羽化高度（原 0.0365，+42%）：0.770 + 0.052 = 0.822
+YT_BAND_FILL = (8, 25, 70)
+# 2026-09-08 使用者裁決：底部壓色框改成開關（預設 OFF），開的時候要半透明——
+# 原本 205／255 ≈ 80% 幾乎把照片下半整片吃掉。153／255 = 60%。
+YT_BAND_ALPHA = 153
+YT_BAND_BLOCK_FILL = (60, 130, 230)
 YT_TITLE_MIN_SIZE_RATIO = 0.085
-YT_TITLE_STROKE_RATIO = 0.05         # 描邊佔字級比例
+# 2026-09-08 晚使用者：國內外／熱搜「太粗、複雜的字分不出來」，整點「太細」，兩邊要對齊。
+# 描邊 0.05→0.04、假粗體 0.015→0.008，三種版面統一走 _draw_yt_title_line（整點原本沒假粗體沒陰影）。
+YT_TITLE_STROKE_RATIO = 0.04         # 深色描邊佔字級比例（假粗體吃掉的部分另外補，見 _draw_yt_title_line）
+# 2026-09-08 第二輪：3.5% 太重，第二行黃字筆畫互相黏住、字腔（口、日的內白）被吃掉，
+# 「關閉社群媒體」糊成一團。降到 1.5%——12 字的長行在最小字級下字腔仍然清楚。
+YT_TITLE_BOLD_RATIO = 0.008          # 假粗體：同色描邊佔字級比例
+YT_TITLE_SHADOW_RATIO = 0.02         # 陰影位移佔字級比例（底色框預設關之後才補的）
 YT_LINE1_FILL = (255, 255, 255)
 YT_LINE2_FILL = (250, 215, 0)
 YT_TITLE_STROKE = (8, 8, 8)
@@ -643,6 +1147,19 @@ YT_AI_NOTE = "AI示意圖"
 YT_AI_NOTE_SIZE_RATIO = 0.032
 YT_AI_NOTE_TOP_RATIO = 0.20          # 藍標籤之下的右側空位
 YT_AI_NOTE_PLATE = (0, 0, 0, 120)
+
+# ---- 底色框上界（2026-09-08 WP3）----
+# 羽化結尾不准疊到第二行字：上界用**最大字級**的 ascent 算，不用某一句話 fit 完的字級：
+# 短標題不會縮字，ink 會比長標題更高，拿長標題量出來的上緣當上界，換一句短的就被漸入層蓋到。
+# outline 是描邊往外撐的部分。
+def _yt_title_ink_top_ratio(baseline_ratio: float) -> float:
+    """該行標題在最大字級下、含描邊的墨水上緣（佔畫布高的比例）。"""
+    _, height = YT_CANVAS
+    size = round(height * YT_TITLE_SIZE_RATIO)
+    font = _font(size)
+    ascent, _ = font.getmetrics()
+    outline = max(4, round(size * YT_TITLE_STROKE_RATIO)) + round(size * YT_TITLE_BOLD_RATIO)
+    return (round(height * baseline_ratio) - ascent - outline) / height
 
 
 def _paste_live_badge(canvas: Image.Image, box: tuple[int, int], width: int) -> int:
@@ -687,14 +1204,14 @@ def _draw_top_line(canvas: Image.Image) -> None:
     canvas.alpha_composite(line, (0, 0))
 
 
-def _draw_logo_tab(
-    canvas: Image.Image,
+def _logo_tab_layer(
     top_colour: tuple[int, int, int] = YT_LOGO_TAB_TOP,
     bottom_colour: tuple[int, int, int] = YT_LOGO_TAB_BOTTOM,
-) -> None:
-    """右上角漸層標籤（左邊斜切、左下圓角）＋白色 TVBS Logo，貼著畫面右上角。
+) -> Image.Image:
+    """右上角漸層標籤（左邊斜切、左下圓角）本身，畫在一張畫布大小的透明圖上。
 
-    預設藍色（新聞直播）；今日熱搜傳紅色。
+    跟貼 Logo 拆開，是為了 PNG 壓標要把標籤鏡射到另外三個角——鏡射整張會連 Logo
+    一起翻過去。預設藍色（新聞直播）；今日熱搜傳紅色。
     """
     width, height = YT_CANVAS
     tab_h = round(height * YT_LOGO_TAB_HEIGHT_RATIO)
@@ -733,29 +1250,80 @@ def _draw_logo_tab(
         t = y / max(1, tab_h - 1)
         colour = tuple(round(top_colour[i] * (1 - t) + bottom_colour[i] * t) for i in range(3))
         gd.line(((0, y), (width, y)), fill=colour + (255,))
-    layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     layer.paste(gradient, (0, 0), mask)
-    canvas.alpha_composite(layer)
+    return layer
+
+
+def _draw_logo_tab(
+    canvas: Image.Image,
+    top_colour: tuple[int, int, int] = YT_LOGO_TAB_TOP,
+    bottom_colour: tuple[int, int, int] = YT_LOGO_TAB_BOTTOM,
+) -> None:
+    """右上角漸層標籤＋白色 TVBS Logo，貼著畫面右上角。"""
+    width, height = YT_CANVAS
+    canvas.alpha_composite(_logo_tab_layer(top_colour, bottom_colour))
     _paste_logo(canvas, (round(width * YT_LOGO_LEFT_RATIO), round(height * YT_LOGO_TOP_RATIO)), round(width * YT_LOGO_WIDTH_RATIO))
+
+
+def _draw_yt_title_line(
+    draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str,
+    font: ImageFont.FreeTypeFont, fill: tuple[int, int, int], anchor: str = "ms",
+) -> None:
+    """YT 封面的一行標題：深色描邊 → 同色描邊加粗（2026-09-08 使用者回饋「字體再粗一點」）。
+
+    台北黑體只有 Bold 一個字重，沒有更粗的檔可換，所以用同色描邊把字身撐開。
+    深色描邊要**先加上假粗體吃掉的寬度**，不然加粗完外框只剩一兩個像素，
+    字壓在照片上（底色框現在預設關）就立不住。
+    """
+    # 不設下限：假粗體是「加多少」不是「至少多少」，設了 max(2, …) 會讓 1.5% 與完全不加粗
+    # 在常見字級下畫出一模一樣的字（round(157 × 0.015)=2，撞到下限）。
+    bold = round(font.size * YT_TITLE_BOLD_RATIO)
+    outline = max(4, round(font.size * YT_TITLE_STROKE_RATIO)) + bold
+    # 陰影一層再正字（比照十點封面的標題）：底色框 2026-09-08 起預設關，字直接壓在照片上，
+    # 光靠描邊在亮背景仍然糊。位移用字級的比例算，字級縮了陰影跟著縮。
+    shadow = round(font.size * YT_TITLE_SHADOW_RATIO)
+    if shadow > 0:
+        _draw_text(draw, (xy[0] + shadow, xy[1] + shadow), text, font, fill=(0, 0, 0),
+                   stroke=(0, 0, 0), stroke_width=outline, anchor=anchor)
+    _draw_text(draw, xy, text, font, fill=fill, stroke=YT_TITLE_STROKE, stroke_width=outline, anchor=anchor)
+    if bold > 0:
+        _draw_text(draw, xy, text, font, fill=fill, stroke=fill, stroke_width=bold, anchor=anchor)
+
+
+def _yt_shared_title_font(lines: list[str], max_w: int, start: int, smallest: int):
+    """YT 封面兩行標題共用一個字級（2026-09-08 使用者裁決：同一組標題各行一律同字級）。
+
+    每行各自算出塞得進寬度的字級，取全域最小；兩行都短時就是起始字級。
+    """
+    sizes = [_fit_font(text, max_w, start, smallest).size for text in lines if text]
+    return _font(min(sizes)) if sizes else _font(start)
 
 
 def _draw_title_band(
     canvas: Image.Image,
     fill: tuple[int, int, int] = YT_BAND_FILL,
     block_fill: tuple[int, int, int] = YT_BAND_BLOCK_FILL,
+    *,
+    top_ratio: float | None = None,
+    fade_ratio: float | None = None,
 ) -> None:
     """底部科技底帶：頂端漸入，帶上撒幾塊半透明方塊模擬頻道的電路紋。
 
     預設深藍（新聞直播）；今日熱搜傳深紅。
+    top_ratio／fade_ratio 是出樣張用的覆寫，None＝沿用定版常數（2026-09-08 使用者挑定：
+    第一行基線起羽化、第二行上緣到全濃度）。
     """
     width, height = YT_CANVAS
-    top = round(height * YT_BAND_TOP_RATIO)
-    fade = round(height * YT_BAND_FADE_RATIO)
+    top = round(height * (YT_BAND_TOP_RATIO if top_ratio is None else top_ratio))
+    fade = round(height * (YT_BAND_FADE_RATIO if fade_ratio is None else fade_ratio))
     band = Image.new("RGBA", (width, height - top), fill + (0,))
     alpha = Image.new("L", band.size, YT_BAND_ALPHA)
     ad = ImageDraw.Draw(alpha)
     for y in range(fade):
-        ad.line(((0, y), (width, y)), fill=round(YT_BAND_ALPHA * y / fade))
+        # smoothstep 羽化：兩端切線水平，看不到「這裡開始有框」的硬邊
+        t = y / fade
+        ad.line(((0, y), (width, y)), fill=round(YT_BAND_ALPHA * t * t * (3 - 2 * t)))
     band.putalpha(alpha)
     blocks = Image.new("RGBA", band.size, (0, 0, 0, 0))
     bd = ImageDraw.Draw(blocks)
@@ -783,8 +1351,14 @@ def compose_yt_cover(
     ai_translation: bool = False,
     ai_note: bool = False,
     draw_titles: bool = True,
+    bottom_band: bool = True,
+    band_top_ratio: float | None = None,
+    band_fade_ratio: float | None = None,
 ) -> bytes:
     """合成 YT 國內外新聞直播封面（2026-09-06 依頻道實際版面）。
+
+    bottom_band（2026-09-08 晚使用者裁決改預設**開**）：底部深藍壓色框。關＝完全不畫，
+    標題靠描邊自己立在照片上；開＝畫，且只有 YT_BAND_ALPHA（60%）不透明，照片透得出來。
 
     draw_titles=False（標題由 AI 生成模式）：background 已經是模型畫好含標題與底帶的
     整張圖，這裡只貼固定元素（LIVE 章／日期／原音呈現／AI即時翻譯／藍標籤／AI示意圖）。
@@ -805,8 +1379,8 @@ def compose_yt_cover(
     margin = round(width * YT_MARGIN_RATIO)
 
     # ---- 底帶先鋪，章與標籤壓在上面（AI 標題模式：底帶與標題都是模型畫的）----
-    if draw_titles:
-        _draw_title_band(canvas)
+    if draw_titles and bottom_band:
+        _draw_title_band(canvas, top_ratio=band_top_ratio, fade_ratio=band_fade_ratio)
     _draw_top_line(canvas)
     _draw_logo_tab(canvas)
     draw = ImageDraw.Draw(canvas)
@@ -858,16 +1432,14 @@ def compose_yt_cover(
     max_w = width - margin * 2
     start = round(height * YT_TITLE_SIZE_RATIO)
     smallest = round(height * YT_TITLE_MIN_SIZE_RATIO)
+    font = _yt_shared_title_font([line1, line2], max_w, start, smallest)
     for text, fill, baseline_ratio in (
         (line1, YT_LINE1_FILL, YT_LINE1_BASELINE_RATIO),
         (line2, YT_LINE2_FILL, YT_LINE2_BASELINE_RATIO),
     ) if draw_titles else ():
-        font = _fit_font(text, max_w, start, smallest)
-        stroke = max(4, round(font.size * YT_TITLE_STROKE_RATIO))
-        _draw_text(
-            draw, (width // 2, round(height * baseline_ratio)), text, font,
-            fill=fill, stroke=YT_TITLE_STROKE, stroke_width=stroke, anchor="ms",
-        )
+        if font.getbbox(text)[2] > max_w:
+            raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{text}」（請縮短這一行）")
+        _draw_yt_title_line(draw, (width // 2, round(height * baseline_ratio)), text, font, fill)
 
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")
@@ -880,9 +1452,11 @@ def compose_yt_cover(
 # 比例量自截圖去掉 YT 介面後的縮圖區（約 415×220）。
 YT_HOURLY_LOGO_WIDTH_RATIO = 0.118      # Logo 寬（48/415）
 YT_HOURLY_LOGO_TOP_RATIO = 0.064
-YT_HOURLY_BADGE_WIDTH_RATIO = 0.25      # LIVE 章寬（104/415）
+# 2026-09-09 使用者：右上 LIVE 章與整點時間白框「再縮小一點點」。章寬 0.25→0.225，
+# 時間帶寬度是從 badge_w 推的會跟著縮，帶高另外按同比例收（0.095→0.086）。
+YT_HOURLY_BADGE_WIDTH_RATIO = 0.225     # LIVE 章寬（原 0.25）
 YT_HOURLY_BADGE_TOP_RATIO = 0.024
-YT_HOURLY_TIME_BAND_HEIGHT_RATIO = 0.095  # 章下時間帶高（21/220）
+YT_HOURLY_TIME_BAND_HEIGHT_RATIO = 0.086  # 章下時間帶高（原 0.095）
 YT_HOURLY_TIME_BAND_FILL = (255, 255, 255)   # 頻道實際：白底紅字
 YT_HOURLY_TIME_BAND_TEXT = (200, 20, 30)
 YT_HOURLY_DATE_TAB_WIDTH_RATIO = 0.30   # 日期紅條寬（125/415）
@@ -890,10 +1464,23 @@ YT_HOURLY_DATE_TAB_HEIGHT_RATIO = 0.095
 YT_HOURLY_DATE_TOP_RATIO = 0.52         # 日期紅條上緣（114/220）
 YT_HOURLY_DATE_FILL = (214, 22, 32)
 YT_HOURLY_DATE_TEXT = (255, 255, 255)
-YT_HOURLY_LINE1_BASELINE_RATIO = 0.80
+YT_HOURLY_LINE1_BASELINE_RATIO = 0.815   # 2026-09-08 晚使用者「行距可略縮」：0.80→0.815（第二行不動）
 YT_HOURLY_LINE2_BASELINE_RATIO = 0.965
 YT_HOURLY_TITLE_SIZE_RATIO = 0.15       # 字高 32/220
 YT_HOURLY_AI_NOTE_TOP_RATIO = 0.34      # LIVE 章（含時間帶）之下的右側空位
+# 「雙則」每行字數上限（2026-09-08 使用者裁決）：兩行各是一則新聞的完整標題，
+# 不是同一句拆兩段，長度沒有天然上限，所以要有一條硬線。單則模式不套用。
+YT_HOURLY_LINE_MAX_CHARS = 18          # 2026-09-08 晚使用者：14 放寬到 18
+
+
+def title_display_width(text: str) -> float:
+    """標題長度（全形字算 1、半形字算 0.5）。
+
+    直接數 len() 會把「1380」這種半形數字當 4 個字——使用者自己給的樣張標題
+    「尼泊爾洪災逾1380死家屬抗議」len() 是 15、實際排出來只有 13 個全形字寬。
+    上限本來就是為了「排不排得下」，所以照顯示寬度算才對得上。
+    """
+    return sum(0.5 if unicodedata.east_asian_width(ch) in ("Na", "H") else 1.0 for ch in text)
 
 
 def compose_yt_hourly_cover(
@@ -905,10 +1492,15 @@ def compose_yt_hourly_cover(
     time_text: str = "",
     ai_note: bool = False,
     draw_titles: bool = True,
+    line_max_chars: int | None = None,
 ) -> bytes:
     """合成 YT 整點直播封面。time_text（如 20:00）選填，有填才在 LIVE 章下掛時間帶。
 
     draw_titles=False：標題已由模型畫在 background 上，這裡只貼固定元素。
+
+    line_max_chars（2026-09-08 WP2）：每行字數上限，超過就報錯。給「雙則」用——
+    那個模式的兩行各是一則新聞的完整標題，不是同一句拆兩段，長度沒有天然上限。
+    單則模式不帶這個參數，維持原行為。
     """
     line1, line2 = (line1 or "").strip(), (line2 or "").strip()
     if not line1 or not line2:
@@ -970,19 +1562,84 @@ def compose_yt_hourly_cover(
     max_w = width - margin * 2
     start = round(height * YT_HOURLY_TITLE_SIZE_RATIO)
     smallest = round(height * YT_TITLE_MIN_SIZE_RATIO)
+    font = _yt_shared_title_font([line1, line2], max_w, start, smallest)
     for text, fill, baseline_ratio in (
         (line1, YT_LINE1_FILL, YT_HOURLY_LINE1_BASELINE_RATIO),
         (line2, YT_LINE2_FILL, YT_HOURLY_LINE2_BASELINE_RATIO),
     ) if draw_titles else ():
-        font = _fit_font(text, max_w, start, smallest)
-        stroke = max(4, round(font.size * YT_TITLE_STROKE_RATIO))
-        _draw_text(
-            draw, (margin, round(height * baseline_ratio)), text, font,
-            fill=fill, stroke=YT_TITLE_STROKE, stroke_width=stroke, anchor="ls",
-        )
+        if line_max_chars and title_display_width(text) > line_max_chars:
+            raise ComposeError(f"標題超過 {line_max_chars} 字：「{text}」（請縮短這一行）")
+        # 共用字級縮到最小仍塞不下時放著不管就是字被畫框裁掉
+        if font.getbbox(text)[2] > max_w:
+            raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{text}」（請縮短這一行）")
+        # 與國內外／熱搜同一支畫字（描邊＋假粗體＋陰影），三種 YT 封面字重對齊
+        _draw_yt_title_line(draw, (margin, round(height * baseline_ratio)), text, font, fill, anchor="ls")
 
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+# ---- 左右兩張底圖的羽化拼接（2026-09-08 WP2）----
+#
+# 整點「雙則」的底圖是兩則新聞各一張，但標題是橫跨全寬的兩整行——中間若有 split_canvas
+# 那種白色硬邊（或斜切），線會從標題字中間穿過去，兩者互相打架。使用者給的真實封面上
+# 兩張圖是「柔和的深色漸層帶」接起來的，看不到任何直線，所以這裡走 alpha 漸融：
+# 中線兩側各一段寬羽化，接縫再疊一層很淡的深色暈讓過渡自然。
+YT_SEAM_FEATHER_RATIO = 0.07     # 羽化半寬佔畫面寬（中線兩側各 7%，使用者說 6–8%）
+YT_SEAM_SHADE_ALPHA = 56         # 接縫深色暈的最深值（56/255 ≈ 22%，使用者上限 25%）
+YT_SEAM_CENTRE_RATIO = 0.5       # 接縫中心，預設正中
+
+
+def blend_backgrounds_lr(
+    left: bytes,
+    right: bytes,
+    size: tuple[int, int] = YT_CANVAS,
+    *,
+    feather_ratio: float = YT_SEAM_FEATHER_RATIO,
+    seam_ratio: float = YT_SEAM_CENTRE_RATIO,
+    shade_alpha: int = YT_SEAM_SHADE_ALPHA,
+) -> bytes:
+    """左右兩張底圖羽化拼成一張，回 PNG bytes。沒有分隔線、沒有硬邊。
+
+    seam_ratio＝接縫中心佔畫面寬，預設正中（0.5），限 0.35–0.65。使用者範例裡接縫偏左
+    是因為右圖主體剛好擋到才挪的，屬個案微調，所以留成參數但 API／UI 先不暴露。
+
+    每一格各自 COVER 裁切到「自己那半再加上羽化帶」的尺寸（不變形）；羽化用 smoothstep
+    而不是線性，線性的兩端會留下看得出來的折線。
+    """
+    if not 0.35 <= seam_ratio <= 0.65:
+        raise ComposeError(f"接縫位置要在 0.35–0.65 之間：{seam_ratio}")
+    width, height = size
+    seam = round(width * seam_ratio)
+    band = max(2, round(width * feather_ratio))
+    x0 = max(0, seam - band)          # 羽化帶左緣：這裡右圖完全透明
+    x1 = min(width, seam + band)      # 羽化帶右緣：這裡右圖完全不透明
+
+    canvas = Image.new("RGB", size, (0, 0, 0))
+    canvas.paste(_cover_panel(left, (x1, height)), (0, 0))
+    right_panel = _cover_panel(right, (width - x0, height))
+
+    mask = Image.new("L", (width - x0, height), 255)
+    md = ImageDraw.Draw(mask)
+    span = max(1, x1 - x0)
+    for i in range(span):
+        t = i / span
+        md.line(((i, 0), (i, height)), fill=round(255 * t * t * (3 - 2 * t)))  # smoothstep
+    canvas.paste(right_panel, (x0, 0), mask)
+
+    # 接縫深色暈：中心最深、往兩側以同一條 smoothstep 收掉，讓兩張圖的亮度差不刺眼
+    if shade_alpha > 0:
+        shade = Image.new("RGBA", size, (0, 0, 0, 0))
+        sd = ImageDraw.Draw(shade)
+        for x in range(x0, x1):
+            d = abs(x - seam) / max(1, band)
+            t = max(0.0, 1.0 - d)
+            sd.line(((x, 0), (x, height)), fill=(0, 0, 0, round(shade_alpha * t * t * (3 - 2 * t))))
+        canvas = Image.alpha_composite(canvas.convert("RGBA"), shade).convert("RGB")
+
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -1032,10 +1689,14 @@ def compose_yt_hot_cover(
     line2: str,
     ai_note: bool = False,
     draw_titles: bool = True,
+    bottom_band: bool = True,
+    band_top_ratio: float | None = None,
+    band_fade_ratio: float | None = None,
 ) -> bytes:
-    """合成 YT「今日熱搜」封面：紅色系標頭、無日期無 LIVE，底部深紅帶兩行標題。
+    """合成 YT「今日熱搜」封面：紅色系標頭、無日期無 LIVE，底部兩行標題。
 
     draw_titles=False（標題由 AI 生成）：background 已含標題與底帶，只貼固定元素。
+    bottom_band（2026-09-08 使用者裁決，預設關）：底部深紅壓色框，開關與透明度同新聞版。
     """
     line1, line2 = (line1 or "").strip(), (line2 or "").strip()
     if not line1 or not line2:
@@ -1043,8 +1704,9 @@ def compose_yt_hot_cover(
     canvas = _cover_panel(background, YT_CANVAS).convert("RGBA")
     width, height = YT_CANVAS
     margin = round(width * YT_MARGIN_RATIO)
-    if draw_titles:
-        _draw_title_band(canvas, YT_HOT_BAND_FILL, YT_HOT_BAND_BLOCK_FILL)
+    if draw_titles and bottom_band:
+        _draw_title_band(canvas, YT_HOT_BAND_FILL, YT_HOT_BAND_BLOCK_FILL,
+                         top_ratio=band_top_ratio, fade_ratio=band_fade_ratio)
     _draw_hot_header(canvas)
     if ai_note:
         _draw_ai_note(canvas, round(height * YT_AI_NOTE_TOP_RATIO))
@@ -1052,19 +1714,480 @@ def compose_yt_hot_cover(
     max_w = width - margin * 2
     start = round(height * YT_TITLE_SIZE_RATIO)
     smallest = round(height * YT_TITLE_MIN_SIZE_RATIO)
+    font = _yt_shared_title_font([line1, line2], max_w, start, smallest)
     for text, fill, baseline_ratio in (
         (line1, YT_LINE1_FILL, YT_LINE1_BASELINE_RATIO),
         (line2, YT_LINE2_FILL, YT_LINE2_BASELINE_RATIO),
     ) if draw_titles else ():
-        font = _fit_font(text, max_w, start, smallest)
-        stroke = max(4, round(font.size * YT_TITLE_STROKE_RATIO))
-        _draw_text(
-            draw, (width // 2, round(height * baseline_ratio)), text, font,
-            fill=fill, stroke=YT_TITLE_STROKE, stroke_width=stroke, anchor="ms",
-        )
+        if font.getbbox(text)[2] > max_w:
+            raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{text}」（請縮短這一行）")
+        _draw_yt_title_line(draw, (width // 2, round(height * baseline_ratio)), text, font, fill)
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+# ============================================================
+# YT 直播「直標」PNG 壓標（2026-09-08 WP3 第二版，計畫書 E 段）
+#
+# 第一版做成底部橫向標題條，是誤讀規格：使用者說的「直標」是**垂直**的標題條。
+# 這一版全部依兩張真實播出截圖重量：
+#   D:\Downloads\20260908_直標參考_一般國內直播.png（718×404）
+#   D:\Downloads\20260908_直標參考_原音呈現.png（721×404）
+#
+# 版面（左緣版，右緣版整組鏡射）：
+#   LIVE 章（＋原音呈現／AI即時翻譯白底小標）壓在最上面，底下接兩欄直排文字。
+#   內側欄＝主標，字大、欄寬；外側欄＝副標，字小、欄窄。兩欄**同一個上緣、同一個
+#   下緣**，各自的字距＝共用欄高 ÷ 自己的格數——所以格數多的那欄字自動變小。
+#   這是量出來的：ref1 兩欄都是 y 67→358，主標 9 格、副標 12 格，格距 8.0%／6.0%。
+#
+# 兩件跟直覺不一樣、但截圖就是這樣的事：
+#   1. 兩欄都是深藍，沒有紅欄。ref1／ref2 取色外側 (28,53,99)、內側 (27,41,74)；
+#      2026-09-08 使用者裁決兩欄同底色、同一塊色框，統一用內側那個色（fill 參數）。
+#   2. 右上角是白色 TVBS NEWS 字標，不是 YT 封面那塊藍色斜標籤（logo_tab 參數）。
+#
+# 直排是逐字疊放，不是把整行轉 90°：標點要換成直排相容字元（「→﹁、。→︒），
+# 連續的英數字（AI／AMD／30）併成一格橫著寫（縱中橫），截圖裡就是這樣排的。
+# ============================================================
+
+VSTRIP_LEFT_RATIO = 0.0265           # 整組直標離畫面外緣（19/718）
+# 2026-09-08 使用者裁決：兩欄字級一樣大、底色一致、同一個色框不拆開——
+# 所以兩欄同寬（都用主標欄寬）、中間沒有縫、共用一個格距，底色是一整塊。
+# 2026-09-09 使用者回饋：整組直標太長、上下都貼邊，要縮短、字級再縮小、兩行之間的
+# 行距也縮小，整體置中偏上。
+#   - 欄寬本來是固定比例（0.0445w≈85px），字級卻是由格距算的，兩者脫鉤——字級一縮，
+#     欄寬不動，兩行之間的空白反而變大。改成由字級推導（VSTRIP_COLUMN_WIDTH_EM），
+#     字級縮 → 欄寬縮 → 行距自動變窄。舊常數留著給還在用它的呼叫端當參考值。
+#   - 上緣本來釘死在 VSTRIP_TOP_RATIO 往下長，長標題就一路長到 BOTTOM_MAX 貼邊。
+#     改成先算出色框長度，再用 VSTRIP_VERTICAL_ANCHOR 在可用範圍內置中偏上。
+VSTRIP_COLUMN_WIDTH_EM = 1.12        # 欄寬＝字級 × 這個值（字左右各留一點）
+VSTRIP_MAIN_WIDTH_RATIO = 0.0445     # 舊的固定欄寬（32/718）；現在只當參考值
+VSTRIP_SUB_WIDTH_RATIO = VSTRIP_MAIN_WIDTH_RATIO
+VSTRIP_SEAM_RATIO = 0.0              # 兩欄之間不留縫：同一個色框
+VSTRIP_TOP_RATIO = 0.166             # 色框可用範圍的上緣，一般版（67/404）
+VSTRIP_TOP_WITH_LABEL_RATIO = 0.191  # 有原音呈現／AI即時翻譯小標時（77/404）
+VSTRIP_TOP_GAP_RATIO = 0.014         # 色框上緣與 LIVE 章／小標底之間至少留這麼多（2026-09-08 使用者：頂上的字快被吃掉）
+VSTRIP_BOTTOM_MAX_RATIO = 0.94       # 可用範圍的下緣（不是實際長度，2026-09-09 起色框在範圍內浮動）
+VSTRIP_VERTICAL_ANCHOR = 0.38        # 色框在可用範圍裡的位置：0＝貼上緣、1＝貼下緣，置中偏上
+# 色框總長度的硬上限（佔畫布高）。光縮格距擋不住最長的標題：14 格 × 0.070 = 0.98h，
+# 一定會被可用範圍夾成「從上緣長到下緣」，也就是使用者說的「上下都貼邊」。
+# 直接封住總長度，格距與字級再由它反推，長標題才會真的變短。
+VSTRIP_COLUMN_MAX_RATIO = 0.64
+VSTRIP_MAIN_PITCH_RATIO = 0.070      # 格距上限（2026-09-09 由 0.080 縮小），兩欄共用
+VSTRIP_SUB_PITCH_RATIO = VSTRIP_MAIN_PITCH_RATIO
+VSTRIP_MIN_PITCH_RATIO = 0.040       # 縮到這裡還放不下就丟 ComposeError（2026-09-09 隨總長度上限一起下修）
+VSTRIP_CELL_TIGHT = 0.92             # 字級佔格距（字距約 0.08em）
+VSTRIP_MAIN_FILL = (27, 41, 74)      # 整塊色框：深藏青（截圖取色）
+VSTRIP_SUB_FILL = VSTRIP_MAIN_FILL   # 2026-09-08 起兩欄同色（保留名字給舊呼叫）
+VSTRIP_FILL_SHADE = 0.78             # 欄內由外而內的漸層，模擬截圖的漸層感
+VSTRIP_LIVE_TOP_RATIO = 0.104        # LIVE 章上緣，一般版（42/404）
+VSTRIP_LIVE_TOP_WITH_LABEL_RATIO = 0.057   # 有小標時 LIVE 往上讓（23/404）
+VSTRIP_LIVE_WIDTH_RATIO = 0.0877     # LIVE 章寬（63/718）
+VSTRIP_LABEL_HEIGHT_RATIO = 0.069    # 白底小標高（28/404）
+VSTRIP_LABEL_WIDTH_RATIO = 0.0905    # 白底小標寬（65/718）
+VSTRIP_LABEL_FILL = (255, 255, 255)
+VSTRIP_LABEL_TEXT = (208, 20, 30)
+VSTRIP_LABEL_BORDER = (208, 20, 30)
+VSTRIP_SOURCE_SIZE_RATIO = 0.030     # 來源句字級
+VSTRIP_SOURCE_GAP_RATIO = 0.014      # 來源句與 LIVE 章的距離（截圖就是貼著章排）
+# 來源句落在 Logo 那一角時，與 Logo 的水平間距（2026-09-09 使用者：都選右下會黏在一起）。
+# 舊做法是疊在 Logo 正上／正下、只隔 15px，左右範圍又完全重疊，看起來像 Logo 的說明文字；
+# 左版還會撞到 LIVE 章（left/tl/tl 實測重疊）。改成排在 Logo 的「內側」同一列、垂直置中對齊。
+VSTRIP_SOURCE_LOGO_GAP_RATIO = 0.018  # 佔畫面寬（＝Logo 自己的外緣留白，35px @1920）
+# 2026-09-09 使用者：「畫面來源：」這幾個字改成自動補，使用者只填來源名。
+# 已經以「畫面來源」開頭的就不再補（使用者習慣整句貼上，補兩次很醜）。
+VSTRIP_SOURCE_PREFIX = "畫面來源："
+VSTRIP_SOURCE_CORNERS = ("tl", "tr", "bl", "br")
+VSTRIP_LOGO_WIDTH_RATIO = 0.105      # 白色字標寬
+VSTRIP_LOGO_MARGIN_RATIO = 0.018
+VSTRIP_VARIANTS = ("normal", "original_audio", "ai_translation")
+VSTRIP_VARIANT_LABELS = {"original_audio": "原音呈現", "ai_translation": "AI即時翻譯"}
+VSTRIP_CORNERS = ("tr", "tl", "br", "bl")
+VSTRIP_SIDES = ("left", "right")
+VSTRIP_MAIN_MAX_CELLS = 12           # 主標格數上限（規格）
+VSTRIP_SUB_MAX_CELLS = 14            # 副標格數上限（規格）
+
+# 直排相容標點（U+FE1x／FE3x／FE4x）。台北黑體 Bold 這些字都有真字形，逐字render
+# 驗過不是豆腐；沒有的字才退回旋轉 90°，所以 _VERTICAL_ROTATE_FALLBACK 平常不會用到。
+VERTICAL_PUNCTUATION = {
+    "「": "﹁", "」": "﹂", "『": "﹃", "』": "﹄",
+    "（": "︵", "）": "︶", "(": "︵", ")": "︶",
+    "〔": "︹", "〕": "︺", "【": "︻", "】": "︼",
+    "，": "︐", "、": "︑", "。": "︒", "：": "︓", "；": "︔",
+    "！": "︕", "？": "︖", "…": "︙", "—": "︱", "─": "︱", "－": "︱",
+}
+
+
+def _vertical_cells(text: str) -> list[str]:
+    """把一行字拆成直排的格子。連續英數字併成一格（縱中橫），標點換直排字形。
+
+    「明早晚涼「中午仍破30度」」→ 明 早 晚 涼 ﹁ 中 午 仍 破 30 度 ﹂ ＝ 12 格。
+    30 是一格不是兩格，字數上限要照格數算，不是照字元數。
+    """
+    cells: list[str] = []
+    run = ""
+    for ch in text:
+        if ch.isascii() and ch.isalnum():
+            run += ch
+            continue
+        if run:
+            cells.append(run)
+            run = ""
+        if ch.isspace():
+            continue
+        cells.append(VERTICAL_PUNCTUATION.get(ch, ch))
+    if run:
+        cells.append(run)
+    return cells
+
+
+def _draw_vertical_cell(
+    canvas: Image.Image, cell: str, box: tuple[int, int, int, int],
+    font: ImageFont.FreeTypeFont, fill: tuple[int, int, int],
+) -> None:
+    """畫一格直排文字。box 是格子的 (x0, y0, x1, y1)。
+
+    單字用 anchor="ma" 貼在格子頂端置中——**不能**拿 getbbox 把墨水置中，
+    那會把 ﹁ 從它該待的右上角拖到格子正中間，直排標點就白換了。
+    英數字串（縱中橫）橫著寫，寬度超過格寬就縮字級。
+    """
+    x0, y0, x1, _ = box
+    centre = (x0 + x1) // 2
+    if len(cell) > 1 or (cell.isascii() and cell.isalnum()):
+        # 縱中橫：整串橫排塞進格寬
+        size = font.size
+        small = _font(size)
+        while size > 8 and small.getbbox(cell)[2] > (x1 - x0):
+            size -= 2
+            small = _font(size)
+        ImageDraw.Draw(canvas).text((centre, y0 + (font.size - small.size) // 2), cell,
+                                    font=small, fill=fill, anchor="ma")
+        return
+    if cell not in VERTICAL_PUNCTUATION.values() and _is_tofu(cell, font):
+        # 沒有直排字形才退回旋轉（台北黑體目前不會走到這條）
+        patch = Image.new("RGBA", (font.size * 2, font.size * 2), (0, 0, 0, 0))
+        ImageDraw.Draw(patch).text((font.size, font.size), cell, font=font, fill=fill + (255,), anchor="mm")
+        patch = patch.rotate(-90, resample=Image.BICUBIC)
+        canvas.alpha_composite(patch, (centre - font.size, y0))
+        return
+    ImageDraw.Draw(canvas).text((centre, y0), cell, font=font, fill=fill, anchor="ma")
+
+
+def _is_tofu(ch: str, font: ImageFont.FreeTypeFont) -> bool:
+    probe = Image.new("L", (font.size * 2, font.size * 2), 0)
+    ImageDraw.Draw(probe).text((font.size // 4, font.size // 4), ch, font=font, fill=255)
+    return probe.getbbox() is None
+
+
+def _vertical_column_layer(size: tuple[int, int], fill: tuple[int, int, int], outward: bool) -> Image.Image:
+    """一欄的底色：由外緣往內做一道很淡的漸層，貼近截圖的漸層感。"""
+    width, height = size
+    column = Image.new("RGBA", size)
+    draw = ImageDraw.Draw(column)
+    dark = tuple(round(c * VSTRIP_FILL_SHADE) for c in fill)
+    for x in range(width):
+        t = (x / max(1, width - 1)) if outward else (1 - x / max(1, width - 1))
+        colour = tuple(round(fill[i] + (dark[i] - fill[i]) * t) for i in range(3))
+        draw.line(((x, 0), (x, height)), fill=colour + (255,))
+    return column
+
+
+def vstrip_source_text(raw: str) -> str:
+    """來源句正規化：使用者只填來源名，「畫面來源：」自動補上（2026-09-09 使用者要求）。
+
+    已經以「畫面來源」開頭的原樣回傳——使用者習慣整句貼上，補兩次很醜。
+    冪等：對同一個字串套幾次結果都一樣，所以 layout 與 compose 各自呼叫都安全。
+    """
+    text = (raw or "").strip()
+    if not text or text.startswith("畫面來源"):
+        return text
+    return VSTRIP_SOURCE_PREFIX + text
+
+
+def vstrip_source_corner(
+    *, source_corner: str = "", logo_corner: str = "tr", title_side: str = "left",
+    source_follow_logo: bool = False,
+) -> str:
+    """來源句實際落在哪個角。
+
+    source_corner 空字串＝舊呼叫端（沒帶這個欄位）：沿用 source_follow_logo，
+    True 跟 Logo、False 跟 LIVE 章。行為與 2026-09-08 逐字元相同。
+    """
+    if source_corner:
+        if source_corner not in VSTRIP_SOURCE_CORNERS:
+            raise ComposeError(
+                f"source_corner 只能是 {'／'.join(VSTRIP_SOURCE_CORNERS)}，收到 {source_corner!r}"
+            )
+        return source_corner
+    return logo_corner if source_follow_logo else ("tl" if title_side == "left" else "tr")
+
+
+def yt_vertical_layout(
+    *, main_title: str, sub_title: str = "", title_side: str = "left",
+    variant: str = "normal", logo_corner: str = "tr", source_text: str = "",
+    source_follow_logo: bool = False, source_corner: str = "",
+) -> dict:
+    """算出直標每一塊的矩形，不畫任何東西。
+
+    幾何跟畫圖拆開才驗得到「主標在內側」——兩欄都是深藍，用像素分不出誰是誰。
+    回傳 live／label／main／sub／source／logo 的 (x0, y0, x1, y1)，以及兩欄的格數與格距。
+    """
+    width, height = YT_CANVAS
+    main_cells = _vertical_cells(main_title)
+    sub_cells = _vertical_cells(sub_title)
+    if not main_cells:
+        raise ComposeError("直標至少要有第一標題")
+    if len(main_cells) > VSTRIP_MAIN_MAX_CELLS:
+        raise ComposeError(f"第一標題 {len(main_cells)} 格，超過上限 {VSTRIP_MAIN_MAX_CELLS} 格")
+    if len(sub_cells) > VSTRIP_SUB_MAX_CELLS:
+        raise ComposeError(f"第二標題 {len(sub_cells)} 格，超過上限 {VSTRIP_SUB_MAX_CELLS} 格")
+
+    labelled = variant in VSTRIP_VARIANT_LABELS
+    band_top = round(height * (VSTRIP_TOP_WITH_LABEL_RATIO if labelled else VSTRIP_TOP_RATIO))
+    # LIVE 章（與小標）先算高度：色框上緣不准貼到它們，至少隔 VSTRIP_TOP_GAP_RATIO
+    live_top = round(height * (VSTRIP_LIVE_TOP_WITH_LABEL_RATIO if labelled
+                               else VSTRIP_LIVE_TOP_RATIO))
+    with Image.open(LIVE_BADGE) as badge:
+        live_h = round(badge.height * round(width * VSTRIP_LIVE_WIDTH_RATIO) / badge.width)
+    stack_bottom = live_top + live_h + (round(height * VSTRIP_LABEL_HEIGHT_RATIO) if labelled else 0)
+    band_top = max(band_top, stack_bottom + round(height * VSTRIP_TOP_GAP_RATIO))
+
+    # Logo 要先算：同側下角時色框底緣得讓開它（2026-09-09 放寬下角同側之後的必要條件）
+    logo_w = round(width * VSTRIP_LOGO_WIDTH_RATIO)
+    logo_margin = round(width * VSTRIP_LOGO_MARGIN_RATIO)
+    with Image.open(TVBS_LOGO_WHITE) as logo_file:
+        logo_h = round(logo_file.height * logo_w / logo_file.width)
+    logo_x0 = width - logo_margin - logo_w if logo_corner in ("tr", "br") else logo_margin
+    logo_y0 = logo_margin if logo_corner in ("tr", "tl") else height - logo_margin - logo_h
+    logo = (logo_x0, logo_y0, logo_x0 + logo_w, logo_y0 + logo_h)
+
+    band_bottom = round(height * VSTRIP_BOTTOM_MAX_RATIO)
+    same_side_bottom = logo_corner == ("bl" if title_side == "left" else "br")
+    if same_side_bottom:
+        gap = round(height * VSTRIP_TOP_GAP_RATIO)
+        band_bottom = min(band_bottom, logo_y0 - gap)
+        # 2026-09-09（第三批）：來源句與 Logo 同角時改排在 Logo「內側」的同一列，
+        # 垂直範圍完全落在 Logo 之內，所以 logo_y0 這一刀已經涵蓋它，不用再多讓一層
+        # （上一版為此扣掉的 src_h 白白吃掉了色框長度）。
+
+    # 兩欄同字級（2026-09-08 裁決）：格距由格數多的那欄決定，另一欄用同一個格距、
+    # 字少就早點結束；欄高＝格數多的那欄的長度（色框是一整塊，高度取這個）。
+    most = max(len(main_cells), len(sub_cells))
+    wanted = min(most * height * VSTRIP_MAIN_PITCH_RATIO, height * VSTRIP_COLUMN_MAX_RATIO)
+    column_h = round(min(wanted, band_bottom - band_top))
+    pitch = column_h / most
+    if pitch < height * VSTRIP_MIN_PITCH_RATIO:
+        longer = "第一標題" if len(main_cells) >= len(sub_cells) else "第二標題"
+        hint = "（Logo 放在同一側的下角壓縮了可用高度）" if same_side_bottom else ""
+        raise ComposeError(
+            f"{longer} {most} 格，縮到最小字級仍放不進直標（欄高 {column_h}px）{hint}"
+        )
+    # 2026-09-09：色框不再從 band_top 往下長到底，改成在可用範圍內置中偏上
+    top = band_top + round((band_bottom - band_top - column_h) * VSTRIP_VERTICAL_ANCHOR)
+
+    # 欄寬由字級推導（2026-09-09）：字級縮 → 欄寬縮 → 兩行之間的行距跟著變窄。
+    # 字級與 compose_yt_overlay 畫字時用的是同一個值，所以一併回傳。
+    cell_size = max(1, round(pitch * VSTRIP_CELL_TIGHT))
+    main_w = sub_w = max(1, round(cell_size * VSTRIP_COLUMN_WIDTH_EM))
+    seam = round(width * VSTRIP_SEAM_RATIO)
+    outer = round(width * VSTRIP_LEFT_RATIO)
+    if title_side == "left":
+        sub_x0 = outer
+        main_x0 = sub_x0 + sub_w + seam
+    else:
+        sub_x0 = width - outer - sub_w
+        main_x0 = sub_x0 - seam - main_w
+    main = (main_x0, top, main_x0 + main_w, top + column_h)
+    sub = (sub_x0, top, sub_x0 + sub_w, top + column_h) if sub_cells else (sub_x0, top, sub_x0, top)
+
+    strip_x0 = min(main[0], sub[0]) if sub_cells else main[0]
+    strip_x1 = max(main[2], sub[2]) if sub_cells else main[2]
+    box = (strip_x0, top, strip_x1, top + column_h)   # 一整塊色框
+    live_w = round(width * VSTRIP_LIVE_WIDTH_RATIO)
+    live_x0 = strip_x0 if title_side == "left" else strip_x1 - live_w
+    live = (live_x0, live_top, live_x0 + live_w, live_top + live_h)
+
+    label_w = round(width * VSTRIP_LABEL_WIDTH_RATIO)
+    label_h = round(height * VSTRIP_LABEL_HEIGHT_RATIO)
+    label_x0 = strip_x0 if title_side == "left" else strip_x1 - label_w
+    label = (label_x0, live[3], label_x0 + label_w, live[3] + label_h) if labelled else (0, 0, 0, 0)
+
+    source = (0, 0, 0, 0)
+    source_text = vstrip_source_text(source_text)
+    corner = vstrip_source_corner(
+        source_corner=source_corner, logo_corner=logo_corner,
+        title_side=title_side, source_follow_logo=source_follow_logo,
+    )
+    if source_text:
+        font = _font(round(height * VSTRIP_SOURCE_SIZE_RATIO))
+        src_w = font.getbbox(source_text)[2]
+        src_h = round(height * VSTRIP_SOURCE_SIZE_RATIO * 1.3)
+        gap = round(height * VSTRIP_SOURCE_GAP_RATIO)
+        live_corner = "tl" if title_side == "left" else "tr"
+        if corner == logo_corner:
+            # 同一角：讓開 Logo（Logo 在上→句子在下、在下→在上）
+            source = _vstrip_source_box_follow_logo(logo, logo_corner, src_w, src_h, gap)
+        elif corner == live_corner:
+            # LIVE 章那一角：貼在章旁邊（截圖的預設做法）
+            source = _vstrip_source_box(live, logo, logo_corner, title_side, src_w, src_h, gap)
+        else:
+            source = _vstrip_source_box_corner(corner, src_w, src_h, logo_margin)
+
+    return {"live": live, "label": label, "main": main, "sub": sub, "box": box,
+            "source": source, "logo": logo, "main_cells": main_cells,
+            "sub_cells": sub_cells, "column_height": column_h, "pitch": pitch,
+            "cell_size": cell_size, "source_corner": corner}
+
+
+def _vstrip_source_box(live, logo, logo_corner, title_side, src_w, src_h, gap):
+    """來源句預設貼在 LIVE 章右側同一列（截圖就是這樣）；跟 Logo 模式另算。"""
+    width, _ = YT_CANVAS
+    if title_side == "left":
+        x0 = live[2] + gap
+    else:
+        x0 = live[0] - gap - src_w
+    y0 = live[1] + (live[3] - live[1] - src_h) // 2
+    return (x0, y0, x0 + src_w, y0 + src_h)
+
+
+def _vstrip_source_box_corner(corner, src_w, src_h, margin):
+    """來源句自己佔一個空角落（既沒有 Logo 也沒有 LIVE 章）：貼著該角內縮 margin。"""
+    width, height = YT_CANVAS
+    x0 = margin if corner in ("tl", "bl") else width - margin - src_w
+    y0 = margin if corner in ("tl", "tr") else height - margin - src_h
+    return (x0, y0, x0 + src_w, y0 + src_h)
+
+
+def _vstrip_source_box_follow_logo(logo, logo_corner, src_w, src_h, gap=None):
+    """來源句與 Logo 同一角：排在 Logo 內側的同一列，垂直置中對齊。
+
+    2026-09-09 使用者：「都選右下會黏在一起」。舊做法上下疊、只隔 15px 且左右完全重疊，
+    像 Logo 的附屬說明；而且左版 Logo 在左上時句子會壓進 LIVE 章。改成往畫面中央讓開一個
+    Logo 留白的寬度——Logo 位置一律不動（使用者指定），只動來源句。
+
+    gap 參數保留給舊呼叫端，實際用 VSTRIP_SOURCE_LOGO_GAP_RATIO；傳進來的值忽略。
+    """
+    width, _ = YT_CANVAS
+    pad = round(width * VSTRIP_SOURCE_LOGO_GAP_RATIO)
+    if logo_corner in ("tr", "br"):      # Logo 靠右 → 句子往左讓
+        x1 = logo[0] - pad
+        x0 = x1 - src_w
+    else:                                 # Logo 靠左 → 句子往右讓
+        x0 = logo[2] + pad
+        x1 = x0 + src_w
+    y0 = logo[1] + (logo[3] - logo[1] - src_h) // 2
+    return (x0, y0, x1, y0 + src_h)
+
+
+def compose_yt_overlay(
+    *,
+    main_title: str,
+    sub_title: str = "",
+    source_text: str = "",
+    variant: str = "normal",
+    logo_corner: str = "tr",
+    title_side: str = "left",
+    source_follow_logo: bool = False,
+    source_corner: str = "",
+    logo_tab: bool = False,
+    live: bool = True,
+    fill: tuple[int, int, int] = VSTRIP_MAIN_FILL,
+    size: tuple[int, int] = YT_CANVAS,
+) -> bytes:
+    """合成 YT 直播用的「直標」透明底 PNG，回傳 PNG bytes（RGBA，沒有底圖）。
+
+    main_title 是主標（內側欄），sub_title 是副標（外側欄）；2026-09-08 起兩欄**同字級、
+    同底色、同一塊色框**（fill 一個顏色畫整塊），字少的那欄早點結束。
+    variant：normal／original_audio／ai_translation，後兩者在 LIVE 章下方多一枚白底小標。
+    source_text 只要填來源名（例「美聯社」），「畫面來源：」由 vstrip_source_text 自動補。
+    source_corner 指定它落在哪一角（tl／tr／bl／br），空字串＝舊行為
+    （source_follow_logo=True 跟 Logo、False 跟 LIVE 章）。同一角有 Logo 或 LIVE 章時
+    自動讓開，不會打架。
+    logo_tab=True 才畫 YT 封面那塊藍色斜標籤；預設是截圖裡的白色字標。
+
+    size 目前只支援 1920×1080，其他尺寸直接擋掉而不是默默畫錯。
+    """
+    if variant not in VSTRIP_VARIANTS:
+        raise ComposeError(f"variant 只能是 {'／'.join(VSTRIP_VARIANTS)}，收到 {variant!r}")
+    if logo_corner not in VSTRIP_CORNERS:
+        raise ComposeError(f"logo_corner 只能是 {'／'.join(VSTRIP_CORNERS)}，收到 {logo_corner!r}")
+    if title_side not in VSTRIP_SIDES:
+        raise ComposeError(f"title_side 只能是 left／right，收到 {title_side!r}")
+    if tuple(size) != YT_CANVAS:
+        raise ComposeError(f"直標目前只支援 {YT_CANVAS[0]}×{YT_CANVAS[1]}，收到 {size}")
+    # 2026-09-09 使用者裁決：直標縮短之後，同一側的**下**角空出來了，左下／右下一律
+    # 開放；同一側的**上**角仍然會壓在直標上（LIVE 章與色框頂都在那裡），照舊擋掉。
+    # 下角的實際避讓由 yt_vertical_layout 夾住色框底緣負責，不是靠這裡放行就沒事。
+    same_side_top = logo_corner == ("tl" if title_side == "left" else "tr")
+    if same_side_top:
+        raise ComposeError(
+            f"Logo 放 {logo_corner} 會壓在 {title_side} 側的直標上，請把 Logo 換到另一邊"
+        )
+
+    width, height = YT_CANVAS
+    layout = yt_vertical_layout(main_title=main_title, sub_title=sub_title,
+                               title_side=title_side, variant=variant,
+                               logo_corner=logo_corner, source_text=source_text,
+                               source_follow_logo=source_follow_logo,
+                               source_corner=source_corner)
+    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+
+    # ---- 底色：一整塊色框（兩欄不拆開），由外緣往內一道很淡的漸層 ----
+    x0, y0, x1, y1 = layout["box"]
+    canvas.alpha_composite(_vertical_column_layer((x1 - x0, y1 - y0), fill, title_side == "left"),
+                           (x0, y0))
+
+    # ---- 兩欄文字：白字、同字級，不用封面那套重描邊＋陰影（那是壓照片用的，壓深藍會糊）----
+    pitch = layout["pitch"]
+    for key, cells in (("main", layout["main_cells"]), ("sub", layout["sub_cells"])):
+        if not cells:
+            continue
+        x0, y0, x1, _ = layout[key]
+        # 欄寬 2026-09-09 起由字級推導，字級直接用 layout 算好的那個；仍夾一次欄寬
+        # 當保險，免得哪天欄寬改回固定值又忘了這裡。
+        size_px = min(layout["cell_size"], round((x1 - x0) * 0.94))
+        font = _font(size_px)
+        for index, cell in enumerate(cells):
+            cell_y0 = y0 + round(index * pitch)
+            _draw_vertical_cell(canvas, cell, (x0, cell_y0, x1, cell_y0 + round(pitch)),
+                                font, (255, 255, 255))
+
+    # ---- LIVE 章 ----
+    if live:
+        box = layout["live"]
+        _paste_live_badge(canvas, (box[0], box[1]), box[2] - box[0])
+
+    # ---- 原音呈現／AI即時翻譯：白底、紅框、紅字 ----
+    if variant in VSTRIP_VARIANT_LABELS:
+        box = layout["label"]
+        draw = ImageDraw.Draw(canvas)
+        draw.rounded_rectangle(box, radius=round(height * 0.008), fill=VSTRIP_LABEL_FILL,
+                               outline=VSTRIP_LABEL_BORDER, width=max(2, round(height * 0.004)))
+        text = VSTRIP_VARIANT_LABELS[variant]
+        font = _fit_font(text, (box[2] - box[0]) - round(width * 0.008),
+                         round((box[3] - box[1]) * 0.72), round((box[3] - box[1]) * 0.4))
+        _draw_text(draw, ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2), text, font,
+                   fill=VSTRIP_LABEL_TEXT, stroke_width=0, anchor="mm")
+
+    # ---- Logo ----
+    if logo_tab:
+        canvas.alpha_composite(_logo_tab_layer())
+    logo = layout["logo"]
+    _paste_logo(canvas, (logo[0], logo[1]), logo[2] - logo[0])
+
+    # ---- 來源句（「畫面來源：」自動補，見 vstrip_source_text）----
+    source_text = vstrip_source_text(source_text)
+    if source_text:
+        font = _font(round(height * VSTRIP_SOURCE_SIZE_RATIO))
+        box = layout["source"]
+        _draw_text(ImageDraw.Draw(canvas), (box[0], box[1]), source_text, font,
+                   fill=(255, 255, 255), stroke=YT_TITLE_STROKE,
+                   stroke_width=max(3, round(height * 0.004)), anchor="la")
+
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG")
+    return buffer.getvalue()
+
 
 
 # 多圖分切底圖（2026-09-06 使用者裁決：「原圖放置」附圖 2 張＝左右雙切、3 張＝三切，

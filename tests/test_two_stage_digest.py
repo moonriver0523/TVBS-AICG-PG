@@ -178,22 +178,31 @@ class MapScopeGuardTests(_Harness):
         self.assertIn("MAP ACCURACY RULES", prompt)
         self.assertNotIn("MAP SCOPE GUARD", prompt)
 
-    def test_fallback_and_user_specified_types_never_get_the_guard(self):
+    def test_the_fallback_path_still_carries_the_full_map_rules(self):
+        """分類失敗退回自動判斷，那條路徑拿的是整塊 MAP_ACCURACY_RULES，不是守門短文。"""
         _, old_calls, _ = self.run_generate(classify_raises=RuntimeError("boom"))
         self.assertNotIn("MAP SCOPE GUARD", old_calls[0]["system_prompt"])
+        self.assertIn("MAP ACCURACY RULES", old_calls[0]["system_prompt"])
+
+    def test_user_specified_non_map_types_now_get_the_guard_too(self):
+        """2026-09-10：使用者指定非地圖類型時，原本兩塊地理約束都不注入，等於零約束——
+        實例是 type_label=資訊卡 的高溫新聞，消化端寫出「地理準確的臺灣地圖」，
+        成品縣市界全錯。「指定非地圖類型」不代表這張圖不會畫地圖。
+        """
         _, spec_calls, _ = self.run_generate(type_label="情境示意圖")
-        self.assertNotIn("MAP SCOPE GUARD", spec_calls[0]["system_prompt"])
+        self.assertIn("MAP SCOPE GUARD", spec_calls[0]["system_prompt"])
         self.assertEqual(spec_calls[0]["system_prompt"],
                          main.build_digest_instructions(
                              role="記者", density="standard", type_label="情境示意圖",
                              full_bleed=main.resolve_frame_plan("記者", False)[0]))
 
-    def test_build_digest_instructions_default_is_unchanged(self):
+    def test_the_guard_flag_no_longer_changes_anything_for_non_map_types(self):
+        """兩段式分類成非地圖、與使用者自己指定非地圖，走的是同一條守門。"""
         kwargs = dict(role="記者", density="standard", type_label="資料圖表",
                       full_bleed=False)
         self.assertEqual(main.build_digest_instructions(**kwargs),
                          main.build_digest_instructions(**kwargs, map_scope_guard=False))
-        self.assertNotIn("MAP SCOPE GUARD", main.build_digest_instructions(**kwargs))
+        self.assertIn("MAP SCOPE GUARD", main.build_digest_instructions(**kwargs))
 
 
 class FailSafeTests(_Harness):

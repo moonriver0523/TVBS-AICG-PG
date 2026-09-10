@@ -56,15 +56,19 @@ GEMINI_API_KEY=your_api_key
 GEMINI_IMAGE_MODEL=gemini-3-pro-image
 
 # GPT 圖片沿用上方 OPENAI_API_KEY
-# 可選：只在 IMAGE_BACKEND=native 時生效，預設為 gpt-image-2
-OPENAI_IMAGE_MODEL=gpt-image-2
+# 可選：只在 IMAGE_BACKEND=native 時生效，預設為 gpt-image-2.5-sunburst
+OPENAI_IMAGE_MODEL=gpt-image-2.5-sunburst
 # 可選：low / medium / high / auto，預設 medium
 OPENAI_IMAGE_QUALITY=medium
 ```
 
 **預設走 OpenRouter**（`IMAGE_BACKEND=openrouter`，設 `native` 可切回原生直連），模型分別是
-`openai/gpt-image-2` 與 `google/gemini-3-pro-image`，以 `OPENROUTER_GPT_MODEL`／
+`openai/gpt-image-2.5-sunburst` 與 `google/gemini-3-pro-image`，以 `OPENROUTER_GPT_MODEL`／
 `OPENROUTER_GEMINI_MODEL` 覆寫。兩條路徑刻意用同一個模型，切換傳輸層不會連模型一起換掉。
+
+GPT 走 OpenRouter 時會額外送明確的 `size`：2.5 系列在那條端點上會把 `aspect_ratio` 整個丟掉、
+落回 1536×1024，只有 `size` 吃得到（2026-09-10 實打定位，細節見 `main.py` 的
+`OPENROUTER_GPT_IMAGE_MODEL` 註解）。
 
 Gemini 使用原生 `1K` 設定；GPT 依要求的比例換算尺寸（16:9→1280×720、21:9→1680×720）輸出 PNG。
 模型做不到要求的比例時會直接回 400 而不是默默給你別的尺寸——`openai/gpt-5.4-image-2` 之類
@@ -92,4 +96,15 @@ gcloud run deploy tvbs-aicg-linebot --source . --region asia-east1
 
 ## 目前版本
 
-V8.2 — 詳見 `docs/HANDOFF.md` 第七節「已收錄的模板現況」
+版本號寫在 `VERSION`（唯一真相源），格式 `YYMMDD-XX`：`YY` 是年分後兩碼、`XX` 當天從
+`01` 起跳，換一天重新開始。網頁大標「TVBS AICG」右邊顯示的就是它。
+
+**每次改動都要 bump，不是每次佈署**：
+
+```bash
+python scripts/bump_version.py          # 遞增，同時改掉 index.html 的 #appVersion
+python scripts/bump_version.py --set 260909-04
+```
+
+兩邊對不上時測試會擋（`tests/test_app_version.py`）。
+模板現況見 `docs/HANDOFF.md` 第七節「已收錄的模板現況」。

@@ -304,9 +304,17 @@ let state = {
     currentRole: '記者',
     // 2026-09-03：三檔（verbatim=不消化／simplified=字少／standard=字多），預設字少
     digestDensity: 'simplified',
+    // CG 美術創意 0–4（2026-09-10）。記者版與編輯各版型共用；封面那兩條拉桿是別的欄位。
+    cgCreativity: 0,
     // 蓋章由使用者決定（2026-09-03）。以前是消化階段自己決定，同一個產品三種行為。
     // 2026-09-07 起預設 OFF（使用者裁決）；指令欄若提到蓋章，後端以指令欄為準（見 main.py 的優先序規則）。
     stamp: false,
+    // 播出鏡面白色壓框（2026-09-07 使用者裁決：預設 OFF）。OFF＝不蓋白框，底圖完整交給
+    // 後製自己放影片；ON＝置框後蓋白框給後製對位。只在播出鏡面版型顯示這顆。
+    hole: false,
+    // 播出鏡面挖空側（2026-09-08 WP1：左切／右切合併成一個版型後，方向改成版型內的
+    // 一組按鈕）。預設左，切版型時重置——換版型還記著上一次的方向只會讓人選錯邊。
+    holeSide: 'left',
     // 色調（2026-09-04）。預設暗色調＝維持既有畫面風格，改成亮色調是使用者的主動選擇。
     // 兩檔都會送給後端並注入 prompt（不是「預設不注入」），因為只寫亮不寫暗時，
     // 樣板裡本來就偏暗的措辭會跟亮色調各聽一半，出半亮半暗的圖。
@@ -355,6 +363,28 @@ let state = {
     ytCoverBackgroundIsAi: false,
     // 目前成品是哪種標題模式（來自後端回應）：追加修改與重疊固定元素要跟成品一致，不看勾選框
     ytCoverTitleMode: 'ai',
+    // 十點封面：目前成品是 ai 還是 composite（來自後端回應）。只有 ai 版能追加修改。
+    tenCoverMode: 'ai',
+    // 十點封面（滿版合成版）的「只改文字」：上一次的壓字前底圖 {base64, mimeType, isAi}。
+    // 刻意不共用 refineSource——那格的語意是「餵回 /api/images/refine 的原圖」，合成版
+    // 沒有那種東西；混用會讓「修改」鈕誤以為合成版可以 refine（見 handleRefine）。
+    tenCoverBackground: null,
+    // 十點 AI 整張版的標題設計感（2026-09-08）：plain＝現行排版（白黃紅逐行配色、版位固定）。
+    // 2026-09-09 使用者：designed 升級成「完全解放」——配色、版位、字體、邊框、強調全給 AI。
+    // 預設仍是 plain——解放後版面與配色都不可預期，要使用者自己開。
+    coverTitleCreativity: 0,
+    // YT 封面底部壓色框：2026-09-08 晚使用者裁決預設**開**（60% 半透明、第二行上緣起羽化，見 compose）。
+    // 整點直播的版面沒有底帶，按鈕不顯示。
+    ytBottomBand: true,
+    // YT 直播直標（2026-09-08 WP3）的五組開關。刻意**不**在 setEditorFormat 重置：
+    // 直標是同一位導播一整場重複用的東西，換版型回來還要再選一次靠左／Logo 右上很煩。
+    vstrip: {
+        variant: 'normal',        // normal／original_audio／ai_translation
+        titleSide: 'left',        // 直標貼哪一側
+        logoCorner: 'tr',         // Logo 角落，不能跟直標同側
+        sourceCorner: 'tl',       // 來源句角落（2026-09-09 起四角可選，取代 sourceFollowLogo）
+        live: true,               // LIVE 章可取消
+    },
     refineStack: []
 };
 
@@ -387,42 +417,26 @@ const EDITOR_FORMATS = {
         locks: {},
         hole: null,
     },
-    broadcast_left: {
-        label: '播出鏡面（左側挖空）',
-        hint: '畫面左半、垂直置中留一塊 16:9 空位給後製合成影片，內容自動靠右編排。',
+    // 2026-09-08 WP1：左切／右切合併成一個版型，方向改由下方那組按鈕（state.holeSide）
+    // 決定，送 API 時當欄位帶過去。表裡的 hole 是預設方向，不是唯一方向。
+    broadcast: {
+        label: '播出鏡面',
+        hint: '畫面其中半邊、垂直置中留一塊 16:9 空位給後製合成影片，內容自動編排到另一半。方向用下方按鈕選。',
         inputs: 'news',
         // 2026-09-07：preset 不再碰蓋章——原本 stamp:true 會把使用者關掉的蓋章切回 ON
         presets: { safeFrame: true, density: 'simplified' },
         locks: { chartType: true },
         hole: 'left',
     },
-    broadcast_right: {
-        label: '播出鏡面（右側挖空）',
-        hint: '畫面右半、垂直置中留一塊 16:9 空位給後製合成影片，內容自動靠左編排。',
-        inputs: 'news',
-        presets: { safeFrame: true, density: 'simplified' },
-        locks: { chartType: true },
-        hole: 'right',
-    },
     // 十點不一樣封面：「標題由 AI 生成」勾選框切換 ai／composite（比照 YT 直播封面）。
     // 開＝整張由生圖模型畫（含節目名、標題、日期、標籤），只有 Logo 後製貼上；
     // 關＝AI 只生左右兩張無文字底圖，所有文字由程式壓字，零錯字。
+    // 2026-09-08 WP1：滿版／雙切合併成一個版型，版面由「第二標題有沒有填」自動判定
+    // （coverLayout: 'auto'，實際值一律問 coverLayoutNow()）。
     ten_cover: {
-        label: '十點不一樣（雙切）',
-        hint: '左右兩格各一個標題、各一個附圖位：有附圖的格直接上版，沒附圖的格 AI 生底圖。預設整張由生圖模型設計；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。Logo 與節目標籤一律由程式貼正版檔。',
-        coverLayout: 'split',
-        inputs: 'cover',
-        coverMode: 'ai',
-        // 封面沒有消化這道程序：/api/editor/cover 不收 density／stamp／safe_frame／tone，
-        // 留著只會是四顆按了沒反應的按鈕，所以收起來而不是鎖起來
-        locks: {},
-        hides: { digestControls: true, safeFrame: true, stamp: true },
-        hole: null,
-    },
-    ten_cover_full: {
-        label: '十點不一樣（滿版）',
-        hint: '一張圖鋪滿、一個標題：有附圖就直接上版，沒附圖就 AI 生一張。預設整張由生圖模型設計；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。Logo 與節目標籤一律由程式貼正版檔。',
-        coverLayout: 'full',
+        label: '十點不一樣',
+        hint: '只填第一標題＝滿版一張圖；再填第二標題＝左右雙切、兩格各一個標題與附圖位。有附圖的格直接上版，沒附圖的格 AI 生底圖。預設整張由生圖模型設計；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。標頭帶整條由程式貼：Logo、節目標籤、日期與 ON AIR／精華都是正版檔，AI 只負責底圖與標題。',
+        coverLayout: 'auto',
         inputs: 'cover',
         coverMode: 'ai',
         // 封面沒有消化這道程序：/api/editor/cover 不收 density／stamp／safe_frame／tone，
@@ -442,11 +456,23 @@ const EDITOR_FORMATS = {
         hides: { digestControls: true, safeFrame: true, stamp: true },
         hole: null,
     },
+    // YT 直播直標（2026-09-08 WP3）：不是封面，是疊在直播訊號上的透明底 PNG。
+    // 2026-09-09 使用者：下拉往上移一格排在「國內外新聞直播」後面，標籤加全形減號前綴。
+    // 沒有底圖就沒有生圖、沒有附圖、沒有引擎、沒有「只改文字」與追加修改，
+    // 所以 hides 收得比封面更多（連引擎與指令欄都收）。
+    yt_vstrip: {
+        label: '－YT直播直標',
+        hint: '直播用的垂直標題條，透明底 PNG，直接疊在直播訊號上。第一標題最多 12 格、第二標題最多 14 格（連續英數字算一格）。不生圖、不打 AI。',
+        inputs: 'yt_vstrip',
+        locks: {},
+        hides: { digestControls: true, safeFrame: true, stamp: true, engine: true, instruction: true, refUpload: true, refine: true },
+        hole: null,
+    },
     // YT 整點直播：同一條底圖流程，版面換成整點版（Logo 左上、LIVE 章右上＋選填整點時間、
     // 紅底日期、沒有副標）。
     yt_hourly_cover: {
         label: 'YT整點直播',
-        hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。附圖與底圖規則同國內外新聞直播。',
+        hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。第二標題填了就是「雙則」：上白＝第一則、下黃＝第二則，每行一整句不拆、最多 18 字，底圖左右兩張羽化拼成一張。附圖與底圖規則同國內外新聞直播。',
         inputs: 'yt_cover',
         ytLayout: 'hourly',
         locks: {},
@@ -471,11 +497,119 @@ function editorFormat() {
     return EDITOR_FORMATS[state.editorFormat] || EDITOR_FORMATS[EDITOR_FORMAT_DEFAULT];
 }
 
+/* 十點不一樣這一刻是滿版還是雙切（2026-09-08 WP1）。
+   判定只有一條規則：第二標題有值＝雙切、空＝滿版。版型表寫死的 coverLayout
+   只剩 'auto' 這個標記，實際值一律問這支——散在各處各自判斷，遲早會有一處忘了改。 */
+function coverLayoutNow() {
+    if (editorFormat().coverLayout !== 'auto') return editorFormat().coverLayout || '';
+    const right = (document.getElementById('coverTitleRight')?.value || '').trim();
+    return right ? 'split' : 'full';
+}
+
+/* YT 整點直播這一刻是單則還是雙則（2026-09-08 WP2）。判定只有一條規則：
+   第二標題有值＝雙則（同一張底圖上下兩行，上白＝第一則、下黃＝第二則）。
+   國內外新聞直播與今日熱搜沒有這個版面，一律 single。 */
+const YT_HOURLY_LINE_MAX_CHARS = 18;
+// 顯示寬度：全形算 1、半形算 0.5，跟後端 compose.title_display_width 同一套
+function displayWidth(text) {
+    let w = 0;
+    for (const ch of (text || '').trim()) w += /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦]/.test(ch) ? 1 : 0.5;
+    return w;
+}
+
+function ytLayoutNow() {
+    if ((editorFormat().ytLayout || '') !== 'hourly') return 'single';
+    return (document.getElementById('ytCoverTitleSecond')?.value || '').trim() ? 'dual' : 'single';
+}
+
+/* ============================================================
+   下載檔名（2026-09-08 使用者回饋 A）：全站所有版型共用一支。
+   留空 → YYYYMMDD_<版型短名>_<標題前 8 字>；有填 → 使用者字串。
+   檔名非法字元（Windows 不接受的那幾個）與換行一律去掉，收尾去空白。
+   ============================================================ */
+// 2026-09-08 WP1：兩個版型合併後，短名不再是一個 key 一個字串——十點看判定出來的
+// 版面、播出鏡面看選的挖空側，所以那兩筆是巢狀的。
+const DOWNLOAD_FORMAT_NAMES = {
+    default: '編輯CG',
+    broadcast: { left: '播出鏡面左', right: '播出鏡面右' },
+    ten_cover: { full: '十點滿版', split: '十點雙切' },
+    yt_live_cover: 'YT直播',
+    yt_hourly_cover: { single: 'YT整點', dual: 'YT整點雙則' },
+    yt_vstrip: 'YT直標',
+    yt_hot_cover: 'YT熱搜',
+};
+const DOWNLOAD_NAME_ILLEGAL = /[\\/:*?"<>|\r\n]/g;
+const DOWNLOAD_TITLE_MAX = 8;
+
+function downloadFormatName(kind) {
+    const key = kind || state.editorFormat || EDITOR_FORMAT_DEFAULT;
+    // 記者角色沒有版型下拉，一律 default——短名跟編輯的 default 要分得開
+    if (key === EDITOR_FORMAT_DEFAULT && state.currentRole !== '編輯') return 'CG';
+    const name = DOWNLOAD_FORMAT_NAMES[key] || DOWNLOAD_FORMAT_NAMES[EDITOR_FORMAT_DEFAULT];
+    if (typeof name === 'string') return name;
+    // 巢狀：十點與 YT 整點用判定後的版面、播出鏡面用挖空側
+    if (key === 'ten_cover') return name[coverLayoutNow()] || name.full;
+    if (key === 'yt_hourly_cover') return name[ytLayoutNow()] || name.single;
+    return name[state.holeSide] || name.left || name.full;
+}
+
+/* 標題來源：封面用左標題／YT 用標題欄／一般 CG 用消化出的 [標題] 行 */
+function downloadTitleSource(kind) {
+    const key = kind || state.editorFormat || EDITOR_FORMAT_DEFAULT;
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    if (key === 'ten_cover') return val('coverTitleLeft');
+    if (key === 'yt_live_cover' || key === 'yt_hourly_cover' || key === 'yt_hot_cover') {
+        return val('ytCoverTitle');
+    }
+    const match = val('field-variable').match(/\[標題\]\s*([^\n]+)/);
+    return match ? match[1].trim() : '';
+}
+
+/* 使用者填的檔名。第二頁（進階微調）有自己的欄位，避免第一頁的殘值誤用 */
+function customDownloadName() {
+    const id = state.currentPage === 2 ? 'downloadNameAdvanced' : 'downloadName';
+    return document.getElementById(id)?.value || '';
+}
+
+function downloadDateStamp() {
+    const d = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+}
+
+/* 檔名欄在結果區裡，生圖當下還是空的——使用者是看到圖之後才打字。
+   所以下載當下再算一次；同步在 click handler 裡改 download 屬性，瀏覽器吃得到。 */
+function wireDownloadNames() {
+    ['oneClickDownload', 'downloadGeneratedImage'].forEach(id => {
+        const link = document.getElementById(id);
+        if (!link) return;
+        link.addEventListener('click', () => {
+            const ext = (link.href || '').startsWith('data:image/png') ? 'png' : 'jpg';
+            link.download = downloadFileName(state.editorFormat, undefined, ext);
+        });
+    });
+}
+
+function downloadFileName(kind, title, ext) {
+    const clean = s => String(s == null ? '' : s).replace(DOWNLOAD_NAME_ILLEGAL, '').trim();
+    const extension = clean(ext) || 'png';
+    const custom = clean(customDownloadName());
+    if (custom) return `${custom}.${extension}`;
+    const name = clean(title === undefined ? downloadTitleSource(kind) : title)
+        .slice(0, DOWNLOAD_TITLE_MAX)
+        .trim();
+    const parts = [downloadDateStamp(), clean(downloadFormatName(kind))];
+    if (name) parts.push(name);
+    return `${parts.filter(Boolean).join('_')}.${extension}`;
+}
+
 /* 消化程度三檔。key 與後端 DigestDensity 一致，改這裡要同步改 main.py */
 const DENSITY_LABELS = {
     verbatim: '不改字',   // 2026-09-07 使用者裁決：UI 顯示改「不改字」，key 與後端 verbatim 不動
+    minimal: '字極少',    // 2026-09-10 五段拉桿新增
     simplified: '字少',
     standard: '字多',
+    maximum: '字超多',    // 2026-09-10 五段拉桿新增
 };
 
 /* 第一頁「AI 自動判斷版型」的懶人選項，非真實 CHART_TYPES 成員 */
@@ -552,11 +686,9 @@ window.onload = () => {
     updateStampButton();
     updateToneButtons();
     renderEditorFormats();
-    document.querySelectorAll('[data-density]').forEach(btn => {
-        const isActive = btn.dataset.density === state.digestDensity;
-        btn.classList.toggle('density-active', isActive);
-        btn.classList.toggle('text-slate-500', !isActive);
-    });
+    updateDigestDensityBar();
+    updateCgCreativityBar();
+    wireDownloadNames();
     switchPage(1);
 };
 
@@ -758,8 +890,7 @@ function renderEditorFormats() {
         });
     }
     select.value = state.editorFormat;
-    const hint = document.getElementById('editorFormatHint');
-    if (hint) hint.innerText = editorFormat().hint || '';
+    // 2026-09-08 使用者裁決：下拉底下的斜體版型說明拿掉（手冊有寫），欄位內的短提示留著
 }
 
 // 鎖住的開關要看得出來是「這個版型規定的」而不是壞掉。淡化＋擋點擊是外觀，
@@ -781,8 +912,22 @@ function applyEditorFormatLocks() {
     if (presets.density && state.digestDensity !== presets.density) switchDigestDensity(presets.density);
 
     _hide(document.getElementById('digestControlsRow'), !!hides.digestControls);
+    // 指令欄全版型都顯示（2026-09-08 下午裁決，推翻同日早上的隱藏）：封面／YT 的
+    // 端點現在收 instruction，內容當畫面提示餵給推導步驟。畫面描述欄同時被移除，
+    // 指令欄因此是封面唯一的自由輸入。
+    // ——例外只有一個（2026-09-08 WP3）：直標不打任何模型，指令欄沒有東西可以餵，
+    // 留著只會是一格填了不生效的輸入。所以由版型的 hides.instruction 決定。
+    _hide(document.getElementById('instructionRow'), !!hides.instruction);
+    // 引擎 GPT／Gemini 同理：直標沒有生圖這一步，選哪個引擎都一樣
+    _hide(document.getElementById('p1EngineRow'), !!hides.engine);
+    // 追加修改整區：直標沒有底圖可改。別只靠 refineBtn.disabled——結果區一顯示，
+    // 那個輸入框就在那裡等人打字，打完按下去卻什麼都不會發生。
+    _hide(document.getElementById('refineBox'), !!hides.refine);
     _hide(document.getElementById('p1-btnSafeFrame'), !!hides.safeFrame);
     _hide(document.getElementById('p1-btnStamp'), !!hides.stamp);
+    // 壓框開關與挖空方向都只對有挖空側的版型有意義
+    _hide(document.getElementById('p1-btnHole'), !format.hole);
+    updateHoleSideButtons();
 
     // 唯一真的鎖著的：版面由挖空框決定，讓使用者再選一次只會互相打架
     _lock(document.getElementById('digestTypeRow'), !!locks.chartType);
@@ -803,29 +948,50 @@ function applyEditorFormatInputs() {
     const inputs = editorFormat().inputs;
     const wantsCover = inputs === 'cover';
     const wantsYt = inputs === 'yt_cover';
+    // YT 直播直標（2026-09-08 WP3）：獨立一塊欄位，不跟 ytCoverInputs 共用——
+    // 那一塊裡面有附圖／AI 消化／只改文字，直標一個都不要
+    const wantsVstrip = inputs === 'yt_vstrip';
+    const special = wantsCover || wantsYt || wantsVstrip;
     const news = document.getElementById('newsInputs');
     const cover = document.getElementById('coverInputs');
     const yt = document.getElementById('ytCoverInputs');
+    const vstrip = document.getElementById('ytVstripInputs');
     const refBox = document.getElementById('refUploadBox');
     const digestRow = document.getElementById('digestTypeRow');
-    if (news) news.classList.toggle('hidden', wantsCover || wantsYt);
+    if (news) news.classList.toggle('hidden', special);
     if (cover) cover.classList.toggle('hidden', !wantsCover);
-    // 滿版／雙切（2026-09-07）：滿版只留一個標題與一個附圖位
-    const fullLayout = wantsCover && editorFormat().coverLayout === 'full';
-    document.querySelectorAll('.cover-split-only').forEach(el => el.classList.toggle('hidden', fullLayout));
-    const leftLabel = document.getElementById('coverTitleLeftLabel');
-    if (leftLabel) leftLabel.textContent = fullLayout ? '標題' : '左半標題';
-    const leftBtn = document.getElementById('coverAsisLeftBtn');
-    if (leftBtn) leftBtn.textContent = fullLayout ? '＋ 附圖（選填）' : '＋ 左半附圖（選填）';
-    const leftVisual = document.getElementById('coverVisualLeft');
-    if (leftVisual) leftVisual.placeholder = fullLayout ? '畫面描述（選填）——留空由 AI 依標題自動產生' : '左半畫面描述（選填）——留空由 AI 依標題自動產生';
+    // 滿版／雙切（2026-09-08 WP1）：不再是兩個版型，改由第二標題有沒有值即時判定。
+    // 右附圖位、「只改文字」鈕與指示器全部跟著跑，見 updateCoverLayoutIndicator。
+    updateCoverLayoutIndicator();
+    updateCoverTitleStyleButton();
+    updateYtBottomBandButton();
     if (yt) yt.classList.toggle('hidden', !wantsYt);
+    if (vstrip) vstrip.classList.toggle('hidden', !wantsVstrip);
+    updateVstripButtons();
     // 附圖上傳區：主流程、YT 直播封面、十點不一樣（2026-09-06 起收原圖放置）都用。
     // 封面版型時把它搬到該組欄位下面——留在原位會跑到角色鈕正下方，看起來像消失了。
+    // 直標沒有底圖也沒有生圖，附圖無處可去，整區收起來（hides.refUpload）。
     if (refBox) {
-        refBox.classList.remove('hidden');
-        const host = wantsYt ? yt : (wantsCover ? cover : news);
+        refBox.classList.toggle('hidden', !!(editorFormat().hides || {}).refUpload);
+        // 十點的照片走上面兩顆附圖位，這一區不收原圖放置——說明文字要跟著改，
+        // 否則使用者照著字面找不到那個用途。
+        const refHint = document.getElementById('refUploadHint');
+        if (refHint) {
+            refHint.textContent = coverAsisOnlyInSlots()
+                ? '地圖底稿／實景參考／肖像照片，單張 ≤1.5MB，最多 3 張（要直接上版的照片請用上面的附圖位）'
+                : '地圖底稿／實景參考／肖像照片／原圖放置，單張 ≤1.5MB，最多 3 張';
+        }
+        const host = wantsVstrip ? vstrip : (wantsYt ? yt : (wantsCover ? cover : news));
         if (host && refBox.previousElementSibling !== host) host.insertAdjacentElement('afterend', refBox);
+    }
+    // 指令欄同理（2026-09-08 WP1）：它原本住在 newsInputs 裡面，而封面／YT 版型會把
+    // 整個 newsInputs 藏起來——不搬出來，欄位「顯示」了也還是看不到。
+    const instructionRow = document.getElementById('instructionRow');
+    if (instructionRow) {
+        const anchor = refBox || (wantsYt ? yt : (wantsCover ? cover : news));
+        if (anchor && instructionRow.previousElementSibling !== anchor) {
+            anchor.insertAdjacentElement('afterend', instructionRow);
+        }
     }
     // 整點直播：沒有原音呈現／AI即時翻譯、多一格整點時間；今日熱搜：連日期都沒有
     const ytLayout = wantsYt ? editorFormat().ytLayout : '';
@@ -836,9 +1002,16 @@ function applyEditorFormatInputs() {
     const ytDateField = document.getElementById('ytCoverDate');
     if (flagRow) flagRow.classList.toggle('hidden', hourly || hot);
     if (timeField) timeField.classList.toggle('hidden', !hourly);
+    // 整點雙則（2026-09-08 WP2）：第二標題欄與指示器只有整點版型看得到
+    const secondRow = document.getElementById('ytCoverTitleSecondRow');
+    if (secondRow) secondRow.classList.toggle('hidden', !hourly);
+    updateYtLayoutIndicator();
     if (ytDateField) ytDateField.classList.toggle('hidden', hot);
     // 封面模式完全沒有消化這一段，版面形式用不到，整組收起來
-    if (digestRow) digestRow.classList.toggle('hidden', wantsCover || wantsYt);
+    if (digestRow) digestRow.classList.toggle('hidden', special);
+    // 直標是透明底 PNG：預覽區底下鋪深灰格紋，不然白字疊在白底上等於看不到
+    const preview = document.getElementById('oneClickImage');
+    if (preview) preview.classList.toggle('transparent-preview', wantsVstrip);
     for (const id of ['coverDate', 'ytCoverDate']) {
         const dateField = document.getElementById(id);
         if ((wantsCover || wantsYt) && dateField && !dateField.value) dateField.value = todayText();
@@ -847,6 +1020,17 @@ function applyEditorFormatInputs() {
 
 function setEditorFormat(key) {
     state.editorFormat = EDITOR_FORMATS[key] ? key : EDITOR_FORMAT_DEFAULT;
+    // 換版型就把挖空方向重置回左：還記著上一個版型選的右切，只會讓人選錯邊
+    state.holeSide = 'left';
+    // 換版型就丟掉上一版的壓字前底圖：滿版的底圖送進雙切會被後端擋（400），留著只會誤導。
+    // 只在這裡清——applyEditorFormatInputs 換角色也會走，放那邊會把還能用的底圖洗掉。
+    state.tenCoverBackground = null;
+    // 換版型也丟掉上一版 YT 封面的 refine 來源：不清的話切到整點後「只改文字」會對著
+    // 一張國內外版的底圖亮起來（審查建議 2026-09-08）。
+    state.refineSource = null;
+    state.refineDisplay = null;
+    const coverRecompose = document.getElementById('coverRecomposeBtn');
+    if (coverRecompose) coverRecompose.disabled = true;
     renderEditorFormats();
     applyEditorFormatInputs();
     applyEditorFormatLocks();
@@ -856,13 +1040,51 @@ function setEditorFormat(key) {
     }
 }
 
+// 拉桿的左→右順序。左端是「不改字」——它不是「字更少」，是逐字複製（輸出長度＝
+// 輸入長度，貼長稿反而比字多還長）。2026-09-09 使用者知情裁決：三檔仍放同一條拉桿。
+const DENSITY_ORDER = ['verbatim', 'minimal', 'simplified', 'standard', 'maximum'];
+
+function updateDigestDensityBar() {
+    const range = document.getElementById('digestDensityRange');
+    if (range) range.value = String(Math.max(0, DENSITY_ORDER.indexOf(state.digestDensity)));
+    const label = document.getElementById('digestDensityLabel');
+    if (label) label.innerText = DENSITY_LABELS[state.digestDensity] || state.digestDensity;
+}
+
+// CG 美術創意 0–4（2026-09-10 使用者要求：播出鏡面與記者版也要）。
+// 2026-09-10 改成結構性槓桿：形容詞會被圖模平均掉，所以調的是版面怎麼排
+// （分區、英雄區、破格、傾斜、字級落差），不是加幾層描邊（見 main.py 的 _CG_L1–_CG_L4_EXTRA）。
+// 不歸它管的只有：字句、重點的數量、安全留白，以及「不准拿真實地圖當主視覺」。
+const CG_CREATIVITY = [
+    ['規矩', '現行成品，完全不加設計指示'],
+    ['微設計', '畫面分成一個主視覺區與一個文字區，收邊做乾淨'],
+    ['有設計', '再加：挑一個英雄元素獨佔一區，卡片統一形狀語言'],
+    ['奔放', '再加：破格排列、去背主體越出卡片、字級落差拉大'],
+    ['最狂', '再加：斜切分割、英雄破自己的框、標題必須微傾斜'],
+];
+
+function updateCgCreativityBar() {
+    const range = document.getElementById('cgCreativityRange');
+    if (range) range.value = String(state.cgCreativity);
+    const label = document.getElementById('cgCreativityLabel');
+    if (label) label.innerText = CG_CREATIVITY[state.cgCreativity][0];
+}
+
+function setCgCreativity(value) {
+    const level = Math.min(4, Math.max(0, parseInt(value, 10) || 0));
+    state.cgCreativity = level;
+    updateCgCreativityBar();
+    showToast('CG 創意 ' + level + '　' + CG_CREATIVITY[level][0] + '：' + CG_CREATIVITY[level][1]);
+}
+
+function setDigestDensityLevel(value) {
+    const index = Math.min(DENSITY_ORDER.length - 1, Math.max(0, parseInt(value, 10) || 0));
+    switchDigestDensity(DENSITY_ORDER[index]);
+}
+
 function switchDigestDensity(density) {
     state.digestDensity = density;
-    document.querySelectorAll('[data-density]').forEach(btn => {
-        const isActive = btn.dataset.density === density;
-        btn.classList.toggle('density-active', isActive);
-        btn.classList.toggle('text-slate-500', !isActive);
-    });
+    updateDigestDensityBar();
     updateAIBtnRoleHint();
     const label = DENSITY_LABELS[density] || density;
     showToast(density === 'verbatim'
@@ -898,12 +1120,12 @@ function updateAIBtnRoleHint() {
     // 生成中按鈕正顯示進度，切角色／密度不該把進度文字蓋掉
     if (_genTicker) return;
     if (!buttonText) return;
-    if (editorFormat().inputs === 'cover') {
-        buttonText.innerText = `生成 ${editorFormat().label}`;
+    if (editorFormat().inputs === 'yt_vstrip') {
+        buttonText.innerText = '生成直標（透明 PNG）';
         return;
     }
-    if (editorFormat().inputs === 'yt_cover') {
-        buttonText.innerText = `生成 ${editorFormat().label}`;
+    if (editorFormat().inputs === 'cover' || editorFormat().inputs === 'yt_cover') {
+        buttonText.innerText = `生成${editorFormat().label}`;
         return;
     }
     const densityLabel = DENSITY_LABELS[state.digestDensity] || state.digestDensity;
@@ -1042,6 +1264,170 @@ function toggleStamp() {
     updateStampButton();
     updateInstructionOverrideHint();
     showToast(state.stamp ? '蓋章：開（最後一行加結論條）' : '蓋章：關（不放結論條）');
+}
+
+// YT 封面「底色框」開關（2026-09-08）。琥珀色。國內外新聞直播與今日熱搜才有底帶；
+// 整點直播的版面本來就沒有底帶（compose_yt_hourly_cover 不畫），按鈕在那個版型不顯示。
+function updateYtBottomBandButton() {
+    const btn = document.getElementById('ytBottomBandBtn');
+    if (!btn) return;
+    const layout = editorFormat().ytLayout || '';
+    const applies = editorFormat().inputs === 'yt_cover' && layout !== 'hourly';
+    btn.classList.toggle('hidden', !applies);
+    const on = state.ytBottomBand;
+    btn.className = (applies ? '' : 'hidden ')
+        + 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
+        + (on ? 'border border-amber-600 bg-amber-600 text-white' : 'border border-amber-600 text-slate-400 hover:text-white');
+    btn.innerText = on ? '底色框 ON' : '底色框 OFF';
+}
+
+function toggleYtBottomBand() {
+    state.ytBottomBand = !state.ytBottomBand;
+    updateYtBottomBandButton();
+    showToast(state.ytBottomBand ? '底色框：開（半透明，照片透得出來）' : '底色框：關（標題靠描邊立在照片上）');
+}
+
+/* 十點的「滿版／雙切」指示器（2026-09-08 WP1）。
+   這是**判定結果**不是輸入：版面由第二標題有沒有值決定，所以點「雙切」不會切版面，
+   只是把游標移到第二標題——真正要做的就是去填那一欄。 */
+function updateCoverLayoutIndicator() {
+    const row = document.getElementById('coverLayoutIndicator');
+    const isCover = editorFormat().inputs === 'cover';
+    if (row) {
+        row.classList.toggle('hidden', !isCover);
+        const layout = coverLayoutNow();
+        row.querySelectorAll('[data-cover-layout]').forEach(btn => {
+            const active = btn.dataset.coverLayout === layout;
+            btn.className = 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
+                + (active ? 'border border-red-600 bg-red-600 text-white'
+                          : 'border border-red-600 text-slate-500 hover:text-white');
+        });
+    }
+    if (isCover) applyCoverLayoutFields();
+}
+
+// 指示器不是開關，點「雙切」只是把游標帶去第二標題；點「滿版」要清空第二標題才會變，
+// 那是使用者自己的決定，不由按鈕代勞——所以兩顆都只做「把游標移過去」。
+function focusCoverLayoutField() {
+    document.getElementById('coverTitleRight')?.focus();
+}
+
+/* YT 整點的「單則／雙則」指示器（2026-09-08 WP2），做法與十點那個逐字對齊：
+   這是判定結果不是輸入，點「雙則」只把游標移到第二標題。 */
+function updateYtLayoutIndicator() {
+    const row = document.getElementById('ytLayoutIndicator');
+    if (!row) return;
+    const applies = editorFormat().inputs === 'yt_cover' && (editorFormat().ytLayout || '') === 'hourly';
+    row.classList.toggle('hidden', !applies);
+    if (!applies) return;
+    const layout = ytLayoutNow();
+    row.querySelectorAll('[data-yt-layout]').forEach(btn => {
+        const active = btn.dataset.ytLayout === layout;
+        btn.className = 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
+            + (active ? 'border border-red-600 bg-red-600 text-white'
+                      : 'border border-red-600 text-slate-500 hover:text-white');
+    });
+    // 雙則的底圖是拼好的一張，「只改文字」與追加修改都跟單則走同一條路
+    const recompose = document.getElementById('ytCoverRecomposeBtn');
+    if (recompose) recompose.disabled = !state.refineSource;
+}
+
+function focusYtLayoutField() {
+    document.getElementById('ytCoverTitleSecond')?.focus();
+}
+
+/* 消化按鈕的 target：整點直播要判定 1／2 個主題（回兩個標題），其餘維持單標題。 */
+function ytCoverDigestTarget() {
+    return (editorFormat().ytLayout || '') === 'hourly' ? 'yt_hourly' : 'yt_cover';
+}
+
+/* 版面一變，跟著版面走的三件事要同步：右附圖位、「只改文字」鈕、下載短名。
+   換版型會走 applyEditorFormatInputs，但打字改第二標題不會——所以獨立成一支，
+   coverTitleRight 的 oninput 也叫它。 */
+function applyCoverLayoutFields() {
+    const fullLayout = coverLayoutNow() === 'full';
+    document.querySelectorAll('.cover-split-only').forEach(el => el.classList.toggle('hidden', fullLayout));
+    const leftBtn = document.getElementById('coverAsisLeftBtn');
+    if (leftBtn) leftBtn.textContent = fullLayout ? '📁 ＋ 附圖（選填）' : '📁 ＋ 第一附圖（選填）';
+    // 「只改文字」只有滿版合成版有：雙切的成品是左右兩張底圖拼的，拼完分不回去。
+    const recompose = document.getElementById('coverRecomposeBtn');
+    if (recompose) {
+        recompose.classList.toggle('hidden', !fullLayout);
+        recompose.disabled = !(fullLayout && state.tenCoverBackground);
+    }
+}
+
+// 十點封面「標題創意」拉桿（2026-09-08 ON/OFF → 2026-09-09 改成 0–4 五段，仿 AI effort 那條）。
+// 只有十點版型＋AI 整張模式看得到：合成版的字是程式用 Pillow 壓的，這條拉桿對它沒有意義。
+const COVER_TITLE_CREATIVITY = [
+    ['規矩', '白／黃／紅逐行配色，版位固定（現行排版）'],
+    ['微設計', '字體、描邊、材質放開；配色、大小、版位不動'],
+    ['有設計', '整組節目美術字（大小落差、關鍵詞壓框、飽和平塗），版位仍固定'],
+    ['奔放', '再加：版位自由、可掛小圖示'],
+    ['最狂', '再加：更大落差、多層描邊立體、傾斜錯落、爆裂裝飾（字句永遠一字不改）'],
+];
+
+function updateCoverTitleStyleButton() {
+    const bar = document.getElementById('coverTitleStyleBar');
+    if (!bar) return;
+    const aiMode = document.getElementById('coverAiTitle')?.checked !== false;
+    const hidden = editorFormat().inputs !== 'cover' || !aiMode;
+    bar.className = (hidden ? 'hidden ' : '') + 'flex items-center gap-2';
+    const range = document.getElementById('coverTitleStyleRange');
+    if (range) range.value = String(state.coverTitleCreativity);
+    const label = document.getElementById('coverTitleStyleLabel');
+    if (label) label.innerText = COVER_TITLE_CREATIVITY[state.coverTitleCreativity][0];
+}
+
+function setCoverTitleCreativity(value) {
+    const level = Math.min(4, Math.max(0, parseInt(value, 10) || 0));
+    state.coverTitleCreativity = level;
+    updateCoverTitleStyleButton();
+    showToast('標題創意 ' + level + '　' + COVER_TITLE_CREATIVITY[level][0]
+        + '：' + COVER_TITLE_CREATIVITY[level][1]);
+}
+
+// 播出鏡面白色壓框開關（2026-09-07）。青色，與安全框（綠）／蓋章（琥珀）區分。
+function updateHoleButton() {
+    const btn = document.getElementById('p1-btnHole');
+    if (!btn) return;
+    btn.className = 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
+        + (state.hole ? 'border border-cyan-600 bg-cyan-600 text-white' : 'border border-cyan-600 text-slate-400 hover:text-white');
+    btn.innerText = state.hole ? '壓框 ON' : '壓框 OFF';
+}
+
+function toggleHole() {
+    state.hole = !state.hole;
+    updateHoleButton();
+    showToast(state.hole ? '壓框：開（影片位置蓋白框給後製對位）' : '壓框：關（底圖完整，後製自己放影片）');
+}
+
+// 播出鏡面要送給後端的挖空側：版型有挖空側且壓框開著才送，否則後端不蓋框。
+// 方向來自使用者選的 state.holeSide（2026-09-08 WP1），不再是版型表寫死的那一側。
+function broadcastHoleForApi() {
+    if (!state.hole || !editorFormat().hole) return '';
+    return state.holeSide;
+}
+
+/* 挖空方向（2026-09-08 WP1）：左切／右切從兩個版型變成同一個版型裡的一組按鈕。
+   消化與生圖兩端都吃這個值——消化要把內容趕到影片那半邊的對面，方向講錯等於重點被蓋掉。 */
+function updateHoleSideButtons() {
+    const row = document.getElementById('holeSideRow');
+    if (!row) return;
+    row.classList.toggle('hidden', !editorFormat().hole);
+    row.querySelectorAll('[data-hole-side]').forEach(btn => {
+        const active = btn.dataset.holeSide === state.holeSide;
+        btn.className = 'px-2.5 py-1 rounded text-[9px] font-black transition-all '
+            + (active ? 'border border-cyan-600 bg-cyan-600 text-white'
+                      : 'border border-cyan-600 text-slate-400 hover:text-white');
+    });
+}
+
+function setHoleSide(side) {
+    if (side !== 'left' && side !== 'right') return;
+    state.holeSide = side;
+    updateHoleSideButtons();
+    showToast(side === 'left' ? '挖空：左側（內容自動靠右編排）' : '挖空：右側（內容自動靠左編排）');
 }
 
 // 色調切換（2026-09-04）。取代原本擺在這個位置的角色選擇——角色已移到最上方，
@@ -1334,10 +1720,10 @@ REAL-WORLD ACCURACY (CRITICAL)
 ==================================================
 - Real, verifiable places and objects (skylines, specific buildings, highways and interchanges, airports, facilities, and specific models of aircraft, ship, vehicle or equipment) must look like the real thing: correct shape, layout, proportions and distinguishing features as far as they are known. Faithful, realistic rendering is welcome — do not distort reality for style.
 - Do not fabricate identifying detail you do not know and present it as real. If the rendering is a generic stand-in or a reconstruction rather than the real thing, the 示意圖 label supplied in VARIABLE FIELDS must be clearly visible — never drop or hide it.
-- NO UNSOURCED BRANDS: every sign, storefront, banner, package, product body, vehicle livery, screen, badge and building facade must be blank or carry a generic non-readable mark. Do NOT draw any real company logo, wordmark, trademark, ticker symbol, exchange name or brand text — not even a small, faint, distant or background one. A brand name may appear only if that exact text is supplied in VARIABLE FIELDS, and then only as plain typeset text, never as a reproduced logotype.
+- BRANDS: ONLY THOSE IN THE SOURCE. A brand that VARIABLE FIELDS or STRUCTURE names may be shown with its real logo, wordmark or brand text, rendered as faithfully to the real mark as your knowledge allows, and plain typeset text is equally acceptable. Place it ONLY on the objects that belong to that brand — its own signage, packaging, product body, vehicle livery, screen or jersey — and never put one brand's mark on another brand's object. Every OTHER sign, storefront, banner, package, product body, vehicle livery, screen, badge and building facade must be blank or carry a generic non-readable mark: do NOT draw any real company logo, wordmark, trademark, ticker symbol, exchange name or brand text for a brand the source material does not name — not even a small, faint, distant or background one, and never invent one.
 - NAMED REAL PEOPLE: how to depict a named real person is governed by the NAMED REAL PERSON block below whenever one is present — follow that block, not your own judgement. If no such block is present, do NOT draw a recognisable face for a named real person: use a back view or a plain silhouette and keep the 示意圖 label visible. Never show the person in a scene, action or context that STRUCTURE does not describe.
 - A STATED QUANTITY IS A NUMBER, NOT A HEADCOUNT TO DRAW. Where you do draw the individual items, the count on the canvas must equal the stated figure exactly, background and secondary items included — a graphic saying 4車追撞 with five vehicles in it is wrong. Only draw them individually while the figure is small enough to take in at a glance, up to about four. Beyond that do not attempt the instances at all: 12箱走私菸 is one representative crate with the figure 12 set beside it, never a heap the viewer would count as twenty, and 10部機組 is a figure rather than a row you would miscount.
-- SELF-CHECK before finalizing: look at every surface in the image for text or marks you added yourself. If any sign, screen, package or vehicle carries readable branding, blank it.`;
+- SELF-CHECK before finalizing: look at every surface in the image for text or marks you added yourself. If any sign, screen, package or vehicle carries readable branding for a brand the source material does not name, blank it.`;
 
 const TEXT_PLACEMENT_RULES =
 `==================================================
@@ -1422,6 +1808,9 @@ Text Styling Rules:
 - Any <蓋章> marker:
   -> Apply strong full-box highlight style to the following text
   -> Use solid background color (e.g. red background with white text)
+- Any <底帶> marker:
+  -> Remove the marker and set the text as an ordinary information bar, NOT a coloured stamp
+  -> Place it as a single bar along the very bottom of the design, spanning the full width
 
 Visual Elements:
 - Include high-quality flat icons or 3D data charts relevant to the content
@@ -1507,9 +1896,13 @@ async function digestNewsText(input) {
             type_label: digestTypeLabelForApi(),
             role: state.currentRole,
             density: state.digestDensity,
+            visual_creativity: state.cgCreativity,
             stamp: state.stamp,
             tone: state.tone,
             editor_format: state.editorFormat,
+            // 挖空側要在消化階段就講清楚（2026-09-08 WP1）：內容得趕到影片那半邊的
+            // 對面，只在生圖端決定的話，重點會剛好被影片蓋掉。
+            hole_side: state.holeSide,
             safe_frame: state.safeFrame,
             user_instruction: currentUserInstruction(),
             portrait_photo_count: uploadedPortraitCount(),
@@ -1534,6 +1927,14 @@ function noteChartTypeOverride(data) {
 
 function applyDigestToForm(data) {
     state.mapPoints = Array.isArray(data.map_points) ? data.map_points : [];
+    // 地圖類：查不到座標的地名要講出來（2026-09-08）。不足 2 點時後端不做真實底圖，
+    // 以前畫面完全沒提示，使用者重打六次都拿到一樣的結果。
+    if (Array.isArray(data.map_missing) && data.map_missing.length) {
+        const found = state.mapPoints.length;
+        showToast(found >= 2
+            ? `地圖：${data.map_missing.join('、')} 查不到座標，底圖只標 ${found} 點`
+            : `地圖：${data.map_missing.join('、')} 查不到座標，只剩 ${found} 點，這次不會附真實底圖（改寫成行政區名再消化一次）`);
+    }
     const s = curSelected();
     s.style = {};
     s.structure = {};
@@ -1555,16 +1956,89 @@ function applyDigestToForm(data) {
 
 const COVER_BACKEND_URL = `${API_BASE}/api/editor/cover`;
 
+// 追加修改後重貼固定元素用（2026-09-07，比照 recomposeYtCover）：AI 版的成品是
+// 「模型畫的整張圖＋程式後貼的 Logo／節目標籤／AI示意圖」，refine 改的是後貼前的
+// 模型原圖，改完要再走一次後貼才是成品。欄位取現況，所以順便改標題也會生效。
+function tenCoverFields() {
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    const fullLayout = coverLayoutNow() === 'full';
+    return {
+        title_left: val('coverTitleLeft'),
+        title_right: fullLayout ? '' : val('coverTitleRight'),
+        layout: fullLayout ? 'full' : 'split',
+        // 畫面描述欄已移除（2026-09-08 WP1），改送共用的指令欄當畫面提示
+        instruction: coverInstructionForApi(),
+        date_text: val('coverDate'),
+        badge: document.getElementById('coverBadge')?.value || 'on_air',
+        title_creativity: state.coverTitleCreativity,
+        // 側邊標籤（2026-09-10）：使用者自己打的短詞，後端原樣畫成一排小籤
+        side_labels: val('coverSideLabels'),
+        provider: effectiveImageProvider(),
+    };
+}
+
+async function recomposeTenCover(refined) {
+    const source = refineSourceFromResponse(refined);
+    if (!source) throw new Error('沒有可重貼的底圖');
+    const res = await fetch(COVER_BACKEND_URL, {
+        method: 'POST',
+        headers: _apiHeaders(),
+        body: JSON.stringify({
+            ...tenCoverFields(),
+            mode: 'ai',
+            background_image_base64: source.base64,
+            background_mime_type: source.mimeType,
+        }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(_apiError(data, res.status));
+    return data;
+}
+
+// 只改文字（2026-09-08，滿版合成版）：底圖不重生，用目前欄位重壓一次標題，零 API。
+// 底圖走 state.tenCoverBackground，不是 refineSource——見該欄位的註解。
+function setTenCoverBackground(data) {
+    const usable = coverLayoutNow() === 'full'
+        && data.mode === 'composite' && !!data.background_image_base64;
+    state.tenCoverBackground = usable ? {
+        base64: data.background_image_base64,
+        mimeType: data.background_mime_type || 'image/png',
+        isAi: !!data.background_is_ai,
+    } : null;
+    const btn = document.getElementById('coverRecomposeBtn');
+    if (btn) btn.disabled = !usable;
+}
+
+async function recomposeTenCoverText() {
+    const background = state.tenCoverBackground;
+    if (!background) throw new Error('還沒有底圖，請先生成一次');
+    const res = await fetch(COVER_BACKEND_URL, {
+        method: 'POST',
+        headers: _apiHeaders(),
+        body: JSON.stringify({
+            ...tenCoverFields(),
+            mode: 'composite',
+            background_image_base64: background.base64,
+            background_mime_type: background.mimeType,
+            background_is_ai: background.isAi,
+        }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(_apiError(data, res.status));
+    return data;
+}
+
 // 十點不一樣封面：使用者直接給兩個標題，中間沒有消化這一段，所以走自己的端點。
 // 下拉、產出區、下載都還在同一頁同一個位置，編輯不用切分頁。
-async function handleTenCoverGenerate() {
+// recomposeOnly=true：滿版合成版的「只改文字」，底圖不重生（比照 handleYtCoverGenerate）。
+async function handleTenCoverGenerate(recomposeOnly = false) {
     const val = id => (document.getElementById(id)?.value || '').trim();
     const titleLeft = val('coverTitleLeft');
     const titleRight = val('coverTitleRight');
-    const visualLeft = val('coverVisualLeft');
-    const visualRight = val('coverVisualRight');
-    const fullLayout = editorFormat().coverLayout === 'full';
-    if (fullLayout ? !titleLeft : (!titleLeft || !titleRight)) return showToast(fullLayout ? '標題要填' : '左右標題都要填');
+    const fullLayout = coverLayoutNow() === 'full';
+    if (!titleLeft) return showToast('第一標題要填');
+    // 只改文字只做滿版合成版：AI 版的字是模型畫的、雙切拼完分不回去（後端也會回 400）
+    if (recomposeOnly && !state.tenCoverBackground) return showToast('還沒有底圖，請先生成一次');
 
     const btn = document.getElementById('aiBtn');
     const loading = document.getElementById('aiLoading');
@@ -1572,59 +2046,64 @@ async function handleTenCoverGenerate() {
     loading.classList.remove('hidden');
     let completed = false;
     try {
-        const slots = coverAsisSlots();
-        if (fullLayout) slots.right = false;   // 滿版只有一個附圖位
-        const slotCount = (slots.left ? 1 : 0) + (slots.right ? 1 : 0);
-        const asisCount = slotCount || uploadedAsisCount();
-        // 有原圖放置一律程式壓字（後端也會強制），這裡只是把提示講對
-        const composite = document.getElementById('coverAiTitle')?.checked === false || asisCount > 0;
-        const deriving = !visualLeft || !visualRight;
-        showToast(fullLayout ? (slots.left ? '附圖鋪滿，合成中…' : (composite ? '生成底圖中，約 30–90 秒…' : '設計封面中，約 30–120 秒…'))
-            : slots.left && slots.right ? '兩格都用附圖，合成中…'
-            : slots.left ? '左格用附圖，右格生底圖中，約 30–90 秒…'
-            : slots.right ? '右格用附圖，左格生底圖中，約 30–90 秒…'
-            : asisCount >= 2 ? '兩格都用附圖，合成中…'
-            : asisCount === 1 ? '單張附圖整版鋪滿，合成中…'
-            : composite
-                ? '生成左右底圖中，兩張平行跑，約 60–120 秒…'
-                : (deriving ? 'AI 補畫面描述後開始設計封面，約 40–140 秒…' : '設計封面中，約 30–120 秒…'));
-        beginGenerationProgress('image', asisCount >= 2 ? 0.3 : slotCount === 1 ? 1.0 : asisCount === 1 ? 0.3 : (composite ? 1.6 : 1.3));
-        const res = await fetch(COVER_BACKEND_URL, {
-            method: 'POST',
-            headers: _apiHeaders(),
-            body: JSON.stringify({
-                title_left: titleLeft,
-                title_right: fullLayout ? '' : titleRight,
-                layout: fullLayout ? 'full' : 'split',
-                visual_left: visualLeft,
-                visual_right: fullLayout ? '' : visualRight,
-                date_text: val('coverDate'),
-                badge: document.getElementById('coverBadge')?.value || 'on_air',
-                mode: composite ? 'composite' : 'ai',
-                provider: effectiveImageProvider(),
-                reference_images: userRefImagesPayload(),
-                asis_left: state.coverAsis.left?.dataUrl || '',
-                asis_right: fullLayout ? '' : (state.coverAsis.right?.dataUrl || ''),
-            }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(_apiError(data, res.status));
+        let data;
+        if (recomposeOnly) {
+            showToast('用現有底圖重壓文字…');
+            data = await recomposeTenCoverText();
+        } else {
+            const slots = coverAsisSlots();
+            if (fullLayout) slots.right = false;   // 滿版只有一個附圖位
+            const slotCount = (slots.left ? 1 : 0) + (slots.right ? 1 : 0);
+            const asisCount = slotCount || uploadedAsisCount();
+            // 有原圖放置一律程式壓字（後端也會強制），這裡只是把提示講對
+            const composite = document.getElementById('coverAiTitle')?.checked === false || asisCount > 0;
+            const deriving = true;   // 畫面描述欄移除後一律由 AI 推導（2026-09-08 WP1）
+            showToast(fullLayout ? (slots.left ? '附圖鋪滿，合成中…' : (composite ? '生成底圖中，約 30–90 秒…' : '設計封面中，約 30–120 秒…'))
+                : slots.left && slots.right ? '兩格都用附圖，合成中…'
+                : slots.left ? '左格用附圖，右格生底圖中，約 30–90 秒…'
+                : slots.right ? '右格用附圖，左格生底圖中，約 30–90 秒…'
+                : asisCount >= 2 ? '兩格都用附圖，合成中…'
+                : asisCount === 1 ? '單張附圖整版鋪滿，合成中…'
+                : composite
+                    ? '生成左右底圖中，兩張平行跑，約 60–120 秒…'
+                    : (deriving ? 'AI 補畫面描述後開始設計封面，約 40–140 秒…' : '設計封面中，約 30–120 秒…'));
+            beginGenerationProgress('image', asisCount >= 2 ? 0.3 : slotCount === 1 ? 1.0 : asisCount === 1 ? 0.3 : (composite ? 1.6 : 1.3));
+            const res = await fetch(COVER_BACKEND_URL, {
+                method: 'POST',
+                headers: _apiHeaders(),
+                body: JSON.stringify({
+                    title_left: titleLeft,
+                    title_right: fullLayout ? '' : titleRight,
+                    layout: fullLayout ? 'full' : 'split',
+                    instruction: coverInstructionForApi(),
+                    date_text: val('coverDate'),
+                    badge: document.getElementById('coverBadge')?.value || 'on_air',
+                    title_creativity: state.coverTitleCreativity,
+                    mode: composite ? 'composite' : 'ai',
+                    provider: effectiveImageProvider(),
+                    reference_images: userRefImagesPayload(),
+                    asis_left: state.coverAsis.left?.dataUrl || '',
+                    asis_right: fullLayout ? '' : (state.coverAsis.right?.dataUrl || ''),
+                }),
+            });
+            data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(_apiError(data, res.status));
+        }
 
         const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
         document.getElementById('oneClickImage').src = imageUrl;
         const download = document.getElementById('oneClickDownload');
         download.href = imageUrl;
-        download.download = 'tvbs-ten-cover.png';
+        download.download = downloadFileName(state.editorFormat);
         download.innerText = '下載 PNG';
-        // 封面是程式合成的，沒有可以餵回生圖模型的「置框前原圖」，追加修改不適用
-        resetRefineState(null, null);
-        // 回填實際採用的畫面描述（留空時是 AI 補的）。不填回去，使用者永遠不知道
-        // AI 幫他決定了什麼，也沒辦法在此基礎上微調重生。
-        [['coverVisualLeft', data.visual_left], ['coverVisualRight', data.visual_right]]
-            .forEach(([id, value]) => {
-                const field = document.getElementById(id);
-                if (field && value) field.value = value;
-            });
+        // 追加修改只在 AI 版適用（2026-09-07）：AI 版的源圖是後貼 Logo 前的模型原圖，
+        // 改完再走一次後貼就是新成品。合成版的成品是程式用 Pillow 拼的，沒有可以餵回
+        // 生圖模型的原圖——把拼好的成品餵回去，模型會把 Logo 與標題一起重畫。
+        state.tenCoverMode = data.mode || 'ai';
+        const tenCoverSource = data.mode === 'ai' ? refineSourceFromResponse(data) : null;
+        resetRefineState(tenCoverSource, tenCoverSource ? data : null);
+        // 滿版合成版：把壓字前底圖記下來，「只改文字」才有東西可以帶回去（零 API 重壓）
+        setTenCoverBackground(data);
         document.getElementById('oneClickLabel').innerText = editorFormat().label;
         document.getElementById('oneClickMeta').innerText = fullLayout ? titleLeft : `${titleLeft}｜${titleRight}`;
         document.getElementById('oneClickEmpty').classList.add('hidden');
@@ -1645,10 +2124,12 @@ const COVER_TITLES_BACKEND_URL = `${API_BASE}/api/editor/cover-titles`;
 // 封面標題自動消化（2026-09-06）：貼新聞內文 → 文字模型出標題 → 回填欄位。
 // 刻意不接著生圖：使用者裁決要讓編輯看過標題再自己按「生成」。
 async function handleCoverTitleDigest(target) {
-    if (target === 'ten_cover' && editorFormat().coverLayout === 'full') target = 'ten_cover_full';
+    // 2026-09-08 WP1：不再依版型改 target——版面由消化結果決定，不是反過來。
+    // AI 判定內文是 1 個還是 2 個主題，單主題只回第一標題（回填後即為滿版）。
     const ten = target === 'ten_cover';
-    const tenFull = target === 'ten_cover_full';
-    const textarea = document.getElementById((ten || tenFull) ? 'coverNewsText' : 'ytCoverNewsText');
+    // 2026-09-08 WP2：整點直播用自己的 target，回兩個標題＋主題數（同十點的判定）
+    const ytHourly = target === 'yt_hourly';
+    const textarea = document.getElementById(ten ? 'coverNewsText' : 'ytCoverNewsText');
     const newsText = (textarea?.value || '').trim();
     if (newsText.length < 10) return showToast('先貼新聞內文（至少 10 個字）');
     const btn = document.getElementById('aiBtn');
@@ -1665,16 +2146,61 @@ async function handleCoverTitleDigest(target) {
         if (ten) {
             document.getElementById('coverTitleLeft').value = data.title_left || '';
             document.getElementById('coverTitleRight').value = data.title_right || '';
-        } else if (tenFull) {
-            document.getElementById('coverTitleLeft').value = data.title || '';
+            // 回填完版面就跟著變（第二標題空＝滿版），指示器與右附圖位一起更新
+            updateCoverLayoutIndicator();
         } else {
             document.getElementById('ytCoverTitle').value = data.title || '';
+            if (ytHourly) {
+                const second = document.getElementById('ytCoverTitleSecond');
+                if (second) second.value = data.title_second || '';
+                // 回填完版面就跟著變（第二標題空＝滿版），指示器與下載短名一起更新
+                updateYtLayoutIndicator();
+            }
         }
-        showToast('標題已回填，看過沒問題再按「生成」');
+        const single = ten ? !(data.title_right || '').trim()
+            : ytHourly ? !(data.title_second || '').trim() : false;
+        showToast((ten || ytHourly) && single
+            ? `判定為單一主題（${ten ? '滿版' : '單則'}），標題已回填，看過沒問題再按「生成」`
+            : '標題已回填，看過沒問題再按「生成」');
     } catch (err) {
         showToast(`消化標題失敗：${err.message}`);
     } finally {
         btn.disabled = false;
+    }
+}
+
+// 直標的自動消化（2026-09-09 使用者）：貼一段文字 → 兩段標題＋判定來源。
+// 與封面那條分開，因為回填的是三個欄位（含來源）、而且不動版面指示器；共用的是
+// 同一個後端端點（target=yt_vstrip）。一樣不接生圖：編輯看過再自己按。
+async function handleVstripTitleDigest() {
+    const newsText = (document.getElementById('vstripNewsText')?.value || '').trim();
+    if (newsText.length < 10) return showToast('先貼一段文字（至少 10 個字）');
+    const btn = document.getElementById('vstripDigestBtn');
+    if (btn) btn.disabled = true;
+    try {
+        showToast('AI 消化標題中，約 10–30 秒…');
+        const res = await fetch(COVER_TITLES_BACKEND_URL, {
+            method: 'POST',
+            headers: _apiHeaders(),
+            body: JSON.stringify({ news_text: newsText, target: 'yt_vstrip' }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(_apiError(data, res.status));
+        document.getElementById('vstripTitle').value = data.title || '';
+        document.getElementById('vstripTitleSecond').value = data.title_second || '';
+        // 來源判不出來時後端回空字串——不要覆蓋掉編輯已經自己填好的那一欄
+        const source = (data.source_text || '').trim();
+        const sourceInput = document.getElementById('vstripSource');
+        if (source) sourceInput.value = source;
+        // 格數提示與來源角落那一列都吃這三個欄位，回填完要重算
+        onVstripInput();
+        showToast(source
+            ? '標題與來源已回填，看過沒問題再按「生成」'
+            : '標題已回填（判不出畫面來源，請自己填），看過沒問題再按「生成」');
+    } catch (err) {
+        showToast(`消化標題失敗：${err.message}`);
+    } finally {
+        if (btn) btn.disabled = false;
     }
 }
 
@@ -1685,12 +2211,17 @@ function ytCoverFields() {
     const layout = editorFormat().ytLayout || 'news';
     return {
         title: val('ytCoverTitle'),
+        // 整點直播＋這一欄有值＝雙則（後端 editor_formats.yt_cover_is_dual）
+        title_second: layout === 'hourly' ? val('ytCoverTitleSecond') : '',
         layout,
         title_mode: document.getElementById('ytCoverAiTitle')?.checked === false ? 'composite' : 'ai',
         original_audio: layout === 'news' && !!document.getElementById('ytCoverOriginalAudio')?.checked,
         ai_translation: layout === 'news' && !!document.getElementById('ytCoverAiTranslation')?.checked,
         date_text: val('ytCoverDate'),
         time_text: layout === 'hourly' ? val('ytCoverTime') : '',
+        bottom_band: layout !== 'hourly' && state.ytBottomBand,
+        // 指令欄（2026-09-08 WP1）：餵給底圖推導當畫面提示
+        instruction: coverInstructionForApi(),
     };
 }
 
@@ -1702,6 +2233,7 @@ async function recomposeYtCover(refined) {
         method: 'POST',
         headers: _apiHeaders(),
         body: JSON.stringify({
+            // ytCoverFields() 帶著第二標題，所以雙則的「只改文字」照樣是雙則
             ...ytCoverFields(),
             title_mode: state.ytCoverTitleMode,
             provider: effectiveImageProvider(),
@@ -1720,17 +2252,19 @@ function showYtCoverResult(data, fields) {
     document.getElementById('oneClickImage').src = imageUrl;
     const download = document.getElementById('oneClickDownload');
     download.href = imageUrl;
-    download.download = { hourly: 'tvbs-yt-hourly-cover.png', hot: 'tvbs-yt-hot-cover.png' }[fields.layout] || 'tvbs-yt-live-cover.png';
+    download.download = downloadFileName(state.editorFormat, fields.title);
     download.innerText = '下載 PNG';
     state.ytCoverBackgroundIsAi = !!data.background_is_ai;
     state.ytCoverTitleMode = data.title_mode || 'ai';
-    // 追加修改：以無文字底圖為源，改完由 handleRefine 再疊一次文字
+    // 追加修改：以無文字底圖為源，改完由 handleRefine 再疊一次文字。
+    // 雙則的底圖是左右兩張羽化拼好的那一張，這裡沒有分別。
     resetRefineState(refineSourceFromResponse(data), data);
     const recompose = document.getElementById('ytCoverRecomposeBtn');
     if (recompose) recompose.disabled = false;
     document.getElementById('oneClickLabel').innerText = editorFormat().label;
     document.getElementById('oneClickMeta').innerText =
         [data.line1, data.line2,
+         data.dual ? '雙則' : '',
          fields.original_audio ? '原音呈現' : '', fields.ai_translation ? 'AI即時翻譯' : '',
          fields.time_text].filter(Boolean).join('｜');
     document.getElementById('oneClickEmpty').classList.add('hidden');
@@ -1741,6 +2275,12 @@ function showYtCoverResult(data, fields) {
 async function handleYtCoverGenerate(recomposeOnly = false) {
     const fields = ytCoverFields();
     if (!fields.title) return showToast('請輸入直播標題');
+    // 雙則每行最多 YT_HOURLY_LINE_MAX_CHARS 個全形字寬（半形算半字），送出前先擋，別燒完兩次生圖才被後端退
+    if (fields.title_second && fields.title_mode !== 'ai') {
+        const tooLong = [['第一標題', fields.title], ['第二標題', fields.title_second]]
+            .find(([, t]) => displayWidth(t) > YT_HOURLY_LINE_MAX_CHARS);
+        if (tooLong) return showToast(`${tooLong[0]}超過 ${YT_HOURLY_LINE_MAX_CHARS} 字，請縮短這一行`);
+    }
     if (recomposeOnly && !state.refineSource) return showToast('還沒有底圖，請先生成一次');
     // AI 標題模式的成品沒有「只改文字」這回事——字是模型畫的，改字就是整張重生
     if (recomposeOnly && state.ytCoverTitleMode === 'ai') {
@@ -1791,9 +2331,208 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
     }
 }
 
+/* ============================================================
+   YT 直播「直標」（2026-09-08 WP3）
+   透明底 PNG，疊在直播訊號上。沒有底圖＝沒有生圖、沒有附圖、沒有引擎、
+   沒有「只改文字」、沒有追加修改。五組按鈕的狀態存在 state.vstrip。
+   ============================================================ */
+const YT_OVERLAY_BACKEND_URL = `${API_BASE}/api/editor/yt-overlay`;
+const VSTRIP_MAIN_MAX_CELLS = 12;
+const VSTRIP_SUB_MAX_CELLS = 14;
+// Logo 角落與直標同側的**上**角會壓到 LIVE 章與色框頂：靠左的直標不能放 tl，靠右的不能放 tr。
+// 2026-09-09 使用者裁決：直標縮短後同側的下角（bl／br）開放，色框會自己讓開 Logo。
+const VSTRIP_BLOCKED_CORNERS = { left: ['tl'], right: ['tr'] };
+// 換邊時把 Logo 移到對側**同高**的角落，不是一律回右上
+const VSTRIP_MIRROR_CORNER = { tl: 'tr', bl: 'br', tr: 'tl', br: 'bl' };
+const VSTRIP_CORNER_LABELS = { tl: '左上', tr: '右上', bl: '左下', br: '右下' };
+
+/* 直排的「格數」。與 compose._vertical_cells 等價：連續英數字併成一格（縱中橫）、
+   空白不算、其餘一字一格。標點只是換字形不影響數量，所以這裡不做替換。
+   用 for...of 逐 code point 走，不是 UTF-16 單元——表情符號會被拆成兩格。 */
+function vstripCells(text) {
+    const cells = [];
+    let run = '';
+    for (const ch of String(text || '')) {
+        if (/^[A-Za-z0-9]$/.test(ch)) { run += ch; continue; }
+        if (run) { cells.push(run); run = ''; }
+        if (/\s/.test(ch)) continue;
+        cells.push(ch);
+    }
+    if (run) cells.push(run);
+    return cells;
+}
+
+function vstripFields() {
+    const val = id => (document.getElementById(id)?.value || '').trim();
+    const v = state.vstrip;
+    return {
+        title: val('vstripTitle'),
+        title_second: val('vstripTitleSecond'),
+        source_text: val('vstripSource'),
+        variant: v.variant,
+        title_side: v.titleSide,
+        logo_corner: v.logoCorner,
+        source_corner: v.sourceCorner,
+        live: !!v.live,
+    };
+}
+
+function setVstripVariant(variant) {
+    state.vstrip.variant = variant;
+    updateVstripButtons();
+}
+
+function setVstripTitleSide(side) {
+    const previous = state.vstrip.titleSide;
+    state.vstrip.titleSide = side;
+    // Logo 還停在直標那一側的上角就會被壓到：自動搬到對側同高的角落，不用使用者自己發現
+    if (VSTRIP_BLOCKED_CORNERS[side].includes(state.vstrip.logoCorner)) {
+        state.vstrip.logoCorner = VSTRIP_MIRROR_CORNER[state.vstrip.logoCorner];
+    }
+    // 來源句一起鏡射（2026-09-09）：預設 tl 是「LIVE 章旁邊」，換成靠右卻還停在 tl
+    // 就變成孤零零貼在對角，跟舊版「跟 LIVE 章」的行為對不上。
+    if (previous !== side) {
+        state.vstrip.sourceCorner = VSTRIP_MIRROR_CORNER[state.vstrip.sourceCorner];
+    }
+    updateVstripButtons();
+}
+
+function setVstripLogoCorner(corner) {
+    if (VSTRIP_BLOCKED_CORNERS[state.vstrip.titleSide].includes(corner)) {
+        return showToast('這個角落會壓到直標，請選另一邊');
+    }
+    state.vstrip.logoCorner = corner;
+    updateVstripButtons();
+}
+
+function setVstripSourceCorner(corner) {
+    state.vstrip.sourceCorner = corner;
+    updateVstripButtons();
+}
+
+function toggleVstripLive(checkbox) {
+    state.vstrip.live = !!checkbox.checked;
+}
+
+// 按鈕外觀：選中的填色、沒選中的只有邊框；會壓到直標的角落直接 disabled
+function _vstripPick(selector, value) {
+    document.querySelectorAll(selector).forEach(btn => {
+        const on = btn.dataset.vstripValue === value;
+        btn.classList.toggle('bg-red-600', on);
+        btn.classList.toggle('text-white', on);
+        btn.classList.toggle('text-slate-400', !on);
+    });
+}
+
+function updateVstripButtons() {
+    if (editorFormat().inputs !== 'yt_vstrip') return;
+    const v = state.vstrip;
+    _vstripPick('[data-vstrip-variant]', v.variant);
+    _vstripPick('[data-vstrip-side]', v.titleSide);
+    _vstripPick('[data-vstrip-corner]', v.logoCorner);
+    _vstripPick('[data-vstrip-source]', v.sourceCorner);
+    const blocked = VSTRIP_BLOCKED_CORNERS[v.titleSide];
+    document.querySelectorAll('[data-vstrip-corner]').forEach(btn => {
+        const bad = blocked.includes(btn.dataset.vstripValue);
+        btn.disabled = bad;
+        btn.classList.toggle('opacity-40', bad);
+        btn.title = bad ? '這個角落有 LIVE 章與直標頂，會打架' : 'TVBS NEWS 白色字標放這個角落';
+    });
+    // 來源句四角：跟 Logo 同一角時後端會自動讓開，所以不 disabled，只在提示裡講清楚
+    document.querySelectorAll('[data-vstrip-source]').forEach(btn => {
+        const corner = btn.dataset.vstripValue;
+        btn.title = corner === v.logoCorner
+            ? `跟 Logo 同一角（${VSTRIP_CORNER_LABELS[corner]}）：會自動排在 Logo 的另一邊，不會重疊`
+            : `來源句放${VSTRIP_CORNER_LABELS[corner]}`;
+    });
+    // 來源句空白時「跟 LIVE 章／跟 Logo」沒有意義，整列收起來
+    const sourceRow = document.getElementById('vstripSourceRow');
+    const hasSource = !!(document.getElementById('vstripSource')?.value || '').trim();
+    if (sourceRow) sourceRow.classList.toggle('hidden', !hasSource);
+    const live = document.getElementById('vstripLive');
+    if (live) live.checked = !!v.live;
+    updateVstripCellHint();
+}
+
+// 欄位下方的格數提示：邊打邊算，不用等生成才知道超了
+function updateVstripCellHint() {
+    const hint = document.getElementById('vstripCellHint');
+    if (!hint) return;
+    const main = vstripCells(document.getElementById('vstripTitle')?.value || '').length;
+    const sub = vstripCells(document.getElementById('vstripTitleSecond')?.value || '').length;
+    const over = main > VSTRIP_MAIN_MAX_CELLS || sub > VSTRIP_SUB_MAX_CELLS;
+    hint.innerText = `第一標題 ${main} 格／${VSTRIP_MAIN_MAX_CELLS}　第二標題 ${sub} 格／${VSTRIP_SUB_MAX_CELLS}`;
+    hint.classList.toggle('text-red-400', over);
+    hint.classList.toggle('text-slate-600', !over);
+}
+
+function onVstripInput() {
+    updateVstripButtons();
+}
+
+function showVstripResult(data, fields) {
+    const imageUrl = `data:${data.mime_type};base64,${data.image_base64}`;
+    document.getElementById('oneClickImage').src = imageUrl;
+    const download = document.getElementById('oneClickDownload');
+    download.href = imageUrl;
+    download.download = downloadFileName(state.editorFormat, fields.title, 'png');
+    download.innerText = '下載 PNG';
+    // 直標沒有底圖，追加修改與「只改文字」都不適用——清成 null，refine 鈕自然不會亮
+    resetRefineState(null, null);
+    document.getElementById('oneClickLabel').innerText = editorFormat().label;
+    const layout = data.layout || {};
+    document.getElementById('oneClickMeta').innerText = [
+        `第一標題 ${layout.main_cells_count} 格`,
+        layout.sub_cells_count ? `第二標題 ${layout.sub_cells_count} 格` : '',
+        fields.title_side === 'left' ? '靠左' : '靠右',
+        VSTRIP_VARIANT_LABELS[fields.variant] || '',
+        fields.live ? 'LIVE' : '無 LIVE 章',
+    ].filter(Boolean).join('｜');
+    document.getElementById('oneClickEmpty').classList.add('hidden');
+    document.getElementById('oneClickResult').classList.remove('hidden');
+}
+
+const VSTRIP_VARIANT_LABELS = { original_audio: '原音呈現', ai_translation: 'AI即時翻譯' };
+
+async function handleYtVstripGenerate() {
+    const fields = vstripFields();
+    if (!fields.title) return showToast('請輸入第一標題');
+    // 格數在送出前先擋：後端也會擋（400），但白跑一趟沒有必要
+    const mainCells = vstripCells(fields.title).length;
+    if (mainCells > VSTRIP_MAIN_MAX_CELLS) {
+        return showToast(`第一標題超過 ${VSTRIP_MAIN_MAX_CELLS} 格（目前 ${mainCells} 格）`);
+    }
+    const subCells = vstripCells(fields.title_second).length;
+    if (subCells > VSTRIP_SUB_MAX_CELLS) {
+        return showToast(`第二標題超過 ${VSTRIP_SUB_MAX_CELLS} 格（目前 ${subCells} 格）`);
+    }
+
+    const btn = document.getElementById('aiBtn');
+    const loading = document.getElementById('aiLoading');
+    btn.disabled = true;
+    loading.classList.remove('hidden');
+    try {
+        const res = await fetch(YT_OVERLAY_BACKEND_URL, {
+            method: 'POST',
+            headers: _apiHeaders(),
+            body: JSON.stringify(fields),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(_apiError(data, res.status));
+        showVstripResult(data, fields);
+    } catch (err) {
+        console.error(err);
+        showToast(err.message || '直標生成失敗，請稍後再試');
+    } finally {
+        btn.disabled = false;
+        loading.classList.add('hidden');
+    }
+}
+
 async function handleOneClickGenerate() {
     if (editorFormat().inputs === 'cover') return handleTenCoverGenerate();
     if (editorFormat().inputs === 'yt_cover') return handleYtCoverGenerate();
+    if (editorFormat().inputs === 'yt_vstrip') return handleYtVstripGenerate();
     const input = document.getElementById("aiInput").value.trim();
     if (!input) return showToast("請輸入欲生成的新聞內容");
 
@@ -1839,7 +2578,7 @@ async function handleOneClickGenerate() {
                 safe_frame_profile: state.currentRole,
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
-                broadcast_hole: editorFormat().hole || '',
+                broadcast_hole: broadcastHoleForApi(),
                 // 地圖類的真實座標（消化端列地名、後端實查 Nominatim）。後端據此
                 // 拼一張真實底圖、把標點畫在正確位置再當參考圖附上——模型記憶裡的
                 // 經緯度實測差到 2.3 公里，冷門地名尤其不準。
@@ -1859,7 +2598,7 @@ async function handleOneClickGenerate() {
         document.getElementById("oneClickImage").src = imageUrl;
         const download = document.getElementById("oneClickDownload");
         download.href = imageUrl;
-        download.download = `tvbs-news-cg.${isPng ? "png" : "jpg"}`;
+        download.download = downloadFileName(state.editorFormat, undefined, isPng ? "png" : "jpg");
         download.innerText = `下載 ${isPng ? "PNG" : "JPEG"}`;
         // ③ 記住「置框前」原圖供追加修改；未置框時成品本身就是原圖
         resetRefineState(refineSourceFromResponse(data), data);
@@ -1878,79 +2617,6 @@ async function handleOneClickGenerate() {
         btnText.classList.remove("hidden");
         loading.classList.add("hidden");
         endGenerationProgress(completed);
-    }
-}
-
-async function handleAIDigestion() {
-    const input = document.getElementById('aiInput').value.trim();
-    if (!input) return showToast("請輸入欲消化整理的新聞內容");
-
-    const btnText = document.getElementById('aiBtnText');
-    const loading = document.getElementById('aiLoading');
-    const btn = document.getElementById('aiBtn');
-    btn.disabled = true; btnText.classList.add('hidden'); loading.classList.remove('hidden');
-
-    // 自動生成一律用第一頁自己的圖表類型（'auto' 時送 sentinel 交由 AI 選型）
-    const typeLabel = digestTypeLabelForApi();
-
-    try {
-        const response = await fetch(AI_BACKEND_URL, {
-            method: "POST",
-            headers: _apiHeaders(),
-            body: JSON.stringify({
-                news_text: input,
-                type_label: typeLabel,
-                role: state.currentRole,
-                density: state.digestDensity,
-                stamp: state.stamp,
-                tone: state.tone,
-                editor_format: state.editorFormat,
-                // 安全框 ON 時消化要出滿版版面，否則 STRUCTURE 的「縮小置中」
-                // 開頭句會跟最終 prompt 的 FULL-FRAME RULES 互相打架
-                safe_frame: state.safeFrame,
-                user_instruction: currentUserInstruction(),
-                // 已上傳幾張肖像照。後端據此判斷「維基查不到的人」是不是其實有照片：
-                // 沒有這個數字，後端會把使用者剛上傳照片的那個人排出版面（2026-08-18）
-                portrait_photo_count: uploadedPortraitCount(),
-                asis_reference_count: uploadedAsisCount()
-            })
-        });
-        if (!response.ok) {
-            throw new Error("HTTP " + response.status);
-        }
-        const data = await response.json();
-
-        const s = curSelected();
-        s.style = {}; s.structure = {};
-        document.getElementById('field-style').value = data.style || '';
-        document.getElementById('field-structure').value = data.structure || '';
-        document.getElementById('field-variable').value = (data.variable || '').replace(SYSTEM_DISCLAIMER, '').trim();
-        applyPortraitSubjects(data);
-
-        // 自動判斷模式：記下 AI 實際選了哪一類，供徽章與按鈕顯示
-        if (state.digestChartType === AUTO_TYPE_KEY) {
-            const resolvedKey = Object.keys(CHART_TYPES)
-                .find(k => CHART_TYPES[k].label === data.chart_type);
-            state.digestResolvedType = resolvedKey || null;
-            renderDigestTypes();
-        } else {
-            noteChartTypeOverride(data);
-        }
-
-        renderTags(); updateCounter();
-        // 剛做完自動生成＝以第一頁的類型為準（claimPromptType 內含 syncOutput）
-        claimPromptType('digest');
-        const portraitHint = state.portraitSubjects.length
-            ? `；具名真人：${state.portraitSubjects.join('、')}（生圖時查參考照）`
-            : '';
-        showToast(state.digestResolvedType
-            ? `AI 判斷為「${CHART_TYPES[state.digestResolvedType].label}」並完成佈局規劃${portraitHint}`
-            : `AI 已完成佈局規劃與視覺輔助設計${portraitHint}`);
-    } catch (err) {
-        console.error(err);
-        showToast("AI 服務連線失敗，請稍後再試");
-    } finally {
-        btn.disabled = false; btnText.classList.remove('hidden'); loading.classList.add('hidden');
     }
 }
 
@@ -2029,7 +2695,7 @@ async function handleImageGeneration() {
                 safe_frame_profile: state.currentRole,
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
-                broadcast_hole: editorFormat().hole || '',
+                broadcast_hole: broadcastHoleForApi(),
                 // 地圖類的真實座標（消化端列地名、後端實查 Nominatim）。後端據此
                 // 拼一張真實底圖、把標點畫在正確位置再當參考圖附上——模型記憶裡的
                 // 經緯度實測差到 2.3 公里，冷門地名尤其不準。
@@ -2049,7 +2715,7 @@ async function handleImageGeneration() {
         const isPng = data.mime_type === 'image/png';
         image.src = imageUrl;
         download.href = imageUrl;
-        download.download = `tvbs-news-cg.${isPng ? 'png' : 'jpg'}`;
+        download.download = downloadFileName(state.editorFormat, undefined, isPng ? 'png' : 'jpg');
         download.innerText = `下載 ${isPng ? 'PNG' : 'JPEG'}`;
         resultLabel.innerText = `${providerName} Generated Preview`;
         image.alt = `${providerName} 生成的新聞 CG 預覽`;
@@ -2071,6 +2737,14 @@ async function handleImageGeneration() {
 function currentUserInstruction() {
     const el = document.getElementById('aiInstruction');
     return el ? el.value.trim() : '';
+}
+
+// 封面／YT 端點的 instruction 上限是 500 字，指令欄本身放到 2000（主流程用得到），
+// 超過直接送會被 pydantic 擋成 422，所以在這裡先截斷（2026-09-08 WP1）。
+const COVER_INSTRUCTION_MAX = 500;
+
+function coverInstructionForApi() {
+    return currentUserInstruction().slice(0, COVER_INSTRUCTION_MAX);
 }
 
 // 指令欄的需求蓋過 UI 按鈕（2026-09-03 使用者裁決），後端已明文寫進優先序規則。
@@ -2188,6 +2862,11 @@ async function handleRefFilesSelected(input) {
     }
 }
 
+// 十點不一樣：原圖放置只走第一／第二附圖那兩顆，通用上傳區不收。
+function coverAsisOnlyInSlots() {
+    return editorFormat().inputs === 'cover';
+}
+
 function renderRefUploads() {
     const list = document.getElementById('refUploadList');
     if (!list) return;
@@ -2203,10 +2882,13 @@ function renderRefUploads() {
         name.textContent = ref.name;
         const select = document.createElement('select');
         select.className = 'bg-slate-900 border border-slate-700 rounded text-[10px] text-slate-200 px-1.5 py-1';
+        // 十點封面有自己的左右附圖位（2026-09-07 加的，2026-09-10 收乾淨）：照片一律走那兩顆，
+        // 通用清單完全不提供「原圖放置」。以前留了「本來就是 asis 就保留」的後門，結果是
+        // 在別的版型設成原圖放置、再切到十點，那張仍會被後端當 asis——上面兩顆沒填時
+        // 它就悄悄變成底圖。這裡直接把用途改掉，讓「哪張圖放哪一格」只有一個答案。
+        if (coverAsisOnlyInSlots() && ref.purpose === 'asis') ref.purpose = 'scene';
         for (const [value, label] of Object.entries(REF_PURPOSES)) {
-            // 十點封面有自己的左右附圖位（2026-09-07），通用清單不再提供「原圖放置」，
-            // 免得又出現分不清左右的附圖
-            if (value === 'asis' && editorFormat().inputs === 'cover' && ref.purpose !== 'asis') continue;
+            if (value === 'asis' && coverAsisOnlyInSlots()) continue;
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
@@ -2342,7 +3024,7 @@ function showRefinedImage(data) {
     document.getElementById('oneClickImage').src = imageUrl;
     const download = document.getElementById('oneClickDownload');
     download.href = imageUrl;
-    download.download = `tvbs-news-cg.${isPng ? 'png' : 'jpg'}`;
+    download.download = downloadFileName(state.editorFormat, undefined, isPng ? 'png' : 'jpg');
     document.getElementById('oneClickLabel').innerText = data.model || 'AI Generated';
 }
 
@@ -2363,6 +3045,10 @@ async function handleRefine() {
     // AI 標題模式改的是含標題的模型圖，走一般 refine 規則（字要保留）。
     const isYtCover = editorFormat().inputs === 'yt_cover';
     const ytTextFree = isYtCover && state.ytCoverTitleMode !== 'ai';
+    // 十點封面的 AI 版：與 YT 的 AI 標題模式同一條路——改的是含標題的模型圖，
+    // 走一般 refine 規則（字要保留），不置框、不挖洞、固定 16:9。
+    const isTenCover = editorFormat().inputs === 'cover' && state.tenCoverMode === 'ai';
+    const isCover = isYtCover || isTenCover;
     try {
         const response = await fetch(REFINE_BACKEND_URL, {
             method: 'POST',
@@ -2372,22 +3058,24 @@ async function handleRefine() {
                 source_mime_type: state.refineSource.mimeType,
                 instruction,
                 provider: effectiveImageProvider(),
-                aspect_ratio: isYtCover ? '16:9' : currentAspectRatio(),
+                aspect_ratio: isCover ? '16:9' : currentAspectRatio(),
                 image_size: state.imageSize,
-                safe_frame: isYtCover ? false : state.safeFrame,
+                safe_frame: isCover ? false : state.safeFrame,
                 safe_frame_profile: state.currentRole,
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
-                broadcast_hole: isYtCover ? '' : (editorFormat().hole || ''),
+                broadcast_hole: isCover ? '' : broadcastHoleForApi(),
                 text_free: ytTextFree,
             }),
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(_apiError(data, response.status));
 
-        // YT 直播封面：refine 只改了無文字底圖，要再疊一次文字才是成品。
-        // 回來的 data 帶著 source_image_base64＝新底圖，refineSource 因此自動接上。
-        const shown = isYtCover ? await recomposeYtCover(data) : data;
+        // 封面兩條線：refine 只改了模型那張圖，要再走一次程式後貼才是成品。
+        // 回來的 data 帶著 source_image_base64＝新的模型圖，refineSource 因此自動接上。
+        const shown = isYtCover ? await recomposeYtCover(data)
+            : isTenCover ? await recomposeTenCover(data)
+            : data;
 
         // 退回上一版用：存目前這一版的置框前原圖與顯示中成品（都在 state，不碰 DOM）
         state.refineStack.push({
@@ -2399,7 +3087,7 @@ async function handleRefine() {
         state.refineDisplay = shown;
         showRefinedImage(shown);
         // 封面的成品標籤維持版型名，不顯示內部的 recomposite 模型字串
-        if (isYtCover) document.getElementById('oneClickLabel').innerText = editorFormat().label;
+        if (isCover) document.getElementById('oneClickLabel').innerText = editorFormat().label;
         input.value = '';
         showToast('修改完成');
     } catch (err) {

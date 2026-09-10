@@ -78,6 +78,12 @@
             border-color: var(--accent);
             box-shadow: 0 0 0 3px rgba(225, 6, 0, 0.22);
         }
+        /* 2026-09-09 使用者：欄位「內」的提示文字一律斜體，才看得出那是提示不是已填的值。
+           寫成全站規則而不是逐個欄位加 class——新增欄位不會忘了帶。 */
+        input::placeholder,
+        textarea::placeholder {
+            font-style: italic;
+        }
         .tag-btn {
             background: #1d1916;
             border: 1px solid var(--line);
@@ -235,6 +241,16 @@
             color: var(--ink);
             min-height: 360px;
         }
+        /* 直標是透明底 PNG：不鋪個深灰格紋，白字疊在頁面底色上根本看不出有沒有畫出來。
+           格紋刻意用深色兩階（不是傳統白灰棋盤）——直標的字是白的，白格會吃掉筆畫。 */
+        .transparent-preview {
+            background-color: #1e293b;
+            background-image:
+                linear-gradient(45deg, #0f172a 25%, transparent 25%, transparent 75%, #0f172a 75%),
+                linear-gradient(45deg, #0f172a 25%, transparent 25%, transparent 75%, #0f172a 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 10px 10px;
+        }
         @media (prefers-reduced-motion: reduce) {
             .tally-dot { animation: none; }
             .toast-animate { animation: none; }
@@ -296,7 +312,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span class="hidden sm:inline text-[10px] text-[color:var(--dim)]">V8.2</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260910-18</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -336,7 +352,13 @@
                            class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 input-focus-ring h-[132px] min-h-[96px] resize-y"
                            placeholder="貼上新聞文字…"></textarea>
 
-                    <!-- ① 指令拆欄：專用高信賴度通道；在文章內夾指令的舊習慣仍然有效 -->
+                    </div>
+
+                    <!-- ① 指令拆欄：專用高信賴度通道；在文章內夾指令的舊習慣仍然有效。
+                         2026-09-08 WP1：這一組刻意住在 newsInputs **外面**——封面／YT 版型會把
+                         整個 newsInputs 藏起來，留在裡面的話欄位再怎麼「顯示」都看不到。
+                         applyEditorFormatInputs 會把它搬到當前那組欄位底下。 -->
+                    <div id="instructionRow">
                     <input id="aiInstruction" type="text" maxlength="2000"
                            class="w-full mt-2 bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                            placeholder="給 AI 的指令（選填），如：用手繪風／標題放左邊／逐字保留"
@@ -350,8 +372,8 @@
                     <div id="refUploadBox" class="mt-2">
                         <div class="flex items-center gap-2">
                             <button type="button" onclick="document.getElementById('refFileInput').click()"
-                                    class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">＋ 附參考圖（選填）</button>
-                            <span class="text-[9px] text-slate-600">地圖底稿／實景參考／肖像照片／原圖放置，單張 ≤1.5MB，最多 3 張</span>
+                                    class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 附參考圖（選填）</button>
+                            <span id="refUploadHint" class="text-[9px] text-slate-600">地圖底稿／實景參考／肖像照片／原圖放置，單張 ≤1.5MB，最多 3 張</span>
                         </div>
                         <input id="refFileInput" type="file" accept="image/*" multiple class="hidden"
                                onchange="handleRefFilesSelected(this)" />
@@ -362,7 +384,6 @@
                         <label class="block text-[9px] font-black text-amber-500/80 uppercase tracking-[0.16em] mb-1">編輯格式</label>
                         <select id="editorFormatSelect" onchange="setEditorFormat(this.value)"
                                 class="w-full rounded-lg px-2.5 py-2 text-[11px] font-black transition-all input-focus-ring"></select>
-                        <p id="editorFormatHint" class="text-[10px] text-slate-500 italic mt-1"></p>
                     </div>
 
                     <div id="digestTypeRow" class="mt-3 mb-2">
@@ -374,16 +395,13 @@
 
                     <div id="coverInputs" class="hidden mt-3 mb-2 flex flex-col gap-2">
                         <div>
-                            <label id="coverTitleLeftLabel" class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">左半標題</label>
+                            <label id="coverTitleLeftLabel" class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">第一標題</label>
                             <input id="coverTitleLeft" type="text" maxlength="40"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
-                                   placeholder="政府明年勞保撥補上看1300億" />
-                            <input id="coverVisualLeft" type="text" maxlength="500"
-                                   class="w-full mt-1 bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-300 input-focus-ring"
-                                   placeholder="左半畫面描述（選填）——留空由 AI 依標題自動產生" />
+                                   placeholder="勞保撥補 上看1300億（半形空格分行，最多 3 段、每段 ≤ 8 字）" />
                             <div class="mt-1 flex items-center gap-2">
                                 <button type="button" id="coverAsisLeftBtn" onclick="document.getElementById('coverAsisLeftInput').click()"
-                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">＋ 左半附圖（選填）</button>
+                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 附圖（選填）</button>
                                 <input id="coverAsisLeftInput" type="file" accept="image/*" class="hidden" onchange="handleCoverAsisSelected('left', this)" />
                                 <div id="coverAsisLeftPreview" class="hidden items-center gap-2">
                                     <img id="coverAsisLeftImg" class="w-10 h-10 object-cover rounded border border-slate-700" alt="" />
@@ -393,17 +411,16 @@
                                 <span id="coverAsisLeftHint" class="text-[9px] text-slate-600">沒圖＝這格由 AI 生底圖</span>
                             </div>
                         </div>
-                        <div class="cover-split-only">
-                            <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">右半標題</label>
+                        <div>
+                            <!-- 第二標題永遠顯示：它就是判定滿版／雙切的那一欄，藏起來就永遠填不進去 -->
+                            <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">第二標題</label>
                             <input id="coverTitleRight" type="text" maxlength="40"
+                                   oninput="updateCoverLayoutIndicator()"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
-                                   placeholder="病理醫師月薪65萬仍缺工" />
-                            <input id="coverVisualRight" type="text" maxlength="500"
-                                   class="w-full mt-1 bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-300 input-focus-ring"
-                                   placeholder="右半畫面描述（選填）——留空由 AI 依標題自動產生" />
-                            <div class="mt-1 flex items-center gap-2">
+                                   placeholder="留空＝滿版；填了＝雙切（例：病理醫師 月薪65萬仍缺工）" />
+                            <div class="mt-1 flex items-center gap-2 cover-split-only">
                                 <button type="button" onclick="document.getElementById('coverAsisRightInput').click()"
-                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">＋ 右半附圖（選填）</button>
+                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 第二附圖（選填）</button>
                                 <input id="coverAsisRightInput" type="file" accept="image/*" class="hidden" onchange="handleCoverAsisSelected('right', this)" />
                                 <div id="coverAsisRightPreview" class="hidden items-center gap-2">
                                     <img id="coverAsisRightImg" class="w-10 h-10 object-cover rounded border border-slate-700" alt="" />
@@ -413,12 +430,25 @@
                                 <span id="coverAsisRightHint" class="text-[9px] text-slate-600">沒圖＝這格由 AI 生底圖</span>
                             </div>
                         </div>
+                        <!-- 滿版／雙切是**判定結果**不是輸入（2026-09-08 WP1）：
+                             按鈕只顯示現在會出哪一種，點「雙切」只是把游標帶到第二標題 -->
+                        <div id="coverLayoutIndicator" class="hidden flex items-center gap-1.5">
+                            <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">版面</span>
+                            <button type="button" data-cover-layout="full" onclick="focusCoverLayoutField()"
+                                    title="只填第一標題＝滿版一張圖"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-500 hover:text-white">滿版</button>
+                            <button type="button" data-cover-layout="split" onclick="focusCoverLayoutField()"
+                                    title="第二標題填了就是雙切；點這裡會把游標移到第二標題"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-500 hover:text-white">雙切</button>
+                            <span class="text-[9px] text-slate-600">依第二標題自動判定</span>
+                        </div>
+
                         <div class="flex flex-col gap-1">
                             <textarea id="coverNewsText" rows="3" maxlength="20000"
                                       class="w-full bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-300 input-focus-ring resize-y"
                                       placeholder="新聞內文（選填）——貼上後按「AI 消化標題」，標題會回填到上方欄位，看過再按生成"></textarea>
                             <button type="button" onclick="handleCoverTitleDigest('ten_cover')"
-                                    class="self-start px-2.5 py-1 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all">AI 消化標題</button>
+                                    class="self-start px-2.5 py-1 rounded-lg text-[10px] font-black bg-violet-700 hover:bg-violet-600 text-white transition-all">AI 消化標題</button>
                         </div>
                         <div class="flex items-center gap-2">
                             <input id="coverDate" type="text" maxlength="20"
@@ -428,13 +458,37 @@
                                 <option value="on_air">ON AIR</option>
                                 <option value="highlight">精華</option>
                             </select>
+                            <button id="coverRecomposeBtn" type="button" onclick="handleTenCoverGenerate(true)" disabled
+                                    title="滿版程式壓字版專用：底圖不重生，只用新的標題／日期／標籤重壓文字"
+                                    class="hidden px-2.5 py-1.5 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all disabled:opacity-40">只改文字</button>
                         </div>
-                        <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-300 cursor-pointer"
-                               title="開：整張連標題字交給 AI 畫（美術字有設計感，但可能出錯字）；關：AI 只生左右底圖、所有文字由程式壓字，零錯字">
-                            <input id="coverAiTitle" type="checkbox" class="accent-red-600" checked />標題由 AI 生成
-                            <span class="text-[9px] font-normal text-slate-500">（關閉＝程式壓字，零錯字）</span>
-                        </label>
-                        <p class="text-[9px] text-slate-600 leading-relaxed">畫面描述<span class="text-amber-500/90">選填</span>：留空時由 AI 讀標題自動補，生成後會填回欄位讓你微調重生。標題用空白分行（最多 3 行，白／黃／紅逐行變色）。左右各有自己的<span class="text-amber-500/90">附圖位</span>：有圖的那格直接上版（不生圖、自動改程式壓字），沒圖的那格由 AI 依標題生底圖，左有右無就只生右格。上方「附參考圖」的實景／肖像／地圖用途仍當生圖參考。Logo 與節目標籤一律由程式貼正版檔。</p>
+                        <div class="flex items-center gap-2">
+                            <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-300 cursor-pointer"
+                                   title="開：整張連標題字交給 AI 畫（美術字有設計感，但可能出錯字）；關：AI 只生左右底圖、所有文字由程式壓字，零錯字">
+                                <input id="coverAiTitle" type="checkbox" class="accent-red-600" checked onchange="updateCoverTitleStyleButton()" />標題由 AI 生成
+                                <span class="text-[9px] font-normal text-slate-500">（關閉＝程式壓字，零錯字）</span>
+                            </label>
+                            <!-- 標題創意拉桿（2026-09-08 ON/OFF → 2026-09-09 改 0–4 五段）：
+                                 只有 AI 整張版有意義，合成版的字是程式壓的 -->
+                            <div id="coverTitleStyleBar" class="hidden flex items-center gap-2"
+                                 title="最左＝白／黃／紅逐行配色、版位固定；愈往右愈放給 AI 設計（字句永遠一字不改）">
+                                <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">標題創意</span>
+                                <span class="text-[9px] font-black text-slate-500">規矩</span>
+                                <input id="coverTitleStyleRange" type="range" min="0" max="4" step="1" value="0"
+                                       class="w-24 accent-violet-500 cursor-pointer"
+                                       oninput="setCoverTitleCreativity(this.value)" />
+                                <span class="text-[9px] font-black text-slate-500">奔放</span>
+                                <span id="coverTitleStyleLabel" class="text-[9px] font-black text-violet-300">規矩</span>
+                            </div>
+                        </div>
+                        <!-- 側邊標籤（2026-09-10）：畫成一排小籤（像症狀列表）。
+                             刻意由使用者自己打——讓 AI 自己想標籤等於讓它編字上鏡。
+                             2026-09-10 使用者裁決：功能還要測，前端先藏起來（欄位留在 DOM，
+                             app.js 照樣讀得到空字串，後端也照樣接受 side_labels）。 -->
+                        <input id="coverSideLabels" type="text" maxlength="120"
+                               class="hidden w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-100 input-focus-ring"
+                               title="最多 6 個、每個最多 6 字；用空白或頓號分隔。留空＝不畫。這些字會原樣畫上去，AI 不會自己增減"
+                               placeholder="側邊小標籤（選填，空白分隔）例：食慾不振 體重下降 腹部不適" />
                     </div>
 
                     <!-- YT 直播封面（國內外新聞／整點兩版型共用）：一句標題（半形空格分段）＋副標或整點時間＋日期；
@@ -446,12 +500,30 @@
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                    placeholder="挪威國王哈拉德辭世 開放公眾瞻仰遺容" />
                         </div>
+                        <!-- 整點直播的第二標題（2026-09-08 WP2）：填了就是「雙則」，做法對齊十點不一樣 -->
+                        <div id="ytCoverTitleSecondRow" class="hidden">
+                            <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">第二標題（選填，填了就是雙則）</label>
+                            <input id="ytCoverTitleSecond" type="text" maxlength="60"
+                                   oninput="updateYtLayoutIndicator()"
+                                   class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
+                                   placeholder="直播帶貨美國爆紅砸數十億" />
+                            <div id="ytLayoutIndicator" class="hidden flex items-center gap-1.5 mt-1.5">
+                                <span class="text-[9px] font-black text-slate-600">版面</span>
+                                <button type="button" data-yt-layout="single" onclick="focusYtLayoutField()"
+                                        title="只填第一標題＝單則（標題用半形空格拆成兩行）"
+                                        class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-500 hover:text-white">單則</button>
+                                <button type="button" data-yt-layout="dual" onclick="focusYtLayoutField()"
+                                        title="兩個標題都填＝雙則（上白＝第一則、下黃＝第二則，每行一整句最多 18 字，底圖左右兩張羽化拼成）；點這裡只會把游標移到第二標題"
+                                        class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-500 hover:text-white">雙則</button>
+                                <span class="text-[9px] text-slate-600">判定結果，不是開關</span>
+                            </div>
+                        </div>
                         <div class="flex flex-col gap-1">
                             <textarea id="ytCoverNewsText" rows="3" maxlength="20000"
                                       class="w-full bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-300 input-focus-ring resize-y"
                                       placeholder="新聞內文（選填）——貼上後按「AI 消化標題」，標題會回填到上方欄位，看過再按生成"></textarea>
-                            <button type="button" onclick="handleCoverTitleDigest('yt_cover')"
-                                    class="self-start px-2.5 py-1 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all">AI 消化標題</button>
+                            <button type="button" onclick="handleCoverTitleDigest(ytCoverDigestTarget())"
+                                    class="self-start px-2.5 py-1 rounded-lg text-[10px] font-black bg-violet-700 hover:bg-violet-600 text-white transition-all">AI 消化標題</button>
                         </div>
                         <div class="flex items-center gap-2">
                             <div id="ytCoverFlags" class="flex items-center gap-2 text-[10px] font-black text-slate-300">
@@ -471,15 +543,138 @@
                                     title="底圖不重生，只用新的標題／副標／日期重疊文字"
                                     class="px-2.5 py-1.5 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all disabled:opacity-40">只改文字</button>
                         </div>
-                        <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-300 cursor-pointer"
-                               title="開：整張連標題字交給 AI 畫（更像頻道實際版，但可能出錯字）；關：AI 只生底圖、標題由程式壓字，零錯字">
-                            <input id="ytCoverAiTitle" type="checkbox" class="accent-red-600" checked />標題由 AI 生成
-                            <span class="text-[9px] font-normal text-slate-500">（關閉＝程式壓字，零錯字）</span>
-                        </label>
-                        <p class="text-[9px] text-slate-600 leading-relaxed">附圖選「<span class="text-amber-500/90">原圖放置</span>」就直接當底圖不生圖：1 張單圖、2 張左右雙切、3 張三切（分切時標題一律程式壓字）；其他用途當生圖參考。沒附圖由 AI 依標題生底圖並標「AI示意圖」。LIVE 章、日期、Logo、兩行標題全由程式疊，零錯字；版面依 TVBS NEWS 頻道實際直播封面。</p>
+                        <div class="flex items-center gap-2">
+                            <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-300 cursor-pointer"
+                                   title="開：整張連標題字交給 AI 畫（更像頻道實際版，但可能出錯字）；關：AI 只生底圖、標題由程式壓字，零錯字">
+                                <input id="ytCoverAiTitle" type="checkbox" class="accent-red-600" checked />標題由 AI 生成
+                                <span class="text-[9px] font-normal text-slate-500">（關閉＝程式壓字，零錯字）</span>
+                            </label>
+                            <!-- 底部壓色框（2026-09-08）：整點直播的版面沒有底帶，那個版型不顯示 -->
+                            <button id="ytBottomBandBtn" type="button" onclick="toggleYtBottomBand()"
+                                    title="開：底部加半透明色框（照片透得出來）；關：不畫框，標題靠描邊立在照片上"
+                                    class="hidden px-2.5 py-1 rounded text-[9px] font-black transition-all border border-amber-600 text-slate-400 hover:text-white">底色框 OFF</button>
+                        </div>
+                    </div>
+
+                    <!-- YT 直播直標（2026-09-08 WP3）：透明底 PNG，疊在直播訊號上。
+                         刻意不跟 ytCoverInputs 共用——那一塊裡的附圖與「只改文字」
+                         直標都不要（AI 消化 2026-09-09 使用者要求另外做了一份，見下）。五組按鈕的狀態存在 state.vstrip，換版型不重置。 -->
+                    <div id="ytVstripInputs" class="hidden mt-3 mb-2 flex flex-col gap-2">
+                        <!-- AI 自動消化（2026-09-09 使用者）：貼一段文字（含外電通稿原文）
+                             → 兩段標題＋判定來源，回填下面三欄；不接生圖，編輯看過再自己按。 -->
+                        <div>
+                            <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">AI 自動消化（選填）</label>
+                            <textarea id="vstripNewsText" rows="3"
+                                      class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
+                                      placeholder="貼新聞內文或外電通稿原文，AI 會生兩段標題並判定畫面來源"></textarea>
+                            <div class="flex items-center gap-2 mt-1">
+                                <button id="vstripDigestBtn" type="button" onclick="handleVstripTitleDigest()"
+                                        class="px-2.5 py-1.5 rounded-lg text-[10px] font-black bg-violet-700 hover:bg-violet-600 text-white transition-all disabled:opacity-40">AI 消化標題</button>
+                                <span class="text-[9px] text-slate-600">回填後看過沒問題再按「生成」</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">第一標題（內側欄，最多 12 格）</label>
+                            <input id="vstripTitle" type="text" maxlength="60" oninput="onVstripInput()"
+                                   class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
+                                   placeholder="明早晚涼「中午仍破30度」" />
+                        </div>
+                        <div>
+                            <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">第二標題（選填，外側欄，最多 14 格）</label>
+                            <input id="vstripTitleSecond" type="text" maxlength="60" oninput="onVstripInput()"
+                                   class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
+                                   placeholder="北臺灣週三轉濕涼 留意日夜溫差" />
+                            <!-- 格數是連續英數字算一格（30＝一格），所以不能用字元數估 -->
+                            <p id="vstripCellHint" class="text-[9px] text-slate-600 mt-1"></p>
+                        </div>
+                        <div>
+                            <label class="block text-[9px] font-black text-slate-500 uppercase tracking-[0.16em] mb-1">來源句（選填）</label>
+                            <input id="vstripSource" type="text" maxlength="40" oninput="onVstripInput()"
+                                   class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
+                                   placeholder="美聯社" />
+                            <p class="text-[9px] text-slate-600 mt-1">只要填來源名，「畫面來源：」會自動補上</p>
+                        </div>
+
+                        <div class="flex items-center gap-1.5">
+                            <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">小標</span>
+                            <button type="button" data-vstrip-variant data-vstrip-value="normal" onclick="setVstripVariant('normal')"
+                                    title="LIVE 章下方不掛小標"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">一般</button>
+                            <button type="button" data-vstrip-variant data-vstrip-value="original_audio" onclick="setVstripVariant('original_audio')"
+                                    title="LIVE 章下方掛白底紅字「原音呈現」"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">原音呈現</button>
+                            <button type="button" data-vstrip-variant data-vstrip-value="ai_translation" onclick="setVstripVariant('ai_translation')"
+                                    title="LIVE 章下方掛白底紅字「AI即時翻譯」"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">AI即時翻譯</button>
+                        </div>
+
+                        <div class="flex items-center gap-1.5">
+                            <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">直標位置</span>
+                            <button type="button" data-vstrip-side data-vstrip-value="left" onclick="setVstripTitleSide('left')"
+                                    title="直標貼畫面左緣"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">靠左</button>
+                            <button type="button" data-vstrip-side data-vstrip-value="right" onclick="setVstripTitleSide('right')"
+                                    title="直標貼畫面右緣（整組鏡射）"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">靠右</button>
+                        </div>
+
+                        <div class="flex items-center gap-1.5">
+                            <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">Logo 角落</span>
+                            <button type="button" data-vstrip-corner data-vstrip-value="tl" onclick="setVstripLogoCorner('tl')"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">左上</button>
+                            <button type="button" data-vstrip-corner data-vstrip-value="bl" onclick="setVstripLogoCorner('bl')"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">左下</button>
+                            <button type="button" data-vstrip-corner data-vstrip-value="tr" onclick="setVstripLogoCorner('tr')"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">右上</button>
+                            <button type="button" data-vstrip-corner data-vstrip-value="br" onclick="setVstripLogoCorner('br')"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white disabled:cursor-not-allowed">右下</button>
+                        </div>
+
+                        <!-- 來源句沒填就整列收起來：那時候選角落沒有意義。
+                             2026-09-09 使用者：四角可選，跟 Logo 同一角時後端自動讓開。 -->
+                        <div id="vstripSourceRow" class="hidden flex items-center gap-1.5">
+                            <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">來源句位置</span>
+                            <button type="button" data-vstrip-source data-vstrip-value="tl" onclick="setVstripSourceCorner('tl')"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">左上</button>
+                            <button type="button" data-vstrip-source data-vstrip-value="bl" onclick="setVstripSourceCorner('bl')"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">左下</button>
+                            <button type="button" data-vstrip-source data-vstrip-value="tr" onclick="setVstripSourceCorner('tr')"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">右上</button>
+                            <button type="button" data-vstrip-source data-vstrip-value="br" onclick="setVstripSourceCorner('br')"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-red-600 text-slate-400 hover:text-white">右下</button>
+                        </div>
+
+                        <div class="flex items-center gap-2">
+                            <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-300 cursor-pointer"
+                                   title="取消後不貼 LIVE 章（非直播的訊號也用得到這塊直標）">
+                                <input id="vstripLive" type="checkbox" class="accent-red-600" checked onchange="toggleVstripLive(this)" />LIVE 章
+                                <span class="text-[9px] font-normal text-slate-500">（取消＝不貼）</span>
+                            </label>
+                        </div>
                     </div>
 
                     <div id="digestControlsRow" class="grid grid-cols-2 gap-2 mb-2">
+                        <!-- CG 美術創意（2026-09-10）：記者版與編輯各版型（含播出鏡面）共用。
+                             YT 封面與十點封面走另一個端點，各有自己的拉桿，不吃這一條。 -->
+                        <div id="cgCreativityBar" class="flex items-center gap-2 bg-black/40 px-2 py-1.5 rounded-lg"
+                             title="0＝現行成品；愈往右，版面排法愈放（分區→英雄區→破格→斜切傾斜），美術處理也跟著加重。重點的數量、安全留白與字句不受影響；不會拿真實地圖當主視覺。">
+                            <span class="text-[9px] font-black text-slate-500">規矩</span>
+                            <input id="cgCreativityRange" type="range" min="0" max="4" step="1" value="0"
+                                   class="flex-1 accent-violet-500 cursor-pointer"
+                                   oninput="setCgCreativity(this.value)" />
+                            <span class="text-[9px] font-black text-slate-500">最狂</span>
+                            <span id="cgCreativityLabel" class="text-[10px] font-black text-violet-300 w-12 text-right">規矩</span>
+                        </div>
+                        <!-- 消化程度（2026-09-09：三顆鈕改成三段拉桿，比照標題創意那條） -->
+                        <div class="flex items-center gap-2 bg-black/40 px-2 py-1.5 rounded-lg"
+                             title="不改字＝貼上的內文一字不改，AI 只做版面設計；字極少＝只留一個重點；字少＝濃縮成 1–3 個重點；字多＝完整重點條列；字超多＝最多八點、每行更長">
+                            <span class="text-[9px] font-black text-slate-500">不改字</span>
+                            <input id="digestDensityRange" type="range" min="0" max="4" step="1" value="2"
+                                   class="flex-1 accent-red-500 cursor-pointer"
+                                   oninput="setDigestDensityLevel(this.value)" />
+                            <span class="text-[9px] font-black text-slate-500">字超多</span>
+                            <span id="digestDensityLabel" class="text-[10px] font-black text-red-300 w-12 text-right">字少</span>
+                        </div>
                         <div class="flex bg-black/40 p-1 rounded-lg">
                             <button data-tone="light" onclick="switchTone('light')"
                                     title="亮色調：淺底深字，白天／日常題材"
@@ -488,21 +683,11 @@
                                     title="暗色調：深底亮字，災害／突發題材（預設）"
                                     class="tone-btn tone-active flex-1 px-2 py-1.5 rounded-md text-[10px] font-black transition-all"><span class="tone-dot tone-dot-dark"></span>色調暗</button>
                         </div>
-                        <div class="flex bg-black/40 p-1 rounded-lg">
-                            <button data-density="verbatim" onclick="switchDigestDensity('verbatim')"
-                                    title="使用者貼的內文一字不改，AI 只做版面設計"
-                                    class="flex-1 px-1 py-1.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">不改字</button>
-                            <button data-density="simplified" onclick="switchDigestDensity('simplified')"
-                                    title="濃縮成 1–3 個重點，單一視覺焦點"
-                                    class="density-active flex-1 px-1 py-1.5 rounded-md text-[10px] font-black transition-all">字少</button>
-                            <button data-density="standard" onclick="switchDigestDensity('standard')"
-                                    title="完整重點條列，資訊量較高"
-                                    class="flex-1 px-1 py-1.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all">字多</button>
-                        </div>
                     </div>
 
                     <div class="flex flex-wrap items-center gap-1.5 mb-3">
-                        <div class="flex bg-black/40 p-1 rounded-lg">
+                        <!-- 生圖引擎：直標不生圖，所以那個版型整組收起來（hides.engine） -->
+                        <div id="p1EngineRow" class="flex bg-black/40 p-1 rounded-lg">
                             <button id="p1-engine-gpt" onclick="switchEngine('gpt')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-blue-600 bg-blue-600 text-white">GPT</button>
                             <button id="p1-engine-gemini" onclick="switchEngine('gemini')" class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-blue-600 text-slate-400 hover:text-white">Gemini</button>
                         </div>
@@ -510,6 +695,16 @@
                              忽略這個設定，擺著只會讓人以為按了有用。第二／三頁保留。 -->
                         <button id="p1-btnSafeFrame" onclick="toggleSafeFrame()" title="開啟後滿版生成，後端再置入安全框" class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-emerald-600 bg-emerald-600 text-white">安全框 ON</button>
                         <button id="p1-btnStamp" onclick="toggleStamp()" title="最後一行加 <蓋章> 結論條；指令欄若寫到蓋章，以指令欄為準" class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-amber-600 text-slate-400 hover:text-white">蓋章 OFF</button>
+                        <button id="p1-btnHole" onclick="toggleHole()" title="播出鏡面：影片位置蓋白框給後製對位；OFF 則保留完整底圖，後製自己放影片" class="hidden px-2.5 py-1 rounded text-[9px] font-black transition-all border border-cyan-600 text-slate-400 hover:text-white">壓框 OFF</button>
+                        <!-- 挖空方向（2026-09-08 WP1）：左切／右切合併成同一個版型後改成這組按鈕 -->
+                        <div id="holeSideRow" class="hidden flex items-center gap-1.5">
+                            <button type="button" data-hole-side="left" onclick="setHoleSide('left')"
+                                    title="影片位置在左半，內容自動靠右編排"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-cyan-600 bg-cyan-600 text-white">左側挖空</button>
+                            <button type="button" data-hole-side="right" onclick="setHoleSide('right')"
+                                    title="影片位置在右半，內容自動靠左編排"
+                                    class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-cyan-600 text-slate-400 hover:text-white">右側挖空</button>
+                        </div>
                     </div>
 
                     <button id="aiBtn" onclick="handleOneClickGenerate()"
@@ -530,7 +725,13 @@
                     <div id="oneClickResult" class="hidden">
                         <div class="flex items-center justify-between gap-3 mb-3">
                             <span id="oneClickLabel" class="text-[10px] font-black uppercase tracking-widest text-violet-400">AI Generated</span>
-                            <a id="oneClickDownload" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg.jpg">下載圖片</a>
+                            <div class="flex items-center gap-2">
+                                <!-- 下載檔名（選填）：留空自動帶 日期_版型_標題，見 app.js downloadFileName -->
+                                <input id="downloadName" type="text" maxlength="120"
+                                       class="w-40 bg-slate-950/80 border border-slate-800 rounded-md px-2 py-1 text-[10px] text-slate-100 input-focus-ring"
+                                       placeholder="檔名（選填）" />
+                                <a id="oneClickDownload" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg.jpg">下載圖片</a>
+                            </div>
                         </div>
                         <img id="oneClickImage" alt="一鍵生成的新聞 CG" class="w-full rounded-lg border border-slate-800" />
 
@@ -542,7 +743,7 @@
                                        class="flex-1 bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                        placeholder="追加修改，如：把標題改成紅色／左邊那張圖換成長條圖" />
                                 <button id="refineBtn" onclick="handleRefine()"
-                                        class="px-3 py-2 rounded-lg text-[10px] font-black bg-violet-600 hover:bg-violet-500 text-white transition-all active:scale-95 disabled:opacity-50 flex items-center gap-1.5">
+                                        class="px-3 py-2 rounded-lg text-[10px] font-black bg-red-600 hover:bg-red-500 text-white transition-all active:scale-95 disabled:opacity-50 flex items-center gap-1.5">
                                     <span id="refineBtnText">修改</span>
                                     <div id="refineLoading" class="hidden w-3.5 h-3.5 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
                                 </button>
@@ -709,7 +910,7 @@
                         </div>
 
                         <button id="btnBg"
-                                class="mt-4 w-full py-3 bg-violet-600 hover:bg-violet-500 rounded-lg text-xs font-black transition-all shadow-lg shadow-violet-600/10 active:scale-95 disabled:opacity-50 uppercase tracking-widest">
+                                class="mt-4 w-full py-3 bg-red-600 hover:bg-red-500 rounded-lg text-xs font-black transition-all shadow-lg shadow-red-600/10 active:scale-95 disabled:opacity-50 uppercase tracking-widest">
                             生成 AI 背景
                         </button>
                         <button id="btnExport"
@@ -792,7 +993,7 @@
                     </span>
                 </label>
                 <button id="generateImageBtn" onclick="handleImageGeneration()" disabled
-                        class="mt-4 w-full py-3 bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed rounded-lg text-xs font-black transition-all flex items-center justify-center gap-2 shadow-lg shadow-violet-600/10 active:scale-95">
+                        class="mt-4 w-full py-3 bg-red-600 hover:bg-red-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed rounded-lg text-xs font-black transition-all flex items-center justify-center gap-2 shadow-lg shadow-red-600/10 active:scale-95">
                     <span id="generateImageBtnText">使用 GPT 生成圖片</span>
                     <div id="generateImageLoading" class="hidden w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
                 </button>
@@ -801,7 +1002,13 @@
             <div id="generatedImageResult" class="hidden mt-4 rounded-xl border border-slate-800 bg-slate-950/60 p-4">
                 <div class="flex items-center justify-between gap-3 mb-3">
                     <span id="generatedImageProviderLabel" class="text-[10px] font-black uppercase tracking-widest text-violet-400">AI Generated Preview</span>
-                    <a id="downloadGeneratedImage" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg.jpg">下載圖片</a>
+                    <div class="flex items-center gap-2">
+                        <!-- 第二頁自己的檔名欄（ID 不能重複，值也不該跟第一頁互相汙染） -->
+                        <input id="downloadNameAdvanced" type="text" maxlength="120"
+                               class="w-40 bg-slate-950/80 border border-slate-800 rounded-md px-2 py-1 text-[10px] text-slate-100 input-focus-ring"
+                               placeholder="檔名（選填）" />
+                        <a id="downloadGeneratedImage" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg.jpg">下載圖片</a>
+                    </div>
                 </div>
                 <img id="generatedImage" alt="AI 生成的新聞 CG 預覽" class="w-full rounded-lg border border-slate-800" />
             </div>

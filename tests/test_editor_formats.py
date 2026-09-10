@@ -28,16 +28,19 @@ APP_JS = pathlib.Path(__file__).resolve().parent.parent / "app.js"
 BROADCAST_MARKER = "BROADCAST INSERT LAYOUT"
 
 
+ALL_KEYS = editor_formats.EDITOR_FORMAT_KEYS + editor_formats.EDITOR_FORMAT_ALIAS_KEYS
+
+
 class RoleGuardTests(unittest.TestCase):
     def test_reporter_never_gets_editor_rules(self):
-        for key in editor_formats.EDITOR_FORMAT_KEYS:
+        for key in ALL_KEYS:
             with self.subTest(key=key):
                 self.assertEqual(editor_formats.digest_rules(key, "記者"), "")
                 self.assertIsNone(editor_formats.hole_side(key, "記者"))
 
     def test_reporter_digest_prompt_is_untouched(self):
         plain = build_digest_instructions("記者", "standard", "資料圖表")
-        for key in editor_formats.EDITOR_FORMAT_KEYS:
+        for key in ALL_KEYS:
             with self.subTest(key=key):
                 self.assertEqual(
                     build_digest_instructions("記者", "standard", "資料圖表", editor_format=key),
@@ -60,10 +63,10 @@ class RoleGuardTests(unittest.TestCase):
 
 class BroadcastDigestRulesTests(unittest.TestCase):
     def test_only_broadcast_formats_inject_the_block(self):
-        for key in editor_formats.EDITOR_FORMAT_KEYS:
+        for key in ALL_KEYS:
             with self.subTest(key=key):
                 text = build_digest_instructions("編輯", "simplified", "資料圖表", editor_format=key)
-                self.assertEqual(BROADCAST_MARKER in text, key.startswith("broadcast_"))
+                self.assertEqual(BROADCAST_MARKER in text, key.startswith("broadcast"))
 
     def test_each_side_talks_about_its_own_side(self):
         left = build_digest_instructions("編輯", "simplified", "資料圖表", editor_format="broadcast_left")
@@ -95,7 +98,7 @@ class BroadcastDigestRulesTests(unittest.TestCase):
 
     def test_rules_override_the_centred_layout_sentence(self):
         text = editor_formats.get("broadcast_left")["digest_rules"]
-        self.assertIn("FOR THIS FORMAT IT IS NOT CENTRED", text)
+        self.assertIn("FOR THIS FORMAT THE BODY IS NOT CENTRED", text)
 
 
 class BroadcastStampSwitchTests(unittest.TestCase):
@@ -120,12 +123,14 @@ class BroadcastStampSwitchTests(unittest.TestCase):
             self.assertEqual(editor_formats.digest_rules(key, "編輯", stamp=None), base)
 
     def test_stamp_off_keeps_sides_straight(self):
+        # 2026-09-09（第三批）：OFF 也要填滿底帶，第 5 條改成把最後一張卡下移跨全寬，
+        # 剩下的卡留在內容半邊——左右不能寫反。
         left = editor_formats.digest_rules("broadcast_left", "編輯", stamp=False)
-        self.assertIn("lowest element of the right half", left)
-        self.assertIn("reserved left area", left)
+        self.assertIn("remaining cards stay stacked in the right half", left)
+        self.assertIn("from the left edge across to the right edge", left)
         right = editor_formats.digest_rules("broadcast_right", "編輯", stamp=False)
-        self.assertIn("lowest element of the left half", right)
-        self.assertIn("reserved right area", right)
+        self.assertIn("remaining cards stay stacked in the left half", right)
+        self.assertIn("from the right edge across to the left edge", right)
 
     def test_off_rules_still_carry_no_digits(self):
         for key in ("broadcast_left", "broadcast_right"):
@@ -229,6 +234,27 @@ class ComposeOutputTests(unittest.TestCase):
             "舊的純字標備援不見了",
         )
 
+    def test_v_left_stroke_reaches_the_t_stem_top(self):
+        """2026-09-09：兩個 Logo 檔的「V」左筆畫上半截都被截掉，看起來像沒點的 i。
+
+        正版 wordmark（使用者提供的播出畫面截圖）裡，V 左筆畫的上緣與 T 直劃的
+        上緣切齊、平切收邊；修好後補回的就是這一截。這裡取上半截裡的點當哨兵，
+        避免哪天又被舊素材蓋回去。
+        """
+        cases = [
+            # 檔名, V 左筆畫上半截裡必須不透明的取樣點 (x, y)
+            ("tvbs-logo-white.png", [(90, 55), (88, 60), (86, 65)]),
+            ("tvbs-logo-white-plain.png", [(330, 93), (325, 105), (318, 120)]),
+        ]
+        for name, points in cases:
+            with self.subTest(name), Image.open(compose.BRAND_DIR / name) as logo:
+                alpha = logo.convert("RGBA").split()[3]
+                for x, y in points:
+                    self.assertGreater(
+                        alpha.getpixel((x, y)), 200,
+                        f"{name} 的 V 左筆畫在 ({x},{y}) 是空的——上半截又被截掉了",
+                    )
+
     def test_white_logo_asset_exists_and_is_white(self):
         self.assertTrue(compose.TVBS_LOGO_WHITE.exists(), "白色 Logo 素材不見了")
         with Image.open(compose.TVBS_LOGO_WHITE) as logo:
@@ -253,10 +279,15 @@ class CoverPromptTests(unittest.TestCase):
         fields = {
             "badge_text": "ON AIR",
             "date_text": "2026/09/03",
-            "title_left": "政府明年勞保撥補上看1300億",
-            "title_right": "病理醫師月薪65萬仍缺工",
+            # 2026-09-07 起模板收的是拆好的行，不是整條標題
+            "title_left_lines": "  Line 1: 政府明年勞保撥補\n  Line 2: 上看1300億",
+            "title_right_lines": "  Line 1: 病理醫師月薪65萬\n  Line 2: 仍缺工",
             "visual_left": "政府大樓與金幣",
             "visual_right": "病理科實驗室",
+            # 2026-09-08 設計標題開關：預設 plain＝不追加任何一段
+            "title_style_clause": "",
+            # 側邊標籤（2026-09-10）：沒填就是空字串，prompt 與過去逐字元相同
+            "side_labels_block": "",
         }
         fields.update(overrides)
         return editor_formats.COVER_AI_PROMPT_TEMPLATE.format(**fields)
@@ -264,12 +295,24 @@ class CoverPromptTests(unittest.TestCase):
     def test_every_user_string_reaches_the_prompt(self):
         prompt = self.render()
         for needle in (
-            "十點不一樣", "ON AIR", "2026/09/03", "AI示意圖",
-            "政府明年勞保撥補上看1300億", "病理醫師月薪65萬仍缺工",
+            "十點不一樣", "AI示意圖",
+            "政府明年勞保撥補", "上看1300億", "病理醫師月薪65萬", "仍缺工",
             "政府大樓與金幣", "病理科實驗室",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, prompt)
+
+    def test_the_date_and_on_air_tag_are_no_longer_asked_of_the_model(self):
+        """2026-09-10：兩者改由程式貼（compose.paste_cover_header_right）。
+
+        原本寫在 prompt 給模型畫，而 ensure_ai_header_band 補厚標頭帶時會把模型畫的
+        日期與紅標切成上下兩截、下面留一層殘影——固定素材本來就不該交給模型。
+        prompt 這邊要一併拿掉，否則模型照畫、程式再蓋，等於白花 token 又多一個變因。
+        """
+        prompt = self.render()
+        self.assertNotIn("2026/09/03", prompt)
+        self.assertIn("Draw NOTHING in the header band", prompt)
+        self.assertIn("keep the WHOLE band clean empty navy", prompt)
 
     def test_prompt_forbids_the_model_drawing_a_logo(self):
         prompt = self.render()
@@ -284,12 +327,18 @@ class CoverPromptTests(unittest.TestCase):
         self.assertNotIn("Programme name, as a SMALL blue rounded tag", prompt)
         self.assertNotIn("FLAT, SOLID WHITE", prompt)
 
-    def test_headlines_must_vary_colour_per_line(self):
-        # 範例圖的標題是分行、每行不同顏色（白／紅／金），不是整段一個顏色
+    def test_headlines_colour_and_line_count_follow_the_labels(self):
+        """2026-09-08：配色改成依**段落**標在每一行上，不再是「第 1 行白、第 2 行黃」。
+
+        根因是 AI 整張版把 3 行併成 2 行、只上白黃兩色（使用者回報）。行數與顏色現在
+        都逐行標在 {title_left_lines} 清單裡，模板只要求模型照標記印。
+        """
         prompt = self.render()
-        self.assertIn("STACKED LINES", prompt)
-        self.assertIn("COLOUR EACH LINE DIFFERENTLY", prompt)
-        self.assertIn("Never render a whole headline in one flat colour", prompt)
+        self.assertIn("STACKED ON THE LINES GIVEN ABOVE", prompt)
+        self.assertIn("THE NUMBER OF LINES AND WHERE THEY BREAK ARE FIXED", prompt)
+        self.assertIn("never merge two listed lines onto one row", prompt)
+        self.assertIn("COLOUR EACH LINE EXACTLY AS LABELLED", prompt)
+        self.assertIn("never recolour a line", prompt)
 
     def test_prompt_forbids_extra_text(self):
         self.assertIn("Do not translate them", self.render())
@@ -328,19 +377,31 @@ class CoverVisualFallbackTests(unittest.TestCase):
         self.assertEqual(request.visual_left, "")
         self.assertEqual(request.visual_right, "")
 
-    def test_both_supplied_skips_the_api_entirely(self):
+    def test_both_supplied_still_asks_for_portrait_subjects(self):
+        # 2026-09-07：描述都填了也要打一次文字模型——不打就沒有肖像名單，具名真人會被畫成背影。
+        # 使用者填的描述仍然優先，AI 只提供名單。
+        import json
         import main
+        from types import SimpleNamespace
         called = []
+
+        def fake(**kw):
+            called.append(kw)
+            payload = {"visual_left": "AI 亂改的描述", "visual_right": "AI 亂改的描述",
+                       "portrait_subjects_left": ["梅爾茨"], "portrait_subjects_left_en": ["Friedrich Merz"],
+                       "portrait_subjects_right": [], "portrait_subjects_right_en": []}
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload, ensure_ascii=False)))])
+
         original = main.digest_completion
-        main.digest_completion = lambda **kw: called.append(kw)
+        main.digest_completion = fake
         try:
-            result = main.resolve_cover_visuals(
-                self.req(visual_left="政府大樓", visual_right="實驗室")
-            )
+            result = main.resolve_cover_visuals(self.req(visual_left="政府大樓", visual_right="實驗室"))
         finally:
             main.digest_completion = original
-        self.assertEqual(result, ("政府大樓", "實驗室"))
-        self.assertEqual(called, [], "兩欄都有值時不該打 API")
+        self.assertEqual(tuple(result), ("政府大樓", "實驗室"))
+        self.assertEqual(len(called), 1)
+        self.assertEqual(main.cover_portraits(result, 0), (["梅爾茨"], ["Friedrich Merz"]))
+        self.assertEqual(main.cover_portraits(result, 1), ([], []))
 
     def test_user_value_wins_over_the_derived_one(self):
         import main
@@ -452,7 +513,8 @@ class LockScopeTests(FrontendParityTests):
     """
 
     def test_broadcast_locks_only_the_chart_type(self):
-        for key in ("broadcast_left", "broadcast_right"):
+        # 2026-09-08 WP1：左切／右切合併成單一個 broadcast
+        for key in ("broadcast",):
             with self.subTest(key=key):
                 entry = self.js_entries()[key]
                 locks = re.search(r"locks:\s*\{([^}]*)\}", entry).group(1)
@@ -462,7 +524,7 @@ class LockScopeTests(FrontendParityTests):
 
     def test_broadcast_still_presets_the_recommended_values(self):
         # 解鎖不等於不幫忙：切過去仍要幫使用者調好，只是調完可以改
-        for key in ("broadcast_left", "broadcast_right"):
+        for key in ("broadcast",):
             with self.subTest(key=key):
                 presets = re.search(r"presets:\s*\{([^}]*)\}", self.js_entries()[key])
                 self.assertIsNotNone(presets, "播出鏡面應該還有預設值")

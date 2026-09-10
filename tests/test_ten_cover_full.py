@@ -29,21 +29,26 @@ def _decode(data) -> Image.Image:
 
 
 class FormatTableTests(unittest.TestCase):
-    def test_two_independent_formats(self):
-        self.assertEqual(editor_formats.cover_layout("ten_cover"), "split")
+    def test_full_is_an_alias_of_the_merged_ten_cover(self):
+        # 2026-09-08 WP1：兩個版型合併成一個 key，版面由第二標題自動判定（auto）。
+        # 舊 key ten_cover_full 降為後端別名，仍然要解析得出「滿版」。
+        self.assertEqual(editor_formats.cover_layout("ten_cover"), "auto")
         self.assertEqual(editor_formats.cover_layout("ten_cover_full"), "full")
         self.assertEqual(editor_formats.cover_layout("default"), "")
         self.assertIn("滿版", editor_formats.get("ten_cover_full")["label"])
-        self.assertIn("雙切", editor_formats.get("ten_cover")["label"])
+        self.assertEqual(editor_formats.get("ten_cover")["label"], "十點不一樣")
 
     def test_full_prompt_has_one_photo_and_one_headline(self):
         text = editor_formats.COVER_AI_FULL_PROMPT_TEMPLATE.format(
-            badge_text="ON AIR", date_text="2026/09/07", title_left="全球3100條 躍動冰川", visual_left="冰川崩落"
+            badge_text="ON AIR", date_text="2026/09/07", side_labels_block="",
+            title_left_lines="  Line 1: 全球3100條\n  Line 2: 躍動冰川", visual_left="冰川崩落",
+            title_style_clause="",   # 2026-09-08 設計標題開關，預設 plain
         )
         self.assertIn("ONE single photograph", text)
         self.assertNotIn("DIAGONAL seam", text)
         self.assertNotIn("RIGHT panel", text)
-        self.assertIn("全球3100條 躍動冰川", text)
+        self.assertIn("全球3100條", text)
+        self.assertIn("躍動冰川", text)
         self.assertIn("do NOT write the programme name", text)
 
 
@@ -51,9 +56,10 @@ class FullEndpointTests(unittest.TestCase):
     def _post(self, body):
         calls = []
 
-        def fake_full(visual, provider, references=None):
+        def fake_full(visual, provider, references=None, *args, **kwargs):
             calls.append(visual)
-            return _png_bytes(size=(1600, 900), colour=GREEN)
+            # 2026-09-07 起這幾支回 (bytes, 生圖模型名)，落檔要記 image_model
+            return _png_bytes(size=(1600, 900), colour=GREEN), "fake-image-model"
 
         with patch.object(main, "_cover_full_image", side_effect=fake_full), \
              patch.object(main, "_cover_panel_image", side_effect=AssertionError("滿版不該生 1:1 格圖")), \
@@ -99,11 +105,13 @@ class FullEndpointTests(unittest.TestCase):
         w, h = img.size
         self.assertEqual(img.getpixel((w // 2, round(h * 0.30))), GREEN)
 
-    def test_full_uses_supplied_visual_without_text_model(self):
+    def test_full_uses_supplied_visual_but_still_resolves_portraits(self):
+        # 2026-09-07：描述有填仍打一次文字模型拿肖像名單；畫面描述採使用者填的
         res, calls, resolve = self._post({"title_left": "標題", "layout": "full", "mode": "composite", "visual_left": "冰川"})
         self.assertEqual(res.status_code, 200, res.text)
         self.assertEqual(calls, ["冰川"])
-        self.assertFalse(resolve.called)
+        self.assertTrue(resolve.called)
+        self.assertEqual(res.json()["visual_left"], "冰川")
 
     def test_full_ai_mode_uses_full_template(self):
         seen = {}

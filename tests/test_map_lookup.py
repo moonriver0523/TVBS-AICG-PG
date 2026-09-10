@@ -293,3 +293,21 @@ class BasemapLabelTests(unittest.TestCase):
             self._render(mark=False),
             self._render(mark=False, labels=["廟口夜市", "西定路", "大武崙"]),
         )
+
+
+class BuildingStationTests(unittest.TestCase):
+    """2026-09-08：路竹車站在 OSM 是 class=building／type=train_station，整類 building 被擋 → 六次查無座標。"""
+
+    def test_train_station_tagged_as_building_is_accepted(self):
+        hit = {"class": "building", "type": "train_station", "name": "路竹車站",
+               "display_name": "路竹車站, 新民路, 鴨寮里, 路竹區, 半路竹, 高雄市, 821, 臺灣"}
+        self.assertTrue(map_lookup._looks_like_the_place_asked_for("高雄市 路竹區 路竹車站", hit))
+
+    def test_other_buildings_still_rejected(self):
+        for typ in ("yes", "retail", "commercial", "house"):
+            hit = {"class": "building", "type": typ, "name": "北海岸", "display_name": "北海岸, 北屯區, 臺中市"}
+            self.assertFalse(map_lookup._looks_like_the_place_asked_for("北海岸", hit), typ)
+
+    def test_public_transport_class_accepted(self):
+        hit = {"class": "public_transport", "type": "station", "name": "岡山車站", "display_name": "岡山車站, 岡山區, 高雄市"}
+        self.assertTrue(map_lookup._looks_like_the_place_asked_for("岡山車站", hit))

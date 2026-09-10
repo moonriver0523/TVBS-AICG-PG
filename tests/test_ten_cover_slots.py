@@ -45,9 +45,10 @@ class SlotTests(unittest.TestCase):
     def _post(self, body, panel_colour=GREEN, visuals=("左景", "右景")):
         calls = []
 
-        def fake_panel(visual, provider, references=None):
+        def fake_panel(visual, provider, references=None, *args, **kwargs):
             calls.append(visual)
-            return _png_bytes(colour=panel_colour)
+            # 2026-09-07 起這幾支回 (bytes, 生圖模型名)，落檔要記 image_model
+            return _png_bytes(colour=panel_colour), "fake-image-model"
 
         with patch.object(main, "_cover_panel_image", side_effect=fake_panel), \
              patch.object(main, "resolve_cover_visuals", return_value=visuals) as resolve, \
@@ -81,8 +82,9 @@ class SlotTests(unittest.TestCase):
         w, h = img.size
         self.assertEqual(img.getpixel((w // 4, round(h * 0.3))), RED)
         self.assertEqual(img.getpixel((3 * w // 4, round(h * 0.3))), GREEN)
-        # 有圖的左格畫面描述用標題佔位，不留空讓模型亂補
-        self.assertEqual(resolve.call_args.args[0].visual_left, "尼泊爾災區 無人機空拍 滅村慘況")
+        # 2026-09-08 WP1：畫面描述欄已從 UI 移除，有圖那格不再用標題預填——
+        # 那格根本不生圖，預填只是為了回填一個已經不存在的欄位。
+        self.assertEqual(resolve.call_args.args[0].visual_left, "")
 
     def test_right_only_generates_left_panel(self):
         res, calls, resolve = self._post(_payload(right=BLUE))
@@ -104,9 +106,9 @@ class SlotTests(unittest.TestCase):
     def test_visual_supplied_for_generated_side_skips_the_text_model(self):
         res, calls, resolve = self._post(_payload(left=RED, visual_right="淹水街道"), visuals=("x", "x"))
         self.assertEqual(res.status_code, 200, res.text)
-        # resolve_cover_visuals 是真函式時兩欄都有值就不打 API；這裡驗證的是傳進去的欄位都已填滿
+        # 使用者自己填的那欄照樣原樣傳下去；有附圖那格不再預填（2026-09-08 WP1）
         req = resolve.call_args.args[0]
-        self.assertEqual(req.visual_left, "尼泊爾災區 無人機空拍 滅村慘況")
+        self.assertEqual(req.visual_left, "")
         self.assertEqual(req.visual_right, "淹水街道")
 
     def test_slots_take_precedence_over_legacy_asis_list(self):
