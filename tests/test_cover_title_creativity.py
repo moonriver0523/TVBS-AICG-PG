@@ -36,8 +36,15 @@ LEVELS = range(editor_formats.COVER_AI_TITLE_LEVEL_MIN,
                editor_formats.COVER_AI_TITLE_LEVEL_MAX + 1)
 
 
-def _clause(level):
+def _clause(level, seed=0):
     return editor_formats.cover_ai_title_style_clause(level)
+
+
+def _brief(level, titles=("尼泊爾災區 無人機空拍",), seed=0):
+    """CANVAS 正後方那塊設計綱要。2026-09-11 第二輪起數字全部住在這裡——
+    第一輪放在 TYPOGRAPHY 段尾（prompt 第 8,000 字元之後），實拍四級長得一模一樣。
+    招式是隨機抽的，所以比對綱要的測試一律釘 seed。"""
+    return editor_formats.cover_design_brief(level, titles=titles, seed=seed)
 
 
 class LadderTests(unittest.TestCase):
@@ -79,85 +86,168 @@ class LadderTests(unittest.TestCase):
     def test_freedoms_only_ever_grow(self):
         """單調性：低一級不得先解放高一級才給的東西。
 
-        2026-09-09 使用者看完 0–4 實拍梯子後改的級距：舊 2（1.2 倍那級）與舊 3
-        「差距不大」，融成新 2；舊 4 下移成 3；最上面補一個更誇張的新 4。
+        2026-09-11 第九批重訂級距（使用者：「1~4 都還可以更有變化」）：四級改綁三個
+        **數字**主軸——標題塊佔畫面高度％、字級落差倍數、招式件數。形容詞會被圖模
+        平均掉，數字不會（2026-09-10 斜切線那次的教訓）。
         """
-        # 整組 house style（行內關鍵詞換色、1.5–2 倍落差）：2 級才開
-        self.assertNotIn("PULL", _clause(1))
+        # 字級落差：1 級一種字級，2 級起才有階層
+        self.assertIn("Every row is the SAME size", _brief(1))
         for level in (2, 3, 4):
             with self.subTest(level=level):
-                self.assertIn("PULL", _clause(level))
-                self.assertIn("one and a half to two times", _clause(level))
-        # 版位自由與小圖示：3 級才開
+                self.assertIn("Row sizes differ", _brief(level))
+        # 版位自由：3 級才開
         for level in (1, 2):
             with self.subTest(level=level):
-                self.assertNotIn("pictograms", _clause(level))
-                self.assertNotIn("place the block anywhere", _clause(level))
+                self.assertNotIn("PLACEMENT IS FREED", _clause(level))
         for level in (3, 4):
             with self.subTest(level=level):
-                self.assertIn("pictograms", _clause(level))
-                self.assertIn("place the block anywhere", _clause(level))
-        # 誇張幅度（傾斜、疊字、多層描邊、爆裂裝飾）：只有最高級
+                self.assertIn("PLACEMENT IS FREED", _clause(level))
+        # 誇張幅度（傾斜、三層描邊、兩個反白塊、第二焦點）：只有最高級
         for level in (1, 2, 3):
             with self.subTest(level=level):
                 self.assertNotIn("GO FURTHER", _clause(level))
         self.assertIn("GO FURTHER", _clause(4))
 
+    def test_the_ladder_is_pinned_to_numbers_not_adjectives(self):
+        """三個數字主軸每一級都要往上跳一階，而且要寫成數字。
+
+        2026-09-10 那輪四級只差在字的表面（描邊層數、材質、色數），縮圖上看不出來。
+        塊高％／落差倍數／招式件數三樣都是**可量測**的，模型照得動、人也看得出來。
+        """
+        self.assertEqual(_brief(0), "")
+        for level, height in ((1, "25%"), (2, "35%"), (3, "45%"), (4, "55%")):
+            with self.subTest(level=level):
+                self.assertIn(f"about {height} of the frame height", _brief(level))
+        self.assertIn("Every row is the SAME size", _brief(1))
+        for level, ratio in ((2, "about 1.8 times"), (3, "about 2.5 times"), (4, "about 3 times")):
+            with self.subTest(level=level):
+                self.assertIn(ratio, _brief(level))
+        # 招式件數：1 級 0 件（整段不出現）、2 級 1 件、3 級 2 件、4 級 3 件
+        self.assertNotIn("supporting artwork", _brief(1))
+        for level, count in ((2, "EXACTLY 1 piece"), (3, "EXACTLY 2 pieces"), (4, "EXACTLY 3 pieces")):
+            with self.subTest(level=level):
+                self.assertIn(count, _brief(level))
+        # 綱要要短，模型才讀得進去。第一輪 L4 條文 7.7KB、坐在第 8,000 字元後，實拍全被無視。
+        for level in range(1, 5):
+            with self.subTest(level=level):
+                self.assertLess(len(_brief(level)), 2200)
+
     def test_each_step_changes_a_visible_shape_not_only_a_finish(self):
         """2026-09-10 使用者：「好像沒有這麼抖，尤其是 1、2 之間」。
-        原因是每一級只多給一項自由、而且都落在字的表面。每一級都要有一個
-        看得見形狀改變的必做項，否則相鄰兩級的成品又會長一樣。
+        每一級都要有一個看得見形狀改變的必做項，否則相鄰兩級的成品又會長一樣。
         """
-        # 1 級：每行各自的底板＋整塊放大（2026-09-10 第二輪：使用者說 1 太像 0，
-        # 原本 1 只多了一塊方底板，形狀跟 0 幾乎一樣，所以把「每行各自的形狀」下放到 1）
-        self.assertIn("EACH ROW SITS ON ITS OWN SHAPE", _clause(1))
-        self.assertIn("MARKEDLY BIGGER", _clause(1))
+        # 1 級：每行各自的底板（跟 0 的「一整塊方板」拉開），但仍齊排
+        self.assertIn("Each row sits on its OWN plate", _brief(1))
+        self.assertIn("Rows stay flush with one another", _brief(1))
         # 2 級起：錯位排列＋每行底板互不相同
-        self.assertNotIn("THE STACK IS NO LONGER FLUSH", _clause(1))
-        self.assertNotIn("THE ROWS NO LONGER MATCH", _clause(1))
         for level in (2, 3, 4):
             with self.subTest(level=level):
-                self.assertIn("THE STACK IS NO LONGER FLUSH", _clause(level))
-                self.assertIn("THE ROWS NO LONGER MATCH", _clause(level))
-        # 3 級起：字級落差再拉一階（2→2.5 倍），4 級再到 2.5–3 倍
-        for level in (1, 2):
-            with self.subTest(level=level):
-                self.assertNotIn("two to two and a half times", _clause(level))
-        for level in (3, 4):
-            with self.subTest(level=level):
-                self.assertIn("two to two and a half times", _clause(level))
-        # 3 級起：多層描邊立體＋與照片主體交錯（原本是 4 級獨有，往下放一級）
+                self.assertIn("Rows are STAGGERED", _brief(level))
+                self.assertIn("THE PLATES NO LONGER MATCH EACH OTHER", _clause(level))
+        self.assertNotIn("THE PLATES NO LONGER MATCH EACH OTHER", _clause(1))
+        # 3 級起：多層描邊立體＋與照片主體交錯
         for level in (1, 2):
             with self.subTest(level=level):
                 self.assertNotIn("MULTI-LAYER EDGES", _clause(level))
-                self.assertNotIn("ENGAGES THE PHOTOGRAPH", _clause(level))
+                self.assertNotIn("INTERLOCKS WITH THE PHOTOGRAPH", _clause(level))
         for level in (3, 4):
             with self.subTest(level=level):
                 self.assertIn("MULTI-LAYER EDGES", _clause(level))
-                self.assertIn("ENGAGES THE PHOTOGRAPH", _clause(level))
+                self.assertIn("INTERLOCKS WITH THE PHOTOGRAPH", _clause(level))
+
+    def test_colour_is_freed_from_the_row_order_at_every_level(self):
+        """2026-09-11 使用者：「標題的顏色其實也可以解放，不必綁住一定要白黃紅順序，
+        也不用綁到同一句同一色」。
+
+        寫成許可句（舊版：「白黃紅只是提示，可以忽略」）沒有用——第七批已證明。
+        所以改成命令句＋明文禁止那個順序，而逐行要怎麼上色由 cover_line_annotation
+        釘在資料行上（條文區離行清單太遠，壓不過釘在行上的東西）。
+        """
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                brief = _brief(level)
+                self.assertIn("COLOUR FOLLOWS MEANING, NEVER ROW ORDER", brief)
+                self.assertIn("row 1 white, row 2 yellow and row 3 red is BANNED", brief)
+        # 色數也跟著爬
+        self.assertIn("TWO colours only", _brief(1))
+        self.assertIn("THREE colours", _brief(2))
+        self.assertIn("plus ONE accent drawn from the subject", _brief(3))
+        self.assertIn("palette is fully open", _brief(4))
+        # 模板裡那條逐行配色也要跟著解除，不能只靠後面 OVERRIDE：顏色標記拿掉後
+        # 它會變成孤兒，模型就照 Line 1/2/3 硬套白黃紅（2026-09-11 第一輪實拍）。
+        self.assertIn("COLOUR EACH LINE EXACTLY AS LABELLED",
+                      editor_formats.cover_title_colour_rule(0))
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                rule = editor_formats.cover_title_colour_rule(level)
+                self.assertNotIn("(yellow)", rule)
+                self.assertIn("is NOT a colour order", rule)
 
     def test_high_levels_require_reversed_out_words_and_wordless_side_artwork(self):
         """2026-09-10 使用者看實際成品後：「都沒有看到反色底字，例如胰臟癌可以反紅」，
         以及「除了標題之外，還允許多一些標籤或標題字以外的元素設計」。
 
-        反色底字原本只是 2 級那條「換色／反白／加粗」三選一的其中一個選項，
-        模型每次都挑最省事的換色。3 級起改成必做。
         額外元素一律**無字**：新增中文標籤等於讓模型自己編字上鏡，那是另一個等級的事故。
+        2026-09-11 起額外元素改成「招式池」，件數由等級決定、抽哪幾件由程式抽——
+        交給模型自己選，四級會塌回同一種。
         """
-        for level in (1, 2):
+        self.assertNotIn("KNOCKED OUT", _brief(1))
+        self.assertIn("1 word of the headline sit KNOCKED OUT", _brief(2))
+        self.assertIn("1 word of the headline sit KNOCKED OUT", _brief(3))
+        self.assertIn("2 words of the headline sit KNOCKED OUT", _brief(4))
+        self.assertIn("each block a different colour", _brief(4))
+        for level in (2, 3, 4):
             with self.subTest(level=level):
-                self.assertNotIn("REVERSE A KEY WORD OUT OF A SOLID BLOCK", _clause(level))
-                self.assertNotIn("BUILD SUPPORTING ARTWORK", _clause(level))
-        for level in (3, 4):
-            with self.subTest(level=level):
-                clause = _clause(level)
-                self.assertIn("REVERSE A KEY WORD OUT OF A SOLID BLOCK", clause)
-                self.assertIn("BUILD SUPPORTING ARTWORK", clause)
-                self.assertIn("never captions", clause)
-        # 4 級再加碼：第二個反白字＋額外元素升格成第二視覺重心
-        self.assertIn("MORE THAN ONE WORD IS REVERSED OUT", _clause(4))
+                brief = _brief(level)
+                self.assertIn("supporting artwork", brief)
+                self.assertIn("never captions", brief)
+        # 4 級再加碼：其中一件招式升格成第二視覺重心
         self.assertIn("SECOND FOCAL POINT", _clause(4))
-        self.assertNotIn("MORE THAN ONE WORD IS REVERSED OUT", _clause(3))
+        self.assertNotIn("SECOND FOCAL POINT", _clause(3))
+
+    def test_the_accessory_pool_rotates_so_the_same_level_is_not_one_look(self):
+        """使用者要的「更有變化」：同一級重生要換一組招式。
+
+        由程式抽而不是叫模型自己想——許可句推不動模型，它會每次挑最省事的同一件。
+        """
+        picks = {tuple(editor_formats.cover_accessories(4, seed=s)) for s in range(6)}
+        self.assertGreater(len(picks), 1)
+        # 同一個 seed 一定重現（測試與除錯都靠這個）
+        self.assertEqual(editor_formats.cover_accessories(3, seed=7),
+                         editor_formats.cover_accessories(3, seed=7))
+
+    def test_no_accessory_claims_a_number_the_model_cannot_count(self):
+        """2026-09-11 實拍：標題寫「6大」，程式把 6 算好寫進 prompt，模型只畫 3 個。
+
+        「說 6 大卻畫 3 個」比沒有這排圖示更糟，而這個精度不是 prompt 壓得住的，
+        所以數量呼應整個拿掉——招式一律不宣稱數字。
+        """
+        for _key, text in editor_formats.COVER_ACCESSORY_POOL:
+            with self.subTest(text=text[:40]):
+                self.assertNotRegex(text, r"EXACTLY \d")
+                self.assertNotIn("matching the number in the headline", text)
+        picked = editor_formats.cover_accessories(3, titles=("極端危機6種 代用貨幣",), seed=0)
+        self.assertNotIn("matching the number", " ".join(picked))
+
+    def test_supporting_artwork_keeps_out_of_the_pasted_label_corner(self):
+        """2026-09-11 實拍 L4：放大鏡的紅圈壓到左上角，而那裡是 compose 後貼
+        AI示意圖 的位置。側邊標籤那段早有這條幾何，招式段當初漏抄。"""
+        brief = _brief(4)
+        self.assertIn("NONE OF THEM MAY SIT IN EITHER OUTER TOP CORNER", brief)
+        self.assertIn("TOP THIRD OF THE FRAME", brief)
+
+    def test_line_annotations_pin_the_treatment_on_the_data_row(self):
+        """顏色與強調的指示釘在**那一行後面**，不是寫在條文區——
+        2026-09-10 反色底字那次已經證明：離行清單太遠的規則，模型讀行清單時看不到。"""
+        self.assertEqual(editor_formats.cover_line_annotation("尼泊爾災區", 0), "")
+        hook = editor_formats.cover_line_annotation("不放棄！", 2)
+        self.assertIn("HOOK ROW", hook)
+        figure = editor_formats.cover_line_annotation("恐迎5天豪雨", 2)
+        self.assertIn("PULL THE FIGURE 5", figure)
+        quoted = editor_formats.cover_line_annotation("「街道成河」", 2)
+        self.assertIn("takes its own colour", quoted)
+        plain = editor_formats.cover_line_annotation("搜救隊深入泥流區", 1)
+        self.assertIn("must not be one flat colour", plain)
 
     def test_extra_artwork_never_licenses_extra_words(self):
         """FIXED (e) 仍然管著：清單以外的字一個都不准畫。"""
@@ -167,8 +257,10 @@ class LadderTests(unittest.TestCase):
 
     def test_the_loudest_level_makes_the_tilt_mandatory(self):
         """「可以傾斜」在第七批就證明推不動模型：許可句＝不會發生。"""
-        self.assertIn("THE BLOCK TILTS OR ARCS — required here, not offered", _clause(4))
-        self.assertIn("two and a half to three times", _clause(4))
+        self.assertIn("rotated 5 to 8 degrees off horizontal", _brief(4))
+        for level in (1, 2, 3):
+            with self.subTest(level=level):
+                self.assertNotIn("rotated", _brief(level))
 
     def test_level_two_says_out_loud_that_placement_still_binds(self):
         """2 級解放的是排法不是位置。只是「不提位置」不夠——

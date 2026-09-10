@@ -320,6 +320,10 @@ COVER_TITLE_STROKE_RATIO = 0.055
 COVER_TITLE_BOLD_RATIO = 0.012       # 假粗體（2026-09-08 晚使用者「十點雙切字還可再粗一點點」），做法同 YT
 # 逐行配色：第 1 行白、第 2 行黃、第 3 行紅（紅字用白描邊，其餘深色描邊）。
 # 這張表同時是 editor_formats.COVER_AI_PROMPT_TEMPLATE 對模型描述的配色規則，改要一起改。
+# 2026-09-11 起這個耦合**只剩創意 0 級**：1 級起配色解放（使用者：「不必綁住一定要白黃紅
+# 順序，也不用綁到同一句同一色」），main._lines_block 不再輸出 (white)／(yellow)／(red)，
+# 改由 editor_formats.cover_line_annotation 依那一行的內容標。1–4 級的圖跟這張表對不起來
+# 是刻意的，別當成 bug 去「修」。
 COVER_TITLE_LINE_COLOURS = ((255, 255, 255), (250, 215, 0), (228, 28, 40))
 COVER_TITLE_STROKE_DARK = (8, 8, 8)
 COVER_TITLE_STROKE_LIGHT = (255, 255, 255)

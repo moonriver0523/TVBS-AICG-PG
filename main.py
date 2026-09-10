@@ -3971,15 +3971,29 @@ def _cover_ai(
     # 模型就得自己猜 "red, white outline" 是不是圖例裡那個 (red)。
     _LINE_COLOUR_NAMES = ("white", "yellow", "red")
 
-    def _lines_block(title: str, *, full_width: bool, reverse_out: bool = False) -> str:
+    # 2026-09-11 第九批 使用者：「標題的顏色其實也可以解放，不必綁住一定要白黃紅順序，
+    # 也不用綁到同一句同一色。」1 級起就**不再輸出顏色標記**——L2 以後的條文早就寫著
+    # 「白黃紅只是提示、可以忽略」，實拍卻照樣白黃紅，因為顏色標記就釘在每一行後面，
+    # 條文區離得太遠壓不過去（同一個教訓見下面反色底字那段）。改由
+    # editor_formats.cover_line_annotation 依這一行的內容（鉤子行／數字／引號詞）
+    # 寫出該行要怎麼處理，位置一樣釘在行上。0 級完全不變，仍與合成版同一套配色。
+    def _lines_block(
+        title: str, *, full_width: bool, reverse_out: bool = False, level: int = 0
+    ) -> str:
         lines = compose.cover_title_lines(title.strip(), full_width=full_width)
         if not lines:
             return ""
         head = f"  (exactly {len(lines)} lines — render each on its own row, in this order)"
-        body = [
-            f"  Line {i} ({_LINE_COLOUR_NAMES[min(i - 1, len(_LINE_COLOUR_NAMES) - 1)]}): {text}"
-            for i, text in enumerate(lines, start=1)
-        ]
+        if level >= 1:
+            body = [
+                f"  Line {i}: {text}{editor_formats.cover_line_annotation(text, level)}"
+                for i, text in enumerate(lines, start=1)
+            ]
+        else:
+            body = [
+                f"  Line {i} ({_LINE_COLOUR_NAMES[min(i - 1, len(_LINE_COLOUR_NAMES) - 1)]}): {text}"
+                for i, text in enumerate(lines, start=1)
+            ]
         # 反色底字（2026-09-10 第二輪）：3 級起條文已經寫成「必做」，實拍卻仍然沒出現——
         # 那條規則離行清單太遠，模型讀到行清單時只看到顏色標記。改成把指示釘在**這一行上**，
         # 與顏色標記同一個位置，模型想漏掉都難。挑第一行：程式拆行時它就是那句鉤子。
@@ -3993,7 +4007,17 @@ def _cover_ai(
 
     # 設計標題（2026-09-08 ON/OFF → 2026-09-09 第八批改成 0–4 拉桿）：
     # 0 完全不追加（維持白／黃／紅排版），1–4 在 TYPOGRAPHY 段尾追加該級的條文。
-    style_clause = editor_formats.cover_ai_title_style_clause(req.creativity_level())
+    # 2026-09-11：條文後面再接一段「招式」——件數由等級決定（2 級 1 件、3 級 2 件、
+    # 4 級 3 件），抽哪幾件由程式隨機抽，所以同一則新聞重生會換一組。標題傳進去是為了
+    # 「N種／N大」時第一件固定用數量呼應的無字圖示列。
+    level = req.creativity_level()
+    style_clause = editor_formats.cover_ai_title_style_clause(level)
+    # 2026-09-11 第二輪：數字全部搬到 CANVAS 正後方那塊 DESIGN BRIEF。第一輪把整份條文
+    # 放在 TYPOGRAPHY 段尾，實拍四級長得一模一樣——L4 的 prompt 14K 字元，條文坐在
+    # 第 8,000 字元之後，模型只讀得進前面那幾段（斜切線的數字就是寫在 CANVAS 才生效的）。
+    titles = (req.title_left, req.title_right)
+    design_brief = editor_formats.cover_design_brief(level, titles=titles)
+    colour_rule = editor_formats.cover_title_colour_rule(level)
     # 3 級起才把反色底字釘在行清單上（條文本身也是 3 級起才要求）。
     reverse_out = req.creativity_level() >= 3
     # 側邊標籤只在 3 級起才畫（2026-09-10 使用者裁決）：0–2 是「規矩」到「有設計」，
@@ -4007,21 +4031,25 @@ def _cover_ai(
         prompt = editor_formats.COVER_AI_FULL_PROMPT_TEMPLATE.format(
             badge_text=badge_text,
             date_text=date_text,
-            title_left_lines=_lines_block(req.title_left, full_width=True, reverse_out=reverse_out),
+            title_left_lines=_lines_block(req.title_left, full_width=True, reverse_out=reverse_out, level=level),
             visual_left=visuals[0],
             side_labels_block=side_labels_block,
             title_style_clause=style_clause,
+            title_design_brief=design_brief,
+            title_colour_rule=colour_rule,
         )
     else:
         prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE.format(
             badge_text=badge_text,
             date_text=date_text,
-            title_left_lines=_lines_block(req.title_left, full_width=False, reverse_out=reverse_out),
-            title_right_lines=_lines_block(req.title_right, full_width=False, reverse_out=reverse_out),
+            title_left_lines=_lines_block(req.title_left, full_width=False, reverse_out=reverse_out, level=level),
+            title_right_lines=_lines_block(req.title_right, full_width=False, reverse_out=reverse_out, level=level),
             visual_left=visuals[0],
             visual_right=visuals[1],
             side_labels_block=side_labels_block,
             title_style_clause=style_clause,
+            title_design_brief=design_brief,
+            title_colour_rule=colour_rule,
         )
     # 整張一起生：兩格的具名真人合成一份名單（去重、保持順序）
     subjects, english = [], []

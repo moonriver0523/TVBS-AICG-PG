@@ -435,12 +435,17 @@ class PromptSyncTests(unittest.TestCase):
         self.assertAlmostEqual((top + bottom) / 2 / width, 0.5)
 
     def test_prompt_colour_names_match_the_composite_table(self):
-        """2026-09-08：顏色改成逐行標記（white／yellow／red），模板只講怎麼讀標記。"""
-        prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE
-        self.assertIn("(white) = solid white", prompt)
-        self.assertIn("(yellow) = bright golden yellow", prompt)
-        self.assertIn("(red) = vivid red with a white outline", prompt)
+        """2026-09-08：顏色改成逐行標記（white／yellow／red），模板只講怎麼讀標記。
+
+        2026-09-11：這個耦合只剩創意 0 級。1 級起配色解放，模板那條逐行配色被
+        cover_title_colour_rule 換掉，行後面也不再輸出顏色標記。
+        """
+        rule = editor_formats.cover_title_colour_rule(0)
+        self.assertIn("(white) = solid white", rule)
+        self.assertIn("(yellow) = bright golden yellow", rule)
+        self.assertIn("(red) = vivid red with a white outline", rule)
         self.assertEqual(compose.COVER_TITLE_LINE_COLOURS[0], (255, 255, 255))
+        self.assertIn("{title_colour_rule}", editor_formats.COVER_AI_PROMPT_TEMPLATE)
 
 
 if __name__ == "__main__":

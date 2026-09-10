@@ -57,11 +57,22 @@ class ClauseTests(unittest.TestCase):
 
     def test_designed_clause_cancels_the_white_yellow_red_rule_explicitly(self):
         """本 repo 的慣例：位置在後**加上**明文 OVERRIDE 才壓得過前面的規則。
-        前面那三條（逐行配色、鎖在左下、一行一列）都要被點名取消，含糊帶過沒有用。"""
+        前面那三條（逐行配色、鎖在左下、一行一列）都要被點名取消，含糊帶過沒有用。
+
+        2026-09-11：配色從「白黃紅只是提示、可以忽略」（許可句，實拍照樣白黃紅）
+        改成命令句＋明文禁止那個順序；顏色標記本身也不再輸出（見 main._lines_block）。
+        """
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
         self.assertIn("OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE", clause)
-        self.assertIn("per-line colour labels (white / yellow / red) are only a hint", clause)
         self.assertIn("no longer binds", clause)
+        # 配色鐵則住在 CANVAS 正後方的 DESIGN BRIEF（第二輪搬過去的，見那支測試），
+        # 模板裡原本那條逐行配色也在 1 級起被換掉，不是靠 OVERRIDE 壓。
+        brief = editor_formats.cover_design_brief(
+            editor_formats.COVER_AI_TITLE_LEVEL_MAX, titles=("尼泊爾災區 無人機空拍",), seed=0)
+        self.assertIn("COLOUR FOLLOWS MEANING, NEVER ROW ORDER", brief)
+        self.assertIn("row 1 white, row 2 yellow and row 3 red is BANNED", brief)
+        self.assertNotIn("(yellow)", editor_formats.cover_title_colour_rule(
+            editor_formats.COVER_AI_TITLE_LEVEL_MAX))
 
     def test_designed_clause_still_locks_the_areas_the_program_pastes_into(self):
         """解放的是設計，不是版面規約：標頭帶／底部飾帶不准被字蓋掉，
@@ -136,9 +147,11 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(res.status_code, 422)
 
     def test_designed_keeps_the_pre_split_lines(self):
-        """設計標題不得取代逐行給定的機制——兩者要同時在 prompt 裡。"""
+        """設計標題不得取代逐行給定的機制——兩者要同時在 prompt 裡。
+        2026-09-11：1 級起行後面不再是顏色標記，而是該行的處理指示（配色已解放）。"""
         prompt = self._prompt(self._split_body(title_style="designed"))
-        self.assertIn("Line 1 (white): 尼泊爾災區", prompt)
+        self.assertIn("Line 1: 尼泊爾災區", prompt)
+        self.assertNotIn("Line 1 (white)", prompt)
         self.assertIn("do NOT re-split, merge or reorder", prompt)
 
 

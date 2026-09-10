@@ -43,6 +43,8 @@ class FormatTableTests(unittest.TestCase):
             badge_text="ON AIR", date_text="2026/09/07", side_labels_block="",
             title_left_lines="  Line 1: 全球3100條\n  Line 2: 躍動冰川", visual_left="冰川崩落",
             title_style_clause="",   # 2026-09-08 設計標題開關，預設 plain
+            title_design_brief="",   # 2026-09-11 設計綱要，0 級為空
+            title_colour_rule=editor_formats.cover_title_colour_rule(0),
         )
         self.assertIn("ONE single photograph", text)
         self.assertNotIn("DIAGONAL seam", text)
