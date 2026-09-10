@@ -4245,10 +4245,49 @@ class CoverTitleDigestResponse(BaseModel):
     title_second: str = ""
     # 直標（target=yt_vstrip）判出來的畫面來源；只有來源名，「畫面來源：」由 compose 補
     source_text: str = ""
+    # 消化順便建議的兩個籤（2026-09-11）：回填到欄位讓編輯看過再生圖，
+    # 與標題同一條路。生圖那一步仍然只畫欄位裡的字，一個字都不准自己加。
+    side_labels: str = ""
+    info_chips: str = ""
     # 十點／整點：這篇內文被判定成幾個主題（1＝滿版、2＝雙切）。前端據此更新版面指示器。
     # 一致性以「第二標題有沒有值」為準：模型說 2 卻只給一個標題就退回 1，
     # 說 1 卻多給了第二標題就清掉——回一組自相矛盾的值，前端的指示器會跟欄位打架。
     topics: int = 1
+
+
+def _digest_chips(value, *, limit: int, chars: int) -> str:
+    """把消化回來的籤陣列變成欄位字串（空白分隔），順便把長度與筆數修剪掉。
+
+    超長的**整個丟掉**，不截斷。使用者自己打的籤截斷沒關係（他看得到自己打了什麼），
+    但 AI 產的籤截斷會變成假資訊：「病例超過三千二百人」砍成「病例超過三千二百」，
+    數字就被改了，而封面上的數字沒人查得到出處。籤是選填的，丟掉一個不會怎樣。
+    """
+    if not isinstance(value, list):
+        return ""
+    out = []
+    for item in value:
+        text = str(item or "").strip().replace(" ", "")
+        if text and len(text) <= chars:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return " ".join(out)
+
+
+def _digest_chip_fields(data: dict) -> dict:
+    """兩個籤欄位的上限直接跟 editor_formats 的常數走，手抄一份遲早對不上。"""
+    return {
+        "side_labels": _digest_chips(
+            data.get("side_labels"),
+            limit=editor_formats.COVER_SIDE_LABEL_MAX,
+            chars=editor_formats.COVER_SIDE_LABEL_CHARS,
+        ),
+        "info_chips": _digest_chips(
+            data.get("info_chips"),
+            limit=editor_formats.COVER_INFO_CHIP_MAX,
+            chars=editor_formats.COVER_INFO_CHIP_CHARS,
+        ),
+    }
 
 
 def _clip_title(text: str, limit: int) -> str:
@@ -4279,7 +4318,7 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
         schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_TEN
     elif req.target == "ten_cover_full":
         base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_TEN_FULL
-        schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT
+        schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_TEN_FULL
     elif hourly:
         base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_YT_HOURLY
         schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT_HOURLY
@@ -4330,11 +4369,14 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
         if data.get("topics") == 1:
             right = ""
         return CoverTitleDigestResponse(
-            title_left=left, title_right=right, topics=2 if right else 1
+            title_left=left, title_right=right, topics=2 if right else 1,
+            **_digest_chip_fields(data),
         )
     title = _clip_title(data.get("title"), 60)
     if not title:
         raise HTTPException(status_code=502, detail="消化標題失敗：模型沒給標題")
+    if req.target == "ten_cover_full":
+        return CoverTitleDigestResponse(title=title, **_digest_chip_fields(data))
     if vstrip:
         # 格數超標不在這裡擋：回填後編輯自己看得到格數指示器，也還沒生圖。
         # 真正的硬上限在 compose.yt_vertical_layout（超過就 400，訊息指名哪一個標題）。

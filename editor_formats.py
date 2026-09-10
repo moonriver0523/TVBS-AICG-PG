@@ -231,7 +231,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 === HARD CONSTRAINTS ===
 - NO television channel logo, NO station identity mark, NO broadcaster wordmark, NO dot-pattern emblem, NO watermark of any kind, and do NOT write the programme name (十點不一樣) anywhere. The upper-LEFT corner of the header band — its entire LEFT HALF — must be left as clean empty navy background: the real channel logo and the official programme-name tag are pasted there afterwards, so keep that whole area free of text, graphics and busy detail. The header band carries NOTHING you draw: its right end is reserved for the date and the small red tag, which software pastes in afterwards, so keep the WHOLE band clean empty navy.
 - Do NOT draw any 示意圖 label, AI示意圖 label or similar disclaimer anywhere in the image. Software adds that label afterwards, at the outer top corner below the header band — keep that small area free of text and busy detail.
-- No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles.
+- No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles. ONE NARROW EXCEPTION: a brand mark that physically belongs to an object in the photograph — an aircraft livery, a storefront sign, a product body, a jersey — may appear on that object when the shot description names that brand, because it is part of the photographed world rather than text laid over it. It never becomes a graphic of its own: no brand mark beside or inside the headline, none floating on the picture, none in the header band or the bottom strip.
 - Keep every piece of text well inside the frame with clear breathing space; nothing may touch or be clipped by any edge.
 """
 
@@ -260,7 +260,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 === HARD CONSTRAINTS ===
 - NO television channel logo, NO station identity mark, NO broadcaster wordmark, NO dot-pattern emblem, NO watermark of any kind, and do NOT write the programme name (十點不一樣) anywhere. The upper-LEFT corner of the header band — its entire LEFT HALF — must be left as clean empty navy background: the real channel logo and the official programme-name tag are pasted there afterwards, so keep that whole area free of text, graphics and busy detail. The header band carries NOTHING you draw: its right end is reserved for the date and the small red tag, which software pastes in afterwards, so keep the WHOLE band clean empty navy.
 - Do NOT draw any 示意圖 label, AI示意圖 label or similar disclaimer anywhere in the image. Software adds that label afterwards, at the outer top corner below the header band — keep that small area free of text and busy detail.
-- No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles.
+- No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles. ONE NARROW EXCEPTION: a brand mark that physically belongs to an object in the photograph — an aircraft livery, a storefront sign, a product body, a jersey — may appear on that object when the shot description names that brand, because it is part of the photographed world rather than text laid over it. It never becomes a graphic of its own: no brand mark beside or inside the headline, none floating on the picture, none in the header band or the bottom strip.
 - Keep every piece of text well inside the frame with clear breathing space; nothing may touch or be clipped by any edge.
 """
 
@@ -421,7 +421,7 @@ COVER_AI_TITLE_LEVEL_NAMES = {
 }
 
 # (a)–(g)：每一級（0 以外）都原樣附上。
-_TITLE_FIXED_BLOCK = """- WHAT IS STILL FIXED, AND IS NOT A DESIGN DECISION: (a) the CHARACTERS. Render the listed strings character for character in the listed order — never add, drop, translate, abbreviate, reorder or substitute a single character to make a layout work, and never break a listed line in the middle: a listed line is one unbroken unit, so a date or score written with a slash such as 9/12 stays whole on one row. (b) Traditional Chinese, Taiwan forms, every character correctly formed and legible — no Simplified or Japanese forms, no invented strokes. (c) The header band across the top and the slim navy strip along the bottom stay as described, and NO part of the headline may sit inside them or overlap them. (d) The WHOLE header band and the small area just below its outer top corner stay clean and empty — software pastes the channel logo, the programme tag, the date, the red ON AIR tag and the 示意圖 label there afterwards, so nothing you draw belongs in that band at either end. (e) No text of any kind other than the listed strings: decorative marks are wordless symbols only — no letters, no digits, no country names, no place labels, no flag chips, no map insets, no extra badges or callouts. (f) Nothing touches or is clipped by the frame edge. (g) In the two-panel layout, each headline stays ENTIRELY INSIDE ITS OWN PANEL and never crosses the diagonal seam or strays into the other panel: freeing the placement frees where it sits WITHIN its panel, not which panel it belongs to.
+_TITLE_FIXED_BLOCK = """- WHAT IS STILL FIXED, AND IS NOT A DESIGN DECISION: (a) the CHARACTERS. Render the listed strings character for character in the listed order — never add, drop, translate, abbreviate, reorder or substitute a single character to make a layout work, and never break a listed line in the middle: a listed line is one unbroken unit, so a date or score written with a slash such as 9/12 stays whole on one row. (b) Traditional Chinese, Taiwan forms, every character correctly formed and legible — no Simplified or Japanese forms, no invented strokes. (c) The header band across the top and the slim navy strip along the bottom stay as described, and NO part of the headline may sit inside them or overlap them. (d) The WHOLE header band and the small area just below its outer top corner stay clean and empty — software pastes the channel logo, the programme tag, the date, the red ON AIR tag and the 示意圖 label there afterwards, so nothing you draw belongs in that band at either end. (e) No text of any kind other than the listed strings: decorative marks you add are wordless symbols only — no letters, no digits, no country names, no place labels, no flag chips, no map insets, no extra badges or callouts. A brand mark carried by an object inside the photograph (a livery, a storefront, a product) is part of that photograph and is not one of your decorative marks — it stays on its object and never migrates onto the headline or into either navy band. (f) Nothing touches or is clipped by the frame edge. (g) In the two-panel layout, each headline stays ENTIRELY INSIDE ITS OWN PANEL and never crosses the diagonal seam or strays into the other panel: freeing the placement frees where it sits WITHIN its panel, not which panel it belongs to.
 """
 
 # ---- 內容觸發的逐行指示與招式池（2026-09-11 第九批）----
@@ -724,7 +724,8 @@ For each headline you are given, describe the single photograph that should sit 
 Rules for every description:
 - Describe only what a camera would see: place, subject, action, weather, light, lens feel. Concrete and photographable.
 - Traditional Chinese (Taiwan), one sentence, roughly twenty to forty characters. No bullet points.
-- NEVER mention text, captions, headlines, numbers, charts, logos or watermarks — the photograph carries no writing at all.
+- NEVER mention text, captions, headlines, numbers or charts — the photograph carries no caption and no graphics.
+- BRANDS: ONLY THOSE THE HEADLINE OR THE SUPPLIED DESCRIPTION NAMES. When the story is about a named brand, company or product, say so in the description and let it appear with its real mark on the objects that belong to it — its own signage, packaging, product body, vehicle livery, screen or jersey. Every OTHER brandable surface in the scene stays de-identified: blank surfaces or generic abstract marks, never a readable brand name the story does not name, and never an invented one. Never put one brand's mark on another brand's object.
 - Do not restate the headline. Turn its meaning into a scene.
 - If a headline is about a specific named real person (a head of state, a politician, a celebrity), the photograph should be a portrait-style shot of that person as its subject, face towards the camera. Otherwise use anonymous figures, back views, crowds, objects or places.
 - If a headline is about data, money or policy, choose a real-world scene that stands for it (a building, a counter, hands, equipment), never a graph.
@@ -880,6 +881,10 @@ THEN write the headlines.
 - Each headline is EXACTLY 3 segments separated by ONE half-width space (two spaces in total, never one, never three); each segment 4–7 characters, NEVER more than 7; whole headline 12–18 characters excluding spaces (fewer than 12 leaves the cover half empty — that is a defect). Each segment becomes one printed line, coloured white / yellow / red in order, so a headline with only two segments loses its red line — that is a defect. A segment longer than 7 characters shrinks every line on the cover — also a defect.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
+
+ALSO SUGGEST THE TWO OPTIONAL CHIP FIELDS. Both are printed on the cover exactly as you write them, so every character has to come from the article. When the article does not support one, return an empty array — an empty field is correct and normal, a padded one is a defect.
+- "side_labels": 3 to 6 short chips for a column down one side, ONLY when the article actually enumerates parallel items — symptoms, causes, steps, warning signs, categories. Each 2 to 6 characters, a noun or a short noun phrase, no punctuation. If the article does not enumerate anything, return [].
+- "info_chips": at most 2 small free-standing chips. One may be the PLACE the story happens, written as the article writes it (「日本・名古屋」「臺南」). One may be the single most telling FIGURE with its unit or subject attached (「降41%」「5萬名確診」「7級強風」). Each at most 10 characters. Never invent or round a figure, never guess a place, and never repeat something the headline already says.
 """
 
 # 十點不一樣（滿版）：只有一個標題，一律 3 段（每段一行，白／黃／紅）。
@@ -890,6 +895,10 @@ Return JSON with "title".
 - EXACTLY 3 segments separated by ONE half-width space (two spaces in total, never one, never three); each segment 4–7 characters, NEVER more than 7; whole headline 12–18 characters excluding spaces (fewer than 12 leaves the cover half empty — that is a defect). Each segment becomes one printed line, coloured white / yellow / red in order, so a headline with only two segments loses its red line — that is a defect.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
+
+ALSO SUGGEST THE TWO OPTIONAL CHIP FIELDS. Both are printed on the cover exactly as you write them, so every character has to come from the article. When the article does not support one, return an empty array — an empty field is correct and normal, a padded one is a defect.
+- "side_labels": 3 to 6 short chips for a column down one side, ONLY when the article actually enumerates parallel items — symptoms, causes, steps, warning signs, categories. Each 2 to 6 characters, a noun or a short noun phrase, no punctuation. If the article does not enumerate anything, return [].
+- "info_chips": at most 2 small free-standing chips. One may be the PLACE the story happens, written as the article writes it (「日本・名古屋」「臺南」). One may be the single most telling FIGURE with its unit or subject attached (「降41%」「5萬名確診」「7級強風」). Each at most 10 characters. Never invent or round a figure, never guess a place, and never repeat something the headline already says.
 """
 
 COVER_TITLE_DIGEST_SYSTEM_YT = """You write the headline for a Taiwanese TV news live-stream thumbnail from one news article.
@@ -937,6 +946,13 @@ def ten_digest_retry_note(data: dict | None) -> str:
             + lines + "\nCount the characters of each segment before you answer.")
 
 
+# 兩個籤欄位（2026-09-11）：strict schema 下一樣要列進 required，
+# 「這篇沒有」用空陣列表達，不是把欄位省略掉。
+_DIGEST_CHIP_PROPS = {
+    "side_labels": {"type": "array", "items": {"type": "string"}},
+    "info_chips": {"type": "array", "items": {"type": "string"}},
+}
+
 COVER_TITLE_DIGEST_SCHEMA_TEN = {
     "type": "object",
     "properties": {
@@ -945,8 +961,17 @@ COVER_TITLE_DIGEST_SCHEMA_TEN = {
         "topics": {"type": "integer", "enum": [1, 2]},
         "title_left": {"type": "string"},
         "title_right": {"type": "string"},
+        **_DIGEST_CHIP_PROPS,
     },
-    "required": ["topics", "title_left", "title_right"],
+    "required": ["topics", "title_left", "title_right", "side_labels", "info_chips"],
+    "additionalProperties": False,
+}
+
+# 滿版走自己的 schema（以前借 YT 那個，只有 title，籤欄位塞不進去）
+COVER_TITLE_DIGEST_SCHEMA_TEN_FULL = {
+    "type": "object",
+    "properties": {"title": {"type": "string"}, **_DIGEST_CHIP_PROPS},
+    "required": ["title", "side_labels", "info_chips"],
     "additionalProperties": False,
 }
 # YT 直播「直標」（2026-09-09 使用者：貼一段文字 → 自動生兩段標題＋判定來源）。

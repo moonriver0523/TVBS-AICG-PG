@@ -2194,6 +2194,13 @@ async function handleCoverTitleDigest(target) {
         if (ten) {
             document.getElementById('coverTitleLeft').value = data.title_left || '';
             document.getElementById('coverTitleRight').value = data.title_right || '';
+            // 兩個籤也一起回填（2026-09-11）：消化讀的是編輯貼進來的內文，
+            // 回填後編輯看得到、改得動、清得掉，按生成之前都在人手上。
+            ['coverSideLabels', 'coverInfoChips'].forEach(function (id) {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.value = (id === 'coverSideLabels' ? data.side_labels : data.info_chips) || '';
+            });
             // 回填完版面就跟著變（第二標題空＝滿版），指示器與右附圖位一起更新
             updateCoverLayoutIndicator();
         } else {
