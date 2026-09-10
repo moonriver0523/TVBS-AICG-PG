@@ -136,6 +136,35 @@ class LadderTests(unittest.TestCase):
                 self.assertIn("MULTI-LAYER EDGES", _clause(level))
                 self.assertIn("ENGAGES THE PHOTOGRAPH", _clause(level))
 
+    def test_high_levels_require_reversed_out_words_and_wordless_side_artwork(self):
+        """2026-09-10 使用者看實際成品後：「都沒有看到反色底字，例如胰臟癌可以反紅」，
+        以及「除了標題之外，還允許多一些標籤或標題字以外的元素設計」。
+
+        反色底字原本只是 2 級那條「換色／反白／加粗」三選一的其中一個選項，
+        模型每次都挑最省事的換色。3 級起改成必做。
+        額外元素一律**無字**：新增中文標籤等於讓模型自己編字上鏡，那是另一個等級的事故。
+        """
+        for level in (1, 2):
+            with self.subTest(level=level):
+                self.assertNotIn("REVERSE A KEY WORD OUT OF A SOLID BLOCK", _clause(level))
+                self.assertNotIn("BUILD SUPPORTING ARTWORK", _clause(level))
+        for level in (3, 4):
+            with self.subTest(level=level):
+                clause = _clause(level)
+                self.assertIn("REVERSE A KEY WORD OUT OF A SOLID BLOCK", clause)
+                self.assertIn("BUILD SUPPORTING ARTWORK", clause)
+                self.assertIn("never captions", clause)
+        # 4 級再加碼：第二個反白字＋額外元素升格成第二視覺重心
+        self.assertIn("MORE THAN ONE WORD IS REVERSED OUT", _clause(4))
+        self.assertIn("SECOND FOCAL POINT", _clause(4))
+        self.assertNotIn("MORE THAN ONE WORD IS REVERSED OUT", _clause(3))
+
+    def test_extra_artwork_never_licenses_extra_words(self):
+        """FIXED (e) 仍然管著：清單以外的字一個都不准畫。"""
+        for level in (3, 4):
+            with self.subTest(level=level):
+                self.assertIn("No text of any kind other than the listed strings", _clause(level))
+
     def test_the_loudest_level_makes_the_tilt_mandatory(self):
         """「可以傾斜」在第七批就證明推不動模型：許可句＝不會發生。"""
         self.assertIn("THE BLOCK TILTS OR ARCS — required here, not offered", _clause(4))
