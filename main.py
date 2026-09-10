@@ -2255,7 +2255,15 @@ def supports_multiple_reference_images() -> bool:
 # 仍不選 gpt-5.4-image-2 / gpt-5-image 系列：連 aspect_ratio 參數都沒有。
 NATIVE_GPT_IMAGE_MODEL = "gpt-image-2.5-sunburst"
 NATIVE_GEMINI_IMAGE_MODEL = "gemini-3-pro-image"
-OPENROUTER_GPT_IMAGE_MODEL = f"openai/{NATIVE_GPT_IMAGE_MODEL}"
+# OpenRouter 這條**不能**跟著換成 2.5（2026-09-10 線上事故）：
+# openai/gpt-image-2.5-sunburst 在 OpenRouter 的 images/generations 上**完全不理會**
+# aspect_ratio，一律回它的原生 1536x1024（3:2），即使 images/models 端點明明宣告
+# 支援 16:9／21:9。實測：不帶任何參考圖、只送 aspect_ratio=16:9 也照樣回 1536x1024，
+# 所以不是參考圖造成的，是那個端點自己的問題。verify_output_aspect_ratio 當場擋下來
+# 回 502，等於網頁版所有 GPT 生圖全掛。原生 OpenAI 那條不受影響（它送的是明確的
+# size，不是 aspect_ratio），所以 2.5 只留在原生。
+# 等 OpenRouter 修好再換回來——換回來前請先跑一次 16:9 實打確認尺寸。
+OPENROUTER_GPT_IMAGE_MODEL = "openai/gpt-image-2"
 OPENROUTER_GEMINI_IMAGE_MODEL = f"google/{NATIVE_GEMINI_IMAGE_MODEL}"
 
 # 各模型在 API 層支援的 aspect_ratio。

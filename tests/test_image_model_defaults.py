@@ -34,11 +34,23 @@ def image_response(size: tuple[int, int], model: str = "openai/gpt-image-2") -> 
 
 
 class ModelDefaultsTests(unittest.TestCase):
-    def test_both_transports_use_the_same_gpt_model(self):
-        """切 IMAGE_BACKEND 不可以連模型一起換掉。"""
-        self.assertEqual(
-            main.OPENROUTER_GPT_IMAGE_MODEL, f"openai/{main.NATIVE_GPT_IMAGE_MODEL}"
-        )
+    def test_gpt_transports_are_split_on_purpose(self):
+        """兩條傳輸層本來就該用同一個模型——2026-09-10 起是刻意的例外，不是漏改。
+
+        openai/gpt-image-2.5-sunburst 在 OpenRouter 的 images/generations 上完全不理會
+        aspect_ratio，一律回 1536x1024（3:2），即使 images/models 端點宣告支援 16:9／21:9。
+        實測不帶任何參考圖也一樣，所以不是參考圖造成的。verify_output_aspect_ratio 會當場
+        擋下來回 502＝網頁版所有 GPT 生圖全掛。原生那條送的是明確的 size 不是 aspect_ratio，
+        不受影響，所以 2.5 只留在原生。
+
+        OpenRouter 修好之後：把 OPENROUTER_GPT_IMAGE_MODEL 改回
+        f"openai/{main.NATIVE_GPT_IMAGE_MODEL}"，**先跑一次 16:9 實打確認尺寸**，
+        再把這個測試改回「兩邊必須相同」。
+        """
+        self.assertEqual(main.NATIVE_GPT_IMAGE_MODEL, "gpt-image-2.5-sunburst")
+        self.assertEqual(main.OPENROUTER_GPT_IMAGE_MODEL, "openai/gpt-image-2")
+        # 不管用哪一個，都必須登記在比例表上，否則 21:9 又會被靜靜忽略
+        self.assertIn("21:9", main.MODEL_ASPECT_RATIOS[main.OPENROUTER_GPT_IMAGE_MODEL])
 
     def test_both_transports_use_the_same_gemini_model(self):
         self.assertEqual(

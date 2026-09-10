@@ -63,7 +63,7 @@ OPENAI_IMAGE_QUALITY=medium
 ```
 
 **預設走 OpenRouter**（`IMAGE_BACKEND=openrouter`，設 `native` 可切回原生直連），模型分別是
-`openai/gpt-image-2.5-sunburst` 與 `google/gemini-3-pro-image`，以 `OPENROUTER_GPT_MODEL`／
+`openai/gpt-image-2`（**不是** 2.5：OpenRouter 那條端點會忽略 `aspect_ratio`，見 `main.py` 的註解）與 `google/gemini-3-pro-image`，以 `OPENROUTER_GPT_MODEL`／
 `OPENROUTER_GEMINI_MODEL` 覆寫。兩條路徑刻意用同一個模型，切換傳輸層不會連模型一起換掉。
 
 Gemini 使用原生 `1K` 設定；GPT 依要求的比例換算尺寸（16:9→1280×720、21:9→1680×720）輸出 PNG。
