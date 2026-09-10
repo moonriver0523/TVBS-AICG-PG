@@ -1961,6 +1961,8 @@ function tenCoverFields() {
         date_text: val('coverDate'),
         badge: document.getElementById('coverBadge')?.value || 'on_air',
         title_creativity: state.coverTitleCreativity,
+        // 側邊標籤（2026-09-10）：使用者自己打的短詞，後端原樣畫成一排小籤
+        side_labels: val('coverSideLabels'),
         provider: effectiveImageProvider(),
     };
 }

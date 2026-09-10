@@ -209,7 +209,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 {title_left_lines}
 - Headline of the RIGHT panel, RIGHT-aligned in its lower-right area, over the photograph. Same rule — render these lines as given:
 {title_right_lines}
-
+{side_labels_block}
 === TYPOGRAPHY (this is the point of the image) ===
 - The two headlines are the loudest thing in the frame: very heavy condensed Chinese display type, STACKED ON THE LINES GIVEN ABOVE (the split is already decided — never change it), tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of each photograph darkens gently so the headline stays readable.
 - THE NUMBER OF LINES AND WHERE THEY BREAK ARE FIXED. Each headline lists its lines above with a count. Render EVERY listed line on its OWN separate row, in the listed order: never merge two listed lines onto one row, never break one listed line across two rows, never drop or reorder one. A headline listed as three lines must appear as three stacked rows.
@@ -240,7 +240,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 - Draw NOTHING in the header band. The date and the small red tag at its right end are pasted in afterwards by software, exactly like the channel logo at its left end.
 - The headline, LEFT-aligned in the lower-left area of the frame, over the photograph. It is ALREADY split into lines — render each line on its own line, in this order, and do NOT re-split, merge or reorder them:
 {title_left_lines}
-
+{side_labels_block}
 === TYPOGRAPHY (this is the point of the image) ===
 - The headline is the loudest thing in the frame: very heavy condensed Chinese display type, STACKED ON THE LINES GIVEN ABOVE (the split is already decided — never change it), occupying roughly the left half of the frame, tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of the photograph darkens gently so the headline stays readable.
 - THE NUMBER OF LINES AND WHERE THEY BREAK ARE FIXED. The headline lists its lines above with a count. Render EVERY listed line on its OWN separate row, in the listed order: never merge two listed lines onto one row, never break one listed line across two rows, never drop or reorder one. A headline listed as three lines must appear as three stacked rows.
@@ -321,6 +321,50 @@ COVER_AI_FULL_PROMPT_TEMPLATE = COVER_AI_FULL_PROMPT_TEMPLATE.replace(
 #   L3 ＋多層描邊與立體擠出（原本 4 級的）／**標題與照片主體交錯**／版位自由／圖示
 #   L4 ＋落差拉到 2.5–3 倍／第三層描邊／**傾斜從「可以」改成「必須」**／爆裂裝飾
 # 判準同 CG 那條拉桿的教訓：形容詞會被圖模平均掉，能看見的是形狀與位置的改變。
+# 側邊標籤（2026-09-10）。使用者拿真實封面對照：高創意那幾級「還允許多一些標籤」，
+# 例如胰臟癌那張右側的六個症狀小籤。
+#
+# 為什麼開一個欄位、而不是叫模型自己想：那六個詞是**新的中文字**。讓模型自己生等於把
+# 「編字上鏡」寫進規則——與這條線一路在防的「憑空多一條警示帶」是同一件事。欄位裡的字
+# 由使用者負責，模型只負責畫；FIXED (e)「清單以外的字一個都不准」原樣成立，
+# 只是這幾個字現在也在清單上。沒填就整段不出現，prompt 與過去逐字元相同。
+COVER_SIDE_LABEL_MAX = 6
+COVER_SIDE_LABEL_CHARS = 6
+_SIDE_LABEL_SPLIT = re.compile(r"[\s、,，/／|｜]+")
+
+
+def cover_side_labels(raw: str) -> list[str]:
+    """把使用者填的一串字拆成標籤清單（空白、頓號、逗號、斜線都算分隔）。"""
+    parts = [p.strip() for p in _SIDE_LABEL_SPLIT.split(raw or "") if p.strip()]
+    return [p[:COVER_SIDE_LABEL_CHARS] for p in parts[:COVER_SIDE_LABEL_MAX]]
+
+
+def cover_side_labels_block(raw: str) -> str:
+    """側邊標籤那一段條文。"""
+    labels = cover_side_labels(raw)
+    if not labels:
+        return ""
+    listed = "\n".join(f"    - {text}" for text in labels)
+    return (
+        "- A COLUMN OF SMALL LABEL CHIPS, DRAWN ONCE AND ONLY IN THE RIGHT-HAND PANEL"
+        " (in the single-photograph layout: down the right-hand side of the frame). The left panel"
+        " carries no chips at all — one column total, never a copy on each side."
+        " It runs down the outer side, clear of the headline and clear of the header band."
+        " Render EXACTLY these strings,"
+        " character for character, one chip each, in this order — they are part of the listed"
+        " text, not decoration you may edit, drop or add to:\n"
+        + listed
+        + "\n  Each chip is a small rounded plate in the panel's accent colour with a thin bright"
+        " edge, a wordless pictogram at its left end, and the characters set small but crisp."
+        " The chips share one width and stack with even gaps. They never overlap the headline,"
+        " never enter the header band or the bottom strip, and never touch a frame edge.\n"
+        "  THE TOP OF THE COLUMN STARTS NO HIGHER THAN ONE THIRD OF THE WAY DOWN THE FRAME:"
+        " the small area just under the outer top corner is reserved for the 示意圖 label that"
+        " software pastes in afterwards, and a chip drawn up there comes out with that label"
+        " printed across it. Leave that corner completely empty and begin the column below it.\n"
+    )
+
+
 COVER_AI_TITLE_LEVEL_MIN = 0
 COVER_AI_TITLE_LEVEL_MAX = 4
 COVER_AI_TITLE_LEVEL_NAMES = {

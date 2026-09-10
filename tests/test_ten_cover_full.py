@@ -40,7 +40,7 @@ class FormatTableTests(unittest.TestCase):
 
     def test_full_prompt_has_one_photo_and_one_headline(self):
         text = editor_formats.COVER_AI_FULL_PROMPT_TEMPLATE.format(
-            badge_text="ON AIR", date_text="2026/09/07",
+            badge_text="ON AIR", date_text="2026/09/07", side_labels_block="",
             title_left_lines="  Line 1: 全球3100條\n  Line 2: 躍動冰川", visual_left="冰川崩落",
             title_style_clause="",   # 2026-09-08 設計標題開關，預設 plain
         )

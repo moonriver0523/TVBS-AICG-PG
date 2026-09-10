@@ -310,7 +310,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260910-11</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260910-12</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -479,6 +479,12 @@
                                 <span id="coverTitleStyleLabel" class="text-[9px] font-black text-violet-300">規矩</span>
                             </div>
                         </div>
+                        <!-- 側邊標籤（2026-09-10）：畫成一排小籤（像症狀列表）。
+                             刻意由使用者自己打——讓 AI 自己想標籤等於讓它編字上鏡。 -->
+                        <input id="coverSideLabels" type="text" maxlength="120"
+                               class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-1.5 text-[11px] text-slate-100 input-focus-ring"
+                               title="最多 6 個、每個最多 6 字；用空白或頓號分隔。留空＝不畫。這些字會原樣畫上去，AI 不會自己增減"
+                               placeholder="側邊小標籤（選填，空白分隔）例：食慾不振 體重下降 腹部不適" />
                     </div>
 
                     <!-- YT 直播封面（國內外新聞／整點兩版型共用）：一句標題（半形空格分段）＋副標或整點時間＋日期；

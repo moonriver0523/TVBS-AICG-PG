@@ -286,6 +286,8 @@ class CoverPromptTests(unittest.TestCase):
             "visual_right": "病理科實驗室",
             # 2026-09-08 設計標題開關：預設 plain＝不追加任何一段
             "title_style_clause": "",
+            # 側邊標籤（2026-09-10）：沒填就是空字串，prompt 與過去逐字元相同
+            "side_labels_block": "",
         }
         fields.update(overrides)
         return editor_formats.COVER_AI_PROMPT_TEMPLATE.format(**fields)

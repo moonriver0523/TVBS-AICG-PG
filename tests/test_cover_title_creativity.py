@@ -244,3 +244,50 @@ class RequestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SideLabelTests(unittest.TestCase):
+    """側邊標籤（2026-09-10）：使用者自己打的短詞，畫成一排小籤。
+
+    為什麼不讓 AI 自己想：那是新的中文字，交給模型等於讓它編字上鏡——
+    與這條線一路在防的「憑空多一條警示帶」同一件事。
+    """
+
+    def test_empty_input_changes_nothing(self):
+        self.assertEqual(editor_formats.cover_side_labels_block(""), "")
+        self.assertEqual(editor_formats.cover_side_labels_block("   "), "")
+
+    def test_separators_and_caps(self):
+        labels = editor_formats.cover_side_labels(
+            "食慾不振 體重下降、腹部不適／容易疲倦,血糖異常|黃疸 第七個"
+        )
+        self.assertEqual(len(labels), editor_formats.COVER_SIDE_LABEL_MAX)
+        self.assertEqual(labels[0], "食慾不振")
+        self.assertTrue(all(len(t) <= editor_formats.COVER_SIDE_LABEL_CHARS for t in labels))
+
+    def test_the_block_lists_them_as_listed_text_not_decoration(self):
+        block = editor_formats.cover_side_labels_block("食慾不振 體重下降")
+        self.assertIn("食慾不振", block)
+        self.assertIn("體重下降", block)
+        self.assertIn("character for character", block)
+        self.assertIn("not decoration you may edit, drop or add to", block)
+        self.assertIn("never enter the header band", block)
+
+    def test_the_request_carries_the_field_through_to_the_prompt(self):
+        seen = {}
+
+        def fake_raw(image_req):
+            seen["prompt"] = image_req.prompt
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(_png_for(image_req.aspect_ratio)).decode("ascii"),
+                mime_type="image/png", model="fake",
+            )
+
+        with patch.object(main, "generate_image_raw", fake_raw):
+            main.editor_cover(main.TenCoverRequest(
+                title_left="胰臟癌6大 前兆", title_right="徵才薪資面議 調高至5萬",
+                layout="split", mode="ai", provider="gpt", title_creativity=4,
+                side_labels="食慾不振 體重下降",
+            ))
+        self.assertIn("食慾不振", seen["prompt"])
+        self.assertIn("COLUMN OF SMALL LABEL CHIPS", seen["prompt"])

@@ -3546,6 +3546,9 @@ class TenCoverRequest(BaseModel):
         default=None, ge=editor_formats.COVER_AI_TITLE_LEVEL_MIN,
         le=editor_formats.COVER_AI_TITLE_LEVEL_MAX,
     )
+    # 側邊標籤（2026-09-10）：使用者自己打的幾個短詞，畫成一排小籤。空白＝不畫。
+    # 刻意由使用者填而不是讓 AI 想——理由見 editor_formats.cover_side_labels_block。
+    side_labels: str = Field(default="", max_length=120)
 
     def creativity_level(self) -> int:
         if self.title_creativity is not None:
@@ -3940,12 +3943,14 @@ def _cover_ai(
     style_clause = editor_formats.cover_ai_title_style_clause(req.creativity_level())
     # 3 級起才把反色底字釘在行清單上（條文本身也是 3 級起才要求）。
     reverse_out = req.creativity_level() >= 3
+    side_labels_block = editor_formats.cover_side_labels_block(req.side_labels)
     if req.layout == "full":
         prompt = editor_formats.COVER_AI_FULL_PROMPT_TEMPLATE.format(
             badge_text=badge_text,
             date_text=date_text,
             title_left_lines=_lines_block(req.title_left, full_width=True, reverse_out=reverse_out),
             visual_left=visuals[0],
+            side_labels_block=side_labels_block,
             title_style_clause=style_clause,
         )
     else:
@@ -3956,6 +3961,7 @@ def _cover_ai(
             title_right_lines=_lines_block(req.title_right, full_width=False, reverse_out=reverse_out),
             visual_left=visuals[0],
             visual_right=visuals[1],
+            side_labels_block=side_labels_block,
             title_style_clause=style_clause,
         )
     # 整張一起生：兩格的具名真人合成一份名單（去重、保持順序）
