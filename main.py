@@ -2255,15 +2255,23 @@ def supports_multiple_reference_images() -> bool:
 # 仍不選 gpt-5.4-image-2 / gpt-5-image 系列：連 aspect_ratio 參數都沒有。
 NATIVE_GPT_IMAGE_MODEL = "gpt-image-2.5-sunburst"
 NATIVE_GEMINI_IMAGE_MODEL = "gemini-3-pro-image"
-# OpenRouter 這條**不能**跟著換成 2.5（2026-09-10 線上事故）：
-# openai/gpt-image-2.5-sunburst 在 OpenRouter 的 images/generations 上**完全不理會**
-# aspect_ratio，一律回它的原生 1536x1024（3:2），即使 images/models 端點明明宣告
-# 支援 16:9／21:9。實測：不帶任何參考圖、只送 aspect_ratio=16:9 也照樣回 1536x1024，
-# 所以不是參考圖造成的，是那個端點自己的問題。verify_output_aspect_ratio 當場擋下來
-# 回 502，等於網頁版所有 GPT 生圖全掛。原生 OpenAI 那條不受影響（它送的是明確的
-# size，不是 aspect_ratio），所以 2.5 只留在原生。
-# 等 OpenRouter 修好再換回來——換回來前請先跑一次 16:9 實打確認尺寸。
-OPENROUTER_GPT_IMAGE_MODEL = "openai/gpt-image-2"
+# 2026-09-10 線上事故與其根因（實打定位，不是推測）：
+# OpenRouter 的 aspect_ratio → OpenAI size 正規化**沒有套用到 GPT Image 2.5 系列**，
+# aspect_ratio 被整個丟掉，落回 OpenAI 預設的 1536x1024（3:2）。
+# verify_output_aspect_ratio 當場擋下來回 502＝網頁版所有 GPT 生圖全掛。
+#
+#   只給 aspect_ratio     sunburst 16:9 / 21:9、flare 16:9 → 全部 1536x1024   ✗
+#   只給 size             sunburst 1536x864 / 1680x720 / 1280x720、flare → 全對 ✓
+#   size + aspect_ratio   以 size 為準，正確                                   ✓
+#   size + 參考圖 1 張     1536x864，正確                                      ✓
+#   對照組 gpt-image-2 只給 aspect_ratio 16:9 → 1536x864，正常
+#
+# 所以解法不是退回 2（那會白白丟掉快一倍、便宜四倍、畫質更好），而是**自己送 size**：
+# 見 _openrouter_gpt_size。size 這條路 21:9 與參考圖都對，兩條傳輸層從此做法一致
+# （原生本來就是送 size）。
+# 注意 size **不在** OpenRouter images/models 宣告的參數清單裡，屬未公開行為；
+# 真的哪天被拿掉，verify_output_aspect_ratio 會照樣當場擋下來，不會默默出錯比例的圖。
+OPENROUTER_GPT_IMAGE_MODEL = f"openai/{NATIVE_GPT_IMAGE_MODEL}"
 OPENROUTER_GEMINI_IMAGE_MODEL = f"google/{NATIVE_GEMINI_IMAGE_MODEL}"
 
 # 各模型在 API 層支援的 aspect_ratio。
@@ -2310,6 +2318,19 @@ MODEL_ASPECT_RATIOS: dict[str, frozenset[str]] = {
     "sourceful/riverflow-v2.5-pro": _RATIOS_WIDE_STANDARD,
     "sourceful/riverflow-v2.5-fast": _RATIOS_WIDE_STANDARD,
 }
+
+
+def _openrouter_gpt_size(model: str, aspect_ratio: str) -> str | None:
+    """OpenRouter 上的 GPT Image 系列要送明確的 size，不能只靠 aspect_ratio。
+
+    2026-09-10 實打：GPT Image 2.5（sunburst／flare）在 OpenRouter 上會把 aspect_ratio
+    整個丟掉，落回 1536x1024；同一支腳本只改成送 size 就完全正確，21:9 與帶參考圖都對。
+    gpt-image-2 兩種都吃，一起送不會有壞處，所以整個 openai/gpt-image 系列統一送 size。
+    尺寸沿用原生那張表，兩條傳輸層拿到的畫素完全一樣。
+    """
+    if not model.startswith("openai/gpt-image"):
+        return None
+    return NATIVE_GPT_IMAGE_SIZES.get(aspect_ratio)
 
 
 def assert_aspect_ratio_supported(model: str, aspect_ratio: str) -> None:
@@ -2484,6 +2505,12 @@ def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGener
     # GPT 系列不吃 resolution，帶了會 400。
     if any(tag in model for tag in ("gemini", "seedream", "riverflow")):
         payload["resolution"] = req.image_size
+    # GPT Image 系列額外送明確的 size（2026-09-10 熱修，根因見 OPENROUTER_GPT_IMAGE_MODEL
+    # 上面那段）：2.5 系列的 aspect_ratio 會被整個丟掉，size 才吃得到。aspect_ratio 一併
+    # 留著，對 2 與其他模型仍然有效；兩者並存時以 size 為準（實打確認）。
+    gpt_size = _openrouter_gpt_size(model, req.aspect_ratio)
+    if gpt_size:
+        payload["size"] = gpt_size
     # 參考圖兩個來源合併送出：肖像參考照（自動查圖）在前、使用者上傳在後。
     # GPT Image 2／2.5 支援 0–16 張、Gemini 0–14 張（PLAN.md 已向 models 端點查證），
     # 但實務上不需要塞滿，超過 MAX_INPUT_REFERENCES 的直接擋下。
