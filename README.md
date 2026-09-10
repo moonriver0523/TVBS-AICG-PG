@@ -56,14 +56,14 @@ GEMINI_API_KEY=your_api_key
 GEMINI_IMAGE_MODEL=gemini-3-pro-image
 
 # GPT 圖片沿用上方 OPENAI_API_KEY
-# 可選：只在 IMAGE_BACKEND=native 時生效，預設為 gpt-image-2
-OPENAI_IMAGE_MODEL=gpt-image-2
+# 可選：只在 IMAGE_BACKEND=native 時生效，預設為 gpt-image-2.5-sunburst
+OPENAI_IMAGE_MODEL=gpt-image-2.5-sunburst
 # 可選：low / medium / high / auto，預設 medium
 OPENAI_IMAGE_QUALITY=medium
 ```
 
 **預設走 OpenRouter**（`IMAGE_BACKEND=openrouter`，設 `native` 可切回原生直連），模型分別是
-`openai/gpt-image-2` 與 `google/gemini-3-pro-image`，以 `OPENROUTER_GPT_MODEL`／
+`openai/gpt-image-2.5-sunburst` 與 `google/gemini-3-pro-image`，以 `OPENROUTER_GPT_MODEL`／
 `OPENROUTER_GEMINI_MODEL` 覆寫。兩條路徑刻意用同一個模型，切換傳輸層不會連模型一起換掉。
 
 Gemini 使用原生 `1K` 設定；GPT 依要求的比例換算尺寸（16:9→1280×720、21:9→1680×720）輸出 PNG。

@@ -3943,7 +3943,13 @@ def _cover_ai(
     style_clause = editor_formats.cover_ai_title_style_clause(req.creativity_level())
     # 3 級起才把反色底字釘在行清單上（條文本身也是 3 級起才要求）。
     reverse_out = req.creativity_level() >= 3
-    side_labels_block = editor_formats.cover_side_labels_block(req.side_labels)
+    # 側邊標籤只在 3 級起才畫（2026-09-10 使用者裁決）：0–2 是「規矩」到「有設計」，
+    # 版面本來就滿，多一排籤會擠掉標題；功能也還在測試期，先只開給高創意。
+    side_labels_block = (
+        editor_formats.cover_side_labels_block(req.side_labels)
+        if req.creativity_level() >= 3
+        else ""
+    )
     if req.layout == "full":
         prompt = editor_formats.COVER_AI_FULL_PROMPT_TEMPLATE.format(
             badge_text=badge_text,

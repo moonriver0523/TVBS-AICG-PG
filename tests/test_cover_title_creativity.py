@@ -291,3 +291,31 @@ class SideLabelTests(unittest.TestCase):
             ))
         self.assertIn("食慾不振", seen["prompt"])
         self.assertIn("COLUMN OF SMALL LABEL CHIPS", seen["prompt"])
+
+    def test_low_creativity_does_not_draw_the_chips(self):
+        """0–2 級一律不畫側標（2026-09-10 使用者裁決）。
+
+        規矩／微設計／有設計那三級版面本來就滿，多一排籤會擠掉標題；
+        功能也還在測試期，先只開給 3 級起。前端欄位同日也先藏起來。
+        """
+        for level in (0, 1, 2):
+            with self.subTest(level=level):
+                seen = {}
+
+                def fake_raw(image_req):
+                    seen["prompt"] = image_req.prompt
+                    return main.ImageGenerateResponse(
+                        image_data_base64=base64.b64encode(
+                            _png_for(image_req.aspect_ratio)
+                        ).decode("ascii"),
+                        mime_type="image/png", model="fake",
+                    )
+
+                with patch.object(main, "generate_image_raw", fake_raw):
+                    main.editor_cover(main.TenCoverRequest(
+                        title_left="胰臟癌6大 前兆", title_right="徵才薪資面議 調高至5萬",
+                        layout="split", mode="ai", provider="gpt", title_creativity=level,
+                        side_labels="食慾不振 體重下降",
+                    ))
+                self.assertNotIn("食慾不振", seen["prompt"])
+                self.assertNotIn("COLUMN OF SMALL LABEL CHIPS", seen["prompt"])
