@@ -2448,6 +2448,9 @@ _RATIOS_WIDE_STANDARD = frozenset(
 MODEL_ASPECT_RATIOS: dict[str, frozenset[str]] = {
     # GPT Image 2.5（2026-09-08 上架）：sunburst 精準向、flare 速度向，
     # aspect_ratio enum 與 gpt-image-2 相同（2026-09-10 向 OpenRouter images/models 端點查證）。
+    # 注意這裡登記的是**宣告值**，而 2.5 系列在 OpenRouter 上並不真的照著做：
+    # aspect_ratio 會被整個丟掉。所以那條路額外送明確的 size 才拿得到這些比例，
+    # 見上面 OPENROUTER_GPT_IMAGE_MODEL 的註解與 _openrouter_gpt_size。
     "openai/gpt-image-2.5-sunburst": _RATIOS_OPENAI_FULL,
     "openai/gpt-image-2.5-flare": _RATIOS_OPENAI_FULL,
     "openai/gpt-image-2": _RATIOS_OPENAI_FULL,
