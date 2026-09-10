@@ -40,6 +40,29 @@ class ModelDefaultsTests(unittest.TestCase):
             main.OPENROUTER_GPT_IMAGE_MODEL, f"openai/{main.NATIVE_GPT_IMAGE_MODEL}"
         )
 
+    def test_openrouter_gpt_gets_an_explicit_size(self):
+        """OpenRouter 上的 GPT Image 一定要送明確的 size，只靠 aspect_ratio 會被丟掉。
+
+        2026-09-10 線上事故：GPT Image 2.5（sunburst／flare）在 OpenRouter 上完全不理會
+        aspect_ratio，一律回 1536x1024（3:2），images/models 端點卻宣告支援 16:9／21:9。
+        同一支腳本只改成送 size 就全對（1536x864、1280x720、1680x720，帶參考圖也對），
+        對照組 gpt-image-2 的 aspect_ratio 則正常。這條測試守的是那個 size 有被送出去。
+        """
+        for ratio, expected in (("16:9", "1280x720"), ("21:9", "1680x720")):
+            with self.subTest(ratio=ratio):
+                self.assertEqual(
+                    main._openrouter_gpt_size(main.OPENROUTER_GPT_IMAGE_MODEL, ratio),
+                    expected,
+                )
+        # 只有 openai/gpt-image 系列要送；Gemini 那條吃的是 resolution，送 size 會壞
+        self.assertIsNone(
+            main._openrouter_gpt_size(main.OPENROUTER_GEMINI_IMAGE_MODEL, "16:9")
+        )
+        # 表上沒有的比例就不硬湊一個尺寸出來
+        self.assertIsNone(
+            main._openrouter_gpt_size(main.OPENROUTER_GPT_IMAGE_MODEL, "5:4")
+        )
+
     def test_both_transports_use_the_same_gemini_model(self):
         self.assertEqual(
             main.OPENROUTER_GEMINI_IMAGE_MODEL, f"google/{main.NATIVE_GEMINI_IMAGE_MODEL}"
