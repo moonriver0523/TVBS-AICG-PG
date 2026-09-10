@@ -352,7 +352,7 @@ class GenerateResponse(BaseModel):
     map_missing: list[str] = Field(default_factory=list)
 
 
-# input_references 的上限。模型端 gpt-image-2 收 0–16、Gemini 0–14（PLAN.md 查證），
+# input_references 的上限。模型端 GPT Image 2／2.5 收 0–16、Gemini 0–14（PLAN.md 查證），
 # 這裡抓遠低於兩者的值：一張肖像參考照＋幾張使用者參考圖已綽綽有餘，
 # 塞更多只會稀釋每張的權重、還把 base64 請求撐爆。
 MAX_INPUT_REFERENCES = 6
@@ -2188,9 +2188,14 @@ def supports_multiple_reference_images() -> bool:
 # 一家一個模型，OpenRouter 與原生兩條路徑共用同一個——否則切 IMAGE_BACKEND 會連模型一起
 # 換掉，而兩個模型的能力並不相同（2026-08-01 清查：OpenRouter 那條原本是 gpt-5.4-image-2、
 # 原生那條是 gpt-image-2，文件卻只寫後者）。
-# GPT 選 gpt-image-2 的理由：OpenAI 家族只有它在 API 層支援安全框要的 21:9，
-# gpt-5.4-image-2 / gpt-5-image 系列連 aspect_ratio 參數都沒有。
-NATIVE_GPT_IMAGE_MODEL = "gpt-image-2"
+# GPT 選 gpt-image-2.5-sunburst 的理由（2026-09-10 使用者裁決，兩輪本機實打對照）：
+# 對 gpt-image-2 同 prompt／同 21:9／同 quality=medium，畫質更好（稻穗有結構、金屬有質感，
+# gpt-image-2 右半糊成一片）、快約 2 倍（12.9s vs 28.5s）、便宜約 4 倍（193 vs 809 輸出 tokens，
+# 單價同為 $30/1M），中文字兩者都全對。安全框要的 21:9 有支援，參考圖上限一樣是 16 張。
+# 對照圖：D:\Downloads\20260910-2.5對照*.png。
+# 不選 flare 的理由：同價同 tokens，但細節較軟——沒有理由買便宜貨當預設。
+# 仍不選 gpt-5.4-image-2 / gpt-5-image 系列：連 aspect_ratio 參數都沒有。
+NATIVE_GPT_IMAGE_MODEL = "gpt-image-2.5-sunburst"
 NATIVE_GEMINI_IMAGE_MODEL = "gemini-3-pro-image"
 OPENROUTER_GPT_IMAGE_MODEL = f"openai/{NATIVE_GPT_IMAGE_MODEL}"
 OPENROUTER_GEMINI_IMAGE_MODEL = f"google/{NATIVE_GEMINI_IMAGE_MODEL}"
@@ -2213,6 +2218,10 @@ _RATIOS_WIDE_STANDARD = frozenset(
 )
 
 MODEL_ASPECT_RATIOS: dict[str, frozenset[str]] = {
+    # GPT Image 2.5（2026-09-08 上架）：sunburst 精準向、flare 速度向，
+    # aspect_ratio enum 與 gpt-image-2 相同（2026-09-10 向 OpenRouter images/models 端點查證）。
+    "openai/gpt-image-2.5-sunburst": _RATIOS_OPENAI_FULL,
+    "openai/gpt-image-2.5-flare": _RATIOS_OPENAI_FULL,
     "openai/gpt-image-2": _RATIOS_OPENAI_FULL,
     "openai/gpt-image-1": _RATIOS_OPENAI_LEGACY,
     "openai/gpt-image-1-mini": _RATIOS_OPENAI_LEGACY,
@@ -2410,7 +2419,7 @@ def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGener
     if any(tag in model for tag in ("gemini", "seedream", "riverflow")):
         payload["resolution"] = req.image_size
     # 參考圖兩個來源合併送出：肖像參考照（自動查圖）在前、使用者上傳在後。
-    # gpt-image-2 支援 0–16 張、Gemini 0–14 張（PLAN.md 已向 models 端點查證），
+    # GPT Image 2／2.5 支援 0–16 張、Gemini 0–14 張（PLAN.md 已向 models 端點查證），
     # 但實務上不需要塞滿，超過 MAX_INPUT_REFERENCES 的直接擋下。
     reference_urls = [
         url
@@ -2479,8 +2488,9 @@ def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGener
     )
 
 
-# 原生 OpenAI 沒有 aspect_ratio，只吃 size。gpt-image-2 接受任意 16 的倍數
-# （標準上限 2560×1440），這裡挑貼合比例、又不超過上限的尺寸。
+# 原生 OpenAI 沒有 aspect_ratio，只吃 size。GPT Image 2／2.5 接受任意 16 的倍數
+# （gpt-image-2 標準上限 2560×1440；2.5 實測長邊上限放寬到 3840，錯誤訊息明講），
+# 這裡挑貼合比例、又不超過兩者共同上限的尺寸——沿用同一組值，換模型不會連尺寸一起變。
 # 2026-08-01 之前這裡寫死 1280x720，等於無視呼叫端要的比例——安全框開 21:9
 # 也會靜靜拿回 16:9，是與 OpenRouter 那條同一類的靜默降級。
 NATIVE_GPT_IMAGE_SIZES = {

@@ -45,6 +45,14 @@ class ModelDefaultsTests(unittest.TestCase):
             main.OPENROUTER_GEMINI_IMAGE_MODEL, f"google/{main.NATIVE_GEMINI_IMAGE_MODEL}"
         )
 
+    def test_gpt_image_2_5_pair_is_on_the_ratio_table(self):
+        """新模型沒登記到表上，assert_aspect_ratio_supported 會走「未知模型照送不擋」，
+        21:9 就重新變回可以被靜靜忽略——正是 2026-08-01 查了整晚的那個坑。
+        """
+        for model in ("openai/gpt-image-2.5-sunburst", "openai/gpt-image-2.5-flare"):
+            with self.subTest(model=model):
+                self.assertIn("21:9", main.MODEL_ASPECT_RATIOS[model])
+
     def test_default_gpt_model_can_actually_do_the_safe_frame_ratio(self):
         """安全框是 21:9，預設模型做不到的話整條流程的前提就不成立。"""
         self.assertIn(
