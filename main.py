@@ -4799,6 +4799,14 @@ def _yt_cover_full_image(
     image_req = ImageGenerateRequest(
         prompt=template.format(
             line1=lines[0], line2=lines[1], visual=visual.strip() or req.title.strip(),
+            # 雙則才講兩景分割；單則是一個場景，講了反而會逼它硬切成兩半。
+            # 分割位置一定要講：不講的話模型自己切，實拍落在 59%／64%，都偏右
+            # 又互不一致（2026-09-10 使用者指出）。
+            split_note=(
+                editor_formats.YT_COVER_DUAL_SPLIT_NOTE
+                if editor_formats.yt_cover_is_dual(req.layout, req.title_second)
+                else ""
+            ),
             # 整點版模板沒有底帶佔位（版面本來就沒有底帶），多給的欄位 format 會忽略
             **(editor_formats.yt_cover_band_fields(req.layout, req.bottom_band)
                if req.layout != editor_formats.YT_COVER_LAYOUT_HOURLY else {}),
