@@ -310,7 +310,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260910-08</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260910-09</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -644,13 +644,16 @@
                     </div>
 
                     <div id="digestControlsRow" class="grid grid-cols-2 gap-2 mb-2">
-                        <div class="flex bg-black/40 p-1 rounded-lg">
-                            <button data-tone="light" onclick="switchTone('light')"
-                                    title="亮色調：淺底深字，白天／日常題材"
-                                    class="tone-btn flex-1 px-2 py-1.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all"><span class="tone-dot tone-dot-light"></span>色調亮</button>
-                            <button data-tone="dark" onclick="switchTone('dark')"
-                                    title="暗色調：深底亮字，災害／突發題材（預設）"
-                                    class="tone-btn tone-active flex-1 px-2 py-1.5 rounded-md text-[10px] font-black transition-all"><span class="tone-dot tone-dot-dark"></span>色調暗</button>
+                        <!-- CG 美術創意（2026-09-10）：記者版與編輯各版型（含播出鏡面）共用。
+                             YT 封面與十點封面走另一個端點，各有自己的拉桿，不吃這一條。 -->
+                        <div id="cgCreativityBar" class="flex items-center gap-2 bg-black/40 px-2 py-1.5 rounded-lg"
+                             title="0＝現行成品；愈往右，標題與關鍵數字的美術處理愈重（描邊、壓框、立體、圖示、裝飾）。版面骨架、卡片數與安全留白不受影響，字句也一字不改。">
+                            <span class="text-[9px] font-black text-slate-500">規矩</span>
+                            <input id="cgCreativityRange" type="range" min="0" max="4" step="1" value="0"
+                                   class="flex-1 accent-violet-500 cursor-pointer"
+                                   oninput="setCgCreativity(this.value)" />
+                            <span class="text-[9px] font-black text-slate-500">最狂</span>
+                            <span id="cgCreativityLabel" class="text-[10px] font-black text-violet-300 w-12 text-right">規矩</span>
                         </div>
                         <!-- 消化程度（2026-09-09：三顆鈕改成三段拉桿，比照標題創意那條） -->
                         <div class="flex items-center gap-2 bg-black/40 px-2 py-1.5 rounded-lg"
@@ -662,16 +665,13 @@
                             <span class="text-[9px] font-black text-slate-500">字超多</span>
                             <span id="digestDensityLabel" class="text-[10px] font-black text-red-300 w-12 text-right">字少</span>
                         </div>
-                        <!-- CG 美術創意（2026-09-10）：記者版與編輯各版型（含播出鏡面）共用。
-                             YT 封面與十點封面走另一個端點，各有自己的拉桿，不吃這一條。 -->
-                        <div id="cgCreativityBar" class="flex items-center gap-2 bg-black/40 px-2 py-1.5 rounded-lg"
-                             title="0＝現行成品；愈往右，標題與關鍵數字的美術處理愈重（描邊、壓框、立體、圖示、裝飾）。版面骨架、卡片數與安全留白不受影響，字句也一字不改。">
-                            <span class="text-[9px] font-black text-slate-500">規矩</span>
-                            <input id="cgCreativityRange" type="range" min="0" max="4" step="1" value="0"
-                                   class="flex-1 accent-violet-500 cursor-pointer"
-                                   oninput="setCgCreativity(this.value)" />
-                            <span class="text-[9px] font-black text-slate-500">最狂</span>
-                            <span id="cgCreativityLabel" class="text-[10px] font-black text-violet-300 w-12 text-right">規矩</span>
+                        <div class="flex bg-black/40 p-1 rounded-lg">
+                            <button data-tone="light" onclick="switchTone('light')"
+                                    title="亮色調：淺底深字，白天／日常題材"
+                                    class="tone-btn flex-1 px-2 py-1.5 rounded-md text-[10px] font-black text-slate-500 hover:text-white transition-all"><span class="tone-dot tone-dot-light"></span>色調亮</button>
+                            <button data-tone="dark" onclick="switchTone('dark')"
+                                    title="暗色調：深底亮字，災害／突發題材（預設）"
+                                    class="tone-btn tone-active flex-1 px-2 py-1.5 rounded-md text-[10px] font-black transition-all"><span class="tone-dot tone-dot-dark"></span>色調暗</button>
                         </div>
                     </div>
 
