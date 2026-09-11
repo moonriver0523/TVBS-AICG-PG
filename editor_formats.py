@@ -411,15 +411,11 @@ def cover_info_chips_block(raw: str) -> str:
     )
 
 
-COVER_AI_TITLE_LEVEL_MIN = 0
-COVER_AI_TITLE_LEVEL_MAX = 4
-COVER_AI_TITLE_LEVEL_NAMES = {
-    0: "規矩",
-    1: "微設計",
-    2: "有設計",
-    3: "奔放",
-    4: "最狂",
-}
+# 等級名稱 0-4 搬進 creativity.py（P2），與 main.CG_CREATIVITY_LEVEL_NAMES 共用
+# 同一份字典——理由同上（main.py 那份的註解）。留舊名稱當別名，呼叫端不用跟著改。
+COVER_AI_TITLE_LEVEL_MIN = creativity.LEVEL_MIN
+COVER_AI_TITLE_LEVEL_MAX = creativity.LEVEL_MAX
+COVER_AI_TITLE_LEVEL_NAMES = creativity.LEVEL_NAMES
 
 # 字句逐字／繁中臺灣用字／不准生新字／不准觸邊四條搬進 creativity.py
 # （target="image"，與 YT 共用，措辭以這裡——十點——為準，見該檔案開頭說明）。

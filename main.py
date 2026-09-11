@@ -937,15 +937,12 @@ MAXIMUM_DENSITY_RULES = """
 #
 # 注入點在 editor_formats.digest_rules 之後（本 repo 慣例：位置在後＋明文 OVERRIDE
 # 才壓得住），但條文自己第一句就聲明「只覆蓋美術，不覆蓋版面與內容」。
-CG_CREATIVITY_LEVEL_MIN = 0
-CG_CREATIVITY_LEVEL_MAX = 4
-CG_CREATIVITY_LEVEL_NAMES = {
-    0: "規矩",
-    1: "微設計",
-    2: "有設計",
-    3: "奔放",
-    4: "最狂",
-}
+# 等級名稱 0-4 搬進 creativity.py（P2），與 editor_formats.COVER_AI_TITLE_LEVEL_NAMES
+# 共用同一份字典——兩邊手寫值原本逐字相同，改一處忘了改另一處的風險同 target="digest"
+# 那段收斂的理由。這裡留舊名稱當別名，呼叫端（cg_creativity_rules 等）不用跟著改。
+CG_CREATIVITY_LEVEL_MIN = creativity.LEVEL_MIN
+CG_CREATIVITY_LEVEL_MAX = creativity.LEVEL_MAX
+CG_CREATIVITY_LEVEL_NAMES = creativity.LEVEL_NAMES
 
 # 「拉桿不准碰的東西」搬進 creativity.py（target="digest"），三處共用的持有權
 # 收在一起，改一處忘了改另外兩處的問題見該檔案開頭說明。這裡刻意不留本地副本，
