@@ -4690,6 +4690,13 @@ class YtCoverRequest(BaseModel):
     date_text: str = Field(default="", max_length=20)
     # 整點直播專用：整點時間（如 20:00），選填，有填才掛在 LIVE 章下
     time_text: str = Field(default="", max_length=10)
+    # 創意階梯（2026-09-11）。目前**只管日期牌**：0＝程式畫牌、程式壓字、位置固定；
+    # 1–4＝整個牌交給生圖模型——紅框、風格、位置、連日期數字都是它畫的，程式一筆不碰。
+    # 等級只決定牌的造型有多放（見 editor_formats._DATE_PLATE_STYLES）。
+    # 使用者裁決，且知道代價：日期畫錯一碼在成品上看起來完全正常，驗收要逐張對。
+    # 前端還沒有拉桿——那是「把創意階梯導入其他封面」那件事的一部分，等要做時再接。
+    # 預設 0 ＝ 現行行為一個像素都沒變。
+    creativity: int = Field(default=0, ge=0, le=4)
     # 給 AI 的指令（2026-09-08 WP1：封面／YT 版型重新顯示這一欄）。餵給
     # derive_yt_cover_plan 的推導步驟當畫面提示，底圖 prompt 因此照著它走。
     # 不直接拼進生圖 prompt：那條線一個字都不准畫，指令會被模型畫上去。
@@ -4923,9 +4930,19 @@ def _yt_cover_full_image(
         editor_formats.YT_COVER_LAYOUT_HOURLY: editor_formats.YT_COVER_FULL_PROMPT_HOURLY,
         editor_formats.YT_COVER_LAYOUT_HOT: editor_formats.YT_COVER_FULL_PROMPT_HOT,
     }.get(req.layout, editor_formats.YT_COVER_FULL_PROMPT_NEWS)
+    # 日期條那一條由 compose 的 box 產生（2026-09-11 創意階梯）——prompt 與程式貼附
+    # 用的是同一個座標，不會再有「兩邊各寫各的百分比」那種對不上的 bug。
+    # 整點以外的版型模板沒有這個佔位，多給的欄位 format 會忽略。
+    # 跟 5144 那處算法一致——模型畫的日期與程式後貼的必須是同一天
+    date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
     image_req = ImageGenerateRequest(
         prompt=template.format(
             line1=lines[0], line2=lines[1], visual=visual.strip() or req.title.strip(),
+            date_clause=editor_formats.yt_hourly_date_clause(
+                req.creativity, compose.YT_HOURLY_DATE_TAB_BOX, date_text
+            ),
+            date_text_line=editor_formats.yt_hourly_date_text_line(req.creativity, date_text),
+            date_ban=editor_formats.yt_hourly_date_ban(req.creativity),
             # 雙則才講兩景分割；單則是一個場景，講了反而會逼它硬切成兩半。
             # 分割位置一定要講：不講的話模型自己切，實拍落在 59%／64%，都偏右
             # 又互不一致（2026-09-10 使用者指出）。
@@ -5201,6 +5218,9 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 # 雙則的每一行是一則新聞的完整標題，長度沒有天然上限，要有一條硬線；
                 # 單則是同一句拆兩段，長度受原標題限制，不套用（維持原行為）。
                 line_max_chars=compose.YT_HOURLY_LINE_MAX_CHARS if dual else None,
+                # 整個日期牌交給模型，只在「創意 ≥1 且真的是模型畫整張」時才成立。
+                # composite（程式壓標題）那條路底圖是無文字的，沒有人畫牌，程式得自己畫。
+                draw_date=not (req.creativity >= 1 and ai_title),
             )
         else:
             cover = compose.compose_yt_cover(

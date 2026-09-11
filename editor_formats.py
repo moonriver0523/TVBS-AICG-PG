@@ -1347,29 +1347,98 @@ Photographic, dramatically lit, news-documentary quality, filling the frame{band
 - Nothing may touch or be clipped by any edge.
 """
 
+# 日期條那一條（2026-09-11 創意階梯）。座標**一律由 compose 的 box 產生**，不再手打
+# 百分比——今天早上那個 bug 就是手打的百分比跟程式實際貼附座標對不上（prompt 寫
+# 「標題第一行正上方」，程式貼固定絕對座標）。
+#
+# 0 級：程式自己畫板，模型只要把那塊留白。
+# 1 級起：模型畫板，風格跟創意等級走，但**一個字都不准寫**——日期由程式壓上去。
+# 2026-09-11 pre-test 三張（見 compose.YT_HOURLY_DATE_TAB_BOX 的註解）確認模型
+# 收到四邊各自的絕對百分比時畫得進去，而且板上不會自己長出字。
+_DATE_PLATE_STYLES = {
+    1: "a clean tab with hard right angles, close in feel to the headline's own plate",
+    2: "a tab with one corner clipped off on a slant",
+    3: "a tab slanted into a parallelogram, leaning slightly forward, with a bright inner edge",
+    4: "a torn-edged or ribbon-like tab with a folded-back end, the boldest treatment on the cover",
+}
+# 位置自由，但有三塊是**程式後貼**的，畫進去就被蓋掉。這三塊的數字與
+# YT_COVER_FULL_PROMPT_HOURLY 裡那兩條保留區、compose 的貼附座標是同一組。
+_DATE_KEEP_OUT = (
+    "Keep it OUT of the UPPER-LEFT corner (14% wide, 14% tall) and the UPPER-RIGHT corner"
+    " (27% wide, 32% tall) — a channel logo and a LIVE badge are pasted over those afterwards —"
+    " and keep it clear of the two headline lines and of every frame edge"
+)
+
+
+def yt_hourly_date_clause(
+    level: int, box: tuple[float, float, float, float], date_text: str = ""
+) -> str:
+    """整點封面裡關於日期牌的那一段。
+
+    0 級：程式畫牌，模型只要把那塊留白，座標由 compose 的 box 產生。
+    1–4 級（2026-09-11 使用者裁決）：整個牌交給模型——紅框、風格、位置、**連日期
+    數字**都是它畫的。日期因此必須進 TEXT TO RENDER 的逐字清單，才吃得到那條
+    「照抄、不准多寫一個字」的約束；只在版面段描述牌長什麼樣是不夠的。
+    """
+    x0, y0, x1, y1 = box
+    if level < 1:
+        return (
+            "- Keep one strip free of everything — no text, no subject, no busy detail:"
+            f" its LEFT edge at {x0:.0%} of the frame WIDTH, its RIGHT edge at {x1:.0%} of the"
+            f" WIDTH, its TOP edge at {y0:.0%} of the frame HEIGHT, its BOTTOM edge at {y1:.0%}"
+            " of the HEIGHT. A red date tab is pasted into it afterwards, at that exact place.\n"
+        )
+    shape = _DATE_PLATE_STYLES.get(level, _DATE_PLATE_STYLES[4])
+    return (
+        f"- THE DATE TAB IS YOURS TO DESIGN AND TO PLACE. Draw {shape}, filled vivid red with a"
+        " thick black outline and a hard offset drop shadow, and set the date inside it in bold"
+        " white characters. It belongs to the same design as the headline — same outline weight,"
+        " same shadow direction — not a sticker laid on top.\n"
+        f"  PUT IT WHERE THE PICTURE WANTS IT: anywhere that suits the composition. {_DATE_KEEP_OUT}.\n"
+        f"  THE CHARACTERS ON IT ARE EXACTLY「{date_text}」— every digit and every slash as listed"
+        " above, nothing added, nothing dropped, nothing reordered. A wrong digit here is the one"
+        " mistake nobody catches before broadcast.\n"
+    )
+
+
+def yt_hourly_date_text_line(level: int, date_text: str) -> str:
+    """TEXT TO RENDER 清單裡的日期那一行。0 級不列（程式壓的，模型不准畫）。"""
+    if level < 1 or not date_text.strip():
+        return ""
+    return f"- The date, on its own tab: {date_text.strip()}"
+
+
+def yt_hourly_date_ban(level: int) -> str:
+    """HARD CONSTRAINTS 裡「不准寫日期」那半句，1 級起要拆掉。
+
+    不能留著讓後面的條文去覆蓋它——2026-09-11 同一天踩過三次：矛盾的兩句放在一起，
+    模型挑最寬鬆或最靠近的那句遵守，結果無法預測。要改行為就把矛盾那句刪掉。
+    """
+    return "" if level >= 1 else "no dates, "
+
+
 YT_COVER_FULL_PROMPT_HOURLY = """Design a complete Taiwanese TV news LIVE-stream thumbnail (YouTube cover) for an on-the-hour news bulletin, 16:9.
 
 === TEXT TO RENDER (Traditional Chinese, Taiwan) ===
 Render EXACTLY these strings, character for character, nothing else:
 - Headline line 1 (upper line): {line1}
 - Headline line 2 (lower line): {line2}
-
+{date_text_line}
 === LAYOUT ===
 - Both headline lines sit in the lower third, LEFT-ALIGNED near the left edge, stacked, each on one line, huge and heavy Chinese display type. No band behind them: the type sits directly on the photograph.
 - THE TWO HEADLINE LINES ARE SET AT ONE SINGLE TYPE SIZE: identical cap height, identical stroke weight, identical character width. Choose that size from the LONGER line — it is the size at which the LONGER line spans almost the full width — then set the SHORTER line at that SAME size, so the shorter line simply ends earlier and leaves empty space to its right. NEVER enlarge the shorter line to make it reach the same width as the other one. A line with far fewer characters MUST end up visibly shorter, never bigger; two lines at different type sizes is a defect.
 - Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
 - Keep the UPPER-LEFT corner (about 14% wide and 14% tall) free: a small channel logo is pasted there afterwards.
 - Keep the UPPER-RIGHT corner (about 27% wide and 32% tall) free: a red LIVE badge with the broadcast time is pasted there afterwards.
-- Keep a strip on the LEFT free of everything — no text, no subject, no busy detail: it runs from the LEFT EDGE to 34% of the frame WIDTH, and from 50% to 63% of the frame HEIGHT. A red date tab is pasted into it afterwards, at that exact place.
-- BECAUSE OF THAT STRIP, HEADLINE LINE 1 STARTS LOW: the TOP of its characters must sit at or below 66% of the frame height, and both headline lines fit between there and the bottom edge. Setting the headline higher runs it straight under the date tab.
+{date_clause}- BECAUSE OF THAT, HEADLINE LINE 1 STARTS LOW: the TOP of its characters must sit at or below 66% of the frame height, and both headline lines fit between there and the bottom edge. Setting the headline higher runs it into the date tab.
 
 === IMAGERY ===
 {visual}
 Photographic, news-documentary quality, filling the frame.
 {split_note}
 === HARD CONSTRAINTS ===
-- Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
-- No other text anywhere: no captions, no dates, no times, no LIVE word, no logos, no watermark, no tickers, no 示意圖 label.
+- Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms. Every digit likewise: a date is read as a fact, so a malformed or wrong digit is a factual error, not a typographic one.
+- No text anywhere other than the strings listed at the top: {date_ban}no times, no LIVE word, no logos, no watermark, no tickers, no 示意圖 label, no captions.
 - Nothing may touch or be clipped by any edge.
 """
 

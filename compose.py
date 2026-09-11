@@ -22,6 +22,7 @@
 import functools
 import io
 import pathlib
+import random
 import re
 import unicodedata
 
@@ -1491,6 +1492,27 @@ YT_HOURLY_LINE1_BASELINE_RATIO = 0.815   # 2026-09-08 晚使用者「行距可�
 YT_HOURLY_LINE2_BASELINE_RATIO = 0.965
 YT_HOURLY_TITLE_SIZE_RATIO = 0.15       # 字高 32/220
 YT_HOURLY_AI_NOTE_TOP_RATIO = 0.34      # LIVE 章（含時間帶）之下的右側空位
+
+# ---- 日期條的創意階梯（2026-09-11 使用者裁決）----
+#
+# 0 級：程式畫板、程式壓字，位置固定（＝這支函式一直以來的行為，一個像素都沒變）。
+# 1–4 級：**整個日期牌交給生圖模型**——紅框、風格、位置、連日期數字本身都是它畫的，
+#         程式完全不碰（compose_yt_hourly_cover(draw_date=False)）。
+#
+# 這條是使用者明確裁決的，而且他知道代價：它違反本模組開頭第二條原則
+# （Logo、日期、ON AIR 這類「錯了就是播出事故」的東西只能是圖層合成）。
+# 使用者的理由是程式壓字同樣有風險——模型畫的板跟程式壓的座標對不上就會露邊。
+# 降風險的做法寫在 editor_formats.yt_hourly_date_clause：日期字串進 TEXT TO RENDER
+# 的逐字清單，跟標題共用同一套「每個字元必須正確、不准多寫一個字」的約束。
+#
+# 驗收時**一定要逐張確認日期數字**。這是這條路唯一真正的風險，而且它在成品上
+# 看起來完全正常——沒有人會在播出前去對那八個數字。
+YT_HOURLY_DATE_TAB_BOX = (
+    YT_MARGIN_RATIO,
+    YT_HOURLY_DATE_TOP_RATIO,
+    YT_MARGIN_RATIO + YT_HOURLY_DATE_TAB_WIDTH_RATIO,
+    YT_HOURLY_DATE_TOP_RATIO + YT_HOURLY_DATE_TAB_HEIGHT_RATIO,
+)
 # 「雙則」每行字數上限（2026-09-08 使用者裁決）：兩行各是一則新聞的完整標題，
 # 不是同一句拆兩段，長度沒有天然上限，所以要有一條硬線。單則模式不套用。
 YT_HOURLY_LINE_MAX_CHARS = 18          # 2026-09-08 晚使用者：14 放寬到 18
@@ -1516,10 +1538,15 @@ def compose_yt_hourly_cover(
     ai_note: bool = False,
     draw_titles: bool = True,
     line_max_chars: int | None = None,
+    draw_date: bool = True,
 ) -> bytes:
     """合成 YT 整點直播封面。time_text（如 20:00）選填，有填才在 LIVE 章下掛時間帶。
 
     draw_titles=False：標題已由模型畫在 background 上，這裡只貼固定元素。
+
+    draw_date=False（2026-09-11 日期條創意階梯，創意 ≥1）：整個日期牌——紅框、風格、
+    位置、數字——都是生圖模型畫的，程式一筆都不碰。預設 True＝0 級的原行為。
+    date_text 這時仍是必填：它要進 prompt 給模型照抄。
 
     line_max_chars（2026-09-08 WP2）：每行字數上限，超過就報錯。給「雙則」用——
     那個模式的兩行各是一則新聞的完整標題，不是同一句拆兩段，長度沒有天然上限。
@@ -1569,17 +1596,20 @@ def compose_yt_hourly_cover(
         _draw_ai_note(canvas, max(round(height * YT_HOURLY_AI_NOTE_TOP_RATIO), block_bottom + 16))
         draw = ImageDraw.Draw(canvas)
 
-    # ---- 左中：紅底白字日期，貼在第一行標題正上方 ----
-    tab_w = round(width * YT_HOURLY_DATE_TAB_WIDTH_RATIO)
-    tab_h = round(height * YT_HOURLY_DATE_TAB_HEIGHT_RATIO)
-    tab_y0 = round(height * YT_HOURLY_DATE_TOP_RATIO)
-    tab_box = (margin, tab_y0, margin + tab_w, tab_y0 + tab_h)
-    draw.rounded_rectangle(tab_box, radius=10, fill=YT_HOURLY_DATE_FILL)
-    date_font = _fit_font(date_text, tab_w - 28, round(tab_h * 0.78), round(tab_h * 0.4))
-    _draw_text(
-        draw, ((tab_box[0] + tab_box[2]) // 2, (tab_box[1] + tab_box[3]) // 2 + 2),
-        date_text, date_font, fill=YT_HOURLY_DATE_TEXT, stroke_width=0, anchor="mm",
-    )
+    # ---- 左中：紅底白字日期（只有 0 級才由程式畫，見 YT_HOURLY_DATE_TAB_BOX 註解）----
+    if draw_date:
+        box = YT_HOURLY_DATE_TAB_BOX
+        tab_box = (
+            round(width * box[0]), round(height * box[1]),
+            round(width * box[2]), round(height * box[3]),
+        )
+        draw.rounded_rectangle(tab_box, radius=10, fill=YT_HOURLY_DATE_FILL)
+        tab_w, tab_h = tab_box[2] - tab_box[0], tab_box[3] - tab_box[1]
+        date_font = _fit_font(date_text, tab_w - 28, round(tab_h * 0.78), round(tab_h * 0.4))
+        _draw_text(
+            draw, ((tab_box[0] + tab_box[2]) // 2, (tab_box[1] + tab_box[3]) // 2 + 2),
+            date_text, date_font, fill=YT_HOURLY_DATE_TEXT, stroke_width=0, anchor="mm",
+        )
 
     # ---- 底部：兩行標題（白／黃、黑描邊），靠左貼邊 ----
     max_w = width - margin * 2
