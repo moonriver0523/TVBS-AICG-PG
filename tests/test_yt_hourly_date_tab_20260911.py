@@ -46,7 +46,7 @@ def _band(text: str) -> tuple[float, float]:
 
 def _headline_floor(level: int = 0) -> float:
     """該級的標題第一行字頂下限。模板裡現在是 {title_top} 佔位符，值由函式給。"""
-    return editor_formats.yt_hourly_title_top(level)
+    return editor_formats.yt_title_top(level)
 
 
 class LevelZeroReservationTests(unittest.TestCase):
@@ -163,10 +163,10 @@ class CreativeDatePlateTests(unittest.TestCase):
             date_ban=editor_formats.yt_hourly_date_ban(3),
             logo_keep_out=f"about {keep_w:.0%} wide and {keep_h:.0%} tall",
             badge_keep_out="about 27% wide and 32% tall",
-            design_brief=editor_formats.yt_hourly_design_brief(3, lines=("第一行", "第二行"), seed="t"),
+            design_brief=editor_formats.yt_design_brief(3, lines=("第一行", "第二行"), seed="t"),
             layout_rules=editor_formats.yt_hourly_layout_rules(3),
-            title_top=editor_formats.yt_hourly_title_top(3),
-            fixed_block=editor_formats.yt_hourly_fixed_block(3),
+            title_top=editor_formats.yt_title_top(3),
+            fixed_block=editor_formats.yt_fixed_block(3),
         )
         self.assertIn(DATE, rendered)
         self.assertNotIn("no dates", rendered)

@@ -23,7 +23,7 @@ LEVELS = (1, 2, 3, 4)
 
 
 def brief(level: int, seed="s") -> str:
-    return ef.yt_hourly_design_brief(level, lines=LINES, seed=seed)
+    return ef.yt_design_brief(level, lines=LINES, seed=seed)
 
 
 class BlockHeightLadderTests(unittest.TestCase):
@@ -44,15 +44,15 @@ class BlockHeightLadderTests(unittest.TestCase):
         for level in LEVELS:
             with self.subTest(level=level):
                 self.assertAlmostEqual(
-                    ef.yt_hourly_title_top(level),
+                    ef.yt_title_top(level),
                     ef.YT_HOURLY_TITLE_BOTTOM_RATIO - ef._yt_block_height(level),
                     places=4,
                 )
 
     def test_level_zero_is_untouched(self):
-        self.assertEqual(ef.yt_hourly_title_top(0), 0.66)
+        self.assertEqual(ef.yt_title_top(0), 0.66)
         self.assertEqual(brief(0), "")
-        self.assertEqual(ef.yt_hourly_fixed_block(0), "")
+        self.assertEqual(ef.yt_fixed_block(0), "")
 
 
 class RngContractTests(unittest.TestCase):
@@ -70,7 +70,7 @@ class RngContractTests(unittest.TestCase):
     def test_the_rng_changes_style_never_loudness(self):
         """塊高、字級落差、反白字數是梯子本身，不准跟著 seed 變。"""
         for level in LEVELS:
-            spec = ef.YT_HOURLY_BRIEF_SPECS[level]
+            spec = ef.YT_BRIEF_SPECS[level]
             for seed in ("a", "b", "c", "d"):
                 text = brief(level, seed)
                 with self.subTest(level=level, seed=seed):
@@ -143,11 +143,11 @@ class StyleClauseTests(unittest.TestCase):
                 self.assertIn("Required, not offered", text)
 
     def test_each_level_has_its_own_finish(self):
-        looks = {ef._YT_HOURLY_STYLE_CLAUSES[level] for level in LEVELS}
+        looks = {ef._YT_STYLE_CLAUSES[level] for level in LEVELS}
         self.assertEqual(len(looks), 4, "有兩級質感條文一樣＝那一段拉桿沒有作用")
 
     def test_the_loudest_level_still_protects_legibility(self):
-        self.assertIn("Loud is not the same as broken", ef._YT_HOURLY_STYLE_CLAUSES[4])
+        self.assertIn("Loud is not the same as broken", ef._YT_STYLE_CLAUSES[4])
 
 
 class FixedBlockTests(unittest.TestCase):
@@ -156,10 +156,10 @@ class FixedBlockTests(unittest.TestCase):
     def test_the_fixed_block_exists_from_level_one(self):
         for level in LEVELS:
             with self.subTest(level=level):
-                self.assertIn("WHAT THE CREATIVITY SETTING NEVER CHANGES", ef.yt_hourly_fixed_block(level))
+                self.assertIn("WHAT THE CREATIVITY SETTING NEVER CHANGES", ef.yt_fixed_block(level))
 
     def test_it_covers_the_things_the_ladder_must_not_touch(self):
-        text = ef.yt_hourly_fixed_block(4)
+        text = ef.yt_fixed_block(4)
         for needle in (
             "THE CHARACTERS",            # 不准改字
             "THE DATE IS A FACT",        # 日期數字

@@ -65,10 +65,17 @@ class AiBandClauseTests(unittest.TestCase):
                 self.assertIn(f"ONLY THE BOTTOM {100 - top}%", clause)
 
     def test_the_clause_comes_after_the_headline_bullet_not_before(self):
-        """這個 repo 的慣例是位置在後＋明文 OVERRIDE 才贏；放在 40% 前面等於被壓掉。"""
-        for template in (editor_formats.YT_COVER_FULL_PROMPT_NEWS,
-                         editor_formats.YT_COVER_FULL_PROMPT_HOT):
-            with self.subTest(template=template[:40]):
+        """這個 repo 的慣例是位置在後＋明文 OVERRIDE 才贏；放在 40% 前面等於被壓掉。
+
+        2026-09-11：標題那三條搬進 editor_formats.yt_layout_rules(0)（創意階梯要
+        條件化它們），所以這裡組出實際的 0 級 prompt 再比位置，而不是比模板字串。
+        """
+        for name, layout in (("YT_COVER_FULL_PROMPT_NEWS", "news"),
+                             ("YT_COVER_FULL_PROMPT_HOT", "hot")):
+            with self.subTest(template=name):
+                template = getattr(editor_formats, name).replace(
+                    "{layout_rules}", editor_formats.yt_layout_rules(0, layout)
+                )
                 self.assertLess(
                     template.index("lower 40% of the frame"),
                     template.index("{band_clause}"),

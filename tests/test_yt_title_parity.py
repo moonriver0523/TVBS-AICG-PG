@@ -23,6 +23,23 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 import compose  # noqa: E402
 import editor_formats  # noqa: E402
 
+_LAYOUT_OF = {
+    "YT_COVER_FULL_PROMPT_NEWS": "news",
+    "YT_COVER_FULL_PROMPT_HOT": "hot",
+    "YT_COVER_FULL_PROMPT_HOURLY": "hourly",
+}
+
+
+def plain_prompt(name: str) -> str:
+    """該版型 0 級的實際 prompt。
+
+    2026-09-11：標題那三條從模板搬進 editor_formats.yt_layout_rules——創意階梯要
+    依等級條件化它們。這些測試要驗的是「0 級送出去的字」，所以在這裡組回來。
+    """
+    return getattr(editor_formats, name).replace(
+        "{layout_rules}", editor_formats.yt_layout_rules(0, _LAYOUT_OF[name])
+    )
+
 LINE1 = "挪威國王哈拉德辭世"
 LINE2 = "開放公眾瞻仰遺容"
 
@@ -79,7 +96,7 @@ class AiPromptParityTests(unittest.TestCase):
     def test_both_templates_describe_the_type_size_the_same_way(self):
         for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
             with self.subTest(template=name):
-                self.assertIn(self.TYPE_CLAUSE, getattr(editor_formats, name))
+                self.assertIn(self.TYPE_CLAUSE, plain_prompt(name))
 
     def test_every_two_line_cover_shares_one_type_size(self):
         """使用者：兩行標（白／黃）字級要完全一樣，字少的那行不准放大去撐滿。
@@ -93,7 +110,7 @@ class AiPromptParityTests(unittest.TestCase):
         # 另外兩個版型沒有創意階梯，這一條照舊無條件成立。
         for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
             with self.subTest(template=name):
-                text = getattr(editor_formats, name)
+                text = plain_prompt(name)
                 self.assertIn(self.SHARED_SIZE_CLAUSE, text)
                 self.assertIn("Choose that size from the LONGER line", text)
                 self.assertIn("NEVER enlarge the shorter line", text)
@@ -121,14 +138,14 @@ class AiPromptParityTests(unittest.TestCase):
     def test_both_templates_ask_for_tight_leading_and_open_counters(self):
         for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
             with self.subTest(template=name):
-                text = getattr(editor_formats, name)
+                text = plain_prompt(name)
                 self.assertIn("TIGHT LEADING", text)
                 self.assertIn("counters (the enclosed white spaces inside characters) must stay open", text)
 
     def test_both_templates_use_the_same_line_colours(self):
         for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
             with self.subTest(template=name):
-                text = getattr(editor_formats, name)
+                text = plain_prompt(name)
                 self.assertIn("Line 1: solid white. Line 2: bright golden yellow.", text)
 
 
