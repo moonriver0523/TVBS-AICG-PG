@@ -44,12 +44,9 @@ def _band(text: str) -> tuple[float, float]:
     return int(match.group(1)) / 100, int(match.group(2)) / 100
 
 
-def _headline_floor() -> float:
-    match = re.search(
-        r"at or below (\d+)% of the frame height", editor_formats.YT_COVER_FULL_PROMPT_HOURLY
-    )
-    assert match, "找不到標題第一行的字頂下限"
-    return int(match.group(1)) / 100
+def _headline_floor(level: int = 0) -> float:
+    """該級的標題第一行字頂下限。模板裡現在是 {title_top} 佔位符，值由函式給。"""
+    return editor_formats.yt_hourly_title_top(level)
 
 
 class LevelZeroReservationTests(unittest.TestCase):
@@ -139,8 +136,15 @@ class CreativeDatePlateTests(unittest.TestCase):
         self.assertEqual(BOX[0], compose.YT_MARGIN_RATIO)
 
     def test_the_guide_box_clears_the_headline(self):
-        """牌的下緣要高於標題第一行的字頂下限——它是坐在標題上方的。"""
-        self.assertLess(BOX[3], _headline_floor())
+        """牌的下緣要高於該級標題第一行的字頂下限——它是坐在標題上方的。
+
+        塊高隨等級變，標題頂就跟著變，護欄框必須一起走；寫死的話 L4 的標題頂會
+        爬到 57%，而護欄還停在 52–61.5%，兩條指示自相矛盾。
+        """
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                box = editor_formats.yt_hourly_date_guide_box(level)
+                self.assertLess(box[3], _headline_floor(level))
 
     def test_each_level_gets_its_own_shape(self):
         shapes = {editor_formats._DATE_PLATE_STYLES[level] for level in (1, 2, 3, 4)}
@@ -159,6 +163,10 @@ class CreativeDatePlateTests(unittest.TestCase):
             date_ban=editor_formats.yt_hourly_date_ban(3),
             logo_keep_out=f"about {keep_w:.0%} wide and {keep_h:.0%} tall",
             badge_keep_out="about 27% wide and 32% tall",
+            design_brief=editor_formats.yt_hourly_design_brief(3, lines=("第一行", "第二行"), seed="t"),
+            layout_rules=editor_formats.yt_hourly_layout_rules(3),
+            title_top=editor_formats.yt_hourly_title_top(3),
+            fixed_block=editor_formats.yt_hourly_fixed_block(3),
         )
         self.assertIn(DATE, rendered)
         self.assertNotIn("no dates", rendered)

@@ -87,8 +87,11 @@ class AiPromptParityTests(unittest.TestCase):
         合成版本來就共用字級（compose._yt_shared_title_font），AI 版之前沒有對應的話，
         所以三個 AI 模板都要有這一條——整點版也是兩行標。
         """
-        for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT",
-                     "YT_COVER_FULL_PROMPT_HOURLY"):
+        # 2026-09-11：整點版移出這個迴圈。使用者裁決整點要導入創意階梯並**照搬十點的
+        # 字級落差**，與這一條正面衝突，所以 1 級起把它拆掉（不是覆蓋——今天因為留著
+        # 矛盾句踩了三次）。0 級仍原樣保留，由下面那支測試單獨釘住。
+        # 另外兩個版型沒有創意階梯，這一條照舊無條件成立。
+        for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
             with self.subTest(template=name):
                 text = getattr(editor_formats, name)
                 self.assertIn(self.SHARED_SIZE_CLAUSE, text)
@@ -96,6 +99,24 @@ class AiPromptParityTests(unittest.TestCase):
                 self.assertIn("NEVER enlarge the shorter line", text)
                 self.assertNotIn("display type filling almost the full width", text)
                 self.assertNotIn("display type spanning almost the full width", text)
+
+    def test_the_hourly_keeps_one_type_size_until_the_ladder_opens_it(self):
+        """整點版：0 級一字不改，1 級起那一條被拆掉、換成讓路給 DESIGN BRIEF 的說法。
+
+        放寬的是「兩行可以不同大小」，**不是**「短行可以被撐大」——後者才是這條
+        規則當初要擋的病灶（`假日回溫` 被拉寬去湊滿版面），所以它必須在新條文裡
+        原樣活著。
+        """
+        plain = editor_formats.yt_hourly_layout_rules(0)
+        self.assertIn(self.SHARED_SIZE_CLAUSE, plain)
+        self.assertIn("Choose that size from the LONGER line", plain)
+        self.assertIn("NEVER enlarge the shorter line", plain)
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                loud = editor_formats.yt_hourly_layout_rules(level)
+                self.assertNotIn(self.SHARED_SIZE_CLAUSE, loud)
+                self.assertIn("DESIGN BRIEF", loud)
+                self.assertIn("may never be stretched or letter-spaced", loud)
 
     def test_both_templates_ask_for_tight_leading_and_open_counters(self):
         for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):

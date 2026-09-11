@@ -4955,6 +4955,15 @@ def _yt_cover_full_image(
             badge_keep_out="about 27% wide and 32% tall",
             date_text_line=editor_formats.yt_hourly_date_text_line(req.creativity, date_text),
             date_ban=editor_formats.yt_hourly_date_ban(req.creativity),
+            # 創意階梯（2026-09-11）：brief 釘在 CANVAS 正後方（鐵律一——數字寫在
+            # 條文區等於不存在）；LAYOUT 段裡跟它打架的兩條由 layout_rules
+            # **拆掉**而不是覆蓋；fixed_block 是 YT 在此之前完全沒有的東西。
+            design_brief=editor_formats.yt_hourly_design_brief(
+                req.creativity, lines=lines, seed=f"{req.title}|{date_text}"
+            ),
+            layout_rules=editor_formats.yt_hourly_layout_rules(req.creativity),
+            title_top=editor_formats.yt_hourly_title_top(req.creativity),
+            fixed_block=editor_formats.yt_hourly_fixed_block(req.creativity),
             # 雙則才講兩景分割；單則是一個場景，講了反而會逼它硬切成兩半。
             # 分割位置一定要講：不講的話模型自己切，實拍落在 59%／64%，都偏右
             # 又互不一致（2026-09-10 使用者指出）。
