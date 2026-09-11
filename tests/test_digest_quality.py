@@ -178,6 +178,24 @@ class SimplifiedCharacterTests(unittest.TestCase):
         ok["structure"] = GOOD["structure"] + " Place the 车 icon top-left."
         self.assertEqual(digest_quality_problem(ok, "stop"), "")
 
+    def test_traditional_orthodox_characters_are_never_listed(self):
+        """繁簡同形的正字一個都不能進清單。
+
+        2026-09-11：清單原本收了「致」。它是臺灣標準正字（導致／一致／致命），
+        模型每次都寫得出來，於是每次 attempt 都被打回，最後撞死線收 503——
+        不是偶發誤判，是必然失敗。這些字在正常的臺灣新聞文字裡到處都是，
+        任何一個被收進去都會複製同一場事故，所以釘死整組而不是只釘「致」。
+        """
+        for word in (
+            "導致人員受傷",
+            "一致通過",
+            "致命傷",
+            "總統致詞",
+        ):
+            with self.subTest(word=word):
+                ok = with_field("variable", "[標題]測試\n[內文小標]" + word)
+                self.assertEqual(digest_quality_problem(ok, "stop"), "")
+
 
 class RawExcerptTests(unittest.TestCase):
     """解析失敗時記到日誌的摘要要看得到尾巴。

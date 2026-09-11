@@ -1024,7 +1024,8 @@ FIRST decide how many stories the article carries, and say so in "topics":
 THEN write the headlines.
 - When "topics" is 1: write ONE headline into "title_left" for the core of that story, and leave "title_right" as an empty string.
 - When "topics" is 2: write "title_left" for the story that appears FIRST in the article and "title_right" for the one that appears second. Keep the two headlines about their own story only — never repeat the same facts in both.
-- Each headline is EXACTLY 3 segments separated by ONE half-width space (two spaces in total, never one, never three); each segment 4–7 characters, NEVER more than 7; whole headline 12–18 characters excluding spaces (fewer than 12 leaves the cover half empty — that is a defect). Each segment becomes one printed line, coloured white / yellow / red in order, so a headline with only two segments loses its red line — that is a defect. A segment longer than 7 characters shrinks every line on the cover — also a defect.
+- Each headline is 2 OR 3 segments separated by ONE half-width space; each segment 4–7 characters, NEVER more than 7 (a longer segment shrinks every line on the cover). Each segment becomes one printed line. Prefer 3 segments — with 3 the headline runs 12–18 characters excluding spaces and fills the cover. Use 2 segments (8–14 characters excluding spaces) when the story is genuinely said in fewer words, or when the only way to reach 3 would be to cut a name or a fixed phrase in half. NEVER pad a short headline up to 3 segments with filler.
+- A SEGMENT BOUNDARY IS A READING BREAK, NOT A CHARACTER COUNT. Every segment has to stand on its own as a phrase. 「葉門青年運動」is the name of an organisation, so 「葉門青年 運動 奪下紅海咽喉」is wrong — it reads as young people in Yemen taking exercise. The correct answer is 「葉門青年運動 奪下紅海咽喉」in 2 segments. The same holds for place names, personal names, organisation names, titles and fixed four-character phrases: never let a segment boundary fall inside one.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
 
@@ -1038,7 +1039,8 @@ COVER_TITLE_DIGEST_SYSTEM_TEN_FULL = """You write the single headline for a Taiw
 
 Return JSON with "title".
 - One punchy Traditional Chinese (Taiwan) headline for the core of the story.
-- EXACTLY 3 segments separated by ONE half-width space (two spaces in total, never one, never three); each segment 4–7 characters, NEVER more than 7; whole headline 12–18 characters excluding spaces (fewer than 12 leaves the cover half empty — that is a defect). Each segment becomes one printed line, coloured white / yellow / red in order, so a headline with only two segments loses its red line — that is a defect.
+- 2 OR 3 segments separated by ONE half-width space; each segment 4–7 characters, NEVER more than 7. Each segment becomes one printed line. Prefer 3 segments — with 3 the headline runs 12–18 characters excluding spaces and fills the cover. Use 2 segments (8–14 characters excluding spaces) when the story is genuinely said in fewer words, or when the only way to reach 3 would be to cut a name or a fixed phrase in half. NEVER pad a short headline up to 3 segments with filler.
+- A SEGMENT BOUNDARY IS A READING BREAK, NOT A CHARACTER COUNT. Every segment has to stand on its own as a phrase. 「葉門青年運動」is the name of an organisation, so 「葉門青年 運動 奪下紅海咽喉」is wrong — it reads as young people in Yemen taking exercise. The correct answer is 「葉門青年運動 奪下紅海咽喉」in 2 segments. The same holds for place names, personal names, organisation names, titles and fixed four-character phrases: never let a segment boundary fall inside one.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
 
@@ -1059,12 +1061,33 @@ TEN_DIGEST_SEGMENT_MIN = 4
 TEN_DIGEST_SEGMENT_MAX = 7
 TEN_DIGEST_TOTAL_MIN = 12
 TEN_DIGEST_TOTAL_MAX = 18
+# 2026-09-11：段數放寬成 2 或 3（見 ten_digest_violations 的註解）。
+TEN_DIGEST_MIN_SEGMENTS = 2
+TEN_DIGEST_MAX_SEGMENTS = 3
+# 兩段版的總字數：每段 4–7 字，所以 8–14。刻意用同一組段長上下限推出來，
+# 而不是另外憑感覺訂一個數字（2026-09-11「訂數字之前先量」那條教訓）。
+TEN_DIGEST_TOTAL_MIN_TWO = TEN_DIGEST_SEGMENT_MIN * 2
+TEN_DIGEST_TOTAL_MAX_TWO = TEN_DIGEST_SEGMENT_MAX * 2
+
+
+def ten_digest_total_range(segment_count: int) -> tuple[int, int]:
+    """這個段數下，整條標題（不含空白）的合理字數區間。"""
+    if segment_count <= 2:
+        return TEN_DIGEST_TOTAL_MIN_TWO, TEN_DIGEST_TOTAL_MAX_TWO
+    return TEN_DIGEST_TOTAL_MIN, TEN_DIGEST_TOTAL_MAX
 
 
 def ten_digest_violations(data: dict | None) -> list[str]:
-    """十點消化標題的三段規格驗證：每段 4–7 字、全篇 12–18 字（不含空白）、剛好 3 段。
+    """十點消化標題的段落規格驗證：每段 4–7 字，2 段或 3 段，總字數依段數而定。
 
     回違規描述清單（空＝合格）。同時看 title_left／title_right（雙切）與 title（滿版）。
+
+    2026-09-11：原本要求**剛好 3 段**（2026-09-08 裁決，理由是只出 2 段就沒有紅字、
+    或生圖階段自己瞎掰第三段）。使用者回報「葉門青年運動 奪下紅海咽喉」被硬湊成
+    三行、把組織名腰斬成「葉門青年／運動」之後翻案：段數交給模型依語意判斷，
+    兩段就白＋黃，不再為了紅字去切一個切不開的詞。
+    總字數的下限跟著段數走——2 段的標題本來就比較短，拿 3 段的 12 字去卡它，
+    等於用另一條路把「一律 3 段」逼回來。
     """
     if not isinstance(data, dict):
         return ["not a JSON object"]
@@ -1075,13 +1098,20 @@ def ten_digest_violations(data: dict | None) -> list[str]:
             continue
         segments = [seg for seg in split_cover_title(text) if seg.strip()]
         total = sum(len(seg) for seg in segments)
-        if len(segments) != 3:
-            problems.append(f'"{key}" has {len(segments)} segments, must be exactly 3')
+        if not TEN_DIGEST_MIN_SEGMENTS <= len(segments) <= TEN_DIGEST_MAX_SEGMENTS:
+            problems.append(
+                f'"{key}" has {len(segments)} segments, must be '
+                f"{TEN_DIGEST_MIN_SEGMENTS} or {TEN_DIGEST_MAX_SEGMENTS}"
+            )
         for seg in segments:
             if not TEN_DIGEST_SEGMENT_MIN <= len(seg) <= TEN_DIGEST_SEGMENT_MAX:
                 problems.append(f'"{key}" segment 「{seg}」 is {len(seg)} characters, must be {TEN_DIGEST_SEGMENT_MIN}–{TEN_DIGEST_SEGMENT_MAX}')
-        if not TEN_DIGEST_TOTAL_MIN <= total <= TEN_DIGEST_TOTAL_MAX:
-            problems.append(f'"{key}" is {total} characters excluding spaces, must be {TEN_DIGEST_TOTAL_MIN}–{TEN_DIGEST_TOTAL_MAX}')
+        low, high = ten_digest_total_range(len(segments))
+        if not low <= total <= high:
+            problems.append(
+                f'"{key}" is {total} characters excluding spaces across '
+                f"{len(segments)} segments, must be {low}–{high}"
+            )
     return problems
 
 
@@ -1299,11 +1329,8 @@ Render EXACTLY these strings, character for character, nothing else:
 - Headline line 1 (upper line): {line1}
 - Headline line 2 (lower line): {line2}
 
-=== LAYOUT ===
-- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in heavy black-weight (weight, not colour) Chinese display type, with TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean and separated — the counters (the enclosed white spaces inside characters) must stay open; do not thicken the type until the strokes merge.
-- THE TWO HEADLINE LINES ARE SET AT ONE SINGLE TYPE SIZE: identical cap height, identical stroke weight, identical character width. Choose that size from the LONGER line — it is the size at which the LONGER line spans almost the full width — then set the SHORTER line at that SAME size, so the shorter line simply comes out narrower and sits centred with empty space at both ends. NEVER enlarge the shorter line to make it reach the same width as the other one. A line with far fewer characters MUST end up visibly shorter, never bigger; two lines at different type sizes is a defect.
-{band_clause}
-- Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
+{design_brief}=== LAYOUT ===
+{layout_rules}{band_clause}
 - Keep the UPPER-LEFT corner (a block about 24% wide and 40% tall) completely free of text or busy detail: a red LIVE badge and a date tab are pasted there afterwards.
 - Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a channel logo tab is pasted there afterwards.
 
@@ -1315,7 +1342,369 @@ Photographic, dramatically lit, news-documentary quality, filling the frame{band
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
 - No other text anywhere: no captions, no dates, no LIVE word, no logos, no watermark, no tickers, no 示意圖 label.
 - Nothing may touch or be clipped by any edge.
+{fixed_block}
 """
+
+# 日期條那一條（2026-09-11 創意階梯）。座標**一律由 compose 的 box 產生**，不再手打
+# 百分比——今天早上那個 bug 就是手打的百分比跟程式實際貼附座標對不上（prompt 寫
+# 「標題第一行正上方」，程式貼固定絕對座標）。
+#
+# 0 級：程式自己畫板，模型只要把那塊留白。
+# 1 級起：模型畫板，風格跟創意等級走，但**一個字都不准寫**——日期由程式壓上去。
+# 2026-09-11 pre-test 三張（見 compose.YT_HOURLY_DATE_TAB_BOX 的註解）確認模型
+# 收到四邊各自的絕對百分比時畫得進去，而且板上不會自己長出字。
+_DATE_PLATE_STYLES = {
+    1: "a clean tab with hard right angles, close in feel to the headline's own plate",
+    2: "a tab with one corner clipped off on a slant",
+    3: "a tab slanted into a parallelogram, leaning slightly forward, with a bright inner edge",
+    4: "a torn-edged or ribbon-like tab with a folded-back end, the boldest treatment on the cover",
+}
+# ---- YT 整點的創意階梯（2026-09-11 使用者：「整個生圖都套用創意階梯 1~4，
+# 包括標題構圖全都在創意設計範圍，跟十點不一樣對齊」）----
+#
+# 機制照搬十點（同一批變化池、同一顆 rng、同樣的抽籤順序），**數字自己量**：
+# 十點的 18/24/30/36% 是量十點成品訂的，YT 整點只有兩行但字更大，尺度不同。
+#
+# 2026-09-11 實測（`scratchpad/measure_yt_title_block.py`，已排除日期牌）：
+#   程式壓字版（已驗收的播出標準）兩行標題佔畫面高 **29.2%**；
+#   模型自己畫 32.7–36.2%，而且四級之間沒有單調趨勢（L1 最大、L2 最小）
+#   ——證實在此之前拉桿對標題構圖完全沒有作用。
+# 使用者裁決塊高 26/31/36/41%：L1 比播出標準再小一點讓照片突出，L4 放到 41%，
+# 跨度 1.58 倍。
+#
+# 字級落差照搬十點（使用者裁決）。這與模板原本那條
+# 「THE TWO HEADLINE LINES ARE SET AT ONE SINGLE TYPE SIZE」正面衝突，
+# 所以 1 級起把那條**拆掉**而不是覆蓋（見 yt_hourly_layout_rules）。
+# 那條原本是為了擋「短行被撐大去湊滿寬度」，放寬後要盯的就是這個回歸。
+#
+# 不搬的東西：落點（YT 的標題固定在左下，日期牌還要跟著它，放開會散掉）、
+# 側邊標籤與畫面小籤（另案）、三行邏輯與雙切幾何。
+YT_BRIEF_SPECS = {
+    1: dict(height="26%", ratio=None, stagger=False, tilt=False, knockouts=0, typeface=False,
+            colours="TWO colours only: {0} dominant, {2} for emphasis"),
+    2: dict(height="31%", ratio="1.8", stagger=True, tilt=False, knockouts=1, typeface=True,
+            colours="THREE colours: {0} dominant, {1} second, {2} on the word that carries the news"),
+    3: dict(height="36%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True,
+            colours="THREE colours plus ONE accent: {0} dominant, {1} second, {2} on the word that carries the news, {3} as the accent"),
+    4: dict(height="41%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True,
+            colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open"),
+}
+# 兩行標題的字底。程式壓字版實測落在 97.9%，取整。
+YT_HOURLY_TITLE_BOTTOM_RATIO = 0.98
+# 日期牌與標題之間的呼吸空間（佔畫面高）。
+YT_HOURLY_DATE_TITLE_GAP_RATIO = 0.02
+# 日期牌高，與 compose.YT_HOURLY_DATE_TAB_HEIGHT_RATIO 同值；這裡不 import compose
+# （會循環），所以各持一份，測試釘住兩邊相等。
+YT_HOURLY_DATE_TAB_HEIGHT_RATIO = 0.095
+
+
+def _yt_block_height(level: int) -> float:
+    spec = YT_BRIEF_SPECS.get(level)
+    return int(spec["height"].rstrip("%")) / 100 if spec else 0.0
+
+
+def yt_title_top(level: int) -> float:
+    """這一級的標題第一行字頂該落在哪（佔畫面高）。0 級維持模板原本的 66%。"""
+    if level < 1:
+        return 0.66
+    return round(YT_HOURLY_TITLE_BOTTOM_RATIO - _yt_block_height(level), 4)
+
+
+def yt_hourly_date_guide_box(level: int) -> tuple[float, float, float, float]:
+    """日期牌的護欄框：坐在該級標題的正上方。
+
+    塊高一變，標題頂就變，牌也得跟著上移——護欄框寫死的話，L4 的標題頂會爬到
+    57%，而護欄還停在 52–61.5%，兩條指示自相矛盾（今天的第二條鐵律）。
+    """
+    bottom = yt_title_top(level) - YT_HOURLY_DATE_TITLE_GAP_RATIO
+    return (
+        COVER_YT_MARGIN_RATIO,
+        round(bottom - YT_HOURLY_DATE_TAB_HEIGHT_RATIO, 4),
+        round(COVER_YT_MARGIN_RATIO + 0.30, 4),
+        round(bottom, 4),
+    )
+
+
+# 與 compose.YT_MARGIN_RATIO 同值（見上，不 import compose）。
+COVER_YT_MARGIN_RATIO = 0.026
+
+
+_SHARED_SIZE_CLAUSE = (
+    "- THE TWO HEADLINE LINES ARE SET AT ONE SINGLE TYPE SIZE: identical cap height,"
+    " identical stroke weight, identical character width. Choose that size from the"
+    " LONGER line — it is the size at which the LONGER line spans almost the full width —"
+    " then set the SHORTER line at that SAME size, so the shorter line simply {tail}."
+    " NEVER enlarge the shorter line to make it reach the same width as the other one."
+    " A line with far fewer characters MUST end up visibly shorter, never bigger;"
+    " two lines at different type sizes is a defect.\n"
+)
+# 0 級的三條，各版型的原文一字不改。1 級起由 _loud_layout_rules 取代。
+# YT 三個版型只差在「靠左／置中」與開場那句的措辭；拆的位置與理由完全相同。
+_YT_PLAIN_LAYOUT = {
+    "hourly": (
+        "- Both headline lines sit in the lower third, LEFT-ALIGNED near the left edge,"
+        " stacked, each on one line, huge and heavy Chinese display type. No band behind"
+        " them: the type sits directly on the photograph.\n"
+        + _SHARED_SIZE_CLAUSE.format(tail="ends earlier and leaves empty space to its right")
+        + "- Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline."
+        " Flat type: no gradient, no metallic, no 3-D.\n"
+    ),
+    # news 與 hot 的這三條本來就一字不差（兩條線的標題規格刻意釘成一樣，
+    # 見 tests/test_yt_title_parity.py），差別在底帶與保留區，那兩者不在這裡。
+    "news": (
+        "- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked,"
+        " each on one line, in heavy black-weight (weight, not colour) Chinese display type, with"
+        " TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean"
+        " and separated — the counters (the enclosed white spaces inside characters) must stay"
+        " open; do not thicken the type until the strokes merge.\n"
+        + _SHARED_SIZE_CLAUSE.format(
+            tail="comes out narrower and sits centred with empty space at both ends"
+        )
+        + "- Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline."
+        " Flat type: no gradient, no metallic, no 3-D.\n"
+    ),
+}
+_YT_PLAIN_LAYOUT["hot"] = _YT_PLAIN_LAYOUT["news"]
+
+
+def _loud_layout_rules(level: int, *, centred: bool) -> str:
+    """1 級起的 LAYOUT 三條：**拆掉**與創意梯子打架的那兩條，換成讓路的說法。
+
+    拆而不是覆蓋：2026-09-11 一天之內因為留著矛盾句踩了三次，模型每次都挑最寬鬆
+    或最靠近的那句遵守。
+    """
+    where = (
+        "CENTRED horizontally in the lower part of the frame"
+        if centred
+        else "in the LOWER LEFT of the frame, LEFT-ALIGNED near the left edge"
+    )
+    narrower = "comes out narrower" if centred else "ends earlier"
+    return (
+        f"- Both headline lines sit {where}, stacked, each on one line, huge and heavy Chinese"
+        " display type. THE DESIGN BRIEF NEAR THE TOP OF THIS PROMPT FIXES their block height,"
+        " their relative sizes and their colours — follow it exactly and do not substitute"
+        " your own.\n"
+        "- ROW SIZES AND ROW COLOURS COME FROM THAT BRIEF, NOT FROM THE ROW ORDER. There is no"
+        " rule here that the two lines share one size, and no rule that line 1 is white and line 2"
+        " yellow. What still binds: the SHORTER line may never be stretched or letter-spaced to"
+        f" reach the width of the longer one — if the brief makes it smaller it simply {narrower},"
+        " and if the brief makes it the larger row it is larger because the brief says so,"
+        " never to fill the width.\n"
+        "- Every character keeps a thick dark outline and a hard offset drop shadow so it reads"
+        " over photography.\n"
+        + _YT_STYLE_CLAUSES[min(level, 4)]
+    )
+
+
+def yt_layout_rules(level: int, layout: str = "hourly") -> str:
+    """LAYOUT 段裡會被創意階梯改掉的那幾條。0 級一字不改，1 級起換成創意版。"""
+    if level < 1:
+        return _YT_PLAIN_LAYOUT[layout]
+    return _loud_layout_rules(level, centred=layout in ("news", "hot"))
+
+
+def yt_hourly_layout_rules(level: int) -> str:
+    """整點版的薄包裝（既有呼叫端與測試用）。"""
+    return yt_layout_rules(level, "hourly")
+
+
+# 每一級的質感條文，比照十點的 _L1–_L4（cover_ai_title_style_clause）。
+#
+# 2026-09-11 使用者驗收 L1：「只有紅標有設計，其他都跟 0 沒有兩樣。」屬實，而且是
+# 必然的——這裡原本整段不存在。L1 的 spec 旗標全是關的（不錯位、不換字體、不反白、
+# 同字級），塊高 26% 與 0 級的 29% 又看不太出來，所以少了質感條文就真的沒有差別。
+#
+# 更關鍵的是：0 級那句「Flat type: no gradient, no metallic, no 3-D」在 1 級起被
+# **拆掉**了（拆矛盾句是對的），但沒有換上正面的命令——模型少了禁令不會自己變花，
+# 它會維持原樣。**拆禁令必須配下命令**，這是今天第四次踩到同一個形狀的坑。
+_YT_STYLE_CLAUSES = {
+    1: "- FINISH (level 1 of 4 — light). Required, not offered:\n"
+       "  * A SURFACE MATERIAL on the characters — a gradient, a soft bevel or a sheen — instead"
+       " of one flat fill.\n"
+       "  * Each row sits on its own plate, and the two plates share ONE corner treatment:"
+       " both rounded, both square, or both cut on the same slant.\n",
+    2: "- FINISH (level 2 of 4 — designed). This is a broadcast title card, not body text; a tame,"
+       " evenly-set stack is a failure. Required, not offered:\n"
+       "  * THE TWO PLATES NO LONGER MATCH: one row reversed out of a solid colour, the other on"
+       " an open outline or a slanted ribbon — assembled parts, not a paragraph on a rectangle.\n"
+       "  * Saturated FLAT poster colour over a thick black outline, a hard offset drop shadow and"
+       " a tight coloured inner edge. High contrast, slight forward lean.\n",
+    3: "- FINISH (level 3 of 4 — loud). Required, not offered:\n"
+       "  * THE BLOCK INTERLOCKS WITH THE PHOTOGRAPH instead of sitting in a clear corner: let a"
+       " plate pass BEHIND the main subject, or let the subject's silhouette break across the edge"
+       " of a plate. Not one character may be hidden by doing this.\n"
+       "  * Saturated FLAT poster colour over a thick black outline, a hard offset drop shadow and"
+       " a tight coloured inner edge.\n",
+    4: "- FINISH (level 4 of 4 — the loudest this cover goes). Required, not offered:\n"
+       "  * THE BLOCK INTERLOCKS WITH THE PHOTOGRAPH: a plate passes behind the main subject, or"
+       " the subject breaks across a plate edge. Not one character may be hidden.\n"
+       "  * Saturated FLAT poster colour, thick black outline, hard offset drop shadow, tight"
+       " coloured inner edge, and one burst or streak shape driving out from behind the block.\n"
+       "  * EVEN HERE: every character stays complete, unobstructed and legible, and nothing"
+       " touches a frame edge. Loud is not the same as broken.\n",
+}
+
+
+def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
+                    bottom_band: bool = False) -> str:
+    """CANVAS 正後方那塊。與十點的 cover_design_brief 同一批池子、同一個抽籤順序。
+
+    順序刻意跟十點一致（plate → stagger → typeface → palette → tilt），只少了
+    anchor——YT 的標題固定在左下，日期牌還要跟著它，落點放開會把整塊拆散。
+    幅度（塊高／落差／反白字數／招式件數）是梯子本身，不進池子。
+    """
+    spec = YT_BRIEF_SPECS.get(level)
+    if not spec:
+        return ""
+    # 日期牌只有整點是交給模型畫的；news 的日期由程式貼在左上角，hot 根本沒有日期。
+    has_date_tab = layout == "hourly"
+    # 底帶（紅／藍套色，2026-09-11 起預設關）。開著的時候整幅底帶與「每行各自一塊
+    # 底板」是兩個互相打架的指示——今天已經因為留著矛盾句踩了四次，所以這裡明講
+    # 兩者的關係，而不是讓模型自己挑一個遵守。
+    band_on = bottom_band and layout != "hourly"
+    rng = random.Random(seed)
+    plate = rng.choice(COVER_PLATE_SHAPES)
+    stagger = rng.choice(COVER_STAGGER_PATTERNS)
+    typeface = rng.choice(COVER_TYPEFACES)
+    palette = rng.choice(COVER_PALETTES)
+    tilt_dir = rng.choice(COVER_TILT_DIRECTIONS)
+
+    top = yt_title_top(level)
+    rows = [
+        "=== HEADLINE DESIGN BRIEF — THESE NUMBERS ARE FIXED AND THEY OVERRIDE ANY TYPOGRAPHY WORDING FURTHER DOWN ===",
+        f"- Headline block height: about {spec['height']} of the frame height, its baseline near"
+        f" the bottom edge, so the TOP of the first row lands around {top:.0%} of the frame height."
+        + (" It is the loudest thing in the frame." if level >= 3
+           else " The photograph keeps the rest of the frame — do not let the type grow past this."),
+    ]
+    if spec["ratio"]:
+        rows.append(_size_hierarchy_line(spec["ratio"], lines, False))
+    else:
+        rows.append("- Both rows are the SAME size at this setting.")
+    rows.append(
+        f"- The two rows are STAGGERED: {stagger}. They do not share a left edge."
+        if spec["stagger"]
+        else "- The two rows stay flush with one another, aligned on the same left edge."
+    )
+    if band_on:
+        # 底帶是使用者開的，它贏——底板退成「字後面的小塊」，不再是整行的載體。
+        rows.append(
+            "- A TRANSLUCENT COLOUR BAND ALREADY RUNS BEHIND THE HEADLINE (described further"
+            " down, and the user asked for it). Do NOT add a second full-width bar. Each row may"
+            f" still carry a SHORT plate of its own, sitting ON the band and no wider than that"
+            f" row's characters — {plate}"
+            + (", both cut the same way." if level < 2 else ", and the two are not cut alike.")
+            + " The band stays the widest element; nothing you draw spans further than it does."
+        )
+    else:
+        rows.append(
+            "- Each row sits on its OWN plate, bar or ribbon — never one rectangle behind both"
+            f" rows, and never a band across the frame. The plates are {plate}"
+            + (", both cut the same way." if level < 2 else ", and the two are not cut alike.")
+        )
+    if spec["typeface"]:
+        rows.append(f"- Letterforms: {typeface}. Every character stays fully legible.")
+    if spec["tilt"]:
+        rows.append(
+            f"- The whole headline block is rotated 5 to 8 degrees off horizontal, {tilt_dir}."
+            + (" THE DATE TAB ROTATES WITH IT — it belongs to the block." if has_date_tab else "")
+        )
+    if spec["knockouts"]:
+        word, verb = ("word", "sits") if spec["knockouts"] == 1 else ("words", "sit")
+        rows.append(
+            f"- {spec['knockouts']} {word} of the headline {verb} KNOCKED OUT of a filled colour"
+            " block (the characters are the empty space inside the shape)"
+            + (", each block a different colour." if spec["knockouts"] > 1 else ".")
+        )
+    rows.append(
+        "- COLOUR FOLLOWS MEANING, NEVER ROW ORDER. Colouring row 1 white and row 2 yellow is"
+        f" BANNED. Use {spec['colours'].format(*palette)}."
+        " A colour switch may happen part-way through a row."
+    )
+    # 配色池會遞四個顏色過去，日期牌是頻道識別的一部分，不跟著抽（house style）。
+    if has_date_tab:
+        rows.append(
+            "- THE DATE TAB IS NOT PART OF THAT PALETTE: it stays vivid red with white characters"
+            " whatever the rows do."
+        )
+    picked = cover_accessories(level, titles=lines, full_width=False, rng=rng)
+    if picked:
+        rows.append(
+            f"- Draw EXACTLY {len(picked)} piece{'' if len(picked) == 1 else 's'} of supporting"
+            " artwork, listed here and no others. They are pictures, never captions: not one"
+            " carries a letter, a digit or a label, none covers a character or touches an edge."
+            " NONE OF THEM MAY SIT IN EITHER TOP CORNER"
+            + (" OR ON THE DATE TAB" if has_date_tab else "")
+            + ": badges and labels are pasted there afterwards."
+            " Obey each piece's own placement note."
+        )
+        rows.extend(f"  {i}. {text}" for i, text in enumerate(picked, start=1))
+    return "\n".join(rows) + "\n\n"
+
+
+def _where(box: tuple[float, float, float, float]) -> str:
+    x0, y0, x1, y1 = box
+    return (
+        f"its LEFT edge at {x0:.0%} of the frame WIDTH, its RIGHT edge at {x1:.0%} of the WIDTH,"
+        f" its TOP edge at {y0:.0%} of the frame HEIGHT, its BOTTOM edge at {y1:.0%} of the HEIGHT"
+    )
+
+
+def yt_hourly_date_clause(
+    level: int, box: tuple[float, float, float, float], date_text: str = ""
+) -> str:
+    """整點封面裡關於日期牌的那一段。
+
+    0 級：程式畫牌，模型只要把那塊留白。
+    1–4 級（2026-09-11 使用者裁決）：整個牌交給模型——紅框、風格、**連日期數字**
+    都是它畫的，但**位置是固定的**：TVBS Logo 正下方、靠左對齊、跟 Logo 留一段
+    間距（box 來自 compose.YT_HOURLY_DATE_AI_BOX，由 Logo 保留區推出來）。
+    等級只決定牌的造型有多放。
+
+    日期必須進 TEXT TO RENDER 的逐字清單（見 yt_hourly_date_text_line），才吃得到
+    「照抄、不准多寫一個字」那條約束；只在版面段描述牌長什麼樣是不夠的。
+    """
+    if level < 1:
+        return (
+            "- Keep one strip free of everything — no text, no subject, no busy detail:"
+            f" {_where(box)}. A red date tab is pasted into it afterwards, at that exact place.\n"
+        )
+    # 1 級起護欄框依該級的塊高算——塊高一變標題頂就變，牌得跟著上移。
+    box = yt_hourly_date_guide_box(level)
+    shape = _DATE_PLATE_STYLES.get(level, _DATE_PLATE_STYLES[4])
+    return (
+        f"- THE DATE TAB: draw {shape}, filled vivid red with a thick black outline and a hard"
+        " offset drop shadow, and set the date inside it in bold white characters. It belongs to"
+        " the same design as the headline — same outline weight, same shadow direction — not a"
+        " sticker laid on top.\n"
+        "  IT BELONGS TO THE HEADLINE AND SITS WITH IT: place it immediately ABOVE headline"
+        " line 1, its LEFT edge flush with the left edge of the headline, so the tab and the two"
+        " headline lines read as one stacked block. It never sits beside the headline, never"
+        " below it, and never drifts off on its own.\n"
+        f"  AS A GUIDE, THAT LANDS IT AROUND HERE: {_where(box)}. Follow the headline if the two"
+        " disagree — the tab's job is to sit on top of the headline, and this box is only telling"
+        " you roughly where that is.\n"
+        f"  THE CHARACTERS ON IT ARE EXACTLY「{date_text}」— every digit and every slash as listed"
+        " above, nothing added, nothing dropped, nothing reordered. A wrong digit here is the one"
+        " mistake nobody catches before broadcast.\n"
+    )
+
+
+def yt_hourly_date_text_line(level: int, date_text: str) -> str:
+    """TEXT TO RENDER 清單裡的日期那一行。0 級不列（程式壓的，模型不准畫）。"""
+    if level < 1 or not date_text.strip():
+        return ""
+    return f"- The date, on its own tab: {date_text.strip()}"
+
+
+def yt_hourly_date_ban(level: int) -> str:
+    """HARD CONSTRAINTS 裡「不准寫日期」那半句，1 級起要拆掉。
+
+    不能留著讓後面的條文去覆蓋它——2026-09-11 同一天踩過三次：矛盾的兩句放在一起，
+    模型挑最寬鬆或最靠近的那句遵守，結果無法預測。要改行為就把矛盾那句刪掉。
+    """
+    return "" if level >= 1 else "no dates, "
+
 
 YT_COVER_FULL_PROMPT_HOURLY = """Design a complete Taiwanese TV news LIVE-stream thumbnail (YouTube cover) for an on-the-hour news bulletin, 16:9.
 
@@ -1323,24 +1712,54 @@ YT_COVER_FULL_PROMPT_HOURLY = """Design a complete Taiwanese TV news LIVE-stream
 Render EXACTLY these strings, character for character, nothing else:
 - Headline line 1 (upper line): {line1}
 - Headline line 2 (lower line): {line2}
-
-=== LAYOUT ===
-- Both headline lines sit in the lower third, LEFT-ALIGNED near the left edge, stacked, each on one line, huge and heavy Chinese display type. No band behind them: the type sits directly on the photograph.
-- THE TWO HEADLINE LINES ARE SET AT ONE SINGLE TYPE SIZE: identical cap height, identical stroke weight, identical character width. Choose that size from the LONGER line — it is the size at which the LONGER line spans almost the full width — then set the SHORTER line at that SAME size, so the shorter line simply ends earlier and leaves empty space to its right. NEVER enlarge the shorter line to make it reach the same width as the other one. A line with far fewer characters MUST end up visibly shorter, never bigger; two lines at different type sizes is a defect.
-- Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
-- Keep the UPPER-LEFT corner (about 14% wide and 14% tall) free: a small channel logo is pasted there afterwards.
-- Keep the UPPER-RIGHT corner (about 27% wide and 32% tall) free: a red LIVE badge with the broadcast time is pasted there afterwards.
-- Keep a strip on the LEFT directly above headline line 1 (about 32% wide and 10% tall) free of detail: a red date tab is pasted there afterwards.
+{date_text_line}
+{design_brief}=== LAYOUT ===
+{layout_rules}- Keep the UPPER-LEFT corner ({logo_keep_out}) free: a small channel logo is pasted there afterwards.
+- Keep the UPPER-RIGHT corner ({badge_keep_out}) free: a red LIVE badge with the broadcast time is pasted there afterwards.
+{date_clause}- BECAUSE OF THAT, HEADLINE LINE 1 STARTS LOW: the TOP of its characters must sit at or below {title_top:.0%} of the frame height, and both headline lines fit between there and the bottom edge. Setting the headline higher runs it into the date tab.
 
 === IMAGERY ===
 {visual}
 Photographic, news-documentary quality, filling the frame.
 {split_note}
 === HARD CONSTRAINTS ===
-- Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
-- No other text anywhere: no captions, no dates, no times, no LIVE word, no logos, no watermark, no tickers, no 示意圖 label.
+- Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms. Every digit likewise: a date is read as a fact, so a malformed or wrong digit is a factual error, not a typographic one.
+- No text anywhere other than the strings listed at the top: {date_ban}no times, no LIVE word, no logos, no watermark, no tickers, no 示意圖 label, no captions.
 - Nothing may touch or be clipped by any edge.
+{fixed_block}"""
+
+
+# 創意階梯不准碰的東西（2026-09-11）。YT 在此之前**一條都沒有**——十點有
+# _TITLE_FIXED_BLOCK (a)–(g)、CG 有 _CG_CREATIVITY_FIXED (a)–(i)，只有 YT 裸奔。
+# 實拍 L1 的配色跑掉（指定紅底白字，畫成白底黑字）就是它擋得住的那一種。
+# 0 級不注入：那一級根本沒有創意條文，沒有東西需要被框住。
+_YT_FIXED_BLOCK = """
+WHAT THE CREATIVITY SETTING NEVER CHANGES — THIS PARAGRAPH OUTRANKS THE DESIGN BRIEF:
+(a) THE CHARACTERS. Render the listed strings character for character, in the listed order. Never add, drop, translate, abbreviate, reorder or substitute one character to make a layout work, and never break a listed line across two rows — each listed line is one unbroken row.
+(b) THE DATE IS A FACT, NOT A GRAPHIC ELEMENT. Its digits and slashes are exactly as listed; a wrong digit is a factual error on air. The tab carrying it stays vivid red with white characters, and it stays attached to the top of the headline block.
+(c) NO NEW TEXT OF ANY KIND. Decorative artwork is wordless: no letters, no digits, no invented badges, no labels, no signature. The design brief never licenses a word that is not in the list above.
+(d) EVERY CHARACTER STAYS COMPLETE, UNOBSTRUCTED AND LEGIBLE at broadcast distance. Decoration that crosses a stroke, a shadow that swallows a stroke, or type squeezed until the counters close, is a defect — not a style. Loud is not the same as broken.
+(e) THE TWO RESERVED CORNERS STAY CLEAN whatever the brief says: a channel logo and a LIVE badge are pasted over them afterwards, so nothing you draw belongs there.
+(f) Traditional Chinese, Taiwan forms throughout — no Simplified or Japanese forms, no invented strokes.
+(g) NOTHING TOUCHES OR IS CLIPPED BY ANY FRAME EDGE, the headline block and the date tab included.
+(h) IF A LEVER CANNOT BE SATISFIED WITHOUT ADDING WORDS OR BREAKING A CHARACTER, THE LEVER LOSES.
 """
+
+
+_YT_FIXED_DATE_LINE = """(b) THE DATE IS A FACT, NOT A GRAPHIC ELEMENT. Its digits and slashes are exactly as listed; a wrong digit is a factual error on air. The tab carrying it stays vivid red with white characters, and it stays attached to the top of the headline block.
+"""
+
+
+def yt_fixed_block(level: int, layout: str = "hourly") -> str:
+    """創意階梯不准碰的那一段。0 級沒有創意條文，也就沒有東西需要框住。
+
+    (b) 日期那條只有整點適用——news 的日期由程式貼在左上角，hot 沒有日期。
+    """
+    if level < 1:
+        return ""
+    if layout == "hourly":
+        return _YT_FIXED_BLOCK
+    return _YT_FIXED_BLOCK.replace(_YT_FIXED_DATE_LINE, "")
 
 # 雙則的兩景分割（2026-09-10 使用者實拍指出）：模板原本對分割位置**一個字都沒有講**，
 # 兩段畫面描述只是用「｜」串起來丟給模型，切在哪裡全憑它自己高興——實拍兩張分別落在
@@ -1363,11 +1782,8 @@ Render EXACTLY these strings, character for character, nothing else:
 - Headline line 1 (upper line): {line1}
 - Headline line 2 (lower line): {line2}
 
-=== LAYOUT ===
-- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked, each on one line, in heavy black-weight (weight, not colour) Chinese display type, with TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean and separated — the counters (the enclosed white spaces inside characters) must stay open; do not thicken the type until the strokes merge.
-- THE TWO HEADLINE LINES ARE SET AT ONE SINGLE TYPE SIZE: identical cap height, identical stroke weight, identical character width. Choose that size from the LONGER line — it is the size at which the LONGER line spans almost the full width — then set the SHORTER line at that SAME size, so the shorter line simply comes out narrower and sits centred with empty space at both ends. NEVER enlarge the shorter line to make it reach the same width as the other one. A line with far fewer characters MUST end up visibly shorter, never bigger; two lines at different type sizes is a defect.
-{band_clause}
-- Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
+{design_brief}=== LAYOUT ===
+{layout_rules}{band_clause}
 - Keep the UPPER-LEFT corner (a block about 30% wide and 16% tall) completely free of text or busy detail: a red-and-white "trending" tag is pasted there afterwards.
 - Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a red channel logo tab is pasted there afterwards.
 - Keep the very top edge free: a thin red strip is pasted along it afterwards.
@@ -1380,7 +1796,7 @@ Photographic, news-documentary quality, filling the frame{band_imagery_tail}.
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
 - No other text anywhere: no captions, no dates, no times, no LIVE word, no logos, no watermark, no tickers, no 示意圖 label.
 - Nothing may touch or be clipped by any edge.
-"""
+{fixed_block}"""
 
 # 生圖 prompt 最後一段。肖像規則（PORTRAIT_MODES）與附圖規則（USER_REFERENCE_MODES）
 # 都寫著「VARIABLE FIELDS 裡的示意圖標籤要保持可見」——這條線根本沒有 VARIABLE

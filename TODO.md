@@ -1,5 +1,37 @@
 # TODO
 
+## 待處理：消化品質閘只裝在 `/api/generate`，封面線全部裸奔（2026-09-11 列入）
+
+`digest_quality_problem` 全檔只有一處呼叫（`main.py:1888`，generate 的重試圈內）。
+也就是說截斷、字元污染、頻道洩漏、簡體／異體字這四道檢查，**只有 CG 一鍵生成
+那條線有**。以下五個 `digest_completion` 呼叫點一道都沒過：
+
+| 呼叫點 | 是什麼 |
+|---|---|
+| `hybrid_digest`（約 2060） | 一鍵成圖 hybrid.html |
+| `resolve_cover_visuals`（約 3879） | 十點封面自動補畫面描述 |
+| `cover_titles`（約 4392） | 十點／YT／直標的「AI 消化標題」 |
+| `derive_yt_cover_plan`（約 4768） | YT 封面補畫面描述、分行 |
+| `classify_chart_type`（約 589） | 類型分類器（回 enum，風險最低） |
+
+風險最高的是 `cover_titles`：它的輸出**直接變成封面上的字**，模型寫出「导致」
+就會原樣印上成品，而封面是要上鏡的。2026-09-05 建這道閘時只接了 generate，
+後來加的封面線一條都沒跟上——跟 2026-09-11 修好的後台稽核歸檔是同一種病
+（共用函式存在，但新端點沒人記得去接）。
+
+做的時候要注意兩件事，不能照抄：
+
+1. **品質閘的欄位名是寫死的**（`variable` / `style` / `structure`），封面線的
+   schema 是 `title_left` / `title_right` / `info_chips` 之類，得先把「要檢查
+   哪些欄位」參數化，否則接上去等於什麼都沒檢查、測試還會全綠。
+2. **失敗要怎麼辦**。generate 有五次 attempt 可以重問；`cover_titles` 只有
+   `TEN_DIGEST_MAX_ATTEMPTS` 次而且那是留給三段字數規格用的，
+   `resolve_cover_visuals` 與 `derive_yt_cover_plan` 更是「失敗就走退路」。
+   要嘛共用重試圈，要嘛檢查到就退回退路——不能直接 raise 502。
+
+順帶：`cover_titles` **完全沒有 API 錯誤重試**（任何上游例外 → 直接 502），
+要不要一起補，使用者尚未裁決。
+
 ## 待處理：入門手冊截圖解析度太差（2026-09-10 列入，下一輪修手冊時處理）
 
 使用者：「手冊截圖解析度太差，下一輪修手冊時處理。」

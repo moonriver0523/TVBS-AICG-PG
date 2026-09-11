@@ -90,14 +90,22 @@ class AiPromptTests(unittest.TestCase):
             "layout": "split", "mode": "ai",
         })
         # 2026-09-08：行數與顏色逐行標在清單上（顏色依行序：白／黃／紅）
-        # 2026-09-08 晚起始字級 0.135：6 字的「成氣候衝擊區」在起始字級塞不進半格，超寬防呆
-        # 從中間切成兩行補滿第三行（顏色依行序，紅行就是這樣補出來的）
+        #
+        # 2026-09-11 翻案：右邊那格原本斷言「成氣候／衝擊區」——6 字的
+        # 「成氣候衝擊區」在起始字級塞不進半格，被超寬防呆從中間切開補滿第三行。
+        # 舊註解自己寫明「紅行就是這樣補出來的」，也就是那一刀的目的是湊紅字，
+        # 不是排版需要。使用者回報「葉門青年運動」被同一刀腰斬成專有名詞的碎片
+        # （葉門的青年運動＝胡塞武裝 → 讀成葉門的年輕人在運動）後裁決：
+        # 段數交給 AI 判斷，只有兩段就白＋黃，不再硬湊第三行。
+        # 實測那一刀也換不到字級：切與不切最終都是 138。
         for expected in (
             "(exactly 3 lines",
             "Line 1 (white): 尼泊爾災區", "Line 2 (yellow): 無人機空拍", "Line 3 (red): 滅村慘況",
-            "Line 1 (white): 台南易淹水", "Line 2 (yellow): 成氣候", "Line 3 (red): 衝擊區",
+            "(exactly 2 lines",
+            "Line 1 (white): 台南易淹水", "Line 2 (yellow): 成氣候衝擊區",
         ):
             self.assertIn(expected, prompt)
+        self.assertNotIn("Line 3 (red): 衝擊區", prompt)
         # 未分行的整條標題不再出現在 prompt 裡
         self.assertNotIn("尼泊爾災區 無人機空拍 滅村慘況", prompt)
 

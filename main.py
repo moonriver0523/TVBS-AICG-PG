@@ -167,6 +167,38 @@ def digest_reasoning_body(max_output_tokens: int) -> dict:
     return {"reasoning": {"max_tokens": budget}}
 
 
+# 消化的 provider 順序（2026-09-11）。使用者回報消化階段常撞上游過載，選定的
+# 對策是「同模型換 provider」——claude-sonnet-5 在 OpenRouter 上有九個端點，
+# 第一方過載時還有 AWS、Azure、Bedrock 可以接手，換 provider 不換模型，品質零風險。
+#
+# 順序寫死第一方優先的理由：OpenRouter 的預設路由「以價格優先、兼顧 uptime」，
+# 實測 2026-09-11 本機連三次 attempt 都落在 claude-on-aws。各端點的延遲與思考
+# 行為不見得一樣，要診斷就得先讓「正常情況走哪一條」是確定的。
+#
+# google-vertex 刻意不列：查 /models/.../endpoints 的 supported_parameters，
+# 三個 vertex 端點都**不支援 structured_outputs**，而這條線全程用 strict
+# json_schema。OpenRouter 說這種參數偏好「只路由到支援的 provider」，但那份文件
+# 同時寫明它「永遠不會把模型從候選清單移除」——也就是萬一全部不支援就照送不誤。
+# 與其賭那句話的邊界，不如明列白名單。
+# allow_fallbacks 保持 true：清單裡的都排不進去時，寧可讓 OpenRouter 自己找一條
+# 活路，也不要整個請求失敗（這正是使用者要解決的問題）。
+DIGEST_PROVIDER_ORDER = [
+    slug.strip()
+    for slug in os.getenv(
+        "DIGEST_PROVIDER_ORDER",
+        "anthropic,claude-on-aws,azure/global,amazon-bedrock/global",
+    ).split(",")
+    if slug.strip()
+]
+
+
+def digest_provider_body() -> dict:
+    """這次呼叫要不要指定 provider 順序。非 OpenRouter 後端一律不送。"""
+    if DIGEST_BACKEND != "openrouter" or not DIGEST_PROVIDER_ORDER:
+        return {}
+    return {"provider": {"order": DIGEST_PROVIDER_ORDER, "allow_fallbacks": True}}
+
+
 # 整個消化迴圈的牆鐘預算（2026-09-09）。Cloud Run 的請求上限是 300 秒，超過就是
 # 連錯誤訊息都沒有的斷線——使用者看到的「逾時沒有生成」。與其讓第五次 attempt 在
 # 第 290 秒才開始，不如在還來得及的時候停手，回一個講得清楚的 503。
@@ -1551,9 +1583,12 @@ def digest_completion(
     client = openai_client
     # 思考上限只有 OpenRouter 吃得到，而且不是每個模型都支援；被明確拒絕時原樣重送
     # 一次不帶這個欄位的請求，換模型不會把整條線弄壞（見 digest_reasoning_body）。
+    # provider 順序同樣只有 OpenRouter 吃得到，兩者共用同一個 extra_body
+    # （2026-09-11 一起加進來，見 digest_provider_body）。
     reasoning = digest_reasoning_body(max_output_tokens)
-    if reasoning:
-        payload["extra_body"] = reasoning
+    extra_body = {**digest_provider_body(), **reasoning}
+    if extra_body:
+        payload["extra_body"] = extra_body
     try:
         response = client.chat.completions.create(
             **payload, max_tokens=max_output_tokens
@@ -1562,7 +1597,13 @@ def digest_completion(
         message = str(exc)
         if reasoning and "reasoning" in message:
             print(f"[digest] 模型不吃 reasoning 上限，改用預設思考量：{message}", flush=True)
-            payload.pop("extra_body", None)
+            # 只拿掉 reasoning，provider 順序要留著——整包 pop 會把換 provider
+            # 的能力一起丟掉，而那正是撞過載時唯一還有用的東西。
+            extra_body.pop("reasoning", None)
+            if extra_body:
+                payload["extra_body"] = extra_body
+            else:
+                payload.pop("extra_body", None)
             reasoning = {}
             try:
                 response = client.chat.completions.create(
@@ -1623,10 +1664,18 @@ DIGEST_MAX_LATIN_RATIO = 0.55
 # 字元級健檢引進相依套件不划算。收錄範圍是「臺灣新聞文字裡出現就一定是錯」的
 # 高頻簡體字，加上實測撞過的異體形。漏網的下次撞到再補——擋掉多數勝過都不擋。
 # 「台」刻意不收：台灣／電視台／台積電都是正當用法，收進來只會製造假警報。
+#
+# 2026-09-11：清單裡原本收了「致」，那是**誤收**——「致」是臺灣標準正字
+# （導致／一致／致命／致詞），繁簡同形。當初大概是想擋「精緻」被寫成「精致」，
+# 但那是詞級的問題，用字元級清單擋等於把最高頻的正字之一整個封殺。
+# 代價不是「偶爾誤判」而是必然失敗：模型只要寫出「導致」就被打回，五次 attempt
+# 每次都寫得出來，於是每次都被擋，最後撞 DIGEST_DEADLINE_SECONDS 收 503。
+# 實測 2026-09-09 雲端與 2026-09-11 本機各撞過一次，使用者看到的是「消化失敗」。
+# 收字進這份清單前必須確認它**不是繁體正字**——繁簡同形的字一個都不能收。
 DIGEST_NON_TW_CHARS = frozenset(
     "脱说这个们时会对关电车长门问见现义应学实发医华国图书报广东头马鸟龙汉"
     "丽临举乐习乡买乱争产亲从价众优伟传伤纪级红约细纸练组经给统绝继续维绿"
-    "网罗职联胜脑致舰艰苏药处备复够夺奋妇孙宁宝宪审层岁岛峡师带帮庆废弃张"
+    "网罗职联胜脑舰艰苏药处备复够夺奋妇孙宁宝宪审层岁岛峡师带帮庆废弃张"
     "强归录彻恋总恶闷闻阅阳阴际陆随难题风"
 )
 DIGEST_CHANNEL_LEAK = re.compile(
@@ -4831,10 +4880,19 @@ class YtCoverRequest(BaseModel):
     ai_translation: bool = False     # 日期下方「AI即時翻譯」
     # 底部壓色框（2026-09-08 使用者裁決，預設 OFF）：關＝完全不畫，標題靠描邊立在照片上；
     # 開＝畫，且只有 60% 不透明（compose.YT_BAND_ALPHA）。整點直播沒有底帶，後端直接忽略。
-    bottom_band: bool = True     # 2026-09-08 晚使用者：藍／紅底色框預設改 ON
+    # 2026-09-08 晚使用者：藍／紅底色框預設改 ON；2026-09-11 再改回 OFF。
+    # 創意階梯上線後標題本身就有底板與描邊，再疊一條整幅底帶會互相打架。
+    bottom_band: bool = False
     date_text: str = Field(default="", max_length=20)
     # 整點直播專用：整點時間（如 20:00），選填，有填才掛在 LIVE 章下
     time_text: str = Field(default="", max_length=10)
+    # 創意階梯（2026-09-11）。目前**只管日期牌**：0＝程式畫牌、程式壓字、位置固定；
+    # 1–4＝整個牌交給生圖模型——紅框、風格、位置、連日期數字都是它畫的，程式一筆不碰。
+    # 等級只決定牌的造型有多放（見 editor_formats._DATE_PLATE_STYLES）。
+    # 使用者裁決，且知道代價：日期畫錯一碼在成品上看起來完全正常，驗收要逐張對。
+    # 前端還沒有拉桿——那是「把創意階梯導入其他封面」那件事的一部分，等要做時再接。
+    # 預設 0 ＝ 現行行為一個像素都沒變。
+    creativity: int = Field(default=0, ge=0, le=4)
     # 給 AI 的指令（2026-09-08 WP1：封面／YT 版型重新顯示這一欄）。餵給
     # derive_yt_cover_plan 的推導步驟當畫面提示，底圖 prompt 因此照著它走。
     # 不直接拼進生圖 prompt：那條線一個字都不准畫，指令會被模型畫上去。
@@ -5068,9 +5126,47 @@ def _yt_cover_full_image(
         editor_formats.YT_COVER_LAYOUT_HOURLY: editor_formats.YT_COVER_FULL_PROMPT_HOURLY,
         editor_formats.YT_COVER_LAYOUT_HOT: editor_formats.YT_COVER_FULL_PROMPT_HOT,
     }.get(req.layout, editor_formats.YT_COVER_FULL_PROMPT_NEWS)
+    # 日期條那一條由 compose 的 box 產生（2026-09-11 創意階梯）——prompt 與程式貼附
+    # 用的是同一個座標，不會再有「兩邊各寫各的百分比」那種對不上的 bug。
+    # 整點以外的版型模板沒有這個佔位，多給的欄位 format 會忽略。
+    # 跟 5144 那處算法一致——模型畫的日期與程式後貼的必須是同一天
+    date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
     image_req = ImageGenerateRequest(
         prompt=template.format(
             line1=lines[0], line2=lines[1], visual=visual.strip() or req.title.strip(),
+            # 兩級都用同一個框：0 級是程式實際貼牌的位置（模型只要留白），
+            # 1 級起模型自己畫牌、跟著標題走，這個框只當護欄（見
+            # compose.YT_HOURLY_DATE_TAB_BOX 上方的註解）。
+            date_clause=editor_formats.yt_hourly_date_clause(
+                req.creativity, compose.YT_HOURLY_DATE_TAB_BOX, date_text
+            ),
+            # 左上角保留區由**程式實際貼上的 Logo 尺寸**算出來（2026-09-11 抓到的
+            # 碰撞：手打的 14%×14% 比實際的 14.4%×16.1% 小，日期牌會疊上去）。
+            # 右上角維持手打的 27%×32%：實測 LIVE 章只佔 25.1%×18.9%，宣告值比實際
+            # **大**＝過度保留，不會撞；收緊會放出右上那塊現在空著的區域，
+            # 等於改掉已驗收的構圖，不值得。
+            logo_keep_out="about {:.0%} wide and {:.0%} tall".format(
+                *compose.yt_hourly_logo_keep_out()
+            ),
+            badge_keep_out="about 27% wide and 32% tall",
+            date_text_line=editor_formats.yt_hourly_date_text_line(req.creativity, date_text),
+            date_ban=editor_formats.yt_hourly_date_ban(req.creativity),
+            # 創意階梯（2026-09-11）：brief 釘在 CANVAS 正後方（鐵律一——數字寫在
+            # 條文區等於不存在）；LAYOUT 段裡跟它打架的兩條由 layout_rules
+            # **拆掉**而不是覆蓋；fixed_block 是 YT 在此之前完全沒有的東西。
+            # 三個版型共用同一套（2026-09-11 第二輪）：同一張塊高表、同一批變化池、
+            # 同一段 FIXED。差別只有靠左／置中，以及日期牌——只有整點把牌交給模型，
+            # news 的日期由程式貼在左上角，hot 根本沒有日期。
+            design_brief=editor_formats.yt_design_brief(
+                req.creativity, lines=lines, seed=f"{req.title}|{date_text}",
+                layout=req.layout,
+                # 底帶開著時，整幅底帶與「每行各自一塊底板」是兩個打架的指示——
+                # brief 要知道，才能明講兩者關係而不是讓模型自己挑一個遵守。
+                bottom_band=req.bottom_band,
+            ),
+            layout_rules=editor_formats.yt_layout_rules(req.creativity, req.layout),
+            title_top=editor_formats.yt_title_top(req.creativity),
+            fixed_block=editor_formats.yt_fixed_block(req.creativity, req.layout),
             # 雙則才講兩景分割；單則是一個場景，講了反而會逼它硬切成兩半。
             # 分割位置一定要講：不講的話模型自己切，實拍落在 59%／64%，都偏右
             # 又互不一致（2026-09-10 使用者指出）。
@@ -5346,6 +5442,9 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 # 雙則的每一行是一則新聞的完整標題，長度沒有天然上限，要有一條硬線；
                 # 單則是同一句拆兩段，長度受原標題限制，不套用（維持原行為）。
                 line_max_chars=compose.YT_HOURLY_LINE_MAX_CHARS if dual else None,
+                # 整個日期牌交給模型，只在「創意 ≥1 且真的是模型畫整張」時才成立。
+                # composite（程式壓標題）那條路底圖是無文字的，沒有人畫牌，程式得自己畫。
+                draw_date=not (req.creativity >= 1 and ai_title),
             )
         else:
             cover = compose.compose_yt_cover(

@@ -377,7 +377,7 @@ let state = {
     coverTitleCreativity: 0,
     // YT 封面底部壓色框：2026-09-08 晚使用者裁決預設**開**（60% 半透明、第二行上緣起羽化，見 compose）。
     // 整點直播的版面沒有底帶，按鈕不顯示。
-    ytBottomBand: true,
+    ytBottomBand: false,   // 2026-09-11 使用者：預設改關閉
     // YT 直播直標（2026-09-08 WP3）的五組開關。刻意**不**在 setEditorFormat 重置：
     // 直標是同一位導播一整場重複用的東西，換版型回來還要再選一次靠左／Logo 右上很煩。
     vstrip: {

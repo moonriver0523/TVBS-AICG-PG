@@ -27,6 +27,7 @@ import editor_formats  # noqa: E402
 import main  # noqa: E402
 from test_ten_cover import _headers, client  # noqa: E402
 
+MAIN_PY = (Path(__file__).resolve().parent.parent / "main.py").read_text(encoding="utf-8")
 APP_JS = (Path(__file__).resolve().parent.parent / "app.js").read_text(encoding="utf-8")
 INDEX_HTML = (Path(__file__).resolve().parent.parent / "index.html").read_text(encoding="utf-8")
 BASE = (20, 120, 20)
@@ -52,13 +53,18 @@ def _hot(**kw) -> Image.Image:
 
 
 class CompositeBandTests(unittest.TestCase):
-    def test_on_is_the_default_and_off_leaves_the_photo_untouched(self):
-        """2026-09-08 晚使用者：所有藍紅底套色預設改 ON。"""
+    def test_off_is_the_default_and_leaves_the_photo_untouched(self):
+        """2026-09-08 晚使用者改 ON；2026-09-11 使用者再改回 OFF。
+
+        兩支合成函式的預設要跟請求端（YtCoverRequest.bottom_band）一致——
+        hot 那支的 docstring 本來就寫「預設關」，簽名卻是 True，自相矛盾。
+        main 兩處都明確傳值，所以這條只保護直接呼叫 compose 的腳本與測試。
+        """
         for name, fn in (("news", _news), ("hot", _hot)):
             with self.subTest(layout=name):
-                self.assertNotEqual(fn().getpixel(PROBE), BASE, "預設沒畫帶")
-                self.assertEqual(fn(bottom_band=False).getpixel(PROBE), BASE)
-                self.assertEqual(fn(), fn(bottom_band=True))
+                self.assertEqual(fn().getpixel(PROBE), BASE, "預設就不該畫帶")
+                self.assertEqual(fn(), fn(bottom_band=False))
+                self.assertNotEqual(fn(bottom_band=True).getpixel(PROBE), BASE, "開了要畫帶")
 
     def test_on_is_semi_transparent_not_a_flat_colour(self):
         for name, img, fill in (("news", _news(bottom_band=True), compose.YT_BAND_FILL),
@@ -130,8 +136,14 @@ class HourlyCompositeTests(unittest.TestCase):
 
 
 class FrontendTests(unittest.TestCase):
-    def test_state_defaults_to_on(self):
-        self.assertRegex(APP_JS, r"ytBottomBand:\s*true")
+    def test_state_defaults_to_off(self):
+        """2026-09-08 晚預設改 ON；2026-09-11 使用者再改回 OFF。
+
+        理由：創意階梯上線後標題本身就有底板與描邊，再疊一條整幅底帶會互相打架。
+        後端 YtCoverRequest.bottom_band 也是 False，兩邊必須一致。
+        """
+        self.assertRegex(APP_JS, r"ytBottomBand:\s*false")
+        self.assertIn("bottom_band: bool = False", MAIN_PY)
 
     def test_field_is_sent_once_and_covers_the_recompose_path(self):
         # ytCoverFields() 同時餵生成與 recomposeYtCover，所以一處就夠

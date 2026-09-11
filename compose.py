@@ -21,7 +21,9 @@
 
 import functools
 import io
+import math
 import pathlib
+import random
 import re
 import unicodedata
 
@@ -823,6 +825,22 @@ def _wrap_pairs(pairs: list[tuple[str, int]], max_w: int, size: int, max_lines: 
 
     行帶著段落索引一起走（拆出來的兩行都繼承原本那一段的索引），只是那個索引現在
     **只記錄出處、不決定顏色**——2026-09-08 同日第二輪裁決把配色改回依行序。
+
+    2026-09-11：**≤ COVER_TITLE_FILL_MIN_CHARS 字的段一律不切**。使用者回報
+    「葉門青年運動 奪下紅海咽喉」被切成「葉門青年／運動／奪下紅海咽喉」，
+    把專有名詞（葉門的青年運動＝胡塞武裝）腰斬成「葉門的年輕人在運動」。
+    根因就在這裡：使用者用空白明確定好的斷點，被這支函式在段**內**又切一刀。
+
+    而且那一刀什麼也沒換到。實測「葉門青年運動」在起始字級 146 寬 876，只超出
+    max_w=833 共 43px（5%），縮一級到 138 就塞得下；而同格另一行「奪下紅海咽喉」
+    同樣 6 字、同樣要縮到 138，所以**切與不切最終字級都是 138**。右格的
+    「升息房貸夾擊」也是 6 字 876px 超寬，只因為它已經是第 3 行就沒被切——
+    可見 6 字在這個版面本來就是正常長度，切它純粹是損失。
+
+    門檻沿用 COVER_TITLE_FILL_MIN_CHARS（7）而不是另訂一個數字：這個 repo 已經
+    三處用 7 表示「一行的合理上限」（消化規格每段 4–7 字、_fill_pairs、
+    COVER_TITLE_AUTO_SPLIT_LEN）。真正超長的段（9 字、12 字）照舊拆——那些不拆
+    會把兩格共用的字級一起壓垮，2026-09-07 建這道防呆就是為了它們。
     """
     pairs = list(pairs)
     font = _font(size)
@@ -830,7 +848,10 @@ def _wrap_pairs(pairs: list[tuple[str, int]], max_w: int, size: int, max_lines: 
         widths = [font.getbbox(text)[2] for text, _ in pairs]
         idx = max(range(len(pairs)), key=widths.__getitem__)
         text, seg = pairs[idx]
+        # 最寬的那行都不必切，其餘更不必——中文等寬，最寬幾乎就是最長。
         if widths[idx] <= max_w or len(text) < 4:
+            break
+        if len(text) <= COVER_TITLE_FILL_MIN_CHARS:
             break
         head, tail = _split_line_near_middle(text)
         pairs[idx : idx + 1] = [(head, seg), (tail, seg)]
@@ -1355,7 +1376,7 @@ def compose_yt_cover(
     ai_translation: bool = False,
     ai_note: bool = False,
     draw_titles: bool = True,
-    bottom_band: bool = True,
+    bottom_band: bool = False,
     band_top_ratio: float | None = None,
     band_fade_ratio: float | None = None,
 ) -> bytes:
@@ -1472,6 +1493,79 @@ YT_HOURLY_LINE1_BASELINE_RATIO = 0.815   # 2026-09-08 晚使用者「行距可�
 YT_HOURLY_LINE2_BASELINE_RATIO = 0.965
 YT_HOURLY_TITLE_SIZE_RATIO = 0.15       # 字高 32/220
 YT_HOURLY_AI_NOTE_TOP_RATIO = 0.34      # LIVE 章（含時間帶）之下的右側空位
+
+# ---- 日期條的創意階梯（2026-09-11 使用者裁決）----
+#
+# 0 級：程式畫板、程式壓字，位置固定（＝這支函式一直以來的行為，一個像素都沒變）。
+# 1–4 級：**整個日期牌交給生圖模型**——紅框、風格、位置、連日期數字本身都是它畫的，
+#         程式完全不碰（compose_yt_hourly_cover(draw_date=False)）。
+#
+# 這條是使用者明確裁決的，而且他知道代價：它違反本模組開頭第二條原則
+# （Logo、日期、ON AIR 這類「錯了就是播出事故」的東西只能是圖層合成）。
+# 使用者的理由是程式壓字同樣有風險——模型畫的板跟程式壓的座標對不上就會露邊。
+# 降風險的做法寫在 editor_formats.yt_hourly_date_clause：日期字串進 TEXT TO RENDER
+# 的逐字清單，跟標題共用同一套「每個字元必須正確、不准多寫一個字」的約束。
+#
+# 驗收時**一定要逐張確認日期數字**。這是這條路唯一真正的風險，而且它在成品上
+# 看起來完全正常——沒有人會在播出前去對那八個數字。
+YT_HOURLY_DATE_TAB_BOX = (
+    YT_MARGIN_RATIO,
+    YT_HOURLY_DATE_TOP_RATIO,
+    YT_MARGIN_RATIO + YT_HOURLY_DATE_TAB_WIDTH_RATIO,
+    YT_HOURLY_DATE_TOP_RATIO + YT_HOURLY_DATE_TAB_HEIGHT_RATIO,
+)
+
+# 1 級起模型自己畫牌時，牌**跟著大標題走：貼在第一行標題的左上方、左緣與標題切齊**
+# ——也就是 0 級程式貼出來的那個樣子（2026-09-11 使用者裁決，改了三次後定案：
+# 先「位置整個交給 AI」，實拍 L1–L4 四張全擠在上半部偏左，變化不大又失去可預期性；
+# 再「置頂置中」；最後是這個）。
+#
+# 為什麼這次可以用相對描述，而今天早上那個 bug 不行：早上是**AI 畫標題、程式貼日期**，
+# 兩邊各自認定「標題上方」在哪，必然對不上；1 級起是**同一個模型畫標題也畫牌**，
+# 相對定位對它自洽，而且跟著標題走比釘死一個座標更協調。
+#
+# 即使如此仍附上 YT_HOURLY_DATE_TAB_BOX 當**護欄**（補強，不是取代相對指示）：
+# 純相對描述今天已經出過一次事，給個範圍讓它不會飄走。那個框正好就是 0 級程式貼的
+# 位置，所以兩條路的成品看起來會一致。
+
+
+@functools.lru_cache(maxsize=1)
+def yt_hourly_logo_extent() -> tuple[float, float]:
+    """程式**實際**貼上的 Logo 佔到哪（右緣、下緣，佔畫面比例）。
+
+    2026-09-11 抓到的碰撞：prompt 手打「保留左上角 14% 寬、14% 高」，而實際貼上去
+    的 Logo 量出來是 14.4% 寬、**16.1% 高**——宣告值比實際小。實拍 L3／L4 的日期牌
+    頂落在 15.9%，比 Logo 下緣還高，會疊上去。
+
+    同一個病今天出現第三次（早上是日期條寫「標題正上方」、中午是 prompt 百分比手打）：
+    **凡是模型要閃避的東西，座標都必須從程式實際畫的那個值算出來，不可以手打。**
+    這支函式就是那個單一真相源；prompt 的保留區與日期牌的位置都從它推。
+    """
+    if not TVBS_LOGO_WHITE.exists():
+        raise ComposeError(f"找不到 Logo 檔：{TVBS_LOGO_WHITE}")
+    width, height = YT_CANVAS
+    logo_w = round(width * YT_HOURLY_LOGO_WIDTH_RATIO)
+    with Image.open(TVBS_LOGO_WHITE) as logo_file:
+        logo_h = round(logo_file.height * logo_w / logo_file.width)
+    right = (round(width * YT_MARGIN_RATIO) + logo_w) / width
+    bottom = (round(height * YT_HOURLY_LOGO_TOP_RATIO) + logo_h) / height
+    return right, bottom
+
+
+def yt_hourly_logo_keep_out() -> tuple[float, float]:
+    """要模型閃開的左上角保留區（寬、高）。實際佔用再往外留一格餘裕。"""
+    right, bottom = yt_hourly_logo_extent()
+    return (
+        math.ceil((right + YT_KEEP_OUT_MARGIN_RATIO) * 100) / 100,
+        math.ceil((bottom + YT_KEEP_OUT_MARGIN_RATIO) * 100) / 100,
+    )
+
+
+# 保留區比實際佔用再外擴這麼多。模型的落點本來就有 ±1.6% 的抖動（pre-test 量的），
+# 貼齊實際邊緣等於把那點抖動全押在「剛好不撞」上。
+YT_KEEP_OUT_MARGIN_RATIO = 0.01
+
+
 # 「雙則」每行字數上限（2026-09-08 使用者裁決）：兩行各是一則新聞的完整標題，
 # 不是同一句拆兩段，長度沒有天然上限，所以要有一條硬線。單則模式不套用。
 YT_HOURLY_LINE_MAX_CHARS = 18          # 2026-09-08 晚使用者：14 放寬到 18
@@ -1497,10 +1591,15 @@ def compose_yt_hourly_cover(
     ai_note: bool = False,
     draw_titles: bool = True,
     line_max_chars: int | None = None,
+    draw_date: bool = True,
 ) -> bytes:
     """合成 YT 整點直播封面。time_text（如 20:00）選填，有填才在 LIVE 章下掛時間帶。
 
     draw_titles=False：標題已由模型畫在 background 上，這裡只貼固定元素。
+
+    draw_date=False（2026-09-11 日期條創意階梯，創意 ≥1）：整個日期牌——紅框、風格、
+    位置、數字——都是生圖模型畫的，程式一筆都不碰。預設 True＝0 級的原行為。
+    date_text 這時仍是必填：它要進 prompt 給模型照抄。
 
     line_max_chars（2026-09-08 WP2）：每行字數上限，超過就報錯。給「雙則」用——
     那個模式的兩行各是一則新聞的完整標題，不是同一句拆兩段，長度沒有天然上限。
@@ -1550,17 +1649,20 @@ def compose_yt_hourly_cover(
         _draw_ai_note(canvas, max(round(height * YT_HOURLY_AI_NOTE_TOP_RATIO), block_bottom + 16))
         draw = ImageDraw.Draw(canvas)
 
-    # ---- 左中：紅底白字日期，貼在第一行標題正上方 ----
-    tab_w = round(width * YT_HOURLY_DATE_TAB_WIDTH_RATIO)
-    tab_h = round(height * YT_HOURLY_DATE_TAB_HEIGHT_RATIO)
-    tab_y0 = round(height * YT_HOURLY_DATE_TOP_RATIO)
-    tab_box = (margin, tab_y0, margin + tab_w, tab_y0 + tab_h)
-    draw.rounded_rectangle(tab_box, radius=10, fill=YT_HOURLY_DATE_FILL)
-    date_font = _fit_font(date_text, tab_w - 28, round(tab_h * 0.78), round(tab_h * 0.4))
-    _draw_text(
-        draw, ((tab_box[0] + tab_box[2]) // 2, (tab_box[1] + tab_box[3]) // 2 + 2),
-        date_text, date_font, fill=YT_HOURLY_DATE_TEXT, stroke_width=0, anchor="mm",
-    )
+    # ---- 左中：紅底白字日期（只有 0 級才由程式畫，見 YT_HOURLY_DATE_TAB_BOX 註解）----
+    if draw_date:
+        box = YT_HOURLY_DATE_TAB_BOX
+        tab_box = (
+            round(width * box[0]), round(height * box[1]),
+            round(width * box[2]), round(height * box[3]),
+        )
+        draw.rounded_rectangle(tab_box, radius=10, fill=YT_HOURLY_DATE_FILL)
+        tab_w, tab_h = tab_box[2] - tab_box[0], tab_box[3] - tab_box[1]
+        date_font = _fit_font(date_text, tab_w - 28, round(tab_h * 0.78), round(tab_h * 0.4))
+        _draw_text(
+            draw, ((tab_box[0] + tab_box[2]) // 2, (tab_box[1] + tab_box[3]) // 2 + 2),
+            date_text, date_font, fill=YT_HOURLY_DATE_TEXT, stroke_width=0, anchor="mm",
+        )
 
     # ---- 底部：兩行標題（白／黃、黑描邊），靠左貼邊 ----
     max_w = width - margin * 2
@@ -1703,7 +1805,7 @@ def compose_yt_hot_cover(
     line2: str,
     ai_note: bool = False,
     draw_titles: bool = True,
-    bottom_band: bool = True,
+    bottom_band: bool = False,
     band_top_ratio: float | None = None,
     band_fade_ratio: float | None = None,
 ) -> bytes:

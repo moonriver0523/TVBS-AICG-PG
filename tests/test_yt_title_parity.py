@@ -23,6 +23,23 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 import compose  # noqa: E402
 import editor_formats  # noqa: E402
 
+_LAYOUT_OF = {
+    "YT_COVER_FULL_PROMPT_NEWS": "news",
+    "YT_COVER_FULL_PROMPT_HOT": "hot",
+    "YT_COVER_FULL_PROMPT_HOURLY": "hourly",
+}
+
+
+def plain_prompt(name: str) -> str:
+    """該版型 0 級的實際 prompt。
+
+    2026-09-11：標題那三條從模板搬進 editor_formats.yt_layout_rules——創意階梯要
+    依等級條件化它們。這些測試要驗的是「0 級送出去的字」，所以在這裡組回來。
+    """
+    return getattr(editor_formats, name).replace(
+        "{layout_rules}", editor_formats.yt_layout_rules(0, _LAYOUT_OF[name])
+    )
+
 LINE1 = "挪威國王哈拉德辭世"
 LINE2 = "開放公眾瞻仰遺容"
 
@@ -79,7 +96,7 @@ class AiPromptParityTests(unittest.TestCase):
     def test_both_templates_describe_the_type_size_the_same_way(self):
         for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
             with self.subTest(template=name):
-                self.assertIn(self.TYPE_CLAUSE, getattr(editor_formats, name))
+                self.assertIn(self.TYPE_CLAUSE, plain_prompt(name))
 
     def test_every_two_line_cover_shares_one_type_size(self):
         """使用者：兩行標（白／黃）字級要完全一樣，字少的那行不准放大去撐滿。
@@ -87,27 +104,48 @@ class AiPromptParityTests(unittest.TestCase):
         合成版本來就共用字級（compose._yt_shared_title_font），AI 版之前沒有對應的話，
         所以三個 AI 模板都要有這一條——整點版也是兩行標。
         """
-        for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT",
-                     "YT_COVER_FULL_PROMPT_HOURLY"):
+        # 2026-09-11：整點版移出這個迴圈。使用者裁決整點要導入創意階梯並**照搬十點的
+        # 字級落差**，與這一條正面衝突，所以 1 級起把它拆掉（不是覆蓋——今天因為留著
+        # 矛盾句踩了三次）。0 級仍原樣保留，由下面那支測試單獨釘住。
+        # 另外兩個版型沒有創意階梯，這一條照舊無條件成立。
+        for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
             with self.subTest(template=name):
-                text = getattr(editor_formats, name)
+                text = plain_prompt(name)
                 self.assertIn(self.SHARED_SIZE_CLAUSE, text)
                 self.assertIn("Choose that size from the LONGER line", text)
                 self.assertIn("NEVER enlarge the shorter line", text)
                 self.assertNotIn("display type filling almost the full width", text)
                 self.assertNotIn("display type spanning almost the full width", text)
 
+    def test_the_hourly_keeps_one_type_size_until_the_ladder_opens_it(self):
+        """整點版：0 級一字不改，1 級起那一條被拆掉、換成讓路給 DESIGN BRIEF 的說法。
+
+        放寬的是「兩行可以不同大小」，**不是**「短行可以被撐大」——後者才是這條
+        規則當初要擋的病灶（`假日回溫` 被拉寬去湊滿版面），所以它必須在新條文裡
+        原樣活著。
+        """
+        plain = editor_formats.yt_hourly_layout_rules(0)
+        self.assertIn(self.SHARED_SIZE_CLAUSE, plain)
+        self.assertIn("Choose that size from the LONGER line", plain)
+        self.assertIn("NEVER enlarge the shorter line", plain)
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                loud = editor_formats.yt_hourly_layout_rules(level)
+                self.assertNotIn(self.SHARED_SIZE_CLAUSE, loud)
+                self.assertIn("DESIGN BRIEF", loud)
+                self.assertIn("may never be stretched or letter-spaced", loud)
+
     def test_both_templates_ask_for_tight_leading_and_open_counters(self):
         for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
             with self.subTest(template=name):
-                text = getattr(editor_formats, name)
+                text = plain_prompt(name)
                 self.assertIn("TIGHT LEADING", text)
                 self.assertIn("counters (the enclosed white spaces inside characters) must stay open", text)
 
     def test_both_templates_use_the_same_line_colours(self):
         for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
             with self.subTest(template=name):
-                text = getattr(editor_formats, name)
+                text = plain_prompt(name)
                 self.assertIn("Line 1: solid white. Line 2: bright golden yellow.", text)
 
 

@@ -206,9 +206,14 @@ class LeadingTests(unittest.TestCase):
 
 class AiPromptTests(unittest.TestCase):
     def test_both_templates_ask_for_ultra_heavy_and_tight_leading(self):
-        for name in ("YT_COVER_FULL_PROMPT_NEWS", "YT_COVER_FULL_PROMPT_HOT"):
+        """2026-09-11：標題那三條搬進 editor_formats.yt_layout_rules(0)（創意階梯要
+        條件化它們），所以這裡組出實際的 0 級 prompt 再驗。"""
+        for name, layout in (("YT_COVER_FULL_PROMPT_NEWS", "news"),
+                             ("YT_COVER_FULL_PROMPT_HOT", "hot")):
             with self.subTest(template=name):
-                text = getattr(editor_formats, name)
+                text = getattr(editor_formats, name).replace(
+                    "{layout_rules}", editor_formats.yt_layout_rules(0, layout)
+                )
                 self.assertIn("heavy black-weight (weight, not colour)", text)
                 self.assertIn("TIGHT LEADING", text)
                 self.assertIn("counters", text)              # 明文要模型別把字腔畫糊
