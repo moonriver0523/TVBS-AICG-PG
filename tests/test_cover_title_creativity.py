@@ -316,7 +316,11 @@ class LadderTests(unittest.TestCase):
         quoted = editor_formats.cover_line_annotation("「街道成河」", 2)
         self.assertIn("takes its own colour", quoted)
         plain = editor_formats.cover_line_annotation("搜救隊深入泥流區", 1)
-        self.assertIn("must not be one flat colour", plain)
+        # 2026-09-11：原本釘的是無條件禁令「must not be one flat colour」。實拍證明
+        # 那句跟「名詞不准切開」正面矛盾——「哈拉德」整行就是一個詞，遵守換色就
+        # 必然切開名字，模型在 L1 選了聽換色那句。禁令已拆掉（不是覆蓋），所以這裡
+        # 改釘同一件事的新形狀：仍然要求「中途換色」這個預設行為在。
+        self.assertIn("switch colour PART-WAY THROUGH this row", plain)
 
     def test_extra_artwork_never_licenses_extra_words(self):
         """FIXED (e) 仍然管著：清單以外的字一個都不准畫。"""

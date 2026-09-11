@@ -58,6 +58,22 @@ class LineAnnotationTests(unittest.TestCase):
         self.assertIn("colour EVERY character of that term, never part of it", note)
         self.assertNotIn("the one word that carries", note)
 
+    def test_a_row_that_is_one_single_term_has_an_explicit_way_out(self):
+        """2026-09-11 實拍：光改成 TERM 還不夠，L1 仍把「哈拉德」切成「哈拉」＋「德」。
+
+        根因是這一條無條件命令「中途換色、不得整行同色」，而那一行整行就是一個
+        詞——遵守它就必然切開名字，兩條規則正面矛盾。修法照 repo 老規矩：矛盾要
+        拆掉，不能靠另一條去壓。所以要有明路（整行同色）＋對比從哪來（上下行）
+        ＋孰輕孰重（切開詞是更嚴重的錯），三樣缺一不可。
+        """
+        note = ef.cover_line_annotation("哈拉德辭世", 2)
+        self.assertIn("IF THIS WHOLE ROW IS ONE SINGLE TERM", note)
+        self.assertIn("give the ENTIRE row one colour", note)
+        self.assertIn("from the rows above and below it", note)
+        self.assertIn("splitting the term to obey the switch is the worse error", note)
+        # 舊的無條件禁令必須**消失**，不是被後面覆蓋——留著就是矛盾本身。
+        self.assertNotIn("this row must not be one flat colour", note)
+
     def test_level_zero_still_emits_nothing(self):
         self.assertEqual(ef.cover_line_annotation("哈拉德辭世", 0), "")
 

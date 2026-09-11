@@ -497,9 +497,20 @@ def cover_line_annotation(text: str, level: int) -> str:
         notes.append(
             # word → TERM：「word」在無空格的中文裡沒有邊界，模型就按字數切
             # （「哈拉德」被切成「哈拉」＋「德」）。邊界的定義寫在 COLOUR 規則本體。
+            #
+            # 2026-09-11 實拍驗收：光是改成 TERM 還不夠。這一條原本無條件命令
+            # 「這一行中途要換色、不得整行同色」，而「哈拉德」整行**就是一個詞**
+            # ——遵守它就必然把名字切開。兩條規則正面矛盾，模型在 L1 選了聽這一條。
+            # 修法照 repo 的老規矩：矛盾要拆掉，不能靠另一條去壓。所以這裡直接把
+            # 「整行只有一個詞」的情形寫成明路，並說清楚那時對比從哪裡來。
+            # 不用程式判斷是不是單一詞：中文沒有空格，斷詞本來就是要用讀的
+            # （同 COLOUR 規則本體那段），程式數不出來。
             "switch colour PART-WAY THROUGH this row on the one TERM that carries the news"
             " (the place, the name, the verdict) — colour EVERY character of that term, never"
-            " part of it; this row must not be one flat colour"
+            " part of it. IF THIS WHOLE ROW IS ONE SINGLE TERM (a name, a place, one word),"
+            " there is no place to switch: give the ENTIRE row one colour and let the contrast"
+            " come from the rows above and below it instead — splitting the term to obey the"
+            " switch is the worse error of the two"
         )
     return "  ← " + "; ".join(notes) + "."
 
