@@ -23,6 +23,7 @@ import re
 # 底色框的百分比要跟合成版同一個數字（見 _BAND_CLAUSE_TEMPLATE）。compose 只在函式
 # 內部反向 import editor_formats，模組層級不成環。
 import compose
+import creativity
 
 DEFAULT_FORMAT = "default"
 
@@ -420,9 +421,25 @@ COVER_AI_TITLE_LEVEL_NAMES = {
     4: "最狂",
 }
 
-# (a)–(g)：每一級（0 以外）都原樣附上。
-_TITLE_FIXED_BLOCK = """- WHAT IS STILL FIXED, AND IS NOT A DESIGN DECISION: (a) the CHARACTERS. Render the listed strings character for character in the listed order — never add, drop, translate, abbreviate, reorder or substitute a single character to make a layout work, and never break a listed line in the middle: a listed line is one unbroken unit, so a date or score written with a slash such as 9/12 stays whole on one row. (b) Traditional Chinese, Taiwan forms, every character correctly formed and legible — no Simplified or Japanese forms, no invented strokes. (c) The header band across the top and the slim navy strip along the bottom stay as described, and NO part of the headline may sit inside them or overlap them. (d) The WHOLE header band and the small area just below its outer top corner stay clean and empty — software pastes the channel logo, the programme tag, the date, the red ON AIR tag and the 示意圖 label there afterwards, so nothing you draw belongs in that band at either end. (e) No text of any kind other than the listed strings: decorative marks you add are wordless symbols only — no letters, no digits, no country names, no place labels, no flag chips, no map insets, no extra badges or callouts. A brand mark carried by an object inside the photograph (a livery, a storefront, a product) is part of that photograph and is not one of your decorative marks — it stays on its object and never migrates onto the headline or into either navy band. (f) Nothing touches or is clipped by the frame edge. (g) In the two-panel layout, each headline stays ENTIRELY INSIDE ITS OWN PANEL and never crosses the diagonal seam or strays into the other panel: freeing the placement frees where it sits WITHIN its panel, not which panel it belongs to.
-"""
+# 字句逐字／繁中臺灣用字／不准生新字／不准觸邊四條搬進 creativity.py
+# （target="image"，與 YT 共用，措辭以這裡——十點——為準，見該檔案開頭說明）。
+# 這裡留下的只剩十點版型專屬的東西：標頭帶／底部窄條／雙欄縫線。
+_TITLE_FIXED_BLOCK = (
+    "- WHAT IS STILL FIXED, AND IS NOT A DESIGN DECISION: "
+    + creativity.fixed_block(target="image")
+    + "\nThe header band across the top and the slim navy strip along the bottom stay as described,"
+    " and NO part of the headline may sit inside them or overlap them."
+    " The WHOLE header band and the small area just below its outer top corner stay clean and"
+    " empty — software pastes the channel logo, the programme tag, the date, the red ON AIR tag"
+    " and the 示意圖 label there afterwards, so nothing you draw belongs in that band at either"
+    " end."
+    " A brand mark carried by an object inside the photograph (a livery, a storefront, a product)"
+    " is part of that photograph and is not one of your decorative marks — it stays on its object"
+    " and never migrates onto the headline or into either navy band."
+    " In the two-panel layout, each headline stays ENTIRELY INSIDE ITS OWN PANEL and never crosses"
+    " the diagonal seam or strays into the other panel: freeing the placement frees where it sits"
+    " WITHIN its panel, not which panel it belongs to.\n"
+)
 
 # ---- 內容觸發的逐行指示與招式池（2026-09-11 第九批）----
 #
@@ -1733,21 +1750,34 @@ Photographic, news-documentary quality, filling the frame.
 # _TITLE_FIXED_BLOCK (a)–(g)、CG 有 _CG_CREATIVITY_FIXED (a)–(i)，只有 YT 裸奔。
 # 實拍 L1 的配色跑掉（指定紅底白字，畫成白底黑字）就是它擋得住的那一種。
 # 0 級不注入：那一級根本沒有創意條文，沒有東西需要被框住。
-_YT_FIXED_BLOCK = """
-WHAT THE CREATIVITY SETTING NEVER CHANGES — THIS PARAGRAPH OUTRANKS THE DESIGN BRIEF:
-(a) THE CHARACTERS. Render the listed strings character for character, in the listed order. Never add, drop, translate, abbreviate, reorder or substitute one character to make a layout work, and never break a listed line across two rows — each listed line is one unbroken row.
-(b) THE DATE IS A FACT, NOT A GRAPHIC ELEMENT. Its digits and slashes are exactly as listed; a wrong digit is a factual error on air. The tab carrying it stays vivid red with white characters, and it stays attached to the top of the headline block.
-(c) NO NEW TEXT OF ANY KIND. Decorative artwork is wordless: no letters, no digits, no invented badges, no labels, no signature. The design brief never licenses a word that is not in the list above.
-(d) EVERY CHARACTER STAYS COMPLETE, UNOBSTRUCTED AND LEGIBLE at broadcast distance. Decoration that crosses a stroke, a shadow that swallows a stroke, or type squeezed until the counters close, is a defect — not a style. Loud is not the same as broken.
-(e) THE TWO RESERVED CORNERS STAY CLEAN whatever the brief says: a channel logo and a LIVE badge are pasted over them afterwards, so nothing you draw belongs there.
-(f) Traditional Chinese, Taiwan forms throughout — no Simplified or Japanese forms, no invented strokes.
-(g) NOTHING TOUCHES OR IS CLIPPED BY ANY FRAME EDGE, the headline block and the date tab included.
-(h) IF A LEVER CANNOT BE SATISFIED WITHOUT ADDING WORDS OR BREAKING A CHARACTER, THE LEVER LOSES.
+#
+# 日期那句本來就會被 yt_fixed_block() 依 layout 整條抽掉（news/hot 沒有日期
+# 牌，見下方 yt_fixed_block），所以這裡也不帶編號——不編號才不用在乎「抽掉
+# 一句之後前後怎麼接」。
+_YT_FIXED_DATE_LINE = """THE DATE IS A FACT, NOT A GRAPHIC ELEMENT. Its digits and slashes are exactly as listed; a wrong digit is a factual error on air. The tab carrying it stays vivid red with white characters, and it stays attached to the top of the headline block.
 """
 
-
-_YT_FIXED_DATE_LINE = """(b) THE DATE IS A FACT, NOT A GRAPHIC ELEMENT. Its digits and slashes are exactly as listed; a wrong digit is a factual error on air. The tab carrying it stays vivid red with white characters, and it stays attached to the top of the headline block.
-"""
+# 字句逐字／繁中臺灣用字／不准生新字／不准觸邊四條搬進 creativity.py
+# （target="image"，與十點共用，措辭以十點為準——十點先上線且經過實拍調校，
+# 這裡原本是手動抄改的，見該檔案開頭說明）。留在這裡的只剩 YT 版型專屬的：
+# 不准觸邊那條點名日期牌的補強句（2026-09-10 教訓：排除條文埋在一長串否定句
+# 中間，模型照樣會犯，見 commit 73ae198——共用句只講「不准觸邊」這個一般
+# 規則，日期牌是不是也算在內要在這裡自己點名一次）、日期牌語意、保留角落、
+# 可讀性重申、「缺字寧可不做」收尾。
+_YT_FIXED_BLOCK = (
+    "\nWHAT THE CREATIVITY SETTING NEVER CHANGES — THIS PARAGRAPH OUTRANKS THE DESIGN BRIEF:\n"
+    + creativity.fixed_block(target="image")
+    + " That includes the headline block and the date tab: neither may touch or be clipped by a"
+    " frame edge either.\n"
+    + _YT_FIXED_DATE_LINE
+    + "EVERY CHARACTER STAYS COMPLETE, UNOBSTRUCTED AND LEGIBLE at broadcast distance. Decoration"
+    " that crosses a stroke, a shadow that swallows a stroke, or type squeezed until the counters"
+    " close, is a defect — not a style. Loud is not the same as broken.\n"
+    "THE TWO RESERVED CORNERS STAY CLEAN whatever the brief says: a channel logo and a LIVE badge"
+    " are pasted over them afterwards, so nothing you draw belongs there.\n"
+    "IF A LEVER CANNOT BE SATISFIED WITHOUT ADDING WORDS OR BREAKING A CHARACTER, THE LEVER"
+    " LOSES.\n"
+)
 
 
 def yt_fixed_block(level: int, layout: str = "hourly") -> str:
