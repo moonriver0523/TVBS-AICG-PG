@@ -495,8 +495,11 @@ def cover_line_annotation(text: str, level: int) -> str:
         )
     if not notes:
         notes.append(
-            "switch colour PART-WAY THROUGH this row on the one word that carries the news"
-            " (the place, the name, the verdict) — this row must not be one flat colour"
+            # word → TERM：「word」在無空格的中文裡沒有邊界，模型就按字數切
+            # （「哈拉德」被切成「哈拉」＋「德」）。邊界的定義寫在 COLOUR 規則本體。
+            "switch colour PART-WAY THROUGH this row on the one TERM that carries the news"
+            " (the place, the name, the verdict) — colour EVERY character of that term, never"
+            " part of it; this row must not be one flat colour"
         )
     return "  ← " + "; ".join(notes) + "."
 
@@ -727,9 +730,20 @@ def cover_title_colour_rule(level: int) -> str:
             " labels literally — never recolour a line, and never give a whole headline one flat"
             " colour.\n"
         )
+    # 2026-09-11 使用者：「名詞應該整個套色 不是單一字套色 不合邏輯」。實拍把
+    # 「哈拉德」切成「哈拉」＋變色的「德」——那是國王的名字，拆開讀起來像兩件事。
+    # 根因跟「葉門青年運動」被腰斬同一個：中文沒有空格，只說「換一個 word」模型
+    # 就按字數切。所以這裡明講**邊界怎麼找**（用讀的，不是用數的）並附上那個錯例。
+    # 放在配色規則本體而不是逐行註解：這樣三個配色分支（數字／引號／預設）全部受約束。
     return (
         "- COLOUR: follow the DESIGN BRIEF above and each row's own note in the list above."
         " The order of the rows is NOT a colour order, and no headline may be one flat colour.\n"
+        "- A COLOUR CHANGE FALLS ON A TERM BOUNDARY, NEVER INSIDE A TERM. Chinese is written"
+        " without spaces between words, so find where a term ends by READING it, not by counting"
+        " characters. A personal name, a place name, an organisation, a job title, a figure with"
+        " its unit — each is ONE unbroken unit, and every character of it takes the SAME colour."
+        " Colouring 「哈拉德」as 「哈拉」plus a differently coloured 「德」is wrong: it is one"
+        " king's name, and splitting it reads as two separate things.\n"
     )
 
 
