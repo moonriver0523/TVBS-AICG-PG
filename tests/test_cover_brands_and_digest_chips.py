@@ -66,8 +66,11 @@ class BrandTests(unittest.TestCase):
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
         self.assertIn("is not one of your decorative marks", clause)
         self.assertIn("never migrates onto the headline", clause)
-        # 其餘禁令一字不動
-        for banned in ("no country names", "no place labels", "no flag chips", "no map insets"):
+        # 其餘禁令一字不動；「no flag chips」2026-09-11 第十批改寫成帶界線的版本
+        # （見 creativity._IMAGE_FIXED 開頭說明：放開的只有照片裡本來就有的旗子），
+        # 改釘新措辭。
+        for banned in ("no country names", "no place labels", "no flag redrawn from memory",
+                       "no map insets"):
             with self.subTest(banned=banned):
                 self.assertIn(banned, clause)
 

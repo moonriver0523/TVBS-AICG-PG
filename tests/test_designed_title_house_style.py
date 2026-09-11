@@ -80,8 +80,14 @@ class HouseStyleTests(unittest.TestCase):
 
     def test_flags_and_map_labels_stay_shut(self):
         """基準圖右上那些國旗小標帶著國名，是清單外文字，而且壓在 AI示意圖 那個角落。
-        要開是另一件事，不能靠「更奔放」順手夾帶進來。"""
-        for banned in ("no country names", "no place labels", "no flag chips", "no map insets"):
+        要開是另一件事，不能靠「更奔放」順手夾帶進來。
+
+        2026-09-11 第十批：使用者另外開放「照片裡已經有的旗子」當招式素材
+        （見 creativity.COVER_FLAG_ACCESSORY），但那是確定性換入，不是靠這裡
+        鬆綁生效——這條仍然擋死「憑記憶畫一面新旗、貼國名」。
+        """
+        for banned in ("no country names", "no place labels", "no flag redrawn from memory",
+                       "no map insets"):
             with self.subTest(banned=banned):
                 self.assertIn(banned, CLAUSE)
 

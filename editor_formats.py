@@ -523,6 +523,7 @@ COVER_TILT_DIRECTIONS = creativity.COVER_TILT_DIRECTIONS
 # 邏輯，跟 titles／full_width 耦合，不是跨拉桿共用的機制。
 COVER_ACCESSORY_SHAPES = creativity.COVER_ACCESSORY_SHAPES
 COVER_ACCESSORY_POOL = creativity.COVER_ACCESSORY_POOL
+COVER_FLAG_ACCESSORY = creativity.COVER_FLAG_ACCESSORY
 
 
 # 2026-09-11 第二輪拿掉「數量呼應」：程式算得出 6，模型畫得出 3。
@@ -532,6 +533,26 @@ COVER_ACCESSORY_POOL = creativity.COVER_ACCESSORY_POOL
 
 # 件數就是梯子的骨架：一眼可見、可數、由程式決定。
 COVER_ACCESSORY_COUNTS = {0: 0, 1: 0, 2: 1, 3: 2, 4: 3}
+
+# 國旗招式只在 3 級以上（COVER_ACCESSORY_COUNTS 給到 2 件以上）才換得進去——
+# 2 級只有 1 件招式，換掉唯一那件會讓 2 級的「規矩」感一次全部讓給國旗，
+# 跟使用者原話「照片裡已經有的旗子，可以被拉出來當設計元素」的分量不成比例。
+_FLAG_ACCESSORY_MIN_COUNT = 2
+
+# 偵測畫面描述裡有沒有旗子：英文 "flag"（含 flags／flagpole 等變化，用詞界）
+# 或中文「旗」。這是確定性判斷，不是隨機——見 creativity.COVER_FLAG_ACCESSORY
+# 上面的註解：挪威那則新聞（畫面描述提到 flag）每次重生都會觸發，使用者實拍
+# 驗得到；沒提到旗子的畫面則完全不觸發，既有 seed 的長相不受影響。
+_FLAG_MENTION_RE = re.compile(r"flag|旗", re.IGNORECASE)
+
+
+def _visuals_mention_flag(visuals) -> bool:
+    """`visuals` 可以是單一字串（YT）或字串的 tuple/list（十點左右兩格）。"""
+    if isinstance(visuals, str):
+        text = visuals
+    else:
+        text = " ".join(v for v in visuals if v)
+    return bool(text) and bool(_FLAG_MENTION_RE.search(text))
 
 
 def _accessory_geometry_note(full_width: bool) -> str:
@@ -550,25 +571,66 @@ def _accessory_geometry_note(full_width: bool) -> str:
     return note + "."
 
 
+# 「畫一個圖示」的招式有三條：icon／bubbles／iconrow。實拍：國王逝世的封面，L4
+# 抽到 icon 配了一朵雨雲，掛在「辭世」旁邊——根因是舊版 icon 條目文字帶著一份
+# 災難／氣象例子清單（已在 creativity.py 拿掉），那份清單被模型當成錨點，蓋過了
+# 條目裡本來就有的「taken from the subject」。不在三條各自的池子文字裡各補一次
+# 正面方法——那樣下次漏改一條又是同一個坑，改成這裡集中管：抽到這三條的任何一條，
+# 就在它前面掛一句共通指示。語氣要對：只給方法不夠，這個 repo 已經證實過具體反例
+# 才擋得住圖模亂套錨點（見 P1 反色底字、招式排除區那幾次教訓）——十點 L3 自己
+# 抽到的 iconrow 是蠟燭／王冠／百合，熱搜 L3 抽到黑色輓帶，證明模型沒有被清單
+# 錨住時挑得很好，問題是清單不是能力。
+_ICON_LIKE_KEYS = frozenset({"icon", "bubbles", "iconrow"})
+# 原稿長得多（先講方法、再講反例，各自成句），但 test_the_ladder_is_pinned_to_
+# numbers_not_adjectives 釘著 L4 最壞情況 brief 要短於 3000 字元——那條上限本身
+# 就是「位置比長度更決定生死，但長度別把自己稀釋掉」那個教訓（見它的註解），這句
+# 一次性插進去每級都會加長，算過 40 顆 seed × 雙切/滿版的最壞值後砍到這個長度，
+# 換來還有一點餘裕（約 20 字元）。方法與反例都留著，只是不重複鋪陳。
+_ICON_SUBJECT_GUIDANCE = (
+    "MATCH SUBJECT AND REGISTER: headline's noun, else photo's subject — a"
+    " raincloud beside a death is weather, not grief. "
+)
+
+
 def cover_accessories(level: int, titles=(), seed=None, full_width: bool = False,
-                      rng=None) -> list[str]:
+                      rng=None, visuals=()) -> list[str]:
     """該級要畫的招式（無字），形狀與幾何都已經填好。
 
     `rng` 由 cover_design_brief 傳進來，讓所有變化軸共用同一顆——一個 seed
     就決定整張的長相，才重現得出來。單獨呼叫時退回自己開一顆。
+
+    `visuals`（2026-09-11 第十批）：畫面描述（十點傳 (visual_left, visual_right)，
+    YT 傳單一字串）。偵測到旗子、且這一級抽得到 2 件以上招式時，把抽到的**最後
+    一件**確定性換成國旗招式——不是丟進池子跟其他九件一起抽（見
+    creativity.COVER_FLAG_ACCESSORY 的註解：那樣會讓所有既有 seed 的長相跟著換，
+    而且沒有旗子的照片也可能抽到它）。換掉之後仍然要接同一支 `_accessory_geometry_note`
+    ——test_every_accessory_carries_its_own_placement_note 釘住「每一件招式都帶
+    自己的排除區」，國旗這件不例外。
     """
     want = COVER_ACCESSORY_COUNTS.get(level, 0)
     if want <= 0:
         return []
     rng = rng if rng is not None else random.Random(seed)
-    pool = [text for _key, text in COVER_ACCESSORY_POOL]
-    rng.shuffle(pool)
+    # 洗牌洗整組 (key, text)，不是只洗 text——洗牌本身（Fisher-Yates）消耗的 rng
+    # 呼叫次數只看串列長度，跟元素內容無關，所以這裡從「洗一串字串」改成「洗一串
+    # tuple」不會動到既有 seed 的抽籤結果；要保留 key 才認得出哪幾件是圖示類
+    # （見下面 _ICON_LIKE_KEYS），沒有 key 就沒辦法只管住那三條、不動到其他六件。
+    entries = list(COVER_ACCESSORY_POOL)
+    rng.shuffle(entries)
     note = _accessory_geometry_note(full_width)
     picked: list[str] = []
-    for text in pool[:want]:
+    icon_guidance_used = False
+    for key, text in entries[:want]:
         if "{shape}" in text:
             text = text.replace("{shape}", rng.choice(COVER_ACCESSORY_SHAPES))
+        if key in _ICON_LIKE_KEYS and not icon_guidance_used:
+            # 同一輪最多掛一次：件數上限只有 3，就算三條圖示類全被抽到，指示重複
+            # 三遍只是噪音，不會多壓住什麼。
+            text = _ICON_SUBJECT_GUIDANCE + text
+            icon_guidance_used = True
         picked.append(text + note)
+    if want >= _FLAG_ACCESSORY_MIN_COUNT and _visuals_mention_flag(visuals):
+        picked[-1] = COVER_FLAG_ACCESSORY[1] + note
     return picked
 
 
@@ -642,7 +704,8 @@ def _size_hierarchy_line(ratio: str, titles, full_width: bool) -> str:
     return f"- Row sizes differ: {body}."
 
 
-def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = False) -> str:
+def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = False,
+                       visuals=("", "")) -> str:
     """CANVAS 正後方那塊。愈短愈好——這是模型真的會讀的位置。
 
     2026-09-11 第四輪起，這裡同時是**變化池的出口**：底板形狀、錯位方式、字體骨架、
@@ -650,6 +713,10 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
     一顆 seed ＝ 一種長相，重現得出來。
 
     幅度（塊高％／落差倍數／招式件數／反白字數）不在池子裡：那是梯子本身。
+
+    `visuals`（第十批）：(visual_left, visual_right) 畫面描述，只用來判斷這張照片
+    裡有沒有旗子（見 cover_accessories 的 visuals 參數）；預設一對空字串，不影響
+    既有呼叫端與 fixture——沒有旗子可提就不會觸發換入。
     """
     spec = COVER_TITLE_BRIEF_SPECS.get(level)
     if not spec:
@@ -708,7 +775,8 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
         f" red is BANNED. Use {spec['colours'].format(*palette)}."
         " A colour switch may happen part-way through a row."
     )
-    picked = cover_accessories(level, titles=titles, full_width=full_width, rng=rng)
+    picked = cover_accessories(level, titles=titles, full_width=full_width, rng=rng,
+                               visuals=visuals)
     if picked:
         rows.append(
             f"- Draw EXACTLY {len(picked)} piece{'' if len(picked) == 1 else 's'} of supporting artwork, listed here and no"
@@ -1279,6 +1347,31 @@ def yt_cover_band_fields(layout: str, bottom_band: bool) -> dict:
     return {"band_clause": YT_COVER_BAND_CLAUSE_OFF, "band_imagery_tail": YT_COVER_BAND_IMAGERY_TAIL_OFF}
 
 
+# 2026-09-11 第十批：news／hot 補上 hourly 已經驗過有效的那句「標題要落到底部
+# 邊緣」數字化約束。查證（見階段 C 回報，實拍熱搜四級底緣都卡在 88%）：這兩個
+# 版型原本只給 TOP 的百分比，「底部」只寫成一個沒有數字的形容詞「near the bottom
+# edge」——這個 repo 已經證實過，形容詞壓不住反覆出現的硬規則，這裡輸給的是同一份
+# prompt 裡出現三次的「不准碰邊」（HARD CONSTRAINTS 一次、FIXED 區塊兩次），模型
+# 挑了最保守的那句、抓一段安全距離。跟 hourly 那句（`{title_top:.0%}` 佔位符，
+# main._yt_cover_full_image 本來就對三個版型都傳這個值，不用改呼叫端）同源，只是
+# 拿掉日期牌／LIVE 章的用語——news／hot 都沒有日期牌可提。
+#
+# news 與 hot 共用同一個常數，不是各寫一次：這兩個版型的標題規格本來就刻意釘成
+# 一樣（見 tests/test_yt_title_parity.py），這句要是各寫一次，下次改其中一份
+# 漏改另一份，兩個版型又會悄悄分岔——跟 `_YT_PLAIN_LAYOUT["hot"] =
+# _YT_PLAIN_LAYOUT["news"]` 那行擋的是同一件事。
+#
+# 「接近但不觸碰」講清楚，不讓模型再一次只能二選一：直接點名這句跟「不准碰邊」的
+# 關係——貼近到跟全篇「不准碰邊」給的同一種細縫，不是另外空出一段安全邊界。
+_YT_TITLE_REACHES_BOTTOM_CLAUSE = (
+    "- THE BLOCK REACHES DOWN NEAR THE BOTTOM EDGE, NOT JUST NEAR ITS OWN TOP: the"
+    " TOP of the first row lands at or below {title_top:.0%} of the frame height,"
+    " and both headline lines fill the space from there down to the bottom edge —"
+    " close to it, the same closeness 'nothing touches or is clipped by any edge'"
+    " already allows everywhere else on this cover, not a wide safety gap."
+    " Stopping well short of the edge wastes the height the brief above just fixed.\n"
+)
+
 YT_COVER_FULL_PROMPT_NEWS = """Design a complete Taiwanese TV news LIVE-stream thumbnail (YouTube cover), 16:9.
 
 === TEXT TO RENDER (Traditional Chinese, Taiwan) ===
@@ -1290,7 +1383,7 @@ Render EXACTLY these strings, character for character, nothing else:
 {layout_rules}{band_clause}
 - Keep the UPPER-LEFT corner (a block about 24% wide and 40% tall) completely free of text or busy detail: a red LIVE badge and a date tab are pasted there afterwards.
 - Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a channel logo tab is pasted there afterwards.
-
+""" + _YT_TITLE_REACHES_BOTTOM_CLAUSE + """
 === IMAGERY ===
 {visual}
 Photographic, dramatically lit, news-documentary quality, filling the frame{band_imagery_tail}.
@@ -1329,6 +1422,15 @@ _DATE_PLATE_STYLES = {
 # 使用者裁決塊高 26/31/36/41%：L1 比播出標準再小一點讓照片突出，L4 放到 41%，
 # 跨度 1.58 倍。
 #
+# 2026-09-11 第十批：上面那組數字訂錯了。L1 要求的 26% 比程式壓字版的 29.2% 還小
+# ——階梯第一階是往下踩，模型不肯縮，實拍 L1 兩個版型都畫成 33% 左右（等於根本
+# 沒吃到這一級的指示），L2 的 31% 也才剛追平 29.2%，等於「L1／L2 幾乎沒有級距」。
+# 十點那邊 P2 改版時守過同一條規矩「訂數字前先量現行成品」，這次訂 YT 塊高沒有
+# 照做，是我的疏失。改成 32/36/40/44%：L1 貼齊 29.2% 那個播出標準再往上一點（不
+# 是往下踩），L4 維持在明顯最大的位置，跨度收到 1.375 倍——比十點四級 18→36%
+# 的 2 倍窄，因為 YT 整點只有兩行、字本來就比十點大，不需要十點那麼大的跨度才
+# 看得出級距。
+#
 # 字級落差照搬十點（使用者裁決）。這與模板原本那條
 # 「THE TWO HEADLINE LINES ARE SET AT ONE SINGLE TYPE SIZE」正面衝突，
 # 所以 1 級起把那條**拆掉**而不是覆蓋（見 yt_hourly_layout_rules）。
@@ -1337,13 +1439,13 @@ _DATE_PLATE_STYLES = {
 # 不搬的東西：落點（YT 的標題固定在左下，日期牌還要跟著它，放開會散掉）、
 # 側邊標籤與畫面小籤（另案）、三行邏輯與雙切幾何。
 YT_BRIEF_SPECS = {
-    1: dict(height="26%", ratio=None, stagger=False, tilt=False, knockouts=0, typeface=False,
+    1: dict(height="32%", ratio=None, stagger=False, tilt=False, knockouts=0, typeface=False,
             colours="TWO colours only: {0} dominant, {2} for emphasis"),
-    2: dict(height="31%", ratio="1.8", stagger=True, tilt=False, knockouts=1, typeface=True,
+    2: dict(height="36%", ratio="1.8", stagger=True, tilt=False, knockouts=1, typeface=True,
             colours="THREE colours: {0} dominant, {1} second, {2} on the word that carries the news"),
-    3: dict(height="36%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True,
+    3: dict(height="40%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True,
             colours="THREE colours plus ONE accent: {0} dominant, {1} second, {2} on the word that carries the news, {3} as the accent"),
-    4: dict(height="41%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True,
+    4: dict(height="44%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True,
             colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open"),
 }
 # 兩行標題的字底。程式壓字版實測落在 97.9%，取整。
@@ -1503,12 +1605,15 @@ _YT_STYLE_CLAUSES = {
 
 
 def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
-                    bottom_band: bool = False) -> str:
+                    bottom_band: bool = False, visual: str = "") -> str:
     """CANVAS 正後方那塊。與十點的 cover_design_brief 同一批池子、同一個抽籤順序。
 
     順序刻意跟十點一致（plate → stagger → typeface → palette → tilt），只少了
     anchor——YT 的標題固定在左下，日期牌還要跟著它，落點放開會把整塊拆散。
     幅度（塊高／落差／反白字數／招式件數）是梯子本身，不進池子。
+
+    `visual`（第十批）：畫面描述，只用來判斷有沒有旗子（見 cover_accessories）；
+    預設空字串，不影響既有呼叫端與 fixture。
     """
     spec = YT_BRIEF_SPECS.get(level)
     if not spec:
@@ -1589,7 +1694,8 @@ def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
             "- THE DATE TAB IS NOT PART OF THAT PALETTE: it stays vivid red with white characters"
             " whatever the rows do."
         )
-    picked = cover_accessories(level, titles=lines, full_width=False, rng=rng)
+    picked = cover_accessories(level, titles=lines, full_width=False, rng=rng,
+                               visuals=visual)
     if picked:
         rows.append(
             f"- Draw EXACTLY {len(picked)} piece{'' if len(picked) == 1 else 's'} of supporting"
@@ -1762,7 +1868,7 @@ Render EXACTLY these strings, character for character, nothing else:
 - Keep the UPPER-LEFT corner (a block about 30% wide and 16% tall) completely free of text or busy detail: a red-and-white "trending" tag is pasted there afterwards.
 - Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a red channel logo tab is pasted there afterwards.
 - Keep the very top edge free: a thin red strip is pasted along it afterwards.
-
+""" + _YT_TITLE_REACHES_BOTTOM_CLAUSE + """
 === IMAGERY ===
 {visual}
 Photographic, news-documentary quality, filling the frame{band_imagery_tail}.

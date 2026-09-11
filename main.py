@@ -4223,8 +4223,10 @@ def _cover_ai(
     # 放在 TYPOGRAPHY 段尾，實拍四級長得一模一樣——L4 的 prompt 14K 字元，條文坐在
     # 第 8,000 字元之後，模型只讀得進前面那幾段（斜切線的數字就是寫在 CANVAS 才生效的）。
     titles = (req.title_left, req.title_right)
+    # visuals=（2026-09-11 第十批）：畫面描述傳進去只為了讓招式段判斷有沒有旗子可用
+    # （見 editor_formats.cover_accessories）——不影響其餘措辭。
     design_brief = editor_formats.cover_design_brief(
-        level, titles=titles, full_width=(req.layout == "full")
+        level, titles=titles, full_width=(req.layout == "full"), visuals=visuals
     )
     colour_rule = editor_formats.cover_title_colour_rule(level)
     # 3 級起才把反色底字釘在行清單上（條文本身也是 3 級起才要求）。
@@ -5117,7 +5119,10 @@ def _yt_cover_full_image(
     }.get(req.layout, editor_formats.YT_COVER_FULL_PROMPT_NEWS)
     # 日期條那一條由 compose 的 box 產生（2026-09-11 創意階梯）——prompt 與程式貼附
     # 用的是同一個座標，不會再有「兩邊各寫各的百分比」那種對不上的 bug。
-    # 整點以外的版型模板沒有這個佔位，多給的欄位 format 會忽略。
+    # 整點以外的版型模板沒有 date_clause／date_text_line／date_ban／logo_keep_out／
+    # badge_keep_out 這幾個佔位，多給的欄位 format 會忽略。title_top 是例外
+    # （2026-09-11 第十批起）：news／hot 補了跟 hourly 同源的「標題落到底部邊緣」
+    # 那句，也吃這個值，所以下面這行本來就對三個版型都傳，不用另外接線。
     # 跟 5144 那處算法一致——模型畫的日期與程式後貼的必須是同一天
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
     image_req = ImageGenerateRequest(
@@ -5152,6 +5157,9 @@ def _yt_cover_full_image(
                 # 底帶開著時，整幅底帶與「每行各自一塊底板」是兩個打架的指示——
                 # brief 要知道，才能明講兩者關係而不是讓模型自己挑一個遵守。
                 bottom_band=req.bottom_band,
+                # visual=（2026-09-11 第十批）：只為了讓招式段判斷這張照片裡有沒有
+                # 旗子可用（見 editor_formats.cover_accessories）。
+                visual=visual,
             ),
             layout_rules=editor_formats.yt_layout_rules(req.creativity, req.layout),
             title_top=editor_formats.yt_title_top(req.creativity),
