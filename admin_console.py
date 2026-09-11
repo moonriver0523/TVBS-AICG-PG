@@ -50,6 +50,17 @@ def _esc(value) -> str:
     return html.escape(str(value or ""))
 
 
+def _type_of(record: dict) -> str:
+    """這筆紀錄要顯示的「類型」。
+
+    最後退到 source 是刻意的：2026-09-11 發現十點與 YT 那幾個版型根本沒寫歸檔，
+    修好之後它們都會帶 type_label。但下一個新版型若又忘了帶，只有前兩層的話
+    整欄會是空白、看起來就像後台認不得——退到 source（每一筆一定有）至少列得出來。
+    """
+    return (record.get("type_label") or record.get("chart_type")
+            or record.get("source") or "（未分類）")
+
+
 def _row(record: dict) -> str:
     # 姓名與 email 都顯示：姓名好認人，email 是唯一的（同名同姓分得開）。
     name = record.get("user_name", "")
@@ -74,7 +85,7 @@ def _row(record: dict) -> str:
     <tr>
       <td class="nowrap">{_esc(record.get("ts", ""))[:19].replace("T", " ")}</td>
       <td class="who">{who}</td>
-      <td class="nowrap">{_esc(record.get("type_label") or record.get("chart_type"))}</td>
+      <td class="nowrap">{_esc(_type_of(record))}</td>
       <td class="thumb">{thumb}</td>
       <td class="text">
         <details><summary>新聞原文（{len(record.get("news_text", "") or "")} 字）</summary>
@@ -117,11 +128,17 @@ summary { cursor: pointer; font-size: 12px; }
 """
 
 
-def _page(records: list[dict], months: list[str], month: str, user: str) -> str:
-    options = ['<option value="">全部月份</option>']
-    for value in months:
-        selected = " selected" if value == month else ""
+def _select(name: str, label: str, values: list[str], chosen: str, all_text: str) -> str:
+    options = [f'<option value="">{_esc(all_text)}</option>']
+    for value in values:
+        selected = " selected" if value == chosen else ""
         options.append(f'<option value="{_esc(value)}"{selected}>{_esc(value)}</option>')
+    return (f'<div><label>{_esc(label)}</label>'
+            f'<select name="{_esc(name)}">{"".join(options)}</select></div>')
+
+
+def _page(records: list[dict], months: list[str], month: str, user: str,
+          types: list[str], type_label: str) -> str:
 
     if records:
         body = f"""<div class="wrap"><table>
@@ -136,7 +153,8 @@ def _page(records: list[dict], months: list[str], month: str, user: str) -> str:
 <h1>AICG 生成紀錄</h1>
 <p class="muted">顯示 {len(records)} 筆（上限 200 筆，用篩選縮小範圍）</p>
 <form class="bar" method="get">
-  <div><label>月份</label><select name="month">{"".join(options)}</select></div>
+  {_select("month", "月份", months, month, "全部月份")}
+  {_select("type", "類型", types, type_label, "全部類型")}
   <div><label>使用者（email 或姓名，部分符合即可）</label>
        <input name="user" value="{_esc(user)}" placeholder="全部"></div>
   <button type="submit">篩選</button>
@@ -151,7 +169,7 @@ def register(app) -> None:
         return
 
     @app.get("/admin", response_class=HTMLResponse)
-    def admin_index(request: Request, month: str = "", user: str = ""):
+    def admin_index(request: Request, month: str = "", user: str = "", type: str = ""):
         if not _authorized(request):
             return _UNAUTHORIZED
         if not audit_archive.ENABLED:
@@ -159,8 +177,13 @@ def register(app) -> None:
                 "尚未設定 AUDIT_ARCHIVE_DIR，沒有歸檔可看。", status_code=503
             )
         records = audit_archive.list_records(month=month, limit=200, user=user)
+        # 選項由現有紀錄長出來，不寫死清單——寫死的話每加一個版型就要記得回來改，
+        # 而那正是這次「後台抓不到新版型」的成因。
+        types = sorted({_type_of(r) for r in records})
+        if type:
+            records = [r for r in records if _type_of(r) == type]
         return HTMLResponse(
-            _page(records, audit_archive.available_months(), month, user)
+            _page(records, audit_archive.available_months(), month, user, types, type)
         )
 
     @app.get("/admin/image/{month}/{filename}")
