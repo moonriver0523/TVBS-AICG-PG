@@ -501,97 +501,25 @@ def cover_line_annotation(text: str, level: int) -> str:
     return "  ← " + "; ".join(notes) + "."
 
 
-# ---- 變化池（2026-09-11 第四輪）----
-# 每一池都只描述**形狀或做法**，不帶數字（延續「招式不宣稱數字」那條），
-# 而且每一條都是命令句：模型讀到的是「就是這個」，不是「你可以選」。
+# ---- 變化池（2026-09-11 第四輪；P3 起實體搬進 creativity.py）----
+# 池子本體與抽籤序列（creativity.draw）現在住在 creativity.py——十點跟 YT
+# 共用同一批池子，同一份持有權，理由跟 target="image" 的 FIXED 條文一樣：
+# 改一處、忘了改另一處的病灶。這裡留下同名別名，不是因為偷懶：既有測試
+# （tests/test_cover_title_creativity.py 等）直接寫 editor_formats.COVER_*，
+# 搬家不該連帶逼著改一堆呼叫點，跟 P2 的 LEVEL_NAMES 走同一個模式
+# ——這幾個名字是「同一個物件」的別名，不是各自留一份副本。
+COVER_PLATE_SHAPES = creativity.COVER_PLATE_SHAPES
+COVER_STAGGER_PATTERNS = creativity.COVER_STAGGER_PATTERNS
+COVER_TYPEFACES = creativity.COVER_TYPEFACES
+COVER_PALETTES = creativity.COVER_PALETTES
+COVER_ANCHORS = creativity.COVER_ANCHORS
+COVER_TILT_DIRECTIONS = creativity.COVER_TILT_DIRECTIONS
 
-# 底板形狀。原本只有「每行各自一塊板」，形狀交給模型 → 每次都是同一種圓角矩形。
-COVER_PLATE_SHAPES: tuple[str, ...] = (
-    "square-cut, hard right angles",
-    "fully rounded, pill-ended",
-    "clipped across one corner",
-    "slanted into parallelograms",
-    "torn-edged, like strips ripped out of paper",
-    "painted brush strokes with ragged ends",
-    "ribbons with folded-back ends",
-    "open bracket frames, outline only, the photograph showing through",
-)
-
-# 錯位方式。原本只寫「錯開」，模型一律交同一種左階梯。
-COVER_STAGGER_PATTERNS: tuple[str, ...] = (
-    "each row stepped further right than the one above",
-    "each row stepped further left than the one above",
-    "alternating left and right, a zig-zag down the block",
-    "the middle row pushed out well past the others",
-    "a short row set beside the end of a long one",
-)
-
-# 字體個性。只描述字形骨架，不給字體名——給名字模型會拿英文字體來套。
-# 每一條都要能用中文黑體體系畫得出來，而且可讀性是硬底線。
-COVER_TYPEFACES: tuple[str, ...] = (
-    "a heavy rounded gothic, thick strokes with softened corners",
-    "a tall condensed gothic, narrow and vertical",
-    "a wide poster gothic, squat and square-shouldered",
-    "a heavy Ming with thick slab serifs and sharp entry strokes",
-    "an angular technical cut, corners sliced off on the diagonal",
-    "a heavy brush-written hand, strokes tapering as they lift off",
-)
-
-# 配色。四個位置＝主色／次色／重點色／備用色，全部是播出安全的高彩度色。
-# 「哪個字拿重點色」仍然由 COLOUR FOLLOWS MEANING 那句決定——池子決定用哪幾色，
-# 意義決定落在誰身上。這樣才不會回到白→黃→紅的行序配色。
-COVER_PALETTES: tuple[tuple[str, str, str, str], ...] = (
-    ("white", "deep navy", "vivid red", "bright golden yellow"),
-    ("white", "black", "bright golden yellow", "vivid red"),
-    ("bright golden yellow", "white", "vivid red", "deep navy"),
-    ("icy white-blue", "deep teal", "hot orange", "white"),
-    ("white", "electric cyan", "magenta", "black"),
-    ("black", "white", "lime green", "electric cyan"),
-    ("white", "royal purple", "bright golden yellow", "hot orange"),
-    ("pale gold", "deep crimson", "white", "black"),
-    ("white", "hot orange", "electric cyan", "deep navy"),
-)
-
-# 標題區落點（3 級起才解放）。全部限中段以下：上緣是 compose 後貼 示意圖 的位置。
-COVER_ANCHORS: tuple[str, ...] = (
-    "low in its own panel, hard against the left edge",
-    "low in its own panel, hard against the right edge",
-    "across the middle band of its own panel",
-    "low and centred in its own panel",
-)
-
-COVER_TILT_DIRECTIONS: tuple[str, ...] = ("clockwise", "anticlockwise")
-
-
-# 招式池。每一條都是**無字**的，而且都是命令句。件數由等級決定，抽哪幾件由程式抽——
-# 交給模型自己選，四級會塌回同一種（許可句推不動模型，第七批已證明）。
-# 小配件的外框形狀。2026-09-11 使用者：「不一定只有圓形可以用吧。」
-# 跟招式用同一個 seeded RNG 抽，所以同一級重生換招式時形狀也跟著換。
-# 一律只描述輪廓，不給數字——延續「招式不宣稱數字」那條。
-COVER_ACCESSORY_SHAPES: tuple[str, ...] = (
-    "circular",
-    "rounded-square",
-    "hexagonal",
-    "diamond-shaped (stood on its corner)",
-    "shield-shaped",
-    "torn-edged",
-    "pentagonal",
-    "capsule-shaped",
-    "starburst-edged",
-)
-
-
-COVER_ACCESSORY_POOL: tuple[tuple[str, str], ...] = (
-    ("icon", "A flat WORDLESS PICTOGRAM taken from the subject (raincloud, flame, siren, warning triangle, syringe), hung at one row's start or end at that row's cap height, never covering a stroke."),
-    ("magnifier", "A {shape} MAGNIFIER INSET: a clean window cut from the photograph enlarging one telling detail, ringed in a bright colour, with a short heavy arrow pointing back to where it came from."),
-    ("bubbles", "A CLUSTER OF SMALL {shape} INSETS arcing along one side of the HEADLINE BLOCK (never up beside the main subject, which often sits high in the frame), each holding one wordless pictogram or tiny photographic detail, shrinking as they trail away."),
-    ("brush", "A ROUGH BRUSH-STROKE OR TORN BAR of flat saturated colour behind or directly under ONE row — painted edges, not a neat rectangle."),
-    ("material", "ONE WORD FILLED WITH A MATERIAL FROM THE STORY instead of flat colour (molten metal, cracked stone, ice, banknote paper), the rest of that row staying flat."),
-    ("cutout", "THE MAIN SUBJECT CUT OUT of its background and stood beside or in front of the headline block, rim-lit or thinly outlined so it reads as a separate layer."),
-    ("burst", "A WORDLESS BURST behind the block: radiating speed lines, sparks, shards or a torn splash of saturated colour."),
-    ("arrow", "ONE HEAVY WORDLESS ARROW in a saturated colour, thick and slightly angled, driving from the photograph towards the headline."),
-    ("iconrow", "A SHORT ROW OF SMALL {shape} WORDLESS ICON CHIPS along the lower edge, just ABOVE the navy bottom strip and never inside it, evenly spaced and equal in size, each holding one flat pictogram from the story."),
-)
+# 招式池的兩個池子也搬進 creativity.py 了；件數表（COVER_ACCESSORY_COUNTS）
+# 與怎麼抽、怎麼拼幾何提示（cover_accessories()）留在這裡——那是十點專屬
+# 邏輯，跟 titles／full_width 耦合，不是跨拉桿共用的機制。
+COVER_ACCESSORY_SHAPES = creativity.COVER_ACCESSORY_SHAPES
+COVER_ACCESSORY_POOL = creativity.COVER_ACCESSORY_POOL
 
 
 # 2026-09-11 第二輪拿掉「數量呼應」：程式算得出 6，模型畫得出 3。
@@ -724,13 +652,15 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
     if not spec:
         return ""
     # 抽籤順序固定，動了順序就換掉所有既有 seed 的長相（測試會抓到）。
-    rng = random.Random(seed)
-    plate = rng.choice(COVER_PLATE_SHAPES)
-    stagger = rng.choice(COVER_STAGGER_PATTERNS)
-    typeface = rng.choice(COVER_TYPEFACES)
-    palette = rng.choice(COVER_PALETTES)
-    anchor = rng.choice(COVER_ANCHORS)
-    tilt_dir = rng.choice(COVER_TILT_DIRECTIONS)
+    # P3（2026-09-11）起序列本身交給 creativity.draw()：十點要 anchor 這一顆
+    # （YT 不要），所以 anchor=True。draw() 回傳的 .rng 是抽完這 6 顆之後
+    # 同一顆亂數——下面 cover_accessories() 要接著它繼續抽招式，不能另外
+    # 開一顆 random.Random(seed)。
+    d = creativity.draw(seed, anchor=True)
+    rng = d.rng
+    plate, stagger, typeface, palette, anchor, tilt_dir = (
+        d.plate, d.stagger, d.typeface, d.palette, d.anchor, d.tilt_dir,
+    )
 
     rows = [
         "=== HEADLINE DESIGN BRIEF — THESE NUMBERS ARE AS FIXED AS THE SEAM GEOMETRY ABOVE, AND THEY OVERRIDE ANY TYPOGRAPHY WORDING FURTHER DOWN ===",

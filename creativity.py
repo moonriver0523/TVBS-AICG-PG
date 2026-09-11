@@ -39,6 +39,8 @@
 百分比或像素數字，那些數字屬於各自呼叫端的 DESIGN BRIEF，抽走會連號碼
 一起被抽掉。
 """
+import random
+from dataclasses import dataclass, field
 
 # ============================================================
 # 等級名稱：CG／十點共用（main.CG_CREATIVITY_LEVEL_NAMES、
@@ -55,6 +57,165 @@ LEVEL_NAMES = {
     3: "奔放",
     4: "最狂",
 }
+
+
+# ============================================================
+# 變化池與抽籤：十點不一樣／YT 三版型共用（P3，2026-09-11）
+# ============================================================
+# 池子與抽籤原本各寫在 editor_formats.cover_design_brief／yt_design_brief 裡，
+# 兩邊各自 `random.Random(seed)` 依固定順序抽——十點抽 6 顆（多一顆 anchor），
+# YT 抽 5 顆。這裡把池子本身、跟兩邊共用的那段抽籤順序收進來，YT 這一輪
+# 仍然不接（見下方 draw() 說明），只是先把介面留對。
+#
+# 池子每一池都只描述**形狀或做法**，不帶數字（延續「招式不宣稱數字」那條），
+# 而且每一條都是命令句：模型讀到的是「就是這個」，不是「你可以選」。
+# 幅度（塊高％／落差倍數／招式件數／反白字數）不在池子裡——那是各拉桿自己的
+# 梯子，數字留在 editor_formats（風險 3：這支模組原始碼不准出現版面尺寸數字，
+# 見 tests/test_creativity_module_20260911.py 的 NoLayoutNumbersInSharedModuleTests）。
+
+# 底板形狀。原本只有「每行各自一塊板」，形狀交給模型 → 每次都是同一種圓角矩形。
+COVER_PLATE_SHAPES: tuple[str, ...] = (
+    "square-cut, hard right angles",
+    "fully rounded, pill-ended",
+    "clipped across one corner",
+    "slanted into parallelograms",
+    "torn-edged, like strips ripped out of paper",
+    "painted brush strokes with ragged ends",
+    "ribbons with folded-back ends",
+    "open bracket frames, outline only, the photograph showing through",
+)
+
+# 錯位方式。原本只寫「錯開」，模型一律交同一種左階梯。
+COVER_STAGGER_PATTERNS: tuple[str, ...] = (
+    "each row stepped further right than the one above",
+    "each row stepped further left than the one above",
+    "alternating left and right, a zig-zag down the block",
+    "the middle row pushed out well past the others",
+    "a short row set beside the end of a long one",
+)
+
+# 字體個性。只描述字形骨架，不給字體名——給名字模型會拿英文字體來套。
+# 每一條都要能用中文黑體體系畫得出來，而且可讀性是硬底線。
+COVER_TYPEFACES: tuple[str, ...] = (
+    "a heavy rounded gothic, thick strokes with softened corners",
+    "a tall condensed gothic, narrow and vertical",
+    "a wide poster gothic, squat and square-shouldered",
+    "a heavy Ming with thick slab serifs and sharp entry strokes",
+    "an angular technical cut, corners sliced off on the diagonal",
+    "a heavy brush-written hand, strokes tapering as they lift off",
+)
+
+# 配色。四個位置＝主色／次色／重點色／備用色，全部是播出安全的高彩度色。
+# 「哪個字拿重點色」仍然由呼叫端自己的 COLOUR FOLLOWS MEANING 那句決定——
+# 池子決定用哪幾色，意義決定落在誰身上。這樣才不會回到白→黃→紅的行序配色。
+COVER_PALETTES: tuple[tuple[str, str, str, str], ...] = (
+    ("white", "deep navy", "vivid red", "bright golden yellow"),
+    ("white", "black", "bright golden yellow", "vivid red"),
+    ("bright golden yellow", "white", "vivid red", "deep navy"),
+    ("icy white-blue", "deep teal", "hot orange", "white"),
+    ("white", "electric cyan", "magenta", "black"),
+    ("black", "white", "lime green", "electric cyan"),
+    ("white", "royal purple", "bright golden yellow", "hot orange"),
+    ("pale gold", "deep crimson", "white", "black"),
+    ("white", "hot orange", "electric cyan", "deep navy"),
+)
+
+# 標題區落點（十點 3 級起才解放）。全部限中段以下：上緣是 compose 後貼
+# 示意圖的位置。YT 的標題固定在左下，這一池不歸它用（見 draw() 的 anchor 參數）。
+COVER_ANCHORS: tuple[str, ...] = (
+    "low in its own panel, hard against the left edge",
+    "low in its own panel, hard against the right edge",
+    "across the middle band of its own panel",
+    "low and centred in its own panel",
+)
+
+COVER_TILT_DIRECTIONS: tuple[str, ...] = ("clockwise", "anticlockwise")
+
+# 招式池。每一條都是**無字**的，而且都是命令句。件數由等級決定，抽哪幾件由
+# 程式抽——交給模型自己選，四級會塌回同一種（許可句推不動模型，第七批已
+# 證明）。件數表（COVER_ACCESSORY_COUNTS）與抽哪幾件、怎麼拼幾何提示的邏輯
+# 是十點專屬（跟 titles／full_width 耦合），留在 editor_formats.cover_accessories；
+# 這裡只搬池子本身。
+
+# 小配件的外框形狀。2026-09-11 使用者：「不一定只有圓形可以用吧。」
+# 跟招式用同一個 seeded RNG 抽，所以同一級重生換招式時形狀也跟著換。
+# 一律只描述輪廓，不給數字——延續「招式不宣稱數字」那條。
+COVER_ACCESSORY_SHAPES: tuple[str, ...] = (
+    "circular",
+    "rounded-square",
+    "hexagonal",
+    "diamond-shaped (stood on its corner)",
+    "shield-shaped",
+    "torn-edged",
+    "pentagonal",
+    "capsule-shaped",
+    "starburst-edged",
+)
+
+COVER_ACCESSORY_POOL: tuple[tuple[str, str], ...] = (
+    ("icon", "A flat WORDLESS PICTOGRAM taken from the subject (raincloud, flame, siren, warning triangle, syringe), hung at one row's start or end at that row's cap height, never covering a stroke."),
+    ("magnifier", "A {shape} MAGNIFIER INSET: a clean window cut from the photograph enlarging one telling detail, ringed in a bright colour, with a short heavy arrow pointing back to where it came from."),
+    ("bubbles", "A CLUSTER OF SMALL {shape} INSETS arcing along one side of the HEADLINE BLOCK (never up beside the main subject, which often sits high in the frame), each holding one wordless pictogram or tiny photographic detail, shrinking as they trail away."),
+    ("brush", "A ROUGH BRUSH-STROKE OR TORN BAR of flat saturated colour behind or directly under ONE row — painted edges, not a neat rectangle."),
+    ("material", "ONE WORD FILLED WITH A MATERIAL FROM THE STORY instead of flat colour (molten metal, cracked stone, ice, banknote paper), the rest of that row staying flat."),
+    ("cutout", "THE MAIN SUBJECT CUT OUT of its background and stood beside or in front of the headline block, rim-lit or thinly outlined so it reads as a separate layer."),
+    ("burst", "A WORDLESS BURST behind the block: radiating speed lines, sparks, shards or a torn splash of saturated colour."),
+    ("arrow", "ONE HEAVY WORDLESS ARROW in a saturated colour, thick and slightly angled, driving from the photograph towards the headline."),
+    ("iconrow", "A SHORT ROW OF SMALL {shape} WORDLESS ICON CHIPS along the lower edge, just ABOVE the navy bottom strip and never inside it, evenly spaced and equal in size, each holding one flat pictogram from the story."),
+)
+
+
+@dataclass(frozen=True)
+class Draw:
+    """一輪抽籤的結果。
+
+    `rng` 是抽完這一輪之後的同一顆 `random.Random`——呼叫端（十點的
+    `cover_accessories`）要接著同一串亂數繼續抽招式，不能另外開一顆
+    `random.Random(seed)`：那樣抽到的是另一串序列，同一顆 seed 卻會抽出
+    不一樣的招式。`repr`／`==` 都跳過它：兩個 `Random` 物件天生不相等，
+    比較兩個 Draw 是不是同一種長相時只該看抽到的值。
+    """
+
+    plate: str
+    stagger: str
+    typeface: str
+    palette: tuple[str, str, str, str]
+    tilt_dir: str
+    anchor: str | None
+    rng: random.Random = field(repr=False, compare=False)
+
+
+def draw(seed, *, anchor: bool = True) -> Draw:
+    """依固定順序抽一輪變化池：plate → stagger → typeface → palette →
+    （anchor＝True 才抽這一顆）→ tilt_dir。
+
+    **抽籤順序寫死，不准改**：動了順序（多抽一次、少抽一次、換位置）就會
+    把所有既有 seed 的長相全部換掉，而現存測試沒有一條看得出來——見
+    docs/plan-20260911-創意拉桿模組化.md 風險 2。
+
+    `anchor=False` 時**連抽都不抽這一顆**，不是抽了不用：YT 的序列裡本來
+    就沒有這一格（標題固定左下，落點放開會拆散日期牌），少抽一顆會讓後面
+    的 tilt_dir 往前遞補一位——這正是十點與 YT 共用同一批池子、卻各自序列
+    長度不同的地方，兩邊都不准把對方的長度套到自己頭上。這一輪 YT 仍然
+    不接這支函式（沿用它自己 editor_formats.yt_design_brief 裡的舊寫法），
+    這個參數是為下一步先把介面留對。
+    """
+    rng = random.Random(seed)
+    plate = rng.choice(COVER_PLATE_SHAPES)
+    stagger = rng.choice(COVER_STAGGER_PATTERNS)
+    typeface = rng.choice(COVER_TYPEFACES)
+    palette = rng.choice(COVER_PALETTES)
+    picked_anchor = rng.choice(COVER_ANCHORS) if anchor else None
+    tilt_dir = rng.choice(COVER_TILT_DIRECTIONS)
+    return Draw(
+        plate=plate,
+        stagger=stagger,
+        typeface=typeface,
+        palette=palette,
+        tilt_dir=tilt_dir,
+        anchor=picked_anchor,
+        rng=rng,
+    )
 
 
 # ============================================================
