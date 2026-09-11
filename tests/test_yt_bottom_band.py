@@ -27,6 +27,7 @@ import editor_formats  # noqa: E402
 import main  # noqa: E402
 from test_ten_cover import _headers, client  # noqa: E402
 
+MAIN_PY = (Path(__file__).resolve().parent.parent / "main.py").read_text(encoding="utf-8")
 APP_JS = (Path(__file__).resolve().parent.parent / "app.js").read_text(encoding="utf-8")
 INDEX_HTML = (Path(__file__).resolve().parent.parent / "index.html").read_text(encoding="utf-8")
 BASE = (20, 120, 20)
@@ -130,8 +131,14 @@ class HourlyCompositeTests(unittest.TestCase):
 
 
 class FrontendTests(unittest.TestCase):
-    def test_state_defaults_to_on(self):
-        self.assertRegex(APP_JS, r"ytBottomBand:\s*true")
+    def test_state_defaults_to_off(self):
+        """2026-09-08 晚預設改 ON；2026-09-11 使用者再改回 OFF。
+
+        理由：創意階梯上線後標題本身就有底板與描邊，再疊一條整幅底帶會互相打架。
+        後端 YtCoverRequest.bottom_band 也是 False，兩邊必須一致。
+        """
+        self.assertRegex(APP_JS, r"ytBottomBand:\s*false")
+        self.assertIn("bottom_band: bool = False", MAIN_PY)
 
     def test_field_is_sent_once_and_covers_the_recompose_path(self):
         # ytCoverFields() 同時餵生成與 recomposeYtCover，所以一處就夠

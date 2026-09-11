@@ -1545,7 +1545,8 @@ _YT_STYLE_CLAUSES = {
 }
 
 
-def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly") -> str:
+def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
+                    bottom_band: bool = False) -> str:
     """CANVAS 正後方那塊。與十點的 cover_design_brief 同一批池子、同一個抽籤順序。
 
     順序刻意跟十點一致（plate → stagger → typeface → palette → tilt），只少了
@@ -1557,6 +1558,10 @@ def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly") -> 
         return ""
     # 日期牌只有整點是交給模型畫的；news 的日期由程式貼在左上角，hot 根本沒有日期。
     has_date_tab = layout == "hourly"
+    # 底帶（紅／藍套色，2026-09-11 起預設關）。開著的時候整幅底帶與「每行各自一塊
+    # 底板」是兩個互相打架的指示——今天已經因為留著矛盾句踩了四次，所以這裡明講
+    # 兩者的關係，而不是讓模型自己挑一個遵守。
+    band_on = bottom_band and layout != "hourly"
     rng = random.Random(seed)
     plate = rng.choice(COVER_PLATE_SHAPES)
     stagger = rng.choice(COVER_STAGGER_PATTERNS)
@@ -1581,11 +1586,22 @@ def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly") -> 
         if spec["stagger"]
         else "- The two rows stay flush with one another, aligned on the same left edge."
     )
-    rows.append(
-        "- Each row sits on its OWN plate, bar or ribbon — never one rectangle behind both rows,"
-        f" and never a band across the frame. The plates are {plate}"
-        + (", both cut the same way." if level < 2 else ", and the two are not cut alike.")
-    )
+    if band_on:
+        # 底帶是使用者開的，它贏——底板退成「字後面的小塊」，不再是整行的載體。
+        rows.append(
+            "- A TRANSLUCENT COLOUR BAND ALREADY RUNS BEHIND THE HEADLINE (described further"
+            " down, and the user asked for it). Do NOT add a second full-width bar. Each row may"
+            f" still carry a SHORT plate of its own, sitting ON the band and no wider than that"
+            f" row's characters — {plate}"
+            + (", both cut the same way." if level < 2 else ", and the two are not cut alike.")
+            + " The band stays the widest element; nothing you draw spans further than it does."
+        )
+    else:
+        rows.append(
+            "- Each row sits on its OWN plate, bar or ribbon — never one rectangle behind both"
+            f" rows, and never a band across the frame. The plates are {plate}"
+            + (", both cut the same way." if level < 2 else ", and the two are not cut alike.")
+        )
     if spec["typeface"]:
         rows.append(f"- Letterforms: {typeface}. Every character stays fully legible.")
     if spec["tilt"]:

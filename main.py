@@ -4686,7 +4686,9 @@ class YtCoverRequest(BaseModel):
     ai_translation: bool = False     # 日期下方「AI即時翻譯」
     # 底部壓色框（2026-09-08 使用者裁決，預設 OFF）：關＝完全不畫，標題靠描邊立在照片上；
     # 開＝畫，且只有 60% 不透明（compose.YT_BAND_ALPHA）。整點直播沒有底帶，後端直接忽略。
-    bottom_band: bool = True     # 2026-09-08 晚使用者：藍／紅底色框預設改 ON
+    # 2026-09-08 晚使用者：藍／紅底色框預設改 ON；2026-09-11 再改回 OFF。
+    # 創意階梯上線後標題本身就有底板與描邊，再疊一條整幅底帶會互相打架。
+    bottom_band: bool = False
     date_text: str = Field(default="", max_length=20)
     # 整點直播專用：整點時間（如 20:00），選填，有填才掛在 LIVE 章下
     time_text: str = Field(default="", max_length=10)
@@ -4964,6 +4966,9 @@ def _yt_cover_full_image(
             design_brief=editor_formats.yt_design_brief(
                 req.creativity, lines=lines, seed=f"{req.title}|{date_text}",
                 layout=req.layout,
+                # 底帶開著時，整幅底帶與「每行各自一塊底板」是兩個打架的指示——
+                # brief 要知道，才能明講兩者關係而不是讓模型自己挑一個遵守。
+                bottom_band=req.bottom_band,
             ),
             layout_rules=editor_formats.yt_layout_rules(req.creativity, req.layout),
             title_top=editor_formats.yt_title_top(req.creativity),
