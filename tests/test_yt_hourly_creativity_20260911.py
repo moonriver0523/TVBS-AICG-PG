@@ -113,6 +113,43 @@ class BriefContentTests(unittest.TestCase):
         self.assertIn("NONE OF THEM MAY SIT IN EITHER TOP CORNER OR ON THE DATE TAB", text)
 
 
+class StyleClauseTests(unittest.TestCase):
+    """質感條文。2026-09-11 使用者驗收 L1：「只有紅標有設計，其他都跟 0 沒有兩樣。」
+
+    根因：這段原本整段不存在。L1 的 spec 旗標全是關的，塊高 26% 跟 0 級的 29% 又
+    看不太出來，所以少了質感條文就真的沒有差別。而且 0 級那句
+    「Flat type: no gradient, no metallic, no 3-D」在 1 級起被拆掉，卻沒換上正面的
+    命令——**拆禁令必須配下命令**，不然模型維持原樣。
+    """
+
+    def test_every_level_carries_a_finish_clause(self):
+        for level in LEVELS:
+            with self.subTest(level=level):
+                self.assertIn("- FINISH (level", ef.yt_hourly_layout_rules(level))
+
+    def test_level_one_is_visibly_different_from_level_zero(self):
+        """L1 至少要有「字面材質」與「底板」兩件事，否則它就只是 0 級換個塊高。"""
+        text = ef.yt_hourly_layout_rules(1)
+        self.assertIn("SURFACE MATERIAL", text)
+        self.assertIn("own plate", text)
+
+    def test_the_flat_type_ban_is_gone_and_replaced_by_an_order(self):
+        """0 級禁材質、1 級起要材質——拆掉禁令的同時必須下正面命令。"""
+        self.assertIn("Flat type: no gradient", ef.yt_hourly_layout_rules(0))
+        for level in LEVELS:
+            with self.subTest(level=level):
+                text = ef.yt_hourly_layout_rules(level)
+                self.assertNotIn("Flat type: no gradient", text)
+                self.assertIn("Required, not offered", text)
+
+    def test_each_level_has_its_own_finish(self):
+        looks = {ef._YT_HOURLY_STYLE_CLAUSES[level] for level in LEVELS}
+        self.assertEqual(len(looks), 4, "有兩級質感條文一樣＝那一段拉桿沒有作用")
+
+    def test_the_loudest_level_still_protects_legibility(self):
+        self.assertIn("Loud is not the same as broken", ef._YT_HOURLY_STYLE_CLAUSES[4])
+
+
 class FixedBlockTests(unittest.TestCase):
     """YT 在此之前**一條都沒有**——十點有 (a)–(g)、CG 有 (a)–(i)，只有 YT 裸奔。"""
 

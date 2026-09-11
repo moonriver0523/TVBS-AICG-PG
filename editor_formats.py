@@ -1467,7 +1467,45 @@ def yt_hourly_layout_rules(level: int) -> str:
         " so, never to fill the width.\n"
         "- Every character keeps a thick dark outline and a hard offset drop shadow so it reads"
         " over photography.\n"
+        + _YT_HOURLY_STYLE_CLAUSES[min(level, 4)]
     )
+
+
+# 每一級的質感條文，比照十點的 _L1–_L4（cover_ai_title_style_clause）。
+#
+# 2026-09-11 使用者驗收 L1：「只有紅標有設計，其他都跟 0 沒有兩樣。」屬實，而且是
+# 必然的——這裡原本整段不存在。L1 的 spec 旗標全是關的（不錯位、不換字體、不反白、
+# 同字級），塊高 26% 與 0 級的 29% 又看不太出來，所以少了質感條文就真的沒有差別。
+#
+# 更關鍵的是：0 級那句「Flat type: no gradient, no metallic, no 3-D」在 1 級起被
+# **拆掉**了（拆矛盾句是對的），但沒有換上正面的命令——模型少了禁令不會自己變花，
+# 它會維持原樣。**拆禁令必須配下命令**，這是今天第四次踩到同一個形狀的坑。
+_YT_HOURLY_STYLE_CLAUSES = {
+    1: "- FINISH (level 1 of 4 — light). Required, not offered:\n"
+       "  * A SURFACE MATERIAL on the characters — a gradient, a soft bevel or a sheen — instead"
+       " of one flat fill.\n"
+       "  * Each row sits on its own plate, and the two plates share ONE corner treatment:"
+       " both rounded, both square, or both cut on the same slant.\n",
+    2: "- FINISH (level 2 of 4 — designed). This is a broadcast title card, not body text; a tame,"
+       " evenly-set stack is a failure. Required, not offered:\n"
+       "  * THE TWO PLATES NO LONGER MATCH: one row reversed out of a solid colour, the other on"
+       " an open outline or a slanted ribbon — assembled parts, not a paragraph on a rectangle.\n"
+       "  * Saturated FLAT poster colour over a thick black outline, a hard offset drop shadow and"
+       " a tight coloured inner edge. High contrast, slight forward lean.\n",
+    3: "- FINISH (level 3 of 4 — loud). Required, not offered:\n"
+       "  * THE BLOCK INTERLOCKS WITH THE PHOTOGRAPH instead of sitting in a clear corner: let a"
+       " plate pass BEHIND the main subject, or let the subject's silhouette break across the edge"
+       " of a plate. Not one character may be hidden by doing this.\n"
+       "  * Saturated FLAT poster colour over a thick black outline, a hard offset drop shadow and"
+       " a tight coloured inner edge.\n",
+    4: "- FINISH (level 4 of 4 — the loudest this cover goes). Required, not offered:\n"
+       "  * THE BLOCK INTERLOCKS WITH THE PHOTOGRAPH: a plate passes behind the main subject, or"
+       " the subject breaks across a plate edge. Not one character may be hidden.\n"
+       "  * Saturated FLAT poster colour, thick black outline, hard offset drop shadow, tight"
+       " coloured inner edge, and one burst or streak shape driving out from behind the block.\n"
+       "  * EVEN HERE: every character stays complete, unobstructed and legible, and nothing"
+       " touches a frame edge. Loud is not the same as broken.\n",
+}
 
 
 def yt_hourly_design_brief(level: int, lines=(), seed=None) -> str:
