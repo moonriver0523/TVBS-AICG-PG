@@ -571,7 +571,7 @@ COVER_ACCESSORY_SHAPES: tuple[str, ...] = (
 COVER_ACCESSORY_POOL: tuple[tuple[str, str], ...] = (
     ("icon", "A flat WORDLESS PICTOGRAM taken from the subject (raincloud, flame, siren, warning triangle, syringe), hung at one row's start or end at that row's cap height, never covering a stroke."),
     ("magnifier", "A {shape} MAGNIFIER INSET: a clean window cut from the photograph enlarging one telling detail, ringed in a bright colour, with a short heavy arrow pointing back to where it came from."),
-    ("bubbles", "A CLUSTER OF SMALL {shape} INSETS arcing beside the main subject, each holding one wordless pictogram or tiny photographic detail, shrinking as they trail away."),
+    ("bubbles", "A CLUSTER OF SMALL {shape} INSETS arcing along one side of the HEADLINE BLOCK (never up beside the main subject, which often sits high in the frame), each holding one wordless pictogram or tiny photographic detail, shrinking as they trail away."),
     ("brush", "A ROUGH BRUSH-STROKE OR TORN BAR of flat saturated colour behind or directly under ONE row — painted edges, not a neat rectangle."),
     ("material", "ONE WORD FILLED WITH A MATERIAL FROM THE STORY instead of flat colour (molten metal, cracked stone, ice, banknote paper), the rest of that row staying flat."),
     ("cutout", "THE MAIN SUBJECT CUT OUT of its background and stood beside or in front of the headline block, rim-lit or thinly outlined so it reads as a separate layer."),

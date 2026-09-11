@@ -261,6 +261,15 @@ class LadderTests(unittest.TestCase):
                     self.assertIn("MIDDLE OR LOWER AREA ONLY", text)
                     self.assertIn("never the top third", text)
 
+    def test_the_bubble_cluster_hangs_off_the_headline_not_the_subject(self):
+        """2026-09-11 實拍（變化池-260911 L3_1）：這排小插圖跑到右格右上角、
+        壓住 AI示意圖 貼紙。根因在敘述本身——原文寫「arcing beside the main subject」，
+        而主體（手機、人臉）常常就在上半部，模型照著長就往上跑，跟後面那句
+        MIDDLE OR LOWER 打架。同一個教訓：矛盾要拆掉，不是靠另一句壓。"""
+        pool = dict(editor_formats.COVER_ACCESSORY_POOL)
+        self.assertIn("HEADLINE BLOCK", pool["bubbles"])
+        self.assertNotIn("arcing beside the main subject", pool["bubbles"])
+
     def test_the_seam_note_only_appears_on_the_split_layout(self):
         """E_L2 那排圖示橫跨切線正中央，兩格共用一排。切線是雙切才有的東西，
         版面是程式知道的事——不該叫模型自己判斷這張有沒有切線。"""
