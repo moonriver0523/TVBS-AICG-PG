@@ -3788,6 +3788,18 @@ class TenCoverRequest(BaseModel):
     background_is_ai: bool = False
 
 
+# 版型名稱：跟前台下拉選單（app.js 的 EDITOR_FORMATS.label）用同一組字，
+# 後台「類型」欄就是編輯自己看得到的名字，不必再對照代碼。
+# 這裡只列**會生圖**的版型；第一頁那條路徑走 type_label，本來就有值。
+COVER_TYPE_LABEL_TEN = "十點不一樣"
+COVER_TYPE_LABEL_YT = {
+    "news": "YT國內外新聞直播",
+    "hourly": "YT整點直播",
+    "hot": "YT今日熱搜",
+}
+COVER_TYPE_LABEL_VSTRIP = "YT直播直標"
+
+
 class TenCoverResponse(ImageGenerateResponse):
     # 這次實際採用的畫面描述（使用者留空時是 AI 補的）。前端會填回欄位——
     # 不回報的話使用者永遠不知道 AI 幫他決定了什麼，也沒辦法微調後重生。
@@ -4630,6 +4642,20 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         image_model=image_model,
         **portrait_fields,
     )
+    _archive_generation(
+        request_id=request_id,
+        image_base64=base64.b64encode(cover).decode("ascii"),
+        mime_type="image/png",
+        source="editor-cover-full",
+        type_label=f"{COVER_TYPE_LABEL_TEN}（滿版）",
+        news_text=req.title_left,
+        variable=req.title_left,
+        prompt=f"FULL: {visual}",
+        role="編輯",
+        provider=req.provider,
+        image_model=image_model,
+        **portrait_fields,
+    )
     return TenCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
@@ -4738,6 +4764,20 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     request_log.log_generation(
         request_id=request_id,
         source="editor-cover",
+        news_text=f"{req.title_left} ｜ {req.title_right}",
+        variable=f"{req.title_left}\n{req.title_right}",
+        prompt=log_prompt,
+        role="編輯",
+        provider=req.provider,
+        image_model=image_model,
+        **portrait_fields,
+    )
+    _archive_generation(
+        request_id=request_id,
+        image_base64=base64.b64encode(cover).decode("ascii"),
+        mime_type="image/png",
+        source="editor-cover",
+        type_label=f"{COVER_TYPE_LABEL_TEN}（雙切）",
         news_text=f"{req.title_left} ｜ {req.title_right}",
         variable=f"{req.title_left}\n{req.title_right}",
         prompt=log_prompt,
@@ -5344,6 +5384,21 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             photos[name].source_page if name in photos else "（查無）" for name in subjects
         ),
     )
+    _archive_generation(
+        request_id=request_id,
+        image_base64=base64.b64encode(cover).decode("ascii"),
+        mime_type="image/png",
+        source=log_source,
+        type_label=COVER_TYPE_LABEL_YT.get(req.layout, "YT封面")
+                   + ("（雙則）" if dual else ""),
+        news_text=log_title,
+        variable="\n".join(filter(None, [lines[0], lines[1]])),
+        prompt=log_prompt,
+        role="編輯",
+        provider=req.provider,
+        image_model=image_model,
+        portrait_subject="、".join(subjects),
+    )
     return YtCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
@@ -5474,6 +5529,18 @@ def editor_yt_overlay(req: YtOverlayRequest) -> YtOverlayResponse:
         news_text=title,
         variable="｜".join(filter(None, [second, req.source_text.strip(),
                                         "" if req.live else "無LIVE章"])),
+        prompt="（直標，不生圖）",
+        role="編輯",
+        image_model="yt-overlay:compose",
+    )
+    _archive_generation(
+        request_id=request_id,
+        image_base64=base64.b64encode(png).decode("ascii"),
+        mime_type="image/png",
+        source=f"editor-yt-overlay-{req.variant}-{req.title_side}",
+        type_label=COVER_TYPE_LABEL_VSTRIP,
+        news_text=title,
+        variable="｜".join(filter(None, [second, req.source_text.strip()])),
         prompt="（直標，不生圖）",
         role="編輯",
         image_model="yt-overlay:compose",
