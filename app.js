@@ -706,8 +706,9 @@ window.onload = () => {
         currentLabelClass: 'text-[9px] font-black text-violet-300',
         oninput: 'setCoverTitleCreativity',
         title: '最左＝白／黃／紅逐行配色、版位固定；愈往右愈放給 AI 設計（字句永遠一字不改）',
-        // 沿用既有手寫 HTML 的原文：右端刻度寫的是「奔放」，不是等級 4 的「最狂」。
-        maxLabel: '奔放',
+        // 2026-09-11 使用者裁決：右端刻度改「最狂」。搬家前手寫的 HTML 寫的是
+        // 「奔放」（等級 3 的名字），但拉桿實際拉得到等級 4，刻度與行為對不上。
+        // 拿掉 maxLabel 覆寫後就照 pairs 最後一格，跟另外兩條拉桿一致。
     });
     renderCreativityBar('ytCreativityBar', {
         pairs: YT_CREATIVITY,
