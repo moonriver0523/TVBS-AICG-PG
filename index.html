@@ -312,7 +312,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260911-21</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260911-22</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -468,18 +468,10 @@
                                 <input id="coverAiTitle" type="checkbox" class="accent-red-600" checked onchange="updateCoverTitleStyleButton()" />標題由 AI 生成
                                 <span class="text-[9px] font-normal text-slate-500">（關閉＝程式壓字，零錯字）</span>
                             </label>
-                            <!-- 標題創意拉桿（2026-09-08 ON/OFF → 2026-09-09 改 0–4 五段）：
+                            <!-- 標題創意拉桿（2026-09-08 ON/OFF → 2026-09-09 改 0–4 五段，
+                                 2026-09-11 P5 起 DOM 由 app.js 的 renderCreativityBar() 共用元件灌入）：
                                  只有 AI 整張版有意義，合成版的字是程式壓的 -->
-                            <div id="coverTitleStyleBar" class="hidden flex items-center gap-2"
-                                 title="最左＝白／黃／紅逐行配色、版位固定；愈往右愈放給 AI 設計（字句永遠一字不改）">
-                                <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">標題創意</span>
-                                <span class="text-[9px] font-black text-slate-500">規矩</span>
-                                <input id="coverTitleStyleRange" type="range" min="0" max="4" step="1" value="0"
-                                       class="w-24 accent-violet-500 cursor-pointer"
-                                       oninput="setCoverTitleCreativity(this.value)" />
-                                <span class="text-[9px] font-black text-slate-500">奔放</span>
-                                <span id="coverTitleStyleLabel" class="text-[9px] font-black text-violet-300">規矩</span>
-                            </div>
+                            <div id="coverTitleStyleBar" class="hidden flex items-center gap-2"></div>
                         </div>
                         <!-- 側邊標籤（2026-09-10）：畫成一排小籤（像症狀列表）。
                              刻意由使用者自己打——讓 AI 自己想標籤等於讓它編字上鏡。
@@ -577,7 +569,8 @@
                         <div class="flex items-center gap-2">
                             <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-300 cursor-pointer"
                                    title="開：整張連標題字交給 AI 畫（更像頻道實際版，但可能出錯字）；關：AI 只生底圖、標題由程式壓字，零錯字">
-                                <input id="ytCoverAiTitle" type="checkbox" class="accent-red-600" checked />標題由 AI 生成
+                                <input id="ytCoverAiTitle" type="checkbox" class="accent-red-600" checked
+                                       onchange="updateYtCreativityBar()" />標題由 AI 生成
                                 <span class="text-[9px] font-normal text-slate-500">（關閉＝程式壓字，零錯字）</span>
                             </label>
                             <!-- 底部壓色框（2026-09-08）：整點直播的版面沒有底帶，那個版型不顯示 -->
@@ -585,6 +578,10 @@
                                     title="開：底部加半透明色框（照片透得出來）；關：不畫框，標題靠描邊立在照片上"
                                     class="hidden px-2.5 py-1 rounded text-[9px] font-black transition-all border border-amber-600 text-slate-400 hover:text-white">底色框 OFF</button>
                         </div>
+                        <!-- YT 創意拉桿（P5，2026-09-11）：三個版型（整點／國內外新聞直播／今日熱搜）
+                             共用同一顆值，只有 AI 整張模式有意義（見 app.js 的 updateYtCreativityBar）。
+                             DOM 由 renderCreativityBar() 共用元件灌入。 -->
+                        <div id="ytCreativityBar" class="hidden flex items-center gap-2"></div>
                     </div>
 
                     <!-- YT 直播直標（2026-09-08 WP3）：透明底 PNG，疊在直播訊號上。
@@ -687,15 +684,8 @@
                     <div id="digestControlsRow" class="grid grid-cols-2 gap-2 mb-2">
                         <!-- CG 美術創意（2026-09-10）：記者版與編輯各版型（含播出鏡面）共用。
                              YT 封面與十點封面走另一個端點，各有自己的拉桿，不吃這一條。 -->
-                        <div id="cgCreativityBar" class="flex items-center gap-2 bg-black/40 px-2 py-1.5 rounded-lg"
-                             title="0＝現行成品；愈往右，版面排法愈放（分區→英雄區→破格→斜切傾斜），美術處理也跟著加重。重點的數量、安全留白與字句不受影響；不會拿真實地圖當主視覺。">
-                            <span class="text-[9px] font-black text-slate-500">規矩</span>
-                            <input id="cgCreativityRange" type="range" min="0" max="4" step="1" value="0"
-                                   class="flex-1 accent-violet-500 cursor-pointer"
-                                   oninput="setCgCreativity(this.value)" />
-                            <span class="text-[9px] font-black text-slate-500">最狂</span>
-                            <span id="cgCreativityLabel" class="text-[10px] font-black text-violet-300 w-12 text-right">規矩</span>
-                        </div>
+                        <!-- DOM 由 app.js 的 renderCreativityBar() 共用元件灌入（P5，2026-09-11）-->
+                        <div id="cgCreativityBar" class="flex items-center gap-2 bg-black/40 px-2 py-1.5 rounded-lg"></div>
                         <!-- 消化程度（2026-09-09：三顆鈕改成三段拉桿，比照標題創意那條） -->
                         <div class="flex items-center gap-2 bg-black/40 px-2 py-1.5 rounded-lg"
                              title="不改字＝貼上的內文一字不改，AI 只做版面設計；字極少＝只留一個重點；字少＝濃縮成 1–3 個重點；字多＝完整重點條列；字超多＝最多八點、每行更長">

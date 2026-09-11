@@ -375,6 +375,9 @@ let state = {
     // 2026-09-09 使用者：designed 升級成「完全解放」——配色、版位、字體、邊框、強調全給 AI。
     // 預設仍是 plain——解放後版面與配色都不可預期，要使用者自己開。
     coverTitleCreativity: 0,
+    // YT 三版型創意拉桿（P5，2026-09-11）。後端 YtCoverRequest.creativity 同一個欄位，
+    // 三個 layout（hourly／news／hot）共用這一顆值。
+    ytCreativity: 0,
     // YT 封面底部壓色框：2026-09-08 晚使用者裁決預設**開**（60% 半透明、第二行上緣起羽化，見 compose）。
     // 整點直播的版面沒有底帶，按鈕不顯示。
     ytBottomBand: false,   // 2026-09-11 使用者：預設改關閉
@@ -680,6 +683,43 @@ function libFor(tab) {
    ============================================================ */
 window.onload = () => {
     document.getElementById('field-variable').value = DEFAULT_VARIABLE_TEMPLATE;
+    // 創意拉桿共用元件（P5）：容器在 index.html 裡只是空殼，先灌好 DOM，
+    // 才輪得到後面 resetToType／renderEditorFormats 觸發的 update 函式去找
+    // range／label 元素——順序反過來會找不到元素，update 函式會靜默 no-op。
+    renderCreativityBar('cgCreativityBar', {
+        pairs: CG_CREATIVITY,
+        rangeId: 'cgCreativityRange', labelId: 'cgCreativityLabel',
+        wrapperClass: 'flex items-center gap-2 bg-black/40 px-2 py-1.5 rounded-lg',
+        rangeClass: 'flex-1 accent-violet-500 cursor-pointer',
+        endLabelClass: 'text-[9px] font-black text-slate-500',
+        currentLabelClass: 'text-[10px] font-black text-violet-300 w-12 text-right',
+        oninput: 'setCgCreativity',
+        title: '0＝現行成品；愈往右，版面排法愈放（分區→英雄區→破格→斜切傾斜），美術處理也跟著加重。重點的數量、安全留白與字句不受影響；不會拿真實地圖當主視覺。',
+    });
+    renderCreativityBar('coverTitleStyleBar', {
+        pairs: COVER_TITLE_CREATIVITY,
+        rangeId: 'coverTitleStyleRange', labelId: 'coverTitleStyleLabel',
+        leading: '標題創意',
+        wrapperClass: 'hidden flex items-center gap-2',
+        rangeClass: 'w-24 accent-violet-500 cursor-pointer',
+        endLabelClass: 'text-[9px] font-black text-slate-500',
+        currentLabelClass: 'text-[9px] font-black text-violet-300',
+        oninput: 'setCoverTitleCreativity',
+        title: '最左＝白／黃／紅逐行配色、版位固定；愈往右愈放給 AI 設計（字句永遠一字不改）',
+        // 沿用既有手寫 HTML 的原文：右端刻度寫的是「奔放」，不是等級 4 的「最狂」。
+        maxLabel: '奔放',
+    });
+    renderCreativityBar('ytCreativityBar', {
+        pairs: YT_CREATIVITY,
+        rangeId: 'ytCreativityRange', labelId: 'ytCreativityLabel',
+        leading: 'YT創意',
+        wrapperClass: 'hidden flex items-center gap-2',
+        rangeClass: 'w-24 accent-violet-500 cursor-pointer',
+        endLabelClass: 'text-[9px] font-black text-slate-500',
+        currentLabelClass: 'text-[9px] font-black text-violet-300',
+        oninput: 'setYtCreativity',
+        title: '最左＝現行成品、版位固定；愈往右愈放給 AI 設計（塊高、字級落差、配色、配件都跟著加重，字句永遠一字不改）',
+    });
     renderChartTypes();
     renderDigestTypes();
     resetToType('data');
@@ -974,6 +1014,7 @@ function applyEditorFormatInputs() {
     updateCoverLayoutIndicator();
     updateCoverTitleStyleButton();
     updateYtBottomBandButton();
+    updateYtCreativityBar();
     if (yt) yt.classList.toggle('hidden', !wantsYt);
     if (vstrip) vstrip.classList.toggle('hidden', !wantsVstrip);
     updateVstripButtons();
@@ -1061,6 +1102,50 @@ function updateDigestDensityBar() {
     if (range) range.value = String(Math.max(0, DENSITY_ORDER.indexOf(state.digestDensity)));
     const label = document.getElementById('digestDensityLabel');
     if (label) label.innerText = DENSITY_LABELS[state.digestDensity] || state.digestDensity;
+}
+
+/* ============================================================
+   創意拉桿共用元件（P5，2026-09-11，見 docs/plan-20260911-創意拉桿模組化.md）
+   三處拉桿（CG／十點不一樣／YT）原本各在 index.html 手寫一段幾乎一樣的
+   「端點標籤 + range + 目前等級標籤」HTML，只差要不要一顆「XX創意」的
+   leading 標籤、外框有沒有底色與內距、range 寬度。這裡抽成一個 render
+   函式：index.html 只留一個空殼容器（例如 <div id="cgCreativityBar">），
+   由這支函式依 opts 把 innerHTML 灌進去，三處呼叫一次即可。
+
+   刻意不順手把三份 `[名稱, 說明]` 陣列（CG_CREATIVITY／COVER_TITLE_CREATIVITY／
+   YT_CREATIVITY）也合併：那是 P2 已經裁決的分工——名稱共用（各陣列第一個
+   元素理應逐字相同，靠 tests/test_creativity_module_20260911.py 的
+   LevelNamesParityTests 釘住），說明文字是每支拉桿專屬的實際行為描述，
+   合併等於把三段不同的行為描述串成一份誰都不精準的話。render 函式因此
+   直接吃某一支拉桿自己的 pairs 陣列，只取端點與初始值需要的部分，不重寫
+   陣列本身。
+
+   行為不變：render 只建立 DOM 與初始值／初始標籤文字，每支拉桿原有的
+   update 函式（updateCgCreativityBar 等）照樣用同一批 id 找元素、照樣
+   自己管 value／label／hidden——這裡不接手那些邏輯，只是把原本手寫在
+   index.html 裡的那幾行 HTML 換成程式生成。
+   ============================================================ */
+function renderCreativityBar(containerId, opts) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    const {
+        pairs, rangeId, labelId, oninput, title = '', leading = '',
+        wrapperClass, rangeClass, endLabelClass, currentLabelClass,
+        // 十點那條拉桿原本手寫的右端刻度文字寫的是「奔放」（等級 3 的名字），
+        // 不是等級 4 的「最狂」——沿用既有的兩份手寫 HTML 才發現這個落差，
+        // 但這次重構只搬 HTML、不改使用者看得到的字，所以留一個可覆寫的
+        // maxLabel，各呼叫端不給就照 pairs 最後一格的名字（CG／YT 兩條本來
+        // 就跟 pairs[-1] 一致，不必覆寫）。
+        maxLabel = pairs[pairs.length - 1][0],
+    } = opts;
+    el.className = wrapperClass;
+    if (title) el.title = title;
+    el.innerHTML =
+        (leading ? `<span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">${leading}</span>` : '')
+        + `<span class="${endLabelClass}">${pairs[0][0]}</span>`
+        + `<input id="${rangeId}" type="range" min="0" max="4" step="1" value="0" class="${rangeClass}" oninput="${oninput}(this.value)" />`
+        + `<span class="${endLabelClass}">${maxLabel}</span>`
+        + `<span id="${labelId}" class="${currentLabelClass}">${pairs[0][0]}</span>`;
 }
 
 // CG 美術創意 0–4（2026-09-10 使用者要求：播出鏡面與記者版也要）。
@@ -1405,6 +1490,48 @@ function setCoverTitleCreativity(value) {
     updateCoverTitleStyleButton();
     showToast('標題創意 ' + level + '　' + COVER_TITLE_CREATIVITY[level][0]
         + '：' + COVER_TITLE_CREATIVITY[level][1]);
+}
+
+// YT 三版型（整點／國內外新聞直播／今日熱搜）「創意」拉桿（P5，2026-09-11）。
+// 後端 YtCoverRequest.creativity 四級早就做好了（見 main.py／editor_formats.py
+// 的 yt_design_brief／yt_layout_rules／yt_fixed_block／yt_title_top），前端
+// 卻一直沒有拉桿可按——這裡補上，照搬十點那條拉桿的做法，數字取自
+// editor_formats.YT_BRIEF_SPECS（塊高 26/31/36/41%）與 _YT_STYLE_CLAUSES，
+// 不是憑感覺寫的說明。三個 layout 共用同一顆 state.ytCreativity 與同一支
+// 拉桿——後端 yt_design_brief 本來就是三個版型共用同一份邏輯，只是 layout
+// 參數不同，拉桿沒有理由分開。
+const YT_CREATIVITY = [
+    ['規矩', '現行成品：兩行同大小、白／黃固定配色、版位固定；整點日期牌由程式畫死'],
+    ['微設計', '標題塊拉到約 26% 畫面高，兩行仍同大小；改用材質字面（漸層／斜角／光澤），兩塊板統一收邊；整點日期牌改交給 AI 畫（連數字都是它畫的）'],
+    ['有設計', '再加：塊高約 31%，字級落差 1.8 倍、兩行錯位、換字體、配色開到三色，掛 1 件無字配件'],
+    ['奔放', '再加：塊高約 36%，字級落差 2.5 倍，標題塊可疊進照片主體邊緣，掛 2 件無字配件'],
+    ['最狂', '再加：塊高約 41%，字級落差 3 倍，整段傾斜 5–8 度、配色全開，掛 3 件配件並加一道爆裂裝飾（字句永遠一字不改）'],
+];
+
+function updateYtCreativityBar() {
+    // 只有 YT 封面版型（hourly／news／hot）的 AI 整張模式看得到：
+    // - 版型要先卡對：YT 直播直標（inputs === 'yt_vstrip'）沒有創意階梯這回事，
+    //   不能靠「祖先容器剛好也藏起來」這種巧合擋掉——十點那支 updateCoverTitleStyleButton
+    //   有明寫 `editorFormat().inputs !== 'cover'`，這支原本漏了同一條，2026-09-11
+    //   驗收時被抓到（面板結構一動就會漏出來），補上跟十點對稱的檢查。
+    // - composite 模式標題由程式壓字，creativity 這條線只影響 _yt_cover_full_image
+    //   （AI 整張），對程式壓字沒有作用——跟十點的 coverTitleStyleBar 同一個理由
+    //   （見 updateCoverTitleStyleButton）。
+    const aiMode = document.getElementById('ytCoverAiTitle')?.checked !== false;
+    const hidden = editorFormat().inputs !== 'yt_cover' || !aiMode;
+    const bar = document.getElementById('ytCreativityBar');
+    if (bar) bar.classList.toggle('hidden', hidden);
+    const range = document.getElementById('ytCreativityRange');
+    if (range) range.value = String(state.ytCreativity);
+    const label = document.getElementById('ytCreativityLabel');
+    if (label) label.innerText = YT_CREATIVITY[state.ytCreativity][0];
+}
+
+function setYtCreativity(value) {
+    const level = Math.min(4, Math.max(0, parseInt(value, 10) || 0));
+    state.ytCreativity = level;
+    updateYtCreativityBar();
+    showToast('YT 創意 ' + level + '　' + YT_CREATIVITY[level][0] + '：' + YT_CREATIVITY[level][1]);
 }
 
 // 播出鏡面白色壓框開關（2026-09-07）。青色，與安全框（綠）／蓋章（琥珀）區分。
@@ -2275,6 +2402,8 @@ function ytCoverFields() {
         date_text: val('ytCoverDate'),
         time_text: layout === 'hourly' ? val('ytCoverTime') : '',
         bottom_band: layout !== 'hourly' && state.ytBottomBand,
+        // 創意拉桿（P5，2026-09-11）：三個版型共用同一顆值，後端依 layout 各自套用。
+        creativity: state.ytCreativity,
         // 一標一附圖（2026-09-10，對齊十點）：只有整點有；其餘版型送空字串，
         // 後端就會走原本的 reference_images 原圖放置清單（1 張整版／2 張雙切／3 張三切）
         asis_left: ytUsesAsisSlots() ? (state.ytAsis.left?.dataUrl || '') : '',

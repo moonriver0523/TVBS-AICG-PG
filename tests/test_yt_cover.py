@@ -564,6 +564,18 @@ class FrontendParityTests(unittest.TestCase):
             html = fh.read()
         self.assertIn('id="ytCoverTime"', html)
 
+    def test_yt_creativity_bar_checks_layout_not_just_ai_mode(self):
+        """P5 驗收（2026-09-11）抓到的防呆漏洞：updateYtCreativityBar() 原本只看
+        ytCoverAiTitle 有沒有勾，沒看版型——YT 直播直標（inputs === 'yt_vstrip'）
+        今天看不到拉桿是靠祖先容器 `ytVstripInputs` 剛好也被藏起來的巧合，不是
+        自己判斷出來的，面板結構一動就會漏出來。比照十點 coverTitleStyleBar 那支
+        （見 test_cover_title_style.FrontendTests.test_slider_only_shows_for_cover_layout_in_ai_mode）
+        明寫版型檢查。
+        """
+        with open(self.APP_JS, encoding="utf-8") as fh:
+            js = fh.read()
+        self.assertIn("editorFormat().inputs !== 'yt_cover' || !aiMode", js)
+
     def test_flag_labels_match_backend(self):
         with open(self.INDEX, encoding="utf-8") as fh:
             html = fh.read()

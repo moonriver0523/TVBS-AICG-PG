@@ -163,6 +163,20 @@ class LevelNamesParityTests(unittest.TestCase):
                     "COVER_TITLE_CREATIVITY 的等級名稱與 creativity.LEVEL_NAMES 不同步",
                 )
 
+    def test_yt_creativity_names_match(self):
+        """P5（2026-09-11）新增：YT 三版型共用的拉桿，陣列名字是 YT_CREATIVITY——
+        跟前兩份走同一個護欄，名稱同步，說明文字（YT 封面專屬的行為描述）不比對。
+        """
+        source = APP_JS.read_text(encoding="utf-8")
+        names = self._js_array_first_elements("YT_CREATIVITY", source)
+        self.assertEqual(len(names), len(creativity.LEVEL_NAMES))
+        for level, name in enumerate(names):
+            with self.subTest(level=level):
+                self.assertEqual(
+                    name, creativity.LEVEL_NAMES[level],
+                    "YT_CREATIVITY 的等級名稱與 creativity.LEVEL_NAMES 不同步",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

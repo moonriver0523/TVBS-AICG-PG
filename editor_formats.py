@@ -1505,12 +1505,17 @@ def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
     # 底板」是兩個互相打架的指示——今天已經因為留著矛盾句踩了四次，所以這裡明講
     # 兩者的關係，而不是讓模型自己挑一個遵守。
     band_on = bottom_band and layout != "hourly"
-    rng = random.Random(seed)
-    plate = rng.choice(COVER_PLATE_SHAPES)
-    stagger = rng.choice(COVER_STAGGER_PATTERNS)
-    typeface = rng.choice(COVER_TYPEFACES)
-    palette = rng.choice(COVER_PALETTES)
-    tilt_dir = rng.choice(COVER_TILT_DIRECTIONS)
+    # P4（2026-09-11）起序列本身交給 creativity.draw()：YT 標題固定左下，
+    # 落點放開會拆散日期牌，所以 anchor=False——這一顆跟十點共用同一批池子、
+    # 同一個抽籤順序，只是少抽 anchor 那一顆（見 creativity.draw() 的說明）。
+    # d.rng 是抽完這五顆之後同一顆亂數，下面 cover_accessories() 要接著它繼續
+    # 抽招式，不能另外開一顆 random.Random(seed)——已用 fixture 逐字元核對過，
+    # 換接線前後 156 筆（3 layout × 4 level × 13 seed）輸出完全一致。
+    d = creativity.draw(seed, anchor=False)
+    rng = d.rng
+    plate, stagger, typeface, palette, tilt_dir = (
+        d.plate, d.stagger, d.typeface, d.palette, d.tilt_dir,
+    )
 
     top = yt_title_top(level)
     rows = [
