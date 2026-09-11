@@ -23,6 +23,7 @@ import re
 # 底色框的百分比要跟合成版同一個數字（見 _BAND_CLAUSE_TEMPLATE）。compose 只在函式
 # 內部反向 import editor_formats，模組層級不成環。
 import compose
+import creativity
 
 DEFAULT_FORMAT = "default"
 
@@ -410,19 +411,31 @@ def cover_info_chips_block(raw: str) -> str:
     )
 
 
-COVER_AI_TITLE_LEVEL_MIN = 0
-COVER_AI_TITLE_LEVEL_MAX = 4
-COVER_AI_TITLE_LEVEL_NAMES = {
-    0: "規矩",
-    1: "微設計",
-    2: "有設計",
-    3: "奔放",
-    4: "最狂",
-}
+# 等級名稱 0-4 搬進 creativity.py（P2），與 main.CG_CREATIVITY_LEVEL_NAMES 共用
+# 同一份字典——理由同上（main.py 那份的註解）。留舊名稱當別名，呼叫端不用跟著改。
+COVER_AI_TITLE_LEVEL_MIN = creativity.LEVEL_MIN
+COVER_AI_TITLE_LEVEL_MAX = creativity.LEVEL_MAX
+COVER_AI_TITLE_LEVEL_NAMES = creativity.LEVEL_NAMES
 
-# (a)–(g)：每一級（0 以外）都原樣附上。
-_TITLE_FIXED_BLOCK = """- WHAT IS STILL FIXED, AND IS NOT A DESIGN DECISION: (a) the CHARACTERS. Render the listed strings character for character in the listed order — never add, drop, translate, abbreviate, reorder or substitute a single character to make a layout work, and never break a listed line in the middle: a listed line is one unbroken unit, so a date or score written with a slash such as 9/12 stays whole on one row. (b) Traditional Chinese, Taiwan forms, every character correctly formed and legible — no Simplified or Japanese forms, no invented strokes. (c) The header band across the top and the slim navy strip along the bottom stay as described, and NO part of the headline may sit inside them or overlap them. (d) The WHOLE header band and the small area just below its outer top corner stay clean and empty — software pastes the channel logo, the programme tag, the date, the red ON AIR tag and the 示意圖 label there afterwards, so nothing you draw belongs in that band at either end. (e) No text of any kind other than the listed strings: decorative marks you add are wordless symbols only — no letters, no digits, no country names, no place labels, no flag chips, no map insets, no extra badges or callouts. A brand mark carried by an object inside the photograph (a livery, a storefront, a product) is part of that photograph and is not one of your decorative marks — it stays on its object and never migrates onto the headline or into either navy band. (f) Nothing touches or is clipped by the frame edge. (g) In the two-panel layout, each headline stays ENTIRELY INSIDE ITS OWN PANEL and never crosses the diagonal seam or strays into the other panel: freeing the placement frees where it sits WITHIN its panel, not which panel it belongs to.
-"""
+# 字句逐字／繁中臺灣用字／不准生新字／不准觸邊四條搬進 creativity.py
+# （target="image"，與 YT 共用，措辭以這裡——十點——為準，見該檔案開頭說明）。
+# 這裡留下的只剩十點版型專屬的東西：標頭帶／底部窄條／雙欄縫線。
+_TITLE_FIXED_BLOCK = (
+    "- WHAT IS STILL FIXED, AND IS NOT A DESIGN DECISION: "
+    + creativity.fixed_block(target="image")
+    + "\nThe header band across the top and the slim navy strip along the bottom stay as described,"
+    " and NO part of the headline may sit inside them or overlap them."
+    " The WHOLE header band and the small area just below its outer top corner stay clean and"
+    " empty — software pastes the channel logo, the programme tag, the date, the red ON AIR tag"
+    " and the 示意圖 label there afterwards, so nothing you draw belongs in that band at either"
+    " end."
+    " A brand mark carried by an object inside the photograph (a livery, a storefront, a product)"
+    " is part of that photograph and is not one of your decorative marks — it stays on its object"
+    " and never migrates onto the headline or into either navy band."
+    " In the two-panel layout, each headline stays ENTIRELY INSIDE ITS OWN PANEL and never crosses"
+    " the diagonal seam or strays into the other panel: freeing the placement frees where it sits"
+    " WITHIN its panel, not which panel it belongs to.\n"
+)
 
 # ---- 內容觸發的逐行指示與招式池（2026-09-11 第九批）----
 #
@@ -488,97 +501,25 @@ def cover_line_annotation(text: str, level: int) -> str:
     return "  ← " + "; ".join(notes) + "."
 
 
-# ---- 變化池（2026-09-11 第四輪）----
-# 每一池都只描述**形狀或做法**，不帶數字（延續「招式不宣稱數字」那條），
-# 而且每一條都是命令句：模型讀到的是「就是這個」，不是「你可以選」。
+# ---- 變化池（2026-09-11 第四輪；P3 起實體搬進 creativity.py）----
+# 池子本體與抽籤序列（creativity.draw）現在住在 creativity.py——十點跟 YT
+# 共用同一批池子，同一份持有權，理由跟 target="image" 的 FIXED 條文一樣：
+# 改一處、忘了改另一處的病灶。這裡留下同名別名，不是因為偷懶：既有測試
+# （tests/test_cover_title_creativity.py 等）直接寫 editor_formats.COVER_*，
+# 搬家不該連帶逼著改一堆呼叫點，跟 P2 的 LEVEL_NAMES 走同一個模式
+# ——這幾個名字是「同一個物件」的別名，不是各自留一份副本。
+COVER_PLATE_SHAPES = creativity.COVER_PLATE_SHAPES
+COVER_STAGGER_PATTERNS = creativity.COVER_STAGGER_PATTERNS
+COVER_TYPEFACES = creativity.COVER_TYPEFACES
+COVER_PALETTES = creativity.COVER_PALETTES
+COVER_ANCHORS = creativity.COVER_ANCHORS
+COVER_TILT_DIRECTIONS = creativity.COVER_TILT_DIRECTIONS
 
-# 底板形狀。原本只有「每行各自一塊板」，形狀交給模型 → 每次都是同一種圓角矩形。
-COVER_PLATE_SHAPES: tuple[str, ...] = (
-    "square-cut, hard right angles",
-    "fully rounded, pill-ended",
-    "clipped across one corner",
-    "slanted into parallelograms",
-    "torn-edged, like strips ripped out of paper",
-    "painted brush strokes with ragged ends",
-    "ribbons with folded-back ends",
-    "open bracket frames, outline only, the photograph showing through",
-)
-
-# 錯位方式。原本只寫「錯開」，模型一律交同一種左階梯。
-COVER_STAGGER_PATTERNS: tuple[str, ...] = (
-    "each row stepped further right than the one above",
-    "each row stepped further left than the one above",
-    "alternating left and right, a zig-zag down the block",
-    "the middle row pushed out well past the others",
-    "a short row set beside the end of a long one",
-)
-
-# 字體個性。只描述字形骨架，不給字體名——給名字模型會拿英文字體來套。
-# 每一條都要能用中文黑體體系畫得出來，而且可讀性是硬底線。
-COVER_TYPEFACES: tuple[str, ...] = (
-    "a heavy rounded gothic, thick strokes with softened corners",
-    "a tall condensed gothic, narrow and vertical",
-    "a wide poster gothic, squat and square-shouldered",
-    "a heavy Ming with thick slab serifs and sharp entry strokes",
-    "an angular technical cut, corners sliced off on the diagonal",
-    "a heavy brush-written hand, strokes tapering as they lift off",
-)
-
-# 配色。四個位置＝主色／次色／重點色／備用色，全部是播出安全的高彩度色。
-# 「哪個字拿重點色」仍然由 COLOUR FOLLOWS MEANING 那句決定——池子決定用哪幾色，
-# 意義決定落在誰身上。這樣才不會回到白→黃→紅的行序配色。
-COVER_PALETTES: tuple[tuple[str, str, str, str], ...] = (
-    ("white", "deep navy", "vivid red", "bright golden yellow"),
-    ("white", "black", "bright golden yellow", "vivid red"),
-    ("bright golden yellow", "white", "vivid red", "deep navy"),
-    ("icy white-blue", "deep teal", "hot orange", "white"),
-    ("white", "electric cyan", "magenta", "black"),
-    ("black", "white", "lime green", "electric cyan"),
-    ("white", "royal purple", "bright golden yellow", "hot orange"),
-    ("pale gold", "deep crimson", "white", "black"),
-    ("white", "hot orange", "electric cyan", "deep navy"),
-)
-
-# 標題區落點（3 級起才解放）。全部限中段以下：上緣是 compose 後貼 示意圖 的位置。
-COVER_ANCHORS: tuple[str, ...] = (
-    "low in its own panel, hard against the left edge",
-    "low in its own panel, hard against the right edge",
-    "across the middle band of its own panel",
-    "low and centred in its own panel",
-)
-
-COVER_TILT_DIRECTIONS: tuple[str, ...] = ("clockwise", "anticlockwise")
-
-
-# 招式池。每一條都是**無字**的，而且都是命令句。件數由等級決定，抽哪幾件由程式抽——
-# 交給模型自己選，四級會塌回同一種（許可句推不動模型，第七批已證明）。
-# 小配件的外框形狀。2026-09-11 使用者：「不一定只有圓形可以用吧。」
-# 跟招式用同一個 seeded RNG 抽，所以同一級重生換招式時形狀也跟著換。
-# 一律只描述輪廓，不給數字——延續「招式不宣稱數字」那條。
-COVER_ACCESSORY_SHAPES: tuple[str, ...] = (
-    "circular",
-    "rounded-square",
-    "hexagonal",
-    "diamond-shaped (stood on its corner)",
-    "shield-shaped",
-    "torn-edged",
-    "pentagonal",
-    "capsule-shaped",
-    "starburst-edged",
-)
-
-
-COVER_ACCESSORY_POOL: tuple[tuple[str, str], ...] = (
-    ("icon", "A flat WORDLESS PICTOGRAM taken from the subject (raincloud, flame, siren, warning triangle, syringe), hung at one row's start or end at that row's cap height, never covering a stroke."),
-    ("magnifier", "A {shape} MAGNIFIER INSET: a clean window cut from the photograph enlarging one telling detail, ringed in a bright colour, with a short heavy arrow pointing back to where it came from."),
-    ("bubbles", "A CLUSTER OF SMALL {shape} INSETS arcing along one side of the HEADLINE BLOCK (never up beside the main subject, which often sits high in the frame), each holding one wordless pictogram or tiny photographic detail, shrinking as they trail away."),
-    ("brush", "A ROUGH BRUSH-STROKE OR TORN BAR of flat saturated colour behind or directly under ONE row — painted edges, not a neat rectangle."),
-    ("material", "ONE WORD FILLED WITH A MATERIAL FROM THE STORY instead of flat colour (molten metal, cracked stone, ice, banknote paper), the rest of that row staying flat."),
-    ("cutout", "THE MAIN SUBJECT CUT OUT of its background and stood beside or in front of the headline block, rim-lit or thinly outlined so it reads as a separate layer."),
-    ("burst", "A WORDLESS BURST behind the block: radiating speed lines, sparks, shards or a torn splash of saturated colour."),
-    ("arrow", "ONE HEAVY WORDLESS ARROW in a saturated colour, thick and slightly angled, driving from the photograph towards the headline."),
-    ("iconrow", "A SHORT ROW OF SMALL {shape} WORDLESS ICON CHIPS along the lower edge, just ABOVE the navy bottom strip and never inside it, evenly spaced and equal in size, each holding one flat pictogram from the story."),
-)
+# 招式池的兩個池子也搬進 creativity.py 了；件數表（COVER_ACCESSORY_COUNTS）
+# 與怎麼抽、怎麼拼幾何提示（cover_accessories()）留在這裡——那是十點專屬
+# 邏輯，跟 titles／full_width 耦合，不是跨拉桿共用的機制。
+COVER_ACCESSORY_SHAPES = creativity.COVER_ACCESSORY_SHAPES
+COVER_ACCESSORY_POOL = creativity.COVER_ACCESSORY_POOL
 
 
 # 2026-09-11 第二輪拿掉「數量呼應」：程式算得出 6，模型畫得出 3。
@@ -711,13 +652,15 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
     if not spec:
         return ""
     # 抽籤順序固定，動了順序就換掉所有既有 seed 的長相（測試會抓到）。
-    rng = random.Random(seed)
-    plate = rng.choice(COVER_PLATE_SHAPES)
-    stagger = rng.choice(COVER_STAGGER_PATTERNS)
-    typeface = rng.choice(COVER_TYPEFACES)
-    palette = rng.choice(COVER_PALETTES)
-    anchor = rng.choice(COVER_ANCHORS)
-    tilt_dir = rng.choice(COVER_TILT_DIRECTIONS)
+    # P3（2026-09-11）起序列本身交給 creativity.draw()：十點要 anchor 這一顆
+    # （YT 不要），所以 anchor=True。draw() 回傳的 .rng 是抽完這 6 顆之後
+    # 同一顆亂數——下面 cover_accessories() 要接著它繼續抽招式，不能另外
+    # 開一顆 random.Random(seed)。
+    d = creativity.draw(seed, anchor=True)
+    rng = d.rng
+    plate, stagger, typeface, palette, anchor, tilt_dir = (
+        d.plate, d.stagger, d.typeface, d.palette, d.anchor, d.tilt_dir,
+    )
 
     rows = [
         "=== HEADLINE DESIGN BRIEF — THESE NUMBERS ARE AS FIXED AS THE SEAM GEOMETRY ABOVE, AND THEY OVERRIDE ANY TYPOGRAPHY WORDING FURTHER DOWN ===",
@@ -1562,12 +1505,17 @@ def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
     # 底板」是兩個互相打架的指示——今天已經因為留著矛盾句踩了四次，所以這裡明講
     # 兩者的關係，而不是讓模型自己挑一個遵守。
     band_on = bottom_band and layout != "hourly"
-    rng = random.Random(seed)
-    plate = rng.choice(COVER_PLATE_SHAPES)
-    stagger = rng.choice(COVER_STAGGER_PATTERNS)
-    typeface = rng.choice(COVER_TYPEFACES)
-    palette = rng.choice(COVER_PALETTES)
-    tilt_dir = rng.choice(COVER_TILT_DIRECTIONS)
+    # P4（2026-09-11）起序列本身交給 creativity.draw()：YT 標題固定左下，
+    # 落點放開會拆散日期牌，所以 anchor=False——這一顆跟十點共用同一批池子、
+    # 同一個抽籤順序，只是少抽 anchor 那一顆（見 creativity.draw() 的說明）。
+    # d.rng 是抽完這五顆之後同一顆亂數，下面 cover_accessories() 要接著它繼續
+    # 抽招式，不能另外開一顆 random.Random(seed)——已用 fixture 逐字元核對過，
+    # 換接線前後 156 筆（3 layout × 4 level × 13 seed）輸出完全一致。
+    d = creativity.draw(seed, anchor=False)
+    rng = d.rng
+    plate, stagger, typeface, palette, tilt_dir = (
+        d.plate, d.stagger, d.typeface, d.palette, d.tilt_dir,
+    )
 
     top = yt_title_top(level)
     rows = [
@@ -1733,21 +1681,34 @@ Photographic, news-documentary quality, filling the frame.
 # _TITLE_FIXED_BLOCK (a)–(g)、CG 有 _CG_CREATIVITY_FIXED (a)–(i)，只有 YT 裸奔。
 # 實拍 L1 的配色跑掉（指定紅底白字，畫成白底黑字）就是它擋得住的那一種。
 # 0 級不注入：那一級根本沒有創意條文，沒有東西需要被框住。
-_YT_FIXED_BLOCK = """
-WHAT THE CREATIVITY SETTING NEVER CHANGES — THIS PARAGRAPH OUTRANKS THE DESIGN BRIEF:
-(a) THE CHARACTERS. Render the listed strings character for character, in the listed order. Never add, drop, translate, abbreviate, reorder or substitute one character to make a layout work, and never break a listed line across two rows — each listed line is one unbroken row.
-(b) THE DATE IS A FACT, NOT A GRAPHIC ELEMENT. Its digits and slashes are exactly as listed; a wrong digit is a factual error on air. The tab carrying it stays vivid red with white characters, and it stays attached to the top of the headline block.
-(c) NO NEW TEXT OF ANY KIND. Decorative artwork is wordless: no letters, no digits, no invented badges, no labels, no signature. The design brief never licenses a word that is not in the list above.
-(d) EVERY CHARACTER STAYS COMPLETE, UNOBSTRUCTED AND LEGIBLE at broadcast distance. Decoration that crosses a stroke, a shadow that swallows a stroke, or type squeezed until the counters close, is a defect — not a style. Loud is not the same as broken.
-(e) THE TWO RESERVED CORNERS STAY CLEAN whatever the brief says: a channel logo and a LIVE badge are pasted over them afterwards, so nothing you draw belongs there.
-(f) Traditional Chinese, Taiwan forms throughout — no Simplified or Japanese forms, no invented strokes.
-(g) NOTHING TOUCHES OR IS CLIPPED BY ANY FRAME EDGE, the headline block and the date tab included.
-(h) IF A LEVER CANNOT BE SATISFIED WITHOUT ADDING WORDS OR BREAKING A CHARACTER, THE LEVER LOSES.
+#
+# 日期那句本來就會被 yt_fixed_block() 依 layout 整條抽掉（news/hot 沒有日期
+# 牌，見下方 yt_fixed_block），所以這裡也不帶編號——不編號才不用在乎「抽掉
+# 一句之後前後怎麼接」。
+_YT_FIXED_DATE_LINE = """THE DATE IS A FACT, NOT A GRAPHIC ELEMENT. Its digits and slashes are exactly as listed; a wrong digit is a factual error on air. The tab carrying it stays vivid red with white characters, and it stays attached to the top of the headline block.
 """
 
-
-_YT_FIXED_DATE_LINE = """(b) THE DATE IS A FACT, NOT A GRAPHIC ELEMENT. Its digits and slashes are exactly as listed; a wrong digit is a factual error on air. The tab carrying it stays vivid red with white characters, and it stays attached to the top of the headline block.
-"""
+# 字句逐字／繁中臺灣用字／不准生新字／不准觸邊四條搬進 creativity.py
+# （target="image"，與十點共用，措辭以十點為準——十點先上線且經過實拍調校，
+# 這裡原本是手動抄改的，見該檔案開頭說明）。留在這裡的只剩 YT 版型專屬的：
+# 不准觸邊那條點名日期牌的補強句（2026-09-10 教訓：排除條文埋在一長串否定句
+# 中間，模型照樣會犯，見 commit 73ae198——共用句只講「不准觸邊」這個一般
+# 規則，日期牌是不是也算在內要在這裡自己點名一次）、日期牌語意、保留角落、
+# 可讀性重申、「缺字寧可不做」收尾。
+_YT_FIXED_BLOCK = (
+    "\nWHAT THE CREATIVITY SETTING NEVER CHANGES — THIS PARAGRAPH OUTRANKS THE DESIGN BRIEF:\n"
+    + creativity.fixed_block(target="image")
+    + " That includes the headline block and the date tab: neither may touch or be clipped by a"
+    " frame edge either.\n"
+    + _YT_FIXED_DATE_LINE
+    + "EVERY CHARACTER STAYS COMPLETE, UNOBSTRUCTED AND LEGIBLE at broadcast distance. Decoration"
+    " that crosses a stroke, a shadow that swallows a stroke, or type squeezed until the counters"
+    " close, is a defect — not a style. Loud is not the same as broken.\n"
+    "THE TWO RESERVED CORNERS STAY CLEAN whatever the brief says: a channel logo and a LIVE badge"
+    " are pasted over them afterwards, so nothing you draw belongs there.\n"
+    "IF A LEVER CANNOT BE SATISFIED WITHOUT ADDING WORDS OR BREAKING A CHARACTER, THE LEVER"
+    " LOSES.\n"
+)
 
 
 def yt_fixed_block(level: int, layout: str = "hourly") -> str:

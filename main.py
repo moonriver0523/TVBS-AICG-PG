@@ -36,6 +36,7 @@ import admin_console
 import audit_archive
 import clerk_auth
 import compose
+import creativity
 import editor_formats
 import gcs_archive
 import map_lookup
@@ -936,29 +937,17 @@ MAXIMUM_DENSITY_RULES = """
 #
 # 注入點在 editor_formats.digest_rules 之後（本 repo 慣例：位置在後＋明文 OVERRIDE
 # 才壓得住），但條文自己第一句就聲明「只覆蓋美術，不覆蓋版面與內容」。
-CG_CREATIVITY_LEVEL_MIN = 0
-CG_CREATIVITY_LEVEL_MAX = 4
-CG_CREATIVITY_LEVEL_NAMES = {
-    0: "規矩",
-    1: "微設計",
-    2: "有設計",
-    3: "奔放",
-    4: "最狂",
-}
+# 等級名稱 0-4 搬進 creativity.py（P2），與 editor_formats.COVER_AI_TITLE_LEVEL_NAMES
+# 共用同一份字典——兩邊手寫值原本逐字相同，改一處忘了改另一處的風險同 target="digest"
+# 那段收斂的理由。這裡留舊名稱當別名，呼叫端（cg_creativity_rules 等）不用跟著改。
+CG_CREATIVITY_LEVEL_MIN = creativity.LEVEL_MIN
+CG_CREATIVITY_LEVEL_MAX = creativity.LEVEL_MAX
+CG_CREATIVITY_LEVEL_NAMES = creativity.LEVEL_NAMES
 
-# 每一級（0 以外）都原樣附上。這一塊是「拉桿不准碰的東西」。
-_CG_CREATIVITY_FIXED = """
-WHAT THE CREATIVITY SETTING NEVER CHANGES — THIS PARAGRAPH OUTRANKS THE ONE ABOVE IT:
-(a) THE WORDS. The creativity setting styles the text; it never rewrites it. Do not add, drop, translate, shorten or reorder a single character to make a design work, and never invent a figure, a label, a caption, a unit or a source line for the sake of the layout.
-(b) THE POINT COUNT AND THE LINE STRUCTURE stay exactly as the blocks above set them. If a block above fixes an exact number of [內文小標] lines, that number still holds. Design freedom is not permission to add a card, drop a card or merge two points.
-(c) THE BROADCAST SAFE AREA stays exactly as instructed above, including the sentence the structure description must begin with, the ban on expressing any position or size as a number, and the ban on anything spanning or touching an edge.
-(d) NO NEW TEXT OF ANY KIND. Decorative marks are wordless: no letters, no digits, no invented badges, no watermark, no signature, no extra labels. Icons carry no writing.
-(e) EVERY CHARACTER STAYS COMPLETE, UNOBSTRUCTED AND LEGIBLE at broadcast distance. A decoration that crosses a stroke, a shadow that swallows a stroke, or type squeezed until the counters close, is a defect — not a style.
-(f) Traditional Chinese, Taiwan forms throughout.
-(g) A HERO ELEMENT IS NEVER A MAP OF REAL GEOGRAPHY UNLESS THE CHART TYPE IS THE MAP TYPE. The levels above invite you to pick one dominant subject image; a map is not available for that job here. Do not ask for a national or regional outline with internal county, state or district boundaries, and do not ask for one place to be highlighted inside another — the renderer draws those borders from memory and gets them wrong, which is a factual error on air, not a styling flaw. Where the story is about places, a wordless silhouette with no internal divisions, or a schematic locator described plainly as schematic, is the most this setting allows.
-(h) THESE LEVERS ADAPT TO THE POINT COUNT THE BLOCKS ABOVE SET — THEY NEVER CREATE MATERIAL TO FEED THEMSELVES. If a block above fixed the graphic at ONE point, the hero element simply IS the graphic: every instruction here about supporting cards, stepped rows, a grid to break, or material on the other side of a dividing edge does not apply, and the empty space stays empty. If a block above raised the count to six or more, grouping and legibility outrank the arrangement instructions here: keep the groups or columns that block asked for, and apply the slant, the stagger or the overlap only as far as every line still reads at broadcast distance.
-(i) IF A LEVER CANNOT BE SATISFIED WITHOUT ADDING WORDS, THE LEVER LOSES. Never invent a banner line, a warning strip, a slogan, a caption or a repeated phrase to fill a zone, balance a composition or complete a shape — an empty area is always the correct answer, and a design that needs new text to work is the wrong design.
-"""
+# 「拉桿不准碰的東西」搬進 creativity.py（target="digest"），三處共用的持有權
+# 收在一起，改一處忘了改另外兩處的問題見該檔案開頭說明。這裡刻意不留本地副本，
+# 逐字元原封不動地轉呼叫，維持 tests/test_reporter_prompt_frozen.py 的位元組凍結。
+_CG_CREATIVITY_FIXED = creativity.fixed_block(target="digest")
 
 _CG_L1 = """
 

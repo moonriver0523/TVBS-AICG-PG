@@ -18,6 +18,7 @@
 4. YT／十點封面走別的端點，不吃這條。
 """
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -185,9 +186,18 @@ class RequestTests(unittest.TestCase):
 
 
 class FrontendTests(unittest.TestCase):
+    """2026-09-11 P5：拉桿 HTML 改由 app.js 的 renderCreativityBar() 共用元件
+    在 window.onload 時灌進 index.html 的空殼容器（id="cgCreativityBar"），
+    見 tests/test_cover_title_style.py 的 FrontendTests 開頭說明——同一次重構，
+    同樣的測試改法。"""
+
     def test_the_slider_exists_and_is_wired(self):
-        self.assertIn('id="cgCreativityRange"', INDEX_HTML)
-        self.assertIn("setCgCreativity(this.value)", INDEX_HTML)
+        self.assertIn('id="cgCreativityBar"', INDEX_HTML)
+        match = re.search(r"renderCreativityBar\('cgCreativityBar',\s*\{(.*?)\}\);", APP_JS, re.S)
+        self.assertIsNotNone(match, "app.js 裡找不到 cgCreativityBar 的 renderCreativityBar 呼叫式")
+        call = match.group(1)
+        self.assertIn("rangeId: 'cgCreativityRange'", call)
+        self.assertIn("oninput: 'setCgCreativity'", call)
         self.assertIn("function setCgCreativity(", APP_JS)
 
     def test_it_defaults_to_zero_and_has_five_labels(self):

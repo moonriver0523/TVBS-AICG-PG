@@ -173,7 +173,16 @@ class PromptTests(unittest.TestCase):
 
 
 class FrontendTests(unittest.TestCase):
-    """2026-09-09 第八批：ON/OFF 按鈕改成 0–4 拉桿（使用者指定仿 AI effort 那一條）。"""
+    """2026-09-09 第八批：ON/OFF 按鈕改成 0–4 拉桿（使用者指定仿 AI effort 那一條）。
+
+    2026-09-11 P5：拉桿的 HTML 從 index.html 手寫改成 app.js 的
+    renderCreativityBar() 共用元件在 window.onload 時灌進空殼容器——
+    range/label 的 id、oninput 呼叫式因此不再是 INDEX_HTML 裡的字面文字，
+    改成 renderCreativityBar('coverTitleStyleBar', {...}) 呼叫式裡的參數。
+    這裡的測試跟著改成檢查那個呼叫式，而不是找 INDEX_HTML 裡一段不存在的
+    HTML。容器本身（id="coverTitleStyleBar"）仍然是 index.html 的一部分，
+    這一半沒變。
+    """
 
     def test_state_defaults_to_the_lowest_level(self):
         """預設仍是最左＝現行排版。設計標題會大改版面，錯字風險較高，要使用者自己拉。"""
@@ -183,19 +192,39 @@ class FrontendTests(unittest.TestCase):
         # 生成本體與 tenCoverFields（追加修改／只改文字）各一處
         self.assertEqual(len(re.findall(r"title_creativity:\s*state\.coverTitleCreativity", APP_JS)), 2)
 
+    def _cover_title_style_render_call(self) -> str:
+        match = re.search(
+            r"renderCreativityBar\('coverTitleStyleBar',\s*\{(.*?)\}\);", APP_JS, re.S
+        )
+        self.assertIsNotNone(match, "app.js 裡找不到 coverTitleStyleBar 的 renderCreativityBar 呼叫式")
+        return match.group(1)
+
     def test_the_slider_exists_and_is_wired(self):
-        self.assertIn('id="coverTitleStyleRange"', INDEX_HTML)
-        self.assertIn('type="range" min="0" max="4" step="1"', INDEX_HTML)
-        self.assertIn("setCoverTitleCreativity(this.value)", INDEX_HTML)
+        self.assertIn('id="coverTitleStyleBar"', INDEX_HTML)
+        self.assertIn("function renderCreativityBar(", APP_JS)
+        call = self._cover_title_style_render_call()
+        self.assertIn("rangeId: 'coverTitleStyleRange'", call)
+        self.assertIn("oninput: 'setCoverTitleCreativity'", call)
         self.assertIn("function setCoverTitleCreativity(", APP_JS)
+        # renderCreativityBar 內部組出來的 <input> 一定是 0–4 五段，跟舊的手寫標記同義
+        self.assertIn('type="range" min="0" max="4" step="1" value="0"', APP_JS)
 
     def test_the_slider_shows_the_level_name_like_the_effort_bar(self):
-        """使用者要的是 effort 那條的樣子：兩端標示＋當前檔位的名字。"""
-        self.assertIn('id="coverTitleStyleLabel"', INDEX_HTML)
-        self.assertIn(">規矩<", INDEX_HTML)
-        self.assertIn(">奔放<", INDEX_HTML)
-        self.assertEqual(len(re.findall(r"\['[^']+',\s*'[^']+'\]", APP_JS.split(
-            "COVER_TITLE_CREATIVITY = [")[1].split("];")[0])), 5)
+        """使用者要的是 effort 那條的樣子：兩端標示＋當前檔位的名字。
+
+        右端刻度沿用既有手寫 HTML 的原文「奔放」（等級 3 的名字，不是等級 4
+        的「最狂」）——這是搬家前就存在的落差，P5 只搬 HTML、不改使用者看得到
+        的字，所以透過 renderCreativityBar 的 maxLabel 覆寫保留原樣。
+        """
+        call = self._cover_title_style_render_call()
+        self.assertIn("labelId: 'coverTitleStyleLabel'", call)
+        self.assertIn("pairs: COVER_TITLE_CREATIVITY", call)
+        self.assertIn("maxLabel: '奔放'", call)
+        block = APP_JS.split("COVER_TITLE_CREATIVITY = [")[1].split("];")[0]
+        pairs = re.findall(r"\['([^']+)',\s*'[^']+'\]", block)
+        self.assertEqual(len(pairs), 5)
+        self.assertEqual(pairs[0], "規矩")
+        self.assertEqual(pairs[-1], "最狂")
 
     def test_the_old_toggle_is_gone(self):
         """留著舊按鈕會有兩個真相源：按鈕設 title_style、拉桿設 title_creativity。"""
