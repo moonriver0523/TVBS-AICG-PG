@@ -1376,7 +1376,7 @@ def compose_yt_cover(
     ai_translation: bool = False,
     ai_note: bool = False,
     draw_titles: bool = True,
-    bottom_band: bool = True,
+    bottom_band: bool = False,
     band_top_ratio: float | None = None,
     band_fade_ratio: float | None = None,
 ) -> bytes:
@@ -1805,7 +1805,7 @@ def compose_yt_hot_cover(
     line2: str,
     ai_note: bool = False,
     draw_titles: bool = True,
-    bottom_band: bool = True,
+    bottom_band: bool = False,
     band_top_ratio: float | None = None,
     band_fade_ratio: float | None = None,
 ) -> bytes:

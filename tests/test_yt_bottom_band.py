@@ -53,13 +53,18 @@ def _hot(**kw) -> Image.Image:
 
 
 class CompositeBandTests(unittest.TestCase):
-    def test_on_is_the_default_and_off_leaves_the_photo_untouched(self):
-        """2026-09-08 晚使用者：所有藍紅底套色預設改 ON。"""
+    def test_off_is_the_default_and_leaves_the_photo_untouched(self):
+        """2026-09-08 晚使用者改 ON；2026-09-11 使用者再改回 OFF。
+
+        兩支合成函式的預設要跟請求端（YtCoverRequest.bottom_band）一致——
+        hot 那支的 docstring 本來就寫「預設關」，簽名卻是 True，自相矛盾。
+        main 兩處都明確傳值，所以這條只保護直接呼叫 compose 的腳本與測試。
+        """
         for name, fn in (("news", _news), ("hot", _hot)):
             with self.subTest(layout=name):
-                self.assertNotEqual(fn().getpixel(PROBE), BASE, "預設沒畫帶")
-                self.assertEqual(fn(bottom_band=False).getpixel(PROBE), BASE)
-                self.assertEqual(fn(), fn(bottom_band=True))
+                self.assertEqual(fn().getpixel(PROBE), BASE, "預設就不該畫帶")
+                self.assertEqual(fn(), fn(bottom_band=False))
+                self.assertNotEqual(fn(bottom_band=True).getpixel(PROBE), BASE, "開了要畫帶")
 
     def test_on_is_semi_transparent_not_a_flat_colour(self):
         for name, img, fill in (("news", _news(bottom_band=True), compose.YT_BAND_FILL),
