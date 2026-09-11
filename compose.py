@@ -21,6 +21,7 @@
 
 import functools
 import io
+import math
 import pathlib
 import random
 import re
@@ -1513,6 +1514,58 @@ YT_HOURLY_DATE_TAB_BOX = (
     YT_MARGIN_RATIO + YT_HOURLY_DATE_TAB_WIDTH_RATIO,
     YT_HOURLY_DATE_TOP_RATIO + YT_HOURLY_DATE_TAB_HEIGHT_RATIO,
 )
+
+# 1 級起模型自己畫牌時，牌**跟著大標題走：貼在第一行標題的左上方、左緣與標題切齊**
+# ——也就是 0 級程式貼出來的那個樣子（2026-09-11 使用者裁決，改了三次後定案：
+# 先「位置整個交給 AI」，實拍 L1–L4 四張全擠在上半部偏左，變化不大又失去可預期性；
+# 再「置頂置中」；最後是這個）。
+#
+# 為什麼這次可以用相對描述，而今天早上那個 bug 不行：早上是**AI 畫標題、程式貼日期**，
+# 兩邊各自認定「標題上方」在哪，必然對不上；1 級起是**同一個模型畫標題也畫牌**，
+# 相對定位對它自洽，而且跟著標題走比釘死一個座標更協調。
+#
+# 即使如此仍附上 YT_HOURLY_DATE_TAB_BOX 當**護欄**（補強，不是取代相對指示）：
+# 純相對描述今天已經出過一次事，給個範圍讓它不會飄走。那個框正好就是 0 級程式貼的
+# 位置，所以兩條路的成品看起來會一致。
+
+
+@functools.lru_cache(maxsize=1)
+def yt_hourly_logo_extent() -> tuple[float, float]:
+    """程式**實際**貼上的 Logo 佔到哪（右緣、下緣，佔畫面比例）。
+
+    2026-09-11 抓到的碰撞：prompt 手打「保留左上角 14% 寬、14% 高」，而實際貼上去
+    的 Logo 量出來是 14.4% 寬、**16.1% 高**——宣告值比實際小。實拍 L3／L4 的日期牌
+    頂落在 15.9%，比 Logo 下緣還高，會疊上去。
+
+    同一個病今天出現第三次（早上是日期條寫「標題正上方」、中午是 prompt 百分比手打）：
+    **凡是模型要閃避的東西，座標都必須從程式實際畫的那個值算出來，不可以手打。**
+    這支函式就是那個單一真相源；prompt 的保留區與日期牌的位置都從它推。
+    """
+    if not TVBS_LOGO_WHITE.exists():
+        raise ComposeError(f"找不到 Logo 檔：{TVBS_LOGO_WHITE}")
+    width, height = YT_CANVAS
+    logo_w = round(width * YT_HOURLY_LOGO_WIDTH_RATIO)
+    with Image.open(TVBS_LOGO_WHITE) as logo_file:
+        logo_h = round(logo_file.height * logo_w / logo_file.width)
+    right = (round(width * YT_MARGIN_RATIO) + logo_w) / width
+    bottom = (round(height * YT_HOURLY_LOGO_TOP_RATIO) + logo_h) / height
+    return right, bottom
+
+
+def yt_hourly_logo_keep_out() -> tuple[float, float]:
+    """要模型閃開的左上角保留區（寬、高）。實際佔用再往外留一格餘裕。"""
+    right, bottom = yt_hourly_logo_extent()
+    return (
+        math.ceil((right + YT_KEEP_OUT_MARGIN_RATIO) * 100) / 100,
+        math.ceil((bottom + YT_KEEP_OUT_MARGIN_RATIO) * 100) / 100,
+    )
+
+
+# 保留區比實際佔用再外擴這麼多。模型的落點本來就有 ±1.6% 的抖動（pre-test 量的），
+# 貼齊實際邊緣等於把那點抖動全押在「剛好不撞」上。
+YT_KEEP_OUT_MARGIN_RATIO = 0.01
+
+
 # 「雙則」每行字數上限（2026-09-08 使用者裁決）：兩行各是一則新聞的完整標題，
 # 不是同一句拆兩段，長度沒有天然上限，所以要有一條硬線。單則模式不套用。
 YT_HOURLY_LINE_MAX_CHARS = 18          # 2026-09-08 晚使用者：14 放寬到 18

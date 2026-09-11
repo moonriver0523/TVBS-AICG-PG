@@ -1361,13 +1361,12 @@ _DATE_PLATE_STYLES = {
     3: "a tab slanted into a parallelogram, leaning slightly forward, with a bright inner edge",
     4: "a torn-edged or ribbon-like tab with a folded-back end, the boldest treatment on the cover",
 }
-# 位置自由，但有三塊是**程式後貼**的，畫進去就被蓋掉。這三塊的數字與
-# YT_COVER_FULL_PROMPT_HOURLY 裡那兩條保留區、compose 的貼附座標是同一組。
-_DATE_KEEP_OUT = (
-    "Keep it OUT of the UPPER-LEFT corner (14% wide, 14% tall) and the UPPER-RIGHT corner"
-    " (27% wide, 32% tall) — a channel logo and a LIVE badge are pasted over those afterwards —"
-    " and keep it clear of the two headline lines and of every frame edge"
-)
+def _where(box: tuple[float, float, float, float]) -> str:
+    x0, y0, x1, y1 = box
+    return (
+        f"its LEFT edge at {x0:.0%} of the frame WIDTH, its RIGHT edge at {x1:.0%} of the WIDTH,"
+        f" its TOP edge at {y0:.0%} of the frame HEIGHT, its BOTTOM edge at {y1:.0%} of the HEIGHT"
+    )
 
 
 def yt_hourly_date_clause(
@@ -1375,26 +1374,33 @@ def yt_hourly_date_clause(
 ) -> str:
     """整點封面裡關於日期牌的那一段。
 
-    0 級：程式畫牌，模型只要把那塊留白，座標由 compose 的 box 產生。
-    1–4 級（2026-09-11 使用者裁決）：整個牌交給模型——紅框、風格、位置、**連日期
-    數字**都是它畫的。日期因此必須進 TEXT TO RENDER 的逐字清單，才吃得到那條
-    「照抄、不准多寫一個字」的約束；只在版面段描述牌長什麼樣是不夠的。
+    0 級：程式畫牌，模型只要把那塊留白。
+    1–4 級（2026-09-11 使用者裁決）：整個牌交給模型——紅框、風格、**連日期數字**
+    都是它畫的，但**位置是固定的**：TVBS Logo 正下方、靠左對齊、跟 Logo 留一段
+    間距（box 來自 compose.YT_HOURLY_DATE_AI_BOX，由 Logo 保留區推出來）。
+    等級只決定牌的造型有多放。
+
+    日期必須進 TEXT TO RENDER 的逐字清單（見 yt_hourly_date_text_line），才吃得到
+    「照抄、不准多寫一個字」那條約束；只在版面段描述牌長什麼樣是不夠的。
     """
-    x0, y0, x1, y1 = box
     if level < 1:
         return (
             "- Keep one strip free of everything — no text, no subject, no busy detail:"
-            f" its LEFT edge at {x0:.0%} of the frame WIDTH, its RIGHT edge at {x1:.0%} of the"
-            f" WIDTH, its TOP edge at {y0:.0%} of the frame HEIGHT, its BOTTOM edge at {y1:.0%}"
-            " of the HEIGHT. A red date tab is pasted into it afterwards, at that exact place.\n"
+            f" {_where(box)}. A red date tab is pasted into it afterwards, at that exact place.\n"
         )
     shape = _DATE_PLATE_STYLES.get(level, _DATE_PLATE_STYLES[4])
     return (
-        f"- THE DATE TAB IS YOURS TO DESIGN AND TO PLACE. Draw {shape}, filled vivid red with a"
-        " thick black outline and a hard offset drop shadow, and set the date inside it in bold"
-        " white characters. It belongs to the same design as the headline — same outline weight,"
-        " same shadow direction — not a sticker laid on top.\n"
-        f"  PUT IT WHERE THE PICTURE WANTS IT: anywhere that suits the composition. {_DATE_KEEP_OUT}.\n"
+        f"- THE DATE TAB: draw {shape}, filled vivid red with a thick black outline and a hard"
+        " offset drop shadow, and set the date inside it in bold white characters. It belongs to"
+        " the same design as the headline — same outline weight, same shadow direction — not a"
+        " sticker laid on top.\n"
+        "  IT BELONGS TO THE HEADLINE AND SITS WITH IT: place it immediately ABOVE headline"
+        " line 1, its LEFT edge flush with the left edge of the headline, so the tab and the two"
+        " headline lines read as one stacked block. It never sits beside the headline, never"
+        " below it, and never drifts off on its own.\n"
+        f"  AS A GUIDE, THAT LANDS IT AROUND HERE: {_where(box)}. Follow the headline if the two"
+        " disagree — the tab's job is to sit on top of the headline, and this box is only telling"
+        " you roughly where that is.\n"
         f"  THE CHARACTERS ON IT ARE EXACTLY「{date_text}」— every digit and every slash as listed"
         " above, nothing added, nothing dropped, nothing reordered. A wrong digit here is the one"
         " mistake nobody catches before broadcast.\n"
@@ -1428,8 +1434,8 @@ Render EXACTLY these strings, character for character, nothing else:
 - Both headline lines sit in the lower third, LEFT-ALIGNED near the left edge, stacked, each on one line, huge and heavy Chinese display type. No band behind them: the type sits directly on the photograph.
 - THE TWO HEADLINE LINES ARE SET AT ONE SINGLE TYPE SIZE: identical cap height, identical stroke weight, identical character width. Choose that size from the LONGER line — it is the size at which the LONGER line spans almost the full width — then set the SHORTER line at that SAME size, so the shorter line simply ends earlier and leaves empty space to its right. NEVER enlarge the shorter line to make it reach the same width as the other one. A line with far fewer characters MUST end up visibly shorter, never bigger; two lines at different type sizes is a defect.
 - Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
-- Keep the UPPER-LEFT corner (about 14% wide and 14% tall) free: a small channel logo is pasted there afterwards.
-- Keep the UPPER-RIGHT corner (about 27% wide and 32% tall) free: a red LIVE badge with the broadcast time is pasted there afterwards.
+- Keep the UPPER-LEFT corner ({logo_keep_out}) free: a small channel logo is pasted there afterwards.
+- Keep the UPPER-RIGHT corner ({badge_keep_out}) free: a red LIVE badge with the broadcast time is pasted there afterwards.
 {date_clause}- BECAUSE OF THAT, HEADLINE LINE 1 STARTS LOW: the TOP of its characters must sit at or below 66% of the frame height, and both headline lines fit between there and the bottom edge. Setting the headline higher runs it into the date tab.
 
 === IMAGERY ===

@@ -33,6 +33,11 @@ def clause(level: int) -> str:
     return editor_formats.yt_hourly_date_clause(level, BOX, DATE)
 
 
+def ai_clause(level: int) -> str:
+    """1 級起的條文。框跟 0 級是同一個——它在這裡只當護欄，主指示是「跟著標題」。"""
+    return clause(level)
+
+
 def _band(text: str) -> tuple[float, float]:
     match = re.search(r"TOP edge at (\d+)% of the frame HEIGHT.*?BOTTOM edge at (\d+)%", text)
     assert match, "找不到保留區的高度範圍"
@@ -97,19 +102,45 @@ class CreativeDatePlateTests(unittest.TestCase):
             with self.subTest(level=level):
                 self.assertIn(DATE, clause(level))
 
-    def test_placement_is_handed_over(self):
-        """1 級起不再給座標——位置是模型的決定。"""
-        for level in (1, 2, 3, 4):
-            with self.subTest(level=level):
-                self.assertNotIn("of the frame HEIGHT", clause(level))
-                self.assertIn("YOURS TO DESIGN AND TO PLACE", clause(level))
+    def test_the_tab_is_anchored_to_the_headline_not_to_a_coordinate(self):
+        """使用者定案：牌跟著大標題走，貼在第一行標題左上方。
 
-    def test_the_paste_on_corners_stay_out_of_bounds(self):
-        """位置自由不包括那兩塊——程式後貼的 Logo 與 LIVE 章會蓋掉畫在那裡的東西。"""
+        這次用相對描述是成立的——1 級起**同一個模型畫標題也畫牌**，它自己知道
+        標題在哪。今天早上那個 bug 的情境不同：AI 畫標題、程式貼日期，兩邊各自
+        認定「標題上方」在哪，必然對不上。
+        """
         for level in (1, 2, 3, 4):
             with self.subTest(level=level):
-                self.assertIn("UPPER-LEFT corner", clause(level))
-                self.assertIn("UPPER-RIGHT corner", clause(level))
+                text = ai_clause(level)
+                self.assertIn("immediately ABOVE headline", text)
+                self.assertIn("flush with the left edge of the headline", text)
+
+    def test_the_coordinate_box_is_only_a_guide(self):
+        """絕對座標仍要給（純相對描述今天出過一次事），但講明它讓位給標題。"""
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                text = ai_clause(level)
+                self.assertIn("AS A GUIDE", text)
+                self.assertIn("of the frame HEIGHT", text)
+                self.assertNotIn("BOX IS FIXED", text)
+
+    def test_the_guide_box_clears_the_real_logo(self):
+        """護欄框不能落在 Logo 上——保留區必須蓋得住**程式實際貼上去**的 Logo。
+
+        2026-09-11 抓到：prompt 手打 14%×14%，實際貼上去是 14.4%×16.1%。
+        """
+        right, bottom = compose.yt_hourly_logo_extent()
+        keep_w, keep_h = compose.yt_hourly_logo_keep_out()
+        self.assertGreater(keep_w, right, "保留區比實際貼上的 Logo 窄")
+        self.assertGreater(keep_h, bottom, "保留區比實際貼上的 Logo 矮")
+        self.assertGreater(BOX[1], bottom, "日期牌的護欄框壓到實際的 Logo")
+
+    def test_the_guide_box_is_left_aligned_with_the_headline(self):
+        self.assertEqual(BOX[0], compose.YT_MARGIN_RATIO)
+
+    def test_the_guide_box_clears_the_headline(self):
+        """牌的下緣要高於標題第一行的字頂下限——它是坐在標題上方的。"""
+        self.assertLess(BOX[3], _headline_floor())
 
     def test_each_level_gets_its_own_shape(self):
         shapes = {editor_formats._DATE_PLATE_STYLES[level] for level in (1, 2, 3, 4)}
@@ -120,14 +151,29 @@ class CreativeDatePlateTests(unittest.TestCase):
 
     def test_the_template_still_formats_with_every_field(self):
         """新增佔位符沒有接上呼叫端的話，format 會在線上才炸。"""
+        keep_w, keep_h = compose.yt_hourly_logo_keep_out()
         rendered = editor_formats.YT_COVER_FULL_PROMPT_HOURLY.format(
             line1="第一行", line2="第二行", visual="場景", split_note="",
-            date_clause=clause(3),
+            date_clause=ai_clause(3),
             date_text_line=editor_formats.yt_hourly_date_text_line(3, DATE),
             date_ban=editor_formats.yt_hourly_date_ban(3),
+            logo_keep_out=f"about {keep_w:.0%} wide and {keep_h:.0%} tall",
+            badge_keep_out="about 27% wide and 32% tall",
         )
         self.assertIn(DATE, rendered)
         self.assertNotIn("no dates", rendered)
+
+    def test_the_logo_keep_out_in_the_prompt_matches_the_real_logo(self):
+        """保留區的百分比必須從實際貼上的 Logo 算出來，不可以手打。
+
+        2026-09-11 的碰撞：模板寫死「14% wide and 14% tall」，實際貼上去的 Logo
+        是 14.4% 寬、16.1% 高，日期牌照宣告值往下排就疊在 Logo 上。
+        """
+        keep_w, keep_h = compose.yt_hourly_logo_keep_out()
+        right, bottom = compose.yt_hourly_logo_extent()
+        self.assertGreaterEqual(keep_w, right)
+        self.assertGreaterEqual(keep_h, bottom)
+        self.assertIn("{logo_keep_out}", editor_formats.YT_COVER_FULL_PROMPT_HOURLY)
 
 
 class CompositeStillDrawsItTests(unittest.TestCase):

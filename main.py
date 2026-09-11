@@ -4938,9 +4938,21 @@ def _yt_cover_full_image(
     image_req = ImageGenerateRequest(
         prompt=template.format(
             line1=lines[0], line2=lines[1], visual=visual.strip() or req.title.strip(),
+            # 兩級都用同一個框：0 級是程式實際貼牌的位置（模型只要留白），
+            # 1 級起模型自己畫牌、跟著標題走，這個框只當護欄（見
+            # compose.YT_HOURLY_DATE_TAB_BOX 上方的註解）。
             date_clause=editor_formats.yt_hourly_date_clause(
                 req.creativity, compose.YT_HOURLY_DATE_TAB_BOX, date_text
             ),
+            # 左上角保留區由**程式實際貼上的 Logo 尺寸**算出來（2026-09-11 抓到的
+            # 碰撞：手打的 14%×14% 比實際的 14.4%×16.1% 小，日期牌會疊上去）。
+            # 右上角維持手打的 27%×32%：實測 LIVE 章只佔 25.1%×18.9%，宣告值比實際
+            # **大**＝過度保留，不會撞；收緊會放出右上那塊現在空著的區域，
+            # 等於改掉已驗收的構圖，不值得。
+            logo_keep_out="about {:.0%} wide and {:.0%} tall".format(
+                *compose.yt_hourly_logo_keep_out()
+            ),
+            badge_keep_out="about 27% wide and 32% tall",
             date_text_line=editor_formats.yt_hourly_date_text_line(req.creativity, date_text),
             date_ban=editor_formats.yt_hourly_date_ban(req.creativity),
             # 雙則才講兩景分割；單則是一個場景，講了反而會逼它硬切成兩半。
