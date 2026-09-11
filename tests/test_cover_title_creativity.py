@@ -115,7 +115,9 @@ class LadderTests(unittest.TestCase):
         塊高％／落差倍數／招式件數三樣都是**可量測**的，模型照得動、人也看得出來。
         """
         self.assertEqual(_brief(0), "")
-        for level, height in ((1, "25%"), (2, "35%"), (3, "45%"), (4, "55%")):
+        # 2026-09-11 收尾降尺寸：25/35/45/55% → 18/24/30/36%。使用者回報字偏大、
+        # 照片被擠掉，拿他自己的範本量，實際成品的標題塊只佔畫面高度約 18–25%。
+        for level, height in ((1, "18%"), (2, "24%"), (3, "30%"), (4, "36%")):
             with self.subTest(level=level):
                 self.assertIn(f"about {height} of the frame height", _brief(level))
         self.assertIn("Every row is the SAME size", _brief(1))
@@ -620,12 +622,12 @@ class VariationAxisTests(unittest.TestCase):
         梯度；只要其中一樣進了池子，L2 偶爾就會比 L3 還吵，四級又糊在一起。
         """
         fixed = {
-            1: ("about 25% of the frame height", "Every row is the SAME size"),
-            2: ("about 35% of the frame height", "about 1.8 times", "EXACTLY 1 piece",
+            1: ("about 18% of the frame height", "Every row is the SAME size"),
+            2: ("about 24% of the frame height", "about 1.8 times", "EXACTLY 1 piece",
                 "1 word of the headline sits KNOCKED OUT"),
-            3: ("about 45% of the frame height", "about 2.5 times", "EXACTLY 2 pieces",
+            3: ("about 30% of the frame height", "about 2.5 times", "EXACTLY 2 pieces",
                 "1 word of the headline sits KNOCKED OUT"),
-            4: ("about 55% of the frame height", "about 3 times", "EXACTLY 3 pieces",
+            4: ("about 36% of the frame height", "about 3 times", "EXACTLY 3 pieces",
                 "2 words of the headline sit KNOCKED OUT"),
         }
         for level, pinned in fixed.items():

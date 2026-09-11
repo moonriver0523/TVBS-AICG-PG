@@ -644,14 +644,23 @@ def cover_accessories(level: int, titles=(), seed=None, full_width: bool = False
 # 幅度（塊高％／落差倍數／招式件數／反白字數）各級固定——那是使用者認可的梯度，
 # RNG 一律不碰。配色改成模板，由 COVER_PALETTES 抽色填進去：換的是「哪幾個顏色」，
 # 不是「用幾個顏色」。
+#
+# 2026-09-11 收尾：塊高從 25/35/45/55% 降到 18/24/30/36%。
+# 使用者：「標題好像字偏大，圖片的比例反而變小了」——不是錯覺，是我加出來的。
+# 今天以前 prompt 裡**根本沒有標題高度的規定**（舊句只講寬度「約佔畫面左半邊」），
+# 高度一直是模型自己決定。我一口氣訂了 25–55%，而拿使用者自己的範本量，
+# 實際成品的標題塊大約只佔畫面高度 **18–25%**——L3／L4 等於是實際的兩倍，
+# 再乘上最大 3 倍的字級落差，照片就被擠掉了。
+# 新的一組讓 L1 貼齊現行成品，L4 仍明顯最大；梯度間距 10 → 6 個百分點，
+# 四級的區分改由板形／配色／招式件數那幾軸扛（它們本來就比塊高更顯眼）。
 COVER_TITLE_BRIEF_SPECS = {
-    1: dict(height="25%", ratio=None, stagger=False, tilt=False, knockouts=0, typeface=False, anchor=False,
+    1: dict(height="18%", ratio=None, stagger=False, tilt=False, knockouts=0, typeface=False, anchor=False,
             colours="TWO colours only: {0} dominant, {2} for emphasis"),
-    2: dict(height="35%", ratio="1.8", stagger=True, tilt=False, knockouts=1, typeface=True, anchor=False,
+    2: dict(height="24%", ratio="1.8", stagger=True, tilt=False, knockouts=1, typeface=True, anchor=False,
             colours="THREE colours: {0} dominant, {1} second, {2} on the word that carries the news"),
-    3: dict(height="45%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True, anchor=True,
+    3: dict(height="30%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True, anchor=True,
             colours="THREE colours plus ONE accent: {0} dominant, {1} second, {2} on the word that carries the news, {3} as the accent"),
-    4: dict(height="55%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True, anchor=True,
+    4: dict(height="36%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True, anchor=True,
             colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open"),
 }
 
@@ -712,7 +721,9 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
 
     rows = [
         "=== HEADLINE DESIGN BRIEF — THESE NUMBERS ARE AS FIXED AS THE SEAM GEOMETRY ABOVE, AND THEY OVERRIDE ANY TYPOGRAPHY WORDING FURTHER DOWN ===",
-        f"- Headline block height: about {spec['height']} of the frame height (per panel). It dominates the picture.",
+        f"- Headline block height: about {spec['height']} of the frame height (per panel)."
+        + (" It is the loudest thing in the frame." if level >= 3
+           else " The photograph keeps the rest of the frame — do not let the type grow past this."),
     ]
     if spec["ratio"]:
         rows.append(_size_hierarchy_line(spec["ratio"], titles, full_width))
