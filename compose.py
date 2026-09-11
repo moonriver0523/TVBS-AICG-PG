@@ -823,6 +823,22 @@ def _wrap_pairs(pairs: list[tuple[str, int]], max_w: int, size: int, max_lines: 
 
     行帶著段落索引一起走（拆出來的兩行都繼承原本那一段的索引），只是那個索引現在
     **只記錄出處、不決定顏色**——2026-09-08 同日第二輪裁決把配色改回依行序。
+
+    2026-09-11：**≤ COVER_TITLE_FILL_MIN_CHARS 字的段一律不切**。使用者回報
+    「葉門青年運動 奪下紅海咽喉」被切成「葉門青年／運動／奪下紅海咽喉」，
+    把專有名詞（葉門的青年運動＝胡塞武裝）腰斬成「葉門的年輕人在運動」。
+    根因就在這裡：使用者用空白明確定好的斷點，被這支函式在段**內**又切一刀。
+
+    而且那一刀什麼也沒換到。實測「葉門青年運動」在起始字級 146 寬 876，只超出
+    max_w=833 共 43px（5%），縮一級到 138 就塞得下；而同格另一行「奪下紅海咽喉」
+    同樣 6 字、同樣要縮到 138，所以**切與不切最終字級都是 138**。右格的
+    「升息房貸夾擊」也是 6 字 876px 超寬，只因為它已經是第 3 行就沒被切——
+    可見 6 字在這個版面本來就是正常長度，切它純粹是損失。
+
+    門檻沿用 COVER_TITLE_FILL_MIN_CHARS（7）而不是另訂一個數字：這個 repo 已經
+    三處用 7 表示「一行的合理上限」（消化規格每段 4–7 字、_fill_pairs、
+    COVER_TITLE_AUTO_SPLIT_LEN）。真正超長的段（9 字、12 字）照舊拆——那些不拆
+    會把兩格共用的字級一起壓垮，2026-09-07 建這道防呆就是為了它們。
     """
     pairs = list(pairs)
     font = _font(size)
@@ -830,7 +846,10 @@ def _wrap_pairs(pairs: list[tuple[str, int]], max_w: int, size: int, max_lines: 
         widths = [font.getbbox(text)[2] for text, _ in pairs]
         idx = max(range(len(pairs)), key=widths.__getitem__)
         text, seg = pairs[idx]
+        # 最寬的那行都不必切，其餘更不必——中文等寬，最寬幾乎就是最長。
         if widths[idx] <= max_w or len(text) < 4:
+            break
+        if len(text) <= COVER_TITLE_FILL_MIN_CHARS:
             break
         head, tail = _split_line_near_middle(text)
         pairs[idx : idx + 1] = [(head, seg), (tail, seg)]

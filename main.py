@@ -163,6 +163,38 @@ def digest_reasoning_body(max_output_tokens: int) -> dict:
     return {"reasoning": {"max_tokens": budget}}
 
 
+# 消化的 provider 順序（2026-09-11）。使用者回報消化階段常撞上游過載，選定的
+# 對策是「同模型換 provider」——claude-sonnet-5 在 OpenRouter 上有九個端點，
+# 第一方過載時還有 AWS、Azure、Bedrock 可以接手，換 provider 不換模型，品質零風險。
+#
+# 順序寫死第一方優先的理由：OpenRouter 的預設路由「以價格優先、兼顧 uptime」，
+# 實測 2026-09-11 本機連三次 attempt 都落在 claude-on-aws。各端點的延遲與思考
+# 行為不見得一樣，要診斷就得先讓「正常情況走哪一條」是確定的。
+#
+# google-vertex 刻意不列：查 /models/.../endpoints 的 supported_parameters，
+# 三個 vertex 端點都**不支援 structured_outputs**，而這條線全程用 strict
+# json_schema。OpenRouter 說這種參數偏好「只路由到支援的 provider」，但那份文件
+# 同時寫明它「永遠不會把模型從候選清單移除」——也就是萬一全部不支援就照送不誤。
+# 與其賭那句話的邊界，不如明列白名單。
+# allow_fallbacks 保持 true：清單裡的都排不進去時，寧可讓 OpenRouter 自己找一條
+# 活路，也不要整個請求失敗（這正是使用者要解決的問題）。
+DIGEST_PROVIDER_ORDER = [
+    slug.strip()
+    for slug in os.getenv(
+        "DIGEST_PROVIDER_ORDER",
+        "anthropic,claude-on-aws,azure/global,amazon-bedrock/global",
+    ).split(",")
+    if slug.strip()
+]
+
+
+def digest_provider_body() -> dict:
+    """這次呼叫要不要指定 provider 順序。非 OpenRouter 後端一律不送。"""
+    if DIGEST_BACKEND != "openrouter" or not DIGEST_PROVIDER_ORDER:
+        return {}
+    return {"provider": {"order": DIGEST_PROVIDER_ORDER, "allow_fallbacks": True}}
+
+
 # 整個消化迴圈的牆鐘預算（2026-09-09）。Cloud Run 的請求上限是 300 秒，超過就是
 # 連錯誤訊息都沒有的斷線——使用者看到的「逾時沒有生成」。與其讓第五次 attempt 在
 # 第 290 秒才開始，不如在還來得及的時候停手，回一個講得清楚的 503。
@@ -1421,9 +1453,12 @@ def digest_completion(
     client = openai_client
     # 思考上限只有 OpenRouter 吃得到，而且不是每個模型都支援；被明確拒絕時原樣重送
     # 一次不帶這個欄位的請求，換模型不會把整條線弄壞（見 digest_reasoning_body）。
+    # provider 順序同樣只有 OpenRouter 吃得到，兩者共用同一個 extra_body
+    # （2026-09-11 一起加進來，見 digest_provider_body）。
     reasoning = digest_reasoning_body(max_output_tokens)
-    if reasoning:
-        payload["extra_body"] = reasoning
+    extra_body = {**digest_provider_body(), **reasoning}
+    if extra_body:
+        payload["extra_body"] = extra_body
     try:
         response = client.chat.completions.create(
             **payload, max_tokens=max_output_tokens
@@ -1432,7 +1467,13 @@ def digest_completion(
         message = str(exc)
         if reasoning and "reasoning" in message:
             print(f"[digest] 模型不吃 reasoning 上限，改用預設思考量：{message}", flush=True)
-            payload.pop("extra_body", None)
+            # 只拿掉 reasoning，provider 順序要留著——整包 pop 會把換 provider
+            # 的能力一起丟掉，而那正是撞過載時唯一還有用的東西。
+            extra_body.pop("reasoning", None)
+            if extra_body:
+                payload["extra_body"] = extra_body
+            else:
+                payload.pop("extra_body", None)
             reasoning = {}
             try:
                 response = client.chat.completions.create(
@@ -1493,10 +1534,18 @@ DIGEST_MAX_LATIN_RATIO = 0.55
 # 字元級健檢引進相依套件不划算。收錄範圍是「臺灣新聞文字裡出現就一定是錯」的
 # 高頻簡體字，加上實測撞過的異體形。漏網的下次撞到再補——擋掉多數勝過都不擋。
 # 「台」刻意不收：台灣／電視台／台積電都是正當用法，收進來只會製造假警報。
+#
+# 2026-09-11：清單裡原本收了「致」，那是**誤收**——「致」是臺灣標準正字
+# （導致／一致／致命／致詞），繁簡同形。當初大概是想擋「精緻」被寫成「精致」，
+# 但那是詞級的問題，用字元級清單擋等於把最高頻的正字之一整個封殺。
+# 代價不是「偶爾誤判」而是必然失敗：模型只要寫出「導致」就被打回，五次 attempt
+# 每次都寫得出來，於是每次都被擋，最後撞 DIGEST_DEADLINE_SECONDS 收 503。
+# 實測 2026-09-09 雲端與 2026-09-11 本機各撞過一次，使用者看到的是「消化失敗」。
+# 收字進這份清單前必須確認它**不是繁體正字**——繁簡同形的字一個都不能收。
 DIGEST_NON_TW_CHARS = frozenset(
     "脱说这个们时会对关电车长门问见现义应学实发医华国图书报广东头马鸟龙汉"
     "丽临举乐习乡买乱争产亲从价众优伟传伤纪级红约细纸练组经给统绝继续维绿"
-    "网罗职联胜脑致舰艰苏药处备复够夺奋妇孙宁宝宪审层岁岛峡师带帮庆废弃张"
+    "网罗职联胜脑舰艰苏药处备复够夺奋妇孙宁宝宪审层岁岛峡师带帮庆废弃张"
     "强归录彻恋总恶闷闻阅阳阴际陆随难题风"
 )
 DIGEST_CHANNEL_LEAK = re.compile(

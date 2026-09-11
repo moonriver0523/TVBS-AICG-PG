@@ -1024,7 +1024,8 @@ FIRST decide how many stories the article carries, and say so in "topics":
 THEN write the headlines.
 - When "topics" is 1: write ONE headline into "title_left" for the core of that story, and leave "title_right" as an empty string.
 - When "topics" is 2: write "title_left" for the story that appears FIRST in the article and "title_right" for the one that appears second. Keep the two headlines about their own story only — never repeat the same facts in both.
-- Each headline is EXACTLY 3 segments separated by ONE half-width space (two spaces in total, never one, never three); each segment 4–7 characters, NEVER more than 7; whole headline 12–18 characters excluding spaces (fewer than 12 leaves the cover half empty — that is a defect). Each segment becomes one printed line, coloured white / yellow / red in order, so a headline with only two segments loses its red line — that is a defect. A segment longer than 7 characters shrinks every line on the cover — also a defect.
+- Each headline is 2 OR 3 segments separated by ONE half-width space; each segment 4–7 characters, NEVER more than 7 (a longer segment shrinks every line on the cover). Each segment becomes one printed line. Prefer 3 segments — with 3 the headline runs 12–18 characters excluding spaces and fills the cover. Use 2 segments (8–14 characters excluding spaces) when the story is genuinely said in fewer words, or when the only way to reach 3 would be to cut a name or a fixed phrase in half. NEVER pad a short headline up to 3 segments with filler.
+- A SEGMENT BOUNDARY IS A READING BREAK, NOT A CHARACTER COUNT. Every segment has to stand on its own as a phrase. 「葉門青年運動」is the name of an organisation, so 「葉門青年 運動 奪下紅海咽喉」is wrong — it reads as young people in Yemen taking exercise. The correct answer is 「葉門青年運動 奪下紅海咽喉」in 2 segments. The same holds for place names, personal names, organisation names, titles and fixed four-character phrases: never let a segment boundary fall inside one.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
 
@@ -1038,7 +1039,8 @@ COVER_TITLE_DIGEST_SYSTEM_TEN_FULL = """You write the single headline for a Taiw
 
 Return JSON with "title".
 - One punchy Traditional Chinese (Taiwan) headline for the core of the story.
-- EXACTLY 3 segments separated by ONE half-width space (two spaces in total, never one, never three); each segment 4–7 characters, NEVER more than 7; whole headline 12–18 characters excluding spaces (fewer than 12 leaves the cover half empty — that is a defect). Each segment becomes one printed line, coloured white / yellow / red in order, so a headline with only two segments loses its red line — that is a defect.
+- 2 OR 3 segments separated by ONE half-width space; each segment 4–7 characters, NEVER more than 7. Each segment becomes one printed line. Prefer 3 segments — with 3 the headline runs 12–18 characters excluding spaces and fills the cover. Use 2 segments (8–14 characters excluding spaces) when the story is genuinely said in fewer words, or when the only way to reach 3 would be to cut a name or a fixed phrase in half. NEVER pad a short headline up to 3 segments with filler.
+- A SEGMENT BOUNDARY IS A READING BREAK, NOT A CHARACTER COUNT. Every segment has to stand on its own as a phrase. 「葉門青年運動」is the name of an organisation, so 「葉門青年 運動 奪下紅海咽喉」is wrong — it reads as young people in Yemen taking exercise. The correct answer is 「葉門青年運動 奪下紅海咽喉」in 2 segments. The same holds for place names, personal names, organisation names, titles and fixed four-character phrases: never let a segment boundary fall inside one.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
 
@@ -1059,12 +1061,33 @@ TEN_DIGEST_SEGMENT_MIN = 4
 TEN_DIGEST_SEGMENT_MAX = 7
 TEN_DIGEST_TOTAL_MIN = 12
 TEN_DIGEST_TOTAL_MAX = 18
+# 2026-09-11：段數放寬成 2 或 3（見 ten_digest_violations 的註解）。
+TEN_DIGEST_MIN_SEGMENTS = 2
+TEN_DIGEST_MAX_SEGMENTS = 3
+# 兩段版的總字數：每段 4–7 字，所以 8–14。刻意用同一組段長上下限推出來，
+# 而不是另外憑感覺訂一個數字（2026-09-11「訂數字之前先量」那條教訓）。
+TEN_DIGEST_TOTAL_MIN_TWO = TEN_DIGEST_SEGMENT_MIN * 2
+TEN_DIGEST_TOTAL_MAX_TWO = TEN_DIGEST_SEGMENT_MAX * 2
+
+
+def ten_digest_total_range(segment_count: int) -> tuple[int, int]:
+    """這個段數下，整條標題（不含空白）的合理字數區間。"""
+    if segment_count <= 2:
+        return TEN_DIGEST_TOTAL_MIN_TWO, TEN_DIGEST_TOTAL_MAX_TWO
+    return TEN_DIGEST_TOTAL_MIN, TEN_DIGEST_TOTAL_MAX
 
 
 def ten_digest_violations(data: dict | None) -> list[str]:
-    """十點消化標題的三段規格驗證：每段 4–7 字、全篇 12–18 字（不含空白）、剛好 3 段。
+    """十點消化標題的段落規格驗證：每段 4–7 字，2 段或 3 段，總字數依段數而定。
 
     回違規描述清單（空＝合格）。同時看 title_left／title_right（雙切）與 title（滿版）。
+
+    2026-09-11：原本要求**剛好 3 段**（2026-09-08 裁決，理由是只出 2 段就沒有紅字、
+    或生圖階段自己瞎掰第三段）。使用者回報「葉門青年運動 奪下紅海咽喉」被硬湊成
+    三行、把組織名腰斬成「葉門青年／運動」之後翻案：段數交給模型依語意判斷，
+    兩段就白＋黃，不再為了紅字去切一個切不開的詞。
+    總字數的下限跟著段數走——2 段的標題本來就比較短，拿 3 段的 12 字去卡它，
+    等於用另一條路把「一律 3 段」逼回來。
     """
     if not isinstance(data, dict):
         return ["not a JSON object"]
@@ -1075,13 +1098,20 @@ def ten_digest_violations(data: dict | None) -> list[str]:
             continue
         segments = [seg for seg in split_cover_title(text) if seg.strip()]
         total = sum(len(seg) for seg in segments)
-        if len(segments) != 3:
-            problems.append(f'"{key}" has {len(segments)} segments, must be exactly 3')
+        if not TEN_DIGEST_MIN_SEGMENTS <= len(segments) <= TEN_DIGEST_MAX_SEGMENTS:
+            problems.append(
+                f'"{key}" has {len(segments)} segments, must be '
+                f"{TEN_DIGEST_MIN_SEGMENTS} or {TEN_DIGEST_MAX_SEGMENTS}"
+            )
         for seg in segments:
             if not TEN_DIGEST_SEGMENT_MIN <= len(seg) <= TEN_DIGEST_SEGMENT_MAX:
                 problems.append(f'"{key}" segment 「{seg}」 is {len(seg)} characters, must be {TEN_DIGEST_SEGMENT_MIN}–{TEN_DIGEST_SEGMENT_MAX}')
-        if not TEN_DIGEST_TOTAL_MIN <= total <= TEN_DIGEST_TOTAL_MAX:
-            problems.append(f'"{key}" is {total} characters excluding spaces, must be {TEN_DIGEST_TOTAL_MIN}–{TEN_DIGEST_TOTAL_MAX}')
+        low, high = ten_digest_total_range(len(segments))
+        if not low <= total <= high:
+            problems.append(
+                f'"{key}" is {total} characters excluding spaces across '
+                f"{len(segments)} segments, must be {low}–{high}"
+            )
     return problems
 
 
@@ -1330,7 +1360,8 @@ Render EXACTLY these strings, character for character, nothing else:
 - Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline. Flat type: no gradient, no metallic, no 3-D.
 - Keep the UPPER-LEFT corner (about 14% wide and 14% tall) free: a small channel logo is pasted there afterwards.
 - Keep the UPPER-RIGHT corner (about 27% wide and 32% tall) free: a red LIVE badge with the broadcast time is pasted there afterwards.
-- Keep a strip on the LEFT directly above headline line 1 (about 32% wide and 10% tall) free of detail: a red date tab is pasted there afterwards.
+- Keep a strip on the LEFT free of everything — no text, no subject, no busy detail: it runs from the LEFT EDGE to 34% of the frame WIDTH, and from 50% to 63% of the frame HEIGHT. A red date tab is pasted into it afterwards, at that exact place.
+- BECAUSE OF THAT STRIP, HEADLINE LINE 1 STARTS LOW: the TOP of its characters must sit at or below 66% of the frame height, and both headline lines fit between there and the bottom edge. Setting the headline higher runs it straight under the date tab.
 
 === IMAGERY ===
 {visual}
