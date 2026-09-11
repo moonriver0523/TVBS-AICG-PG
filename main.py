@@ -3756,6 +3756,9 @@ class TenCoverRequest(BaseModel):
     # 側邊標籤（2026-09-10）：使用者自己打的幾個短詞，畫成一排小籤。空白＝不畫。
     # 刻意由使用者填而不是讓 AI 想——理由見 editor_formats.cover_side_labels_block。
     side_labels: str = Field(default="", max_length=120)
+    # 畫面小籤（2026-09-11）：地點籤、數據徽章、危險標示那種散落在畫面上的小牌。
+    # 同樣由使用者自己填——理由與側邊標籤相同，見 editor_formats.cover_info_chips_block。
+    info_chips: str = Field(default="", max_length=120)
 
     def creativity_level(self) -> int:
         if self.title_creativity is not None:
@@ -4125,15 +4128,29 @@ def _cover_ai(
     # 模型就得自己猜 "red, white outline" 是不是圖例裡那個 (red)。
     _LINE_COLOUR_NAMES = ("white", "yellow", "red")
 
-    def _lines_block(title: str, *, full_width: bool, reverse_out: bool = False) -> str:
+    # 2026-09-11 第九批 使用者：「標題的顏色其實也可以解放，不必綁住一定要白黃紅順序，
+    # 也不用綁到同一句同一色。」1 級起就**不再輸出顏色標記**——L2 以後的條文早就寫著
+    # 「白黃紅只是提示、可以忽略」，實拍卻照樣白黃紅，因為顏色標記就釘在每一行後面，
+    # 條文區離得太遠壓不過去（同一個教訓見下面反色底字那段）。改由
+    # editor_formats.cover_line_annotation 依這一行的內容（鉤子行／數字／引號詞）
+    # 寫出該行要怎麼處理，位置一樣釘在行上。0 級完全不變，仍與合成版同一套配色。
+    def _lines_block(
+        title: str, *, full_width: bool, reverse_out: bool = False, level: int = 0
+    ) -> str:
         lines = compose.cover_title_lines(title.strip(), full_width=full_width)
         if not lines:
             return ""
         head = f"  (exactly {len(lines)} lines — render each on its own row, in this order)"
-        body = [
-            f"  Line {i} ({_LINE_COLOUR_NAMES[min(i - 1, len(_LINE_COLOUR_NAMES) - 1)]}): {text}"
-            for i, text in enumerate(lines, start=1)
-        ]
+        if level >= 1:
+            body = [
+                f"  Line {i}: {text}{editor_formats.cover_line_annotation(text, level)}"
+                for i, text in enumerate(lines, start=1)
+            ]
+        else:
+            body = [
+                f"  Line {i} ({_LINE_COLOUR_NAMES[min(i - 1, len(_LINE_COLOUR_NAMES) - 1)]}): {text}"
+                for i, text in enumerate(lines, start=1)
+            ]
         # 反色底字（2026-09-10 第二輪）：3 級起條文已經寫成「必做」，實拍卻仍然沒出現——
         # 那條規則離行清單太遠，模型讀到行清單時只看到顏色標記。改成把指示釘在**這一行上**，
         # 與顏色標記同一個位置，模型想漏掉都難。挑第一行：程式拆行時它就是那句鉤子。
@@ -4147,13 +4164,28 @@ def _cover_ai(
 
     # 設計標題（2026-09-08 ON/OFF → 2026-09-09 第八批改成 0–4 拉桿）：
     # 0 完全不追加（維持白／黃／紅排版），1–4 在 TYPOGRAPHY 段尾追加該級的條文。
-    style_clause = editor_formats.cover_ai_title_style_clause(req.creativity_level())
+    # 2026-09-11：條文後面再接一段「招式」——件數由等級決定（2 級 1 件、3 級 2 件、
+    # 4 級 3 件），抽哪幾件由程式隨機抽，所以同一則新聞重生會換一組。標題傳進去是為了
+    # 「N種／N大」時第一件固定用數量呼應的無字圖示列。
+    level = req.creativity_level()
+    style_clause = editor_formats.cover_ai_title_style_clause(level)
+    # 2026-09-11 第二輪：數字全部搬到 CANVAS 正後方那塊 DESIGN BRIEF。第一輪把整份條文
+    # 放在 TYPOGRAPHY 段尾，實拍四級長得一模一樣——L4 的 prompt 14K 字元，條文坐在
+    # 第 8,000 字元之後，模型只讀得進前面那幾段（斜切線的數字就是寫在 CANVAS 才生效的）。
+    titles = (req.title_left, req.title_right)
+    design_brief = editor_formats.cover_design_brief(
+        level, titles=titles, full_width=(req.layout == "full")
+    )
+    colour_rule = editor_formats.cover_title_colour_rule(level)
     # 3 級起才把反色底字釘在行清單上（條文本身也是 3 級起才要求）。
     reverse_out = req.creativity_level() >= 3
     # 側邊標籤只在 3 級起才畫（2026-09-10 使用者裁決）：0–2 是「規矩」到「有設計」，
     # 版面本來就滿，多一排籤會擠掉標題；功能也還在測試期，先只開給高創意。
+    # 側邊標籤與畫面小籤共用模板上那個插槽：兩者都是「清單以外、由使用者負責的字」，
+    # 也都只在 3 級起才畫（2026-09-10 裁決：0–2 級版面本來就滿，多一排籤會擠掉標題）。
     side_labels_block = (
         editor_formats.cover_side_labels_block(req.side_labels)
+        + editor_formats.cover_info_chips_block(req.info_chips)
         if req.creativity_level() >= 3
         else ""
     )
@@ -4161,21 +4193,25 @@ def _cover_ai(
         prompt = editor_formats.COVER_AI_FULL_PROMPT_TEMPLATE.format(
             badge_text=badge_text,
             date_text=date_text,
-            title_left_lines=_lines_block(req.title_left, full_width=True, reverse_out=reverse_out),
+            title_left_lines=_lines_block(req.title_left, full_width=True, reverse_out=reverse_out, level=level),
             visual_left=visuals[0],
             side_labels_block=side_labels_block,
             title_style_clause=style_clause,
+            title_design_brief=design_brief,
+            title_colour_rule=colour_rule,
         )
     else:
         prompt = editor_formats.COVER_AI_PROMPT_TEMPLATE.format(
             badge_text=badge_text,
             date_text=date_text,
-            title_left_lines=_lines_block(req.title_left, full_width=False, reverse_out=reverse_out),
-            title_right_lines=_lines_block(req.title_right, full_width=False, reverse_out=reverse_out),
+            title_left_lines=_lines_block(req.title_left, full_width=False, reverse_out=reverse_out, level=level),
+            title_right_lines=_lines_block(req.title_right, full_width=False, reverse_out=reverse_out, level=level),
             visual_left=visuals[0],
             visual_right=visuals[1],
             side_labels_block=side_labels_block,
             title_style_clause=style_clause,
+            title_design_brief=design_brief,
+            title_colour_rule=colour_rule,
         )
     # 整張一起生：兩格的具名真人合成一份名單（去重、保持順序）
     subjects, english = [], []
@@ -4363,10 +4399,49 @@ class CoverTitleDigestResponse(BaseModel):
     title_second: str = ""
     # 直標（target=yt_vstrip）判出來的畫面來源；只有來源名，「畫面來源：」由 compose 補
     source_text: str = ""
+    # 消化順便建議的兩個籤（2026-09-11）：回填到欄位讓編輯看過再生圖，
+    # 與標題同一條路。生圖那一步仍然只畫欄位裡的字，一個字都不准自己加。
+    side_labels: str = ""
+    info_chips: str = ""
     # 十點／整點：這篇內文被判定成幾個主題（1＝滿版、2＝雙切）。前端據此更新版面指示器。
     # 一致性以「第二標題有沒有值」為準：模型說 2 卻只給一個標題就退回 1，
     # 說 1 卻多給了第二標題就清掉——回一組自相矛盾的值，前端的指示器會跟欄位打架。
     topics: int = 1
+
+
+def _digest_chips(value, *, limit: int, chars: int) -> str:
+    """把消化回來的籤陣列變成欄位字串（空白分隔），順便把長度與筆數修剪掉。
+
+    超長的**整個丟掉**，不截斷。使用者自己打的籤截斷沒關係（他看得到自己打了什麼），
+    但 AI 產的籤截斷會變成假資訊：「病例超過三千二百人」砍成「病例超過三千二百」，
+    數字就被改了，而封面上的數字沒人查得到出處。籤是選填的，丟掉一個不會怎樣。
+    """
+    if not isinstance(value, list):
+        return ""
+    out = []
+    for item in value:
+        text = str(item or "").strip().replace(" ", "")
+        if text and len(text) <= chars:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return " ".join(out)
+
+
+def _digest_chip_fields(data: dict) -> dict:
+    """兩個籤欄位的上限直接跟 editor_formats 的常數走，手抄一份遲早對不上。"""
+    return {
+        "side_labels": _digest_chips(
+            data.get("side_labels"),
+            limit=editor_formats.COVER_SIDE_LABEL_MAX,
+            chars=editor_formats.COVER_SIDE_LABEL_CHARS,
+        ),
+        "info_chips": _digest_chips(
+            data.get("info_chips"),
+            limit=editor_formats.COVER_INFO_CHIP_MAX,
+            chars=editor_formats.COVER_INFO_CHIP_CHARS,
+        ),
+    }
 
 
 def _clip_title(text: str, limit: int) -> str:
@@ -4397,7 +4472,7 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
         schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_TEN
     elif req.target == "ten_cover_full":
         base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_TEN_FULL
-        schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT
+        schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_TEN_FULL
     elif hourly:
         base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_YT_HOURLY
         schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT_HOURLY
@@ -4448,11 +4523,14 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
         if data.get("topics") == 1:
             right = ""
         return CoverTitleDigestResponse(
-            title_left=left, title_right=right, topics=2 if right else 1
+            title_left=left, title_right=right, topics=2 if right else 1,
+            **_digest_chip_fields(data),
         )
     title = _clip_title(data.get("title"), 60)
     if not title:
         raise HTTPException(status_code=502, detail="消化標題失敗：模型沒給標題")
+    if req.target == "ten_cover_full":
+        return CoverTitleDigestResponse(title=title, **_digest_chip_fields(data))
     if vstrip:
         # 格數超標不在這裡擋：回填後編輯自己看得到格數指示器，也還沒生圖。
         # 真正的硬上限在 compose.yt_vertical_layout（超過就 400，訊息指名哪一個標題）。

@@ -288,6 +288,9 @@ class CoverPromptTests(unittest.TestCase):
             "title_style_clause": "",
             # 側邊標籤（2026-09-10）：沒填就是空字串，prompt 與過去逐字元相同
             "side_labels_block": "",
+            # 2026-09-11：0 級＝沒有設計綱要、配色條文照舊
+            "title_design_brief": "",
+            "title_colour_rule": editor_formats.cover_title_colour_rule(0),
         }
         fields.update(overrides)
         return editor_formats.COVER_AI_PROMPT_TEMPLATE.format(**fields)

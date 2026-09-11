@@ -17,6 +17,7 @@
 「鎖哪些開關、顯示哪些輸入欄」純屬介面行為，放在 app.js 的同名表裡。
 """
 
+import random
 import re
 
 # 底色框的百分比要跟合成版同一個數字（見 _BAND_CLAUSE_TEMPLATE）。compose 只在函式
@@ -208,7 +209,7 @@ COVER_AI_PROMPT_TEMPLATE = """Design a complete, broadcast-quality Chinese-langu
 === CANVAS ===
 16:9 horizontal. Two photographs fill the ENTIRE frame edge to edge, split by ONE thin white DIAGONAL seam into a LEFT panel and a RIGHT panel. THE SEAM GEOMETRY IS FIXED AND IS NOT A DESIGN DECISION: at mid-height the seam crosses the EXACT HORIZONTAL CENTRE of the frame, so the two panels are the SAME WIDTH. It leans only slightly — its top end sits about 2.5% of the frame width RIGHT of centre, its bottom end about 2.5% of the frame width LEFT of centre. Never move the seam as a whole to the left or to the right of centre, and never lean it harder than that: neither panel may end up visibly wider than the other. No borders, no gutters, no letterboxing. Across the very top runs a deep-navy header band (%HEADER_BAND% of the frame height) with a bright blue hairline along its bottom edge; along the very bottom runs a slim deep-navy strip with one thin glowing straight blue light line (no waves, no text). Everything else is photograph.
 
-=== TEXT TO RENDER (Traditional Chinese, Taiwan) ===
+{title_design_brief}=== TEXT TO RENDER (Traditional Chinese, Taiwan) ===
 Render EXACTLY these strings, character for character. Do not translate them, do not rewrite them, do not shorten them, and do not add any other words, letters or numbers anywhere in the image.
 - Draw NOTHING in the header band. The date and the small red tag at its right end are pasted in afterwards by software, exactly like the channel logo at its left end.
 - Headline of the LEFT panel, LEFT-aligned in its lower-left area, over the photograph. It is ALREADY split into lines — render each line on its own line, in this order, and do NOT re-split, merge or reorder them:
@@ -219,8 +220,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 === TYPOGRAPHY (this is the point of the image) ===
 - The two headlines are the loudest thing in the frame: very heavy condensed Chinese display type, STACKED ON THE LINES GIVEN ABOVE (the split is already decided — never change it), tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of each photograph darkens gently so the headline stays readable.
 - THE NUMBER OF LINES AND WHERE THEY BREAK ARE FIXED. Each headline lists its lines above with a count. Render EVERY listed line on its OWN separate row, in the listed order: never merge two listed lines onto one row, never break one listed line across two rows, never drop or reorder one. A headline listed as three lines must appear as three stacked rows.
-- COLOUR EACH LINE EXACTLY AS LABELLED in that list: (white) = solid white, (yellow) = bright golden yellow, (red) = vivid red with a white outline. Follow the labels literally — never recolour a line, and never give a whole headline one flat colour.
-- The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
+{title_colour_rule}- The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
 {title_style_clause}
 === IMAGERY ===
@@ -231,7 +231,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 === HARD CONSTRAINTS ===
 - NO television channel logo, NO station identity mark, NO broadcaster wordmark, NO dot-pattern emblem, NO watermark of any kind, and do NOT write the programme name (十點不一樣) anywhere. The upper-LEFT corner of the header band — its entire LEFT HALF — must be left as clean empty navy background: the real channel logo and the official programme-name tag are pasted there afterwards, so keep that whole area free of text, graphics and busy detail. The header band carries NOTHING you draw: its right end is reserved for the date and the small red tag, which software pastes in afterwards, so keep the WHOLE band clean empty navy.
 - Do NOT draw any 示意圖 label, AI示意圖 label or similar disclaimer anywhere in the image. Software adds that label afterwards, at the outer top corner below the header band — keep that small area free of text and busy detail.
-- No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles.
+- No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles. ONE NARROW EXCEPTION: a brand mark that physically belongs to an object in the photograph — an aircraft livery, a storefront sign, a product body, a jersey — may appear on that object when the shot description names that brand, because it is part of the photographed world rather than text laid over it. It never becomes a graphic of its own: no brand mark beside or inside the headline, none floating on the picture, none in the header band or the bottom strip.
 - Keep every piece of text well inside the frame with clear breathing space; nothing may touch or be clipped by any edge.
 """
 
@@ -241,7 +241,7 @@ COVER_AI_FULL_PROMPT_TEMPLATE = """Design a complete, broadcast-quality Chinese-
 === CANVAS ===
 16:9 horizontal. ONE single photograph fills the ENTIRE frame edge to edge. No split, no seam, no panels, no collage, no borders, no gutters, no letterboxing. Across the very top runs a deep-navy header band (%HEADER_BAND% of the frame height) with a bright blue hairline along its bottom edge; along the very bottom runs a slim deep-navy strip with one thin glowing straight blue light line (no waves, no text). Everything else is photograph.
 
-=== TEXT TO RENDER (Traditional Chinese, Taiwan) ===
+{title_design_brief}=== TEXT TO RENDER (Traditional Chinese, Taiwan) ===
 Render EXACTLY these strings, character for character. Do not translate them, do not rewrite them, do not shorten them, and do not add any other words, letters or numbers anywhere in the image.
 - Draw NOTHING in the header band. The date and the small red tag at its right end are pasted in afterwards by software, exactly like the channel logo at its left end.
 - The headline, LEFT-aligned in the lower-left area of the frame, over the photograph. It is ALREADY split into lines — render each line on its own line, in this order, and do NOT re-split, merge or reorder them:
@@ -250,8 +250,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 === TYPOGRAPHY (this is the point of the image) ===
 - The headline is the loudest thing in the frame: very heavy condensed Chinese display type, STACKED ON THE LINES GIVEN ABOVE (the split is already decided — never change it), occupying roughly the left half of the frame, tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of the photograph darkens gently so the headline stays readable.
 - THE NUMBER OF LINES AND WHERE THEY BREAK ARE FIXED. The headline lists its lines above with a count. Render EVERY listed line on its OWN separate row, in the listed order: never merge two listed lines onto one row, never break one listed line across two rows, never drop or reorder one. A headline listed as three lines must appear as three stacked rows.
-- COLOUR EACH LINE EXACTLY AS LABELLED in that list: (white) = solid white, (yellow) = bright golden yellow, (red) = vivid red with a white outline. Follow the labels literally — never recolour a line, and never give a whole headline one flat colour.
-- The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
+{title_colour_rule}- The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
 {title_style_clause}
 === IMAGERY ===
@@ -261,7 +260,7 @@ Render EXACTLY these strings, character for character. Do not translate them, do
 === HARD CONSTRAINTS ===
 - NO television channel logo, NO station identity mark, NO broadcaster wordmark, NO dot-pattern emblem, NO watermark of any kind, and do NOT write the programme name (十點不一樣) anywhere. The upper-LEFT corner of the header band — its entire LEFT HALF — must be left as clean empty navy background: the real channel logo and the official programme-name tag are pasted there afterwards, so keep that whole area free of text, graphics and busy detail. The header band carries NOTHING you draw: its right end is reserved for the date and the small red tag, which software pastes in afterwards, so keep the WHOLE band clean empty navy.
 - Do NOT draw any 示意圖 label, AI示意圖 label or similar disclaimer anywhere in the image. Software adds that label afterwards, at the outer top corner below the header band — keep that small area free of text and busy detail.
-- No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles.
+- No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles. ONE NARROW EXCEPTION: a brand mark that physically belongs to an object in the photograph — an aircraft livery, a storefront sign, a product body, a jersey — may appear on that object when the shot description names that brand, because it is part of the photographed world rather than text laid over it. It never becomes a graphic of its own: no brand mark beside or inside the headline, none floating on the picture, none in the header band or the bottom strip.
 - Keep every piece of text well inside the frame with clear breathing space; nothing may touch or be clipped by any edge.
 """
 
@@ -371,6 +370,46 @@ def cover_side_labels_block(raw: str) -> str:
     )
 
 
+COVER_INFO_CHIP_MAX = 4
+COVER_INFO_CHIP_CHARS = 10
+_INFO_CHIP_SPLIT = re.compile(r"[\s、,，|｜]+")
+
+
+def cover_info_chips(raw: str) -> list[str]:
+    """把使用者填的一串字拆成小籤清單（空白、頓號、逗號、直線都算分隔）。
+
+    這裡**不拿斜線當分隔**：小籤最常見的內容就是「日本・名古屋」「降41%」「5萬/月」，
+    斜線是內容的一部分（側邊標籤那支拆斜線，是因為那是症狀短語，不會帶斜線）。
+    """
+    parts = [p.strip() for p in _INFO_CHIP_SPLIT.split(raw or "") if p.strip()]
+    return [p[:COVER_INFO_CHIP_CHARS] for p in parts[:COVER_INFO_CHIP_MAX]]
+
+
+def cover_info_chips_block(raw: str) -> str:
+    """畫面小籤那一段條文。沒填就整段不出現。"""
+    chips = cover_info_chips(raw)
+    if not chips:
+        return ""
+    listed = "\n".join(f"    - {text}" for text in chips)
+    return (
+        "- SMALL FREE-STANDING INFORMATION CHIPS, laid on the photographs. Render EXACTLY these"
+        " strings, character for character, one chip each, in this order — they are part of the"
+        " listed text, not decoration you may edit, drop or add to:\n"
+        + listed
+        + "\n  Each chip is a small rounded plate — a solid dark or saturated panel with a thin"
+        " bright edge, or a bright panel with dark characters — carrying its characters small but"
+        " crisp, with an optional wordless pictogram at its left end (a map pin for a place, an"
+        " arrow for a change, a warning triangle for a risk). They do NOT form a column and they"
+        " do NOT share one size: each chip sits on its own, near whatever it refers to — a place"
+        " chip low in its panel, a figure chip beside the subject it measures.\n"
+        "  PLACEMENT IS CONSTRAINED: no chip may cover a headline character, sit inside the navy"
+        " header band or the bottom strip, cross the diagonal seam, or touch a frame edge. NO CHIP"
+        " MAY SIT IN EITHER OUTER TOP CORNER OR IN THE TOP THIRD OF THE FRAME — software pastes"
+        " the 示意圖 label just under the outer top corner afterwards, and a chip drawn up there"
+        " comes out with that label printed across it.\n"
+    )
+
+
 COVER_AI_TITLE_LEVEL_MIN = 0
 COVER_AI_TITLE_LEVEL_MAX = 4
 COVER_AI_TITLE_LEVEL_NAMES = {
@@ -382,58 +421,399 @@ COVER_AI_TITLE_LEVEL_NAMES = {
 }
 
 # (a)–(g)：每一級（0 以外）都原樣附上。
-_TITLE_FIXED_BLOCK = """- WHAT IS STILL FIXED, AND IS NOT A DESIGN DECISION: (a) the CHARACTERS. Render the listed strings character for character in the listed order — never add, drop, translate, abbreviate, reorder or substitute a single character to make a layout work, and never break a listed line in the middle: a listed line is one unbroken unit, so a date or score written with a slash such as 9/12 stays whole on one row. (b) Traditional Chinese, Taiwan forms, every character correctly formed and legible — no Simplified or Japanese forms, no invented strokes. (c) The header band across the top and the slim navy strip along the bottom stay as described, and NO part of the headline may sit inside them or overlap them. (d) The WHOLE header band and the small area just below its outer top corner stay clean and empty — software pastes the channel logo, the programme tag, the date, the red ON AIR tag and the 示意圖 label there afterwards, so nothing you draw belongs in that band at either end. (e) No text of any kind other than the listed strings: decorative marks are wordless symbols only — no letters, no digits, no country names, no place labels, no flag chips, no map insets, no extra badges or callouts. (f) Nothing touches or is clipped by the frame edge. (g) In the two-panel layout, each headline stays ENTIRELY INSIDE ITS OWN PANEL and never crosses the diagonal seam or strays into the other panel: freeing the placement frees where it sits WITHIN its panel, not which panel it belongs to.
+_TITLE_FIXED_BLOCK = """- WHAT IS STILL FIXED, AND IS NOT A DESIGN DECISION: (a) the CHARACTERS. Render the listed strings character for character in the listed order — never add, drop, translate, abbreviate, reorder or substitute a single character to make a layout work, and never break a listed line in the middle: a listed line is one unbroken unit, so a date or score written with a slash such as 9/12 stays whole on one row. (b) Traditional Chinese, Taiwan forms, every character correctly formed and legible — no Simplified or Japanese forms, no invented strokes. (c) The header band across the top and the slim navy strip along the bottom stay as described, and NO part of the headline may sit inside them or overlap them. (d) The WHOLE header band and the small area just below its outer top corner stay clean and empty — software pastes the channel logo, the programme tag, the date, the red ON AIR tag and the 示意圖 label there afterwards, so nothing you draw belongs in that band at either end. (e) No text of any kind other than the listed strings: decorative marks you add are wordless symbols only — no letters, no digits, no country names, no place labels, no flag chips, no map insets, no extra badges or callouts. A brand mark carried by an object inside the photograph (a livery, a storefront, a product) is part of that photograph and is not one of your decorative marks — it stays on its object and never migrates onto the headline or into either navy band. (f) Nothing touches or is clipped by the frame edge. (g) In the two-panel layout, each headline stays ENTIRELY INSIDE ITS OWN PANEL and never crosses the diagonal seam or strays into the other panel: freeing the placement frees where it sits WITHIN its panel, not which panel it belongs to.
 """
 
-# 每一級的開頭都帶 DESIGNED TITLE 這個記號＋OVERRIDE 宣告：本 repo 的慣例是
-# 「位置在後＋明文 OVERRIDE」才壓得過前面那整段 TYPOGRAPHY 命令句。
-_L1 = """- DESIGNED TITLE (level 1 of 4 — light) — THIS BULLET AND THE ONE BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. Give the headline a designed display finish, and change NOTHING ELSE about it. All three of these are required, not offered — the difference from an undesigned caption has to be obvious at a glance across a room:
-  * A THICK DARK OUTLINE around every character plus a hard offset drop shadow. Not a thin stroke and not a soft blur.
-  * A SURFACE MATERIAL on the characters — a gradient, a soft bevel or a subtle sheen — instead of one flat fill.
-  * EACH ROW SITS ON ITS OWN SHAPE: every row gets its own plate, bar or ribbon, each one only as wide as the words it carries, sharing one corner treatment (all rounded, all square, or all cut on the same slant). One rectangle behind the whole block is the undesigned look this level exists to leave behind.
-  * THE BLOCK IS MARKEDLY BIGGER than an undesigned caption: the headline is the first thing the eye lands on, ahead of anything in the photograph.
-Everything else stays exactly as instructed above: the per-line colours stay EXACTLY as labelled (white / yellow / red), all lines stay at ONE size, and the rows stay left-aligned with one another in the labelled lower corner.
+# ---- 內容觸發的逐行指示與招式池（2026-09-11 第九批）----
+#
+# 使用者：「十點不一樣創意程度，我認為 1~4 都還可以更有變化」「標題的顏色其實也可以
+# 解放，不必綁住一定要白黃紅順序，也不用綁到同一句同一色」，並附 17 張真實封面當範本
+# （D:\Downloads\AICG測試\十點不一樣範本）。
+#
+# 為什麼不是再把條文寫得更大聲：2026-09-10 那輪已經試過。四級當時只差在**字的表面**
+# （描邊層數、材質、色數），縮圖上根本看不出差別。範本裡真正在跳的是**形狀**——
+# 標題塊佔多大、行排得齊不齊、旁邊掛了幾件東西。所以四級改綁三個**數字**主軸：
+#   標題塊佔畫面高度％ / 字級落差倍數 / 附加元件件數
+# 數字是 2026-09-10 斜切線那次唯一壓得住模型的東西（形容詞會被圖模平均掉）。
+#
+# 顏色則從「行序」改成「語意」，而且**釘在資料行上**。L2 以後的條文早就寫著
+# 「白黃紅只是提示，可以忽略」，實拍卻照樣白黃紅——因為 main._lines_block 把
+# (white)/(yellow)/(red) 直接寫在每一行後面，條文區離得太遠壓不過去（同一個教訓
+# 見上面反色底字那段註解）。所以 1 級起就不再輸出顏色標記，改由程式偵測內容，
+# 把「這一行該怎麼處理」寫在那一行上。
+#
+# 範本裡的招式來源（都用無字版本，FIXED (e) 原樣成立）：
+#   行末掛圖示(11 日本暴雨!後接雨雲、印尼災難!後接火焰)、圓形放大鏡 inset＋紅圈箭頭(04/07)、
+#   思考泡泡群(02/10)、底部圓形圖示列且數量呼應標題數字(12「6種」配 6 個圓圖示)、
+#   筆刷底線(07/12)、故事材質填字(05「丹寧」直接填牛仔布紋)、去背主體站在字旁(13)、
+#   爆裂色塊(01/04)、粗箭頭(04/16)。
+# 範本裡**帶字**的那些（數據徽章 52.3%、國旗國名籤、地名籤、流程圖標籤、引言框、
+# 底部文字籤條）不進池子：那些是新的中文字，撞 FIXED (e)，要走既有「側邊標籤」
+# 那種使用者自己填的欄位。
+
+_FULLWIDTH_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
+_COVER_HOOK_RE = re.compile(r"[！!？?]\s*$")
+_COVER_FIGURE_RE = re.compile(r"[0-9０-９]+(?:[.．][0-9０-９]+)?\s*[%％]?")
+_COVER_QUOTED_RE = re.compile(r"[「『“\"][^」』”\"]{1,12}[」』”\"]")
+def cover_line_annotation(text: str, level: int) -> str:
+    """一行標題該怎麼處理——釘在資料行後面，不寫在條文區。
+
+    0 級回空字串（維持白／黃／紅那條線，一個字元都不變）。
+    """
+    if level < 1 or not text:
+        return ""
+    notes: list[str] = []
+    if level >= 2 and _COVER_HOOK_RE.search(text):
+        notes.append("THIS IS THE HOOK ROW — set it at the block's LARGEST size")
+    figure = _COVER_FIGURE_RE.search(text)
+    if figure and figure.group(0).strip():
+        notes.append(
+            "PULL THE FIGURE " + figure.group(0).strip() + " OUT OF THE ROW: set it markedly"
+            " larger than the characters beside it AND in a different colour from them"
+        )
+    quoted = _COVER_QUOTED_RE.search(text)
+    if quoted:
+        treatment = (
+            " or sets it knocked out of a filled block" if level >= 2 else ""
+        )
+        notes.append(
+            "the quoted phrase " + quoted.group(0) + " takes its own colour" + treatment
+            + ", different from the rest of this row"
+        )
+    if not notes:
+        notes.append(
+            "switch colour PART-WAY THROUGH this row on the one word that carries the news"
+            " (the place, the name, the verdict) — this row must not be one flat colour"
+        )
+    return "  ← " + "; ".join(notes) + "."
+
+
+# ---- 變化池（2026-09-11 第四輪）----
+# 每一池都只描述**形狀或做法**，不帶數字（延續「招式不宣稱數字」那條），
+# 而且每一條都是命令句：模型讀到的是「就是這個」，不是「你可以選」。
+
+# 底板形狀。原本只有「每行各自一塊板」，形狀交給模型 → 每次都是同一種圓角矩形。
+COVER_PLATE_SHAPES: tuple[str, ...] = (
+    "square-cut, hard right angles",
+    "fully rounded, pill-ended",
+    "clipped across one corner",
+    "slanted into parallelograms",
+    "torn-edged, like strips ripped out of paper",
+    "painted brush strokes with ragged ends",
+    "ribbons with folded-back ends",
+    "open bracket frames, outline only, the photograph showing through",
+)
+
+# 錯位方式。原本只寫「錯開」，模型一律交同一種左階梯。
+COVER_STAGGER_PATTERNS: tuple[str, ...] = (
+    "each row stepped further right than the one above",
+    "each row stepped further left than the one above",
+    "alternating left and right, a zig-zag down the block",
+    "the middle row pushed out well past the others",
+    "a short row set beside the end of a long one",
+)
+
+# 字體個性。只描述字形骨架，不給字體名——給名字模型會拿英文字體來套。
+# 每一條都要能用中文黑體體系畫得出來，而且可讀性是硬底線。
+COVER_TYPEFACES: tuple[str, ...] = (
+    "a heavy rounded gothic, thick strokes with softened corners",
+    "a tall condensed gothic, narrow and vertical",
+    "a wide poster gothic, squat and square-shouldered",
+    "a heavy Ming with thick slab serifs and sharp entry strokes",
+    "an angular technical cut, corners sliced off on the diagonal",
+    "a heavy brush-written hand, strokes tapering as they lift off",
+)
+
+# 配色。四個位置＝主色／次色／重點色／備用色，全部是播出安全的高彩度色。
+# 「哪個字拿重點色」仍然由 COLOUR FOLLOWS MEANING 那句決定——池子決定用哪幾色，
+# 意義決定落在誰身上。這樣才不會回到白→黃→紅的行序配色。
+COVER_PALETTES: tuple[tuple[str, str, str, str], ...] = (
+    ("white", "deep navy", "vivid red", "bright golden yellow"),
+    ("white", "black", "bright golden yellow", "vivid red"),
+    ("bright golden yellow", "white", "vivid red", "deep navy"),
+    ("icy white-blue", "deep teal", "hot orange", "white"),
+    ("white", "electric cyan", "magenta", "black"),
+    ("black", "white", "lime green", "electric cyan"),
+    ("white", "royal purple", "bright golden yellow", "hot orange"),
+    ("pale gold", "deep crimson", "white", "black"),
+    ("white", "hot orange", "electric cyan", "deep navy"),
+)
+
+# 標題區落點（3 級起才解放）。全部限中段以下：上緣是 compose 後貼 示意圖 的位置。
+COVER_ANCHORS: tuple[str, ...] = (
+    "low in its own panel, hard against the left edge",
+    "low in its own panel, hard against the right edge",
+    "across the middle band of its own panel",
+    "low and centred in its own panel",
+)
+
+COVER_TILT_DIRECTIONS: tuple[str, ...] = ("clockwise", "anticlockwise")
+
+
+# 招式池。每一條都是**無字**的，而且都是命令句。件數由等級決定，抽哪幾件由程式抽——
+# 交給模型自己選，四級會塌回同一種（許可句推不動模型，第七批已證明）。
+# 小配件的外框形狀。2026-09-11 使用者：「不一定只有圓形可以用吧。」
+# 跟招式用同一個 seeded RNG 抽，所以同一級重生換招式時形狀也跟著換。
+# 一律只描述輪廓，不給數字——延續「招式不宣稱數字」那條。
+COVER_ACCESSORY_SHAPES: tuple[str, ...] = (
+    "circular",
+    "rounded-square",
+    "hexagonal",
+    "diamond-shaped (stood on its corner)",
+    "shield-shaped",
+    "torn-edged",
+    "pentagonal",
+    "capsule-shaped",
+    "starburst-edged",
+)
+
+
+COVER_ACCESSORY_POOL: tuple[tuple[str, str], ...] = (
+    ("icon", "A flat WORDLESS PICTOGRAM taken from the subject (raincloud, flame, siren, warning triangle, syringe), hung at one row's start or end at that row's cap height, never covering a stroke."),
+    ("magnifier", "A {shape} MAGNIFIER INSET: a clean window cut from the photograph enlarging one telling detail, ringed in a bright colour, with a short heavy arrow pointing back to where it came from."),
+    ("bubbles", "A CLUSTER OF SMALL {shape} INSETS arcing along one side of the HEADLINE BLOCK (never up beside the main subject, which often sits high in the frame), each holding one wordless pictogram or tiny photographic detail, shrinking as they trail away."),
+    ("brush", "A ROUGH BRUSH-STROKE OR TORN BAR of flat saturated colour behind or directly under ONE row — painted edges, not a neat rectangle."),
+    ("material", "ONE WORD FILLED WITH A MATERIAL FROM THE STORY instead of flat colour (molten metal, cracked stone, ice, banknote paper), the rest of that row staying flat."),
+    ("cutout", "THE MAIN SUBJECT CUT OUT of its background and stood beside or in front of the headline block, rim-lit or thinly outlined so it reads as a separate layer."),
+    ("burst", "A WORDLESS BURST behind the block: radiating speed lines, sparks, shards or a torn splash of saturated colour."),
+    ("arrow", "ONE HEAVY WORDLESS ARROW in a saturated colour, thick and slightly angled, driving from the photograph towards the headline."),
+    ("iconrow", "A SHORT ROW OF SMALL {shape} WORDLESS ICON CHIPS along the lower edge, just ABOVE the navy bottom strip and never inside it, evenly spaced and equal in size, each holding one flat pictogram from the story."),
+)
+
+
+# 2026-09-11 第二輪拿掉「數量呼應」：程式算得出 6，模型畫得出 3。
+# 「說 6 大卻畫 3 個」比沒有這排圖示更糟，而這個精度不是 prompt 壓得住的。
+# 所以改成池子裡一件普通的圖示列，不宣稱任何數字。
+
+
+# 件數就是梯子的骨架：一眼可見、可數、由程式決定。
+COVER_ACCESSORY_COUNTS = {0: 0, 1: 0, 2: 1, 3: 2, 4: 3}
+
+
+def _accessory_geometry_note(full_width: bool) -> str:
+    """釘在每一件招式後面的幾何。
+
+    共用那條總則 bullet 一直都寫著同樣的話，實拍照樣犯規（放大鏡貼上右角、
+    圖示列橫跨切線）——因為它坐在一長串否定句中間。顏色那邊已經證明過：
+    模型讀的是編號清單那幾行，指示就要釘在那幾行後面。
+    """
+    # 短到不能再短：DESIGN BRIEF 靠的就是位置與短，每行拖長等於把自己稀釋掉。
+    # “貼紙在那裡”的理由寫在上面那條總則，這裡只下命令。
+    note = "  ← MIDDLE OR LOWER AREA ONLY, never the top third"
+    if not full_width:
+        # 雙切才有切線。版面是程式知道的事，別叫模型自己判斷。
+        note += ", never across the centre seam"
+    return note + "."
+
+
+def cover_accessories(level: int, titles=(), seed=None, full_width: bool = False,
+                      rng=None) -> list[str]:
+    """該級要畫的招式（無字），形狀與幾何都已經填好。
+
+    `rng` 由 cover_design_brief 傳進來，讓所有變化軸共用同一顆——一個 seed
+    就決定整張的長相，才重現得出來。單獨呼叫時退回自己開一顆。
+    """
+    want = COVER_ACCESSORY_COUNTS.get(level, 0)
+    if want <= 0:
+        return []
+    rng = rng if rng is not None else random.Random(seed)
+    pool = [text for _key, text in COVER_ACCESSORY_POOL]
+    rng.shuffle(pool)
+    note = _accessory_geometry_note(full_width)
+    picked: list[str] = []
+    for text in pool[:want]:
+        if "{shape}" in text:
+            text = text.replace("{shape}", rng.choice(COVER_ACCESSORY_SHAPES))
+        picked.append(text + note)
+    return picked
+
+
+# ---- 設計綱要：插在 CANVAS 正後方（2026-09-11 第二輪）----
+#
+# 第一輪把整份級距條文放在 TYPOGRAPHY 段尾，實拍（創意梯子-260911 A／B 兩組）四級長得
+# 一模一樣、照樣白→黃→紅。查出來的兩件事：
+#   (1) L4 的完整 prompt 14,195 字元，級距條文坐在第 8,000 字元之後。模型唯一乖乖
+#       照做過的東西（2026-09-10 那條斜切線的數字）寫在 **CANVAS 第一段**。
+#       招式件數 L2 要 1 件（做到了）、L3 要 2 件、L4 要 3 件（全沒做）——
+#       是「愈往後愈失效」的斜坡，不是開關壞掉。
+#   (2) 顏色標記拿掉後，模板裡那條 COLOUR EACH LINE EXACTLY AS LABELLED 變成孤兒，
+#       模型就照 Line 1/2/3 把白黃紅硬套上去。矛盾要**拆掉**，不能只靠後面 OVERRIDE。
+#
+# 所以數字全部搬到這裡，而且只有數字：塊高％、落差倍數、錯位、傾斜、反白字數、招式件數、
+# 配色鐵則。後面 TYPOGRAPHY 段尾那塊條文只留「怎麼做」的質感描述，不再重複數字。
+# 幅度（塊高％／落差倍數／招式件數／反白字數）各級固定——那是使用者認可的梯度，
+# RNG 一律不碰。配色改成模板，由 COVER_PALETTES 抽色填進去：換的是「哪幾個顏色」，
+# 不是「用幾個顏色」。
+COVER_TITLE_BRIEF_SPECS = {
+    1: dict(height="25%", ratio=None, stagger=False, tilt=False, knockouts=0, typeface=False, anchor=False,
+            colours="TWO colours only: {0} dominant, {2} for emphasis"),
+    2: dict(height="35%", ratio="1.8", stagger=True, tilt=False, knockouts=1, typeface=True, anchor=False,
+            colours="THREE colours: {0} dominant, {1} second, {2} on the word that carries the news"),
+    3: dict(height="45%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True, anchor=True,
+            colours="THREE colours plus ONE accent: {0} dominant, {1} second, {2} on the word that carries the news, {3} as the accent"),
+    4: dict(height="55%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True, anchor=True,
+            colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open"),
+}
+
+
+def _headline_has_hook(title: str, *, full_width: bool) -> bool:
+    """這條標題拆出來的行裡，有沒有一行以 ！／？ 收尾。"""
+    lines = compose.cover_title_lines((title or "").strip(), full_width=full_width)
+    return any(_COVER_HOOK_RE.search(line) for line in lines)
+
+
+def _size_hierarchy_line(ratio: str, titles, full_width: bool) -> str:
+    """字級落差那一行：鉤子最大／由上往下遞增／兩者都有。"""
+    flags = [
+        _headline_has_hook(title, full_width=full_width)
+        for title in titles
+        if (title or "").strip()
+    ]
+    hook_rule = (
+        f"the row ending in ！or ？ is the largest, about {ratio} times the height of the"
+        " smallest row, and the row that explains it tucks under it"
+    )
+    grow_rule = (
+        f"the rows GROW FROM TOP TO BOTTOM — the last row is about {ratio} times the height of"
+        " the first, the middle row sitting between them"
+    )
+    if flags and all(flags):
+        body = hook_rule
+    elif flags and not any(flags):
+        body = grow_rule
+    else:
+        body = (
+            f"in a headline that HAS a row ending in ！or ？, {hook_rule}; in a headline with NO"
+            f" such row, {grow_rule}"
+        )
+    return f"- Row sizes differ: {body}."
+
+
+def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = False) -> str:
+    """CANVAS 正後方那塊。愈短愈好——這是模型真的會讀的位置。
+
+    2026-09-11 第四輪起，這裡同時是**變化池的出口**：底板形狀、錯位方式、字體骨架、
+    配色、標題落點、傾斜方向、招式，全部由同一顆 rng 依固定順序抽。
+    一顆 seed ＝ 一種長相，重現得出來。
+
+    幅度（塊高％／落差倍數／招式件數／反白字數）不在池子裡：那是梯子本身。
+    """
+    spec = COVER_TITLE_BRIEF_SPECS.get(level)
+    if not spec:
+        return ""
+    # 抽籤順序固定，動了順序就換掉所有既有 seed 的長相（測試會抓到）。
+    rng = random.Random(seed)
+    plate = rng.choice(COVER_PLATE_SHAPES)
+    stagger = rng.choice(COVER_STAGGER_PATTERNS)
+    typeface = rng.choice(COVER_TYPEFACES)
+    palette = rng.choice(COVER_PALETTES)
+    anchor = rng.choice(COVER_ANCHORS)
+    tilt_dir = rng.choice(COVER_TILT_DIRECTIONS)
+
+    rows = [
+        "=== HEADLINE DESIGN BRIEF — THESE NUMBERS ARE AS FIXED AS THE SEAM GEOMETRY ABOVE, AND THEY OVERRIDE ANY TYPOGRAPHY WORDING FURTHER DOWN ===",
+        f"- Headline block height: about {spec['height']} of the frame height (per panel). It dominates the picture.",
+    ]
+    if spec["ratio"]:
+        rows.append(_size_hierarchy_line(spec["ratio"], titles, full_width))
+    else:
+        rows.append("- Every row is the SAME size at this setting.")
+    rows.append(
+        f"- Rows are STAGGERED: {stagger}. No two rows share a left edge."
+        if spec["stagger"]
+        else "- Rows stay flush with one another, aligned in the corner they are assigned."
+    )
+    # 板形：1 級整排同一種（跟 _L1 那句「share ONE corner treatment」對齊），
+    # 2 級起同一種語彙下各行自己變化。
+    rows.append(
+        "- Each row sits on its OWN plate, bar or ribbon — never one rectangle behind the whole"
+        f" block. The plates are {plate}"
+        + (", all cut the same way." if level < 2 else ", and no two are cut alike.")
+    )
+    if spec["typeface"]:
+        # 「You choose the typeface」寫了七批，成品每次都同一種黑體：許可句推不動模型。
+        rows.append(f"- Letterforms: {typeface}. Every character stays fully legible.")
+    if spec["anchor"]:
+        # 3 級起條文說 PLACEMENT IS FREED——解放之後總得有人決定放哪，
+        # 交給模型它就放回左下角，所以由程式指定。
+        rows.append(f"- The headline block sits {anchor}.")
+    if spec["tilt"]:
+        rows.append(f"- The whole block is rotated 5 to 8 degrees off horizontal, {tilt_dir}.")
+    if spec["knockouts"]:
+        word, verb = ("word", "sits") if spec["knockouts"] == 1 else ("words", "sit")
+        rows.append(
+            f"- {spec['knockouts']} {word} of the headline {verb} KNOCKED OUT of a filled colour"
+            " block (the characters are the empty space inside the shape)"
+            + (", each block a different colour." if spec["knockouts"] > 1 else ".")
+        )
+    rows.append(
+        "- COLOUR FOLLOWS MEANING, NEVER ROW ORDER. Colouring row 1 white, row 2 yellow and row 3"
+        f" red is BANNED. Use {spec['colours'].format(*palette)}."
+        " A colour switch may happen part-way through a row."
+    )
+    picked = cover_accessories(level, titles=titles, full_width=full_width, rng=rng)
+    if picked:
+        rows.append(
+            f"- Draw EXACTLY {len(picked)} piece{'' if len(picked) == 1 else 's'} of supporting artwork, listed here and no"
+            " others. They are pictures, never captions: not one carries a letter, a digit or a"
+            " label, none covers a character, enters the top band or the bottom strip, or touches"
+            " an edge. NONE OF THEM MAY SIT IN EITHER OUTER TOP CORNER OR IN THE TOP THIRD OF THE"
+            " FRAME: a label is pasted there afterwards. Obey each piece's own placement note."
+        )
+        rows.extend(f"  {i}. {text}" for i, text in enumerate(picked, start=1))
+    return "\n".join(rows) + "\n\n"
+
+
+def cover_title_colour_rule(level: int) -> str:
+    """逐行配色那一條。0 級照舊；1 級起把矛盾**拆掉**，不是靠後面 OVERRIDE 壓。"""
+    if level < 1:
+        return (
+            "- COLOUR EACH LINE EXACTLY AS LABELLED in that list: (white) = solid white,"
+            " (yellow) = bright golden yellow, (red) = vivid red with a white outline. Follow the"
+            " labels literally — never recolour a line, and never give a whole headline one flat"
+            " colour.\n"
+        )
+    return (
+        "- COLOUR: follow the DESIGN BRIEF above and each row's own note in the list above."
+        " The order of the rows is NOT a colour order, and no headline may be one flat colour.\n"
+    )
+
+
+# 每一級的條文（TYPOGRAPHY 段尾）。2026-09-11 第二輪起這裡**只留質感與做法**，
+# 數字全部搬到 CANVAS 後面的 DESIGN BRIEF——同一個數字寫兩次，遠的那次只會稀釋近的那次。
+# 開頭仍帶 DESIGNED TITLE 記號＋OVERRIDE 宣告（呼叫端與測試指名這兩個字串）。
+_L1 = """- DESIGNED TITLE (level 1 of 4 — light) — OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE, and follow the DESIGN BRIEF near the top of this prompt. Required, not offered:
+  * A THICK DARK OUTLINE on every character plus a hard offset drop shadow — not a thin stroke, not a soft blur.
+  * A SURFACE MATERIAL on the characters (a gradient, a soft bevel or a sheen) instead of one flat fill.
+  * The plates behind the rows share ONE corner treatment: all rounded, all square, or all cut on the same slant.
 """
 
-_L2 = """- DESIGNED TITLE (level 2 of 4 — designed) — THIS BULLET AND THE TWO BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. The headline is a title card built by a broadcast art director, not body text. Build it the way this show's real covers are built — a tame, evenly-set stack is a failure here:
-  * SIZE HIERARCHY IS REQUIRED. The lines are not the same size. Set the short punchy line — the one that shouts, usually the one ending in 「！」 — at roughly one and a half to two times the height of the line that explains it, and let the explaining line tuck under it, indented or offset rather than flush-stacked.
-  * PULL A KEY WORD OUT INSIDE A LINE. Within a line, take the place name, the number, the quoted phrase or the one word that carries the shock, and give it a different treatment from the rest of that same line: another colour, a vivid red or black block with the word reversed out of it, a heavier or larger cut. Quotation marks such as 「」 or 『』 around a phrase are a cue to do exactly this. Every line must not be one flat colour.
-  * THE HOUSE PALETTE AND FINISH: saturated FLAT golden yellow, pure white and vivid red, over a thick black outline with a hard offset drop shadow and a tight coloured inner edge — punchy poster colour, high contrast, slight forward lean. Not a soft pastel wash, and not one uniform polished metallic fill across the whole headline.
-  * THE STACK IS NO LONGER FLUSH — this is required, not offered. The rows step: each row is indented, offset or shifted against the one above it, so the left edges do not line up in a column. A neatly flush-left stack is exactly the level-1 look this level exists to leave behind.
-  * EACH ROW SITS ON ITS OWN SHAPE, AND THE ROWS NO LONGER MATCH: the plates differ from one another — one reversed out of a solid colour, another an open outline, another a slanted ribbon — instead of three copies of the same bar. The block reads as assembled parts, not as a paragraph on a rectangle.
-  * You still choose the typeface, the exact colours, the outline and shadow treatment, and the decorative frames or shapes behind or around the words. Be bold.
-- WHAT THIS CANCELS: the per-line colour labels (white / yellow / red) are only a hint you may ignore entirely — recolour freely, give one line several colours, reverse a word out of a coloured block, whatever reads best; the fixed one-line-per-row stack no longer binds as a SHAPE — stagger the lines, indent them or run one line larger over another (the lines themselves, and how many there are, are still fixed; see below). THE PLACEMENT STILL BINDS: the block stays in the lower-left (or lower-right) area it was assigned. ONE EXCEPTION TO THE SIZE HIERARCHY: when the listed lines are not a hook plus its explanation but one continuous phrase, sentence or proper name simply broken across rows, keep them at ONE size — enlarging half of a single name breaks it apart.
+_L2 = """- DESIGNED TITLE (level 2 of 4 — designed) — OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE, and follow the DESIGN BRIEF near the top of this prompt. This is a broadcast title card, not body text; a tame, evenly-set stack is a failure. Required, not offered:
+  * THE PLATES NO LONGER MATCH EACH OTHER: one row reversed out of a solid colour, another on an open outline, another on a slanted ribbon — assembled parts, not a paragraph on a rectangle.
+  * FINISH: saturated FLAT poster colour over a thick black outline, a hard offset drop shadow and a tight coloured inner edge. High contrast, slight forward lean. Not a soft pastel wash, and not one uniform polished metallic fill.
+  * THE DESIGN BRIEF NEAR THE TOP OF THIS PROMPT ALREADY FIXES the letterforms and the colours — follow it exactly, do not substitute your own. What is left to you: the outline and shadow treatment, and the decorative frames or shapes behind or around the words. Be bold with those.
+- WHAT THIS CANCELS: one-line-per-row no longer binds as a SHAPE — stagger the rows, indent them, run one row larger over another (the rows themselves, and how many there are, are still fixed; see below). THE PLACEMENT STILL BINDS: the block stays in the lower-left (or lower-right) area it was assigned. ONE EXCEPTION TO THE SIZE HIERARCHY: when the listed rows are one continuous phrase, sentence or proper name simply broken across rows, keep them at ONE size — enlarging half of a single name breaks it apart.
 """
 
-_L3 = """- DESIGNED TITLE (level 3 of 4 — loud) — THIS BULLET AND THE TWO BELOW OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE. The headline is a title card built by a broadcast art director, not body text. Build it the way this show's real covers are built, and go loud — a tame, evenly-set stack is a failure here:
-  * SIZE HIERARCHY IS REQUIRED. The lines are not the same size. Set the short punchy line — the one that shouts, usually the one ending in 「！」 — at roughly one and a half to two times the height of the line that explains it, and let the explaining line tuck under it, indented or offset rather than flush-stacked.
-  * PULL A KEY WORD OUT INSIDE A LINE. Within a line, take the place name, the number, the quoted phrase or the one word that carries the shock, and give it a different treatment from the rest of that same line: another colour, a vivid red or black block with the word reversed out of it, a heavier or larger cut. Quotation marks such as 「」 or 『』 around a phrase are a cue to do exactly this. Every line must not be one flat colour.
-  * THE HOUSE PALETTE AND FINISH: saturated FLAT golden yellow, pure white and vivid red, over a thick black outline with a hard offset drop shadow and a tight coloured inner edge — punchy poster colour, high contrast, slight forward lean. Not a soft pastel wash, and not one uniform polished metallic fill across the whole headline.
-  * THE STACK IS NO LONGER FLUSH — this is required, not offered. The rows step: each row is indented, offset or shifted against the one above it, so the left edges do not line up in a column.
-  * EACH ROW SITS ON ITS OWN SHAPE, AND THE ROWS NO LONGER MATCH — one reversed out of a solid colour, another an open outline, another a slanted ribbon, so the block reads as assembled parts rather than a paragraph on a rectangle.
-  * THE SIZE GAP GROWS — THIS OVERRIDES THE RATIO IN THE BULLET ABOVE: the shouting line now runs two to two and a half times the height of the explaining line, and the whole block grows with it.
-  * MULTI-LAYER EDGES AND DEPTH ARE REQUIRED AT THIS LEVEL: stack outlines (a thick black one, then a white or coloured one outside it) and give the characters a three-dimensional extrusion with a surface picked from the story — molten metal, neon, cracked stone, wet chrome.
-  * THE BLOCK ENGAGES THE PHOTOGRAPH instead of sitting in a clear corner of it: let a plate pass behind the main subject, or let the subject's silhouette break across the edge of a plate, so the title and the picture interlock. Not one character may be hidden by doing this.
-  * REVERSE A KEY WORD OUT OF A SOLID BLOCK — required here, not one option among several. At least one word or figure in the headline sits knocked out of a filled shape (vivid red, black or gold) whose edge is torn, brushed or slanted, the way this show's real covers set a disease name or a number. Pick the word that carries the shock — the illness, the place, the figure, the verdict.
-  * BUILD SUPPORTING ARTWORK AROUND THE HEADLINE, NOT ONLY ON IT — wordless, and drawn from the story: a circular inset magnifying one detail of the photograph, a cut-out subject standing beside the block, a heavy arrow, a stack of shapes, a ring of glow, a column of small framed icon chips down one side. These are pictures, never captions: not one of them carries a letter, a digit or a label, and none of them may cover a character or leave its own panel.
-  * HANG ONE OR TWO small flat pictograms on the block — a lightning bolt, a flame, a raincloud, a warning triangle, a siren — picked from what the headline is about, sitting beside or behind a word, never covering a character.
-  * You still choose the typeface, the exact colours, the outline and shadow treatment, the decorative frames or shapes behind or around the words, the emphasis, the scale of each part, and where on the frame the block sits. Be bold.
-- WHAT THIS CANCELS: the per-line colour labels (white / yellow / red) are only a hint you may ignore entirely — recolour freely, give one line several colours, reverse a word out of a coloured block, whatever reads best; the instruction to keep the headline in the lower-left (or lower-right) area no longer binds — place the block anywhere that composes well against the photograph; the fixed one-line-per-row stack no longer binds as a SHAPE — you may stagger the lines, indent them, run one line larger over another, or set a short line beside a long one (the lines themselves, and how many there are, are still fixed; see below). ONE EXCEPTION TO THE SIZE HIERARCHY: when the listed lines are not a hook plus its explanation but one continuous phrase, sentence or proper name simply broken across rows, keep them at ONE size — enlarging half of a single name breaks it apart.
+_L3 = """- DESIGNED TITLE (level 3 of 4 — loud) — OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE, and follow the DESIGN BRIEF near the top of this prompt. This is a broadcast title card and it goes loud; a tame, evenly-set stack is a failure. Required, not offered:
+  * THE PLATES NO LONGER MATCH EACH OTHER: one row reversed out of a solid colour, another on an open outline, another on a slanted ribbon.
+  * PLACEMENT IS FREED: the block no longer has to sit in the lower corner it was assigned. THE DESIGN BRIEF SAYS WHERE IT GOES INSTEAD — obey that line, and keep the whole block inside its own panel.
+  * THE BLOCK INTERLOCKS WITH THE PHOTOGRAPH instead of sitting in a clear corner: let a plate pass BEHIND the main subject, or let the subject's silhouette break across the edge of a plate. Not one character may be hidden by doing this.
+  * MULTI-LAYER EDGES AND DEPTH: stack outlines (a thick black one, then a white or coloured one outside it) and give the characters a three-dimensional extrusion with a surface picked from the story — molten metal, neon, cracked stone, wet chrome.
+  * The knocked-out word's block has a TORN, BRUSHED OR SLANTED edge, and it is the word that carries the shock: the illness, the place, the figure, the verdict.
+  * FINISH: saturated FLAT poster colour over a thick black outline and a hard offset drop shadow. Not a soft pastel wash, and not one uniform polished metallic fill.
+  * THE DESIGN BRIEF NEAR THE TOP OF THIS PROMPT ALREADY FIXES the letterforms, the colours and where the block sits — follow it exactly, do not substitute your own. What is left to you: the outline and shadow treatment, the decorative frames or shapes behind or around the words, the emphasis, and the scale of each part. Be bold with those.
+- WHAT THIS CANCELS: the instruction to keep the headline in the lower-left (or lower-right) area no longer binds; one-line-per-row no longer binds as a SHAPE — stagger the rows, indent them, run one row larger over another, or set a short row beside a long one (the rows themselves, and how many there are, are still fixed; see below). ONE EXCEPTION TO THE SIZE HIERARCHY: when the listed rows are one continuous phrase, sentence or proper name simply broken across rows, keep them at ONE size — enlarging half of a single name breaks it apart.
 """
 
-# 使用者看完 0–4 實拍梯子後：「把現在的 4 當成 3，再做一個更誇張的 4。」
-# 4 = 3 的全部，再加下面這一段。加的是**幅度**（更大的落差、更多層的描邊、傾斜、
-# 疊字、爆裂裝飾），不是新的自由——FIXED (a)–(g) 一樣原樣附上，而且這一級要
-# 特別把「每個字仍要完整可讀、不得碰邊、不得進帶、不得跨格」再講一次：
+# 4 = 3 的全部＋幅度。數字（55%／3 倍／傾斜／兩個反白字）都在 DESIGN BRIEF 裡，
+# 這裡只補「更深的邊、爆裂裝飾、第二焦點」，外加把可讀性護欄再講一次：
 # 幅度愈大，模型愈容易把字推到邊上或蓋掉筆畫。
-_L4_EXTRA = """- GO FURTHER — THIS IS THE LOUDEST SETTING. Everything in the bullet above still applies; now push it to the edge of what still reads:
-  * The shouting line towers over the rest — two and a half to three times the height of the explaining line, not the one-and-a-half of the level below — and the block as a whole is big enough to dominate the photograph.
-  * DEEPEN THE EDGES FURTHER: a third outline layer outside the two required above, and an extrusion deep enough to read as a solid object standing off the photograph.
-  * THE BLOCK TILTS OR ARCS — required here, not offered (a few degrees, no more than about eight) — characters step up and down instead of sitting on one baseline, and one word may overlap the next a little, but an overlap must never hide any part of any stroke.
-  * Add energy behind and around the words: radiating speed lines, sparks, shards, a torn or splashed colour shape, a burst of glow. Up to THREE pictograms instead of two.
-  * MORE THAN ONE WORD IS REVERSED OUT: a second word or figure gets its own knocked-out block in a different colour from the first, so the block reads as several stacked poster elements rather than one plate with a highlight.
-  * THE SUPPORTING ARTWORK BECOMES A SECOND FOCAL POINT, not a garnish: the magnifying inset, the cut-out subject or the icon column is large enough to hold its own against the headline and is composed with it — still wordless, still inside its own panel.
-  * The photograph may darken further behind the block so all of this still reads.
+_L4_EXTRA = """- GO FURTHER — THIS IS THE LOUDEST SETTING. Everything above still applies; now push it to the edge of what still reads:
+  * DEEPEN THE EDGES: a third outline layer outside the two required above, and an extrusion deep enough to read as a solid object standing off the photograph.
+  * ENERGY BEHIND THE WORDS: radiating speed lines, sparks, shards, a torn or splashed colour shape, a burst of glow — wordless, aimed so the eye is thrown at the loudest row.
+  * ONE OF THE REQUIRED ARTWORK PIECES BECOMES A SECOND FOCAL POINT: enlarge it until it holds its own against the headline and compose the two together — still wordless, still inside its own panel.
+  * The photograph darkens overall behind all of this so it still reads.
   * EVEN HERE: every character stays complete, unobstructed and legible; nothing touches or is clipped by any frame edge; nothing enters the header band or the bottom strip; and in the two-panel layout nothing crosses the seam. Loud is not the same as broken.
 """
 
@@ -442,8 +822,12 @@ _L4 = _L3.replace("level 3 of 4 — loud)", "level 4 of 4 — loudest)") + _L4_E
 COVER_AI_TITLE_LEVEL_BLOCKS = {1: _L1, 2: _L2, 3: _L3, 4: _L4}
 
 
-def cover_ai_title_style_clause(level: int) -> str:
-    """0＝完全不追加（現行白／黃／紅排版）；1–4 追加該級的設計條文＋不變的 FIXED 區塊。"""
+def cover_ai_title_style_clause(level: int, *, titles=(), seed=None) -> str:
+    """0＝完全不追加（現行白／黃／紅排版）；1–4 追加該級的設計條文＋招式段＋不變的 FIXED 區塊。
+
+    招式段（2026-09-11）夾在設計條文與 FIXED 之間：件數由等級決定、抽哪幾件由程式抽，
+    所以同一則新聞重生會換一組——這就是使用者要的「更有變化」。seed 留給測試釘死。
+    """
     block = COVER_AI_TITLE_LEVEL_BLOCKS.get(level)
     if not block:
         return ""
@@ -457,7 +841,11 @@ COVER_TITLE_STYLE_LEVELS = {
 }
 
 # 名字留著：第七批以前的呼叫端與測試都指名這一個常數，它就是最高級的條文。
-COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE = cover_ai_title_style_clause(COVER_AI_TITLE_LEVEL_MAX)
+# 2026-09-11 起招式是隨機抽的，所以這個模組層常數釘 seed=0——不釘的話同一個常數
+# 每次 import 都不一樣，比對它的測試會時好時壞。實際出圖不帶 seed（才會每次換一組）。
+COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE = cover_ai_title_style_clause(
+    COVER_AI_TITLE_LEVEL_MAX, seed=0
+)
 
 
 # 畫面描述留空時由 AI 依標題補（2026-09-03 使用者要求：兩欄改選填）。
@@ -471,11 +859,13 @@ For each headline you are given, describe the single photograph that should sit 
 Rules for every description:
 - Describe only what a camera would see: place, subject, action, weather, light, lens feel. Concrete and photographable.
 - Traditional Chinese (Taiwan), one sentence, roughly twenty to forty characters. No bullet points.
-- NEVER mention text, captions, headlines, numbers, charts, logos or watermarks — the photograph carries no writing at all.
+- NEVER mention text, captions, headlines, numbers or charts — the photograph carries no caption and no graphics.
+- BRANDS: ONLY THOSE THE HEADLINE OR THE SUPPLIED DESCRIPTION NAMES. When the story is about a named brand, company or product, say so in the description and let it appear with its real mark on the objects that belong to it — its own signage, packaging, product body, vehicle livery, screen or jersey. Every OTHER brandable surface in the scene stays de-identified: blank surfaces or generic abstract marks, never a readable brand name the story does not name, and never an invented one. Never put one brand's mark on another brand's object.
 - Do not restate the headline. Turn its meaning into a scene.
 - If a headline is about a specific named real person (a head of state, a politician, a celebrity), the photograph should be a portrait-style shot of that person as its subject, face towards the camera. Otherwise use anonymous figures, back views, crowds, objects or places.
 - If a headline is about data, money or policy, choose a real-world scene that stands for it (a building, a counter, hands, equipment), never a graph.
 - If a side's description is already supplied, repeat it back unchanged — but still list the named real people it shows.
+- END EVERY DESCRIPTION YOU WRITE with one short clause naming the light and the palette, chosen by what the story is: disaster, crime, war and accidents get dark, desaturated, high-contrast light; health, family, education and human-interest stories get warm, soft, low-contrast light; weather, sea, cold and environment stories get cool blue-grey light; money, technology and industry get clean, hard, slightly cold light. Never write the same clause for both sides when the two stories differ in kind.
 
 Also return, per side, "portrait_subjects_left" / "portrait_subjects_right": every specific named real person whose face that side's photograph would show, names exactly as the headline writes them (no title, no organisation), at most three per side; an empty array when the scene shows no named real person. "portrait_subjects_left_en" / "portrait_subjects_right_en": the same people, same order, as the name Wikipedia uses in English (e.g. 梅爾茨 → "Friedrich Merz"); empty string when unsure.
 """
@@ -626,6 +1016,10 @@ THEN write the headlines.
 - Each headline is EXACTLY 3 segments separated by ONE half-width space (two spaces in total, never one, never three); each segment 4–7 characters, NEVER more than 7; whole headline 12–18 characters excluding spaces (fewer than 12 leaves the cover half empty — that is a defect). Each segment becomes one printed line, coloured white / yellow / red in order, so a headline with only two segments loses its red line — that is a defect. A segment longer than 7 characters shrinks every line on the cover — also a defect.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
+
+ALSO SUGGEST THE TWO OPTIONAL CHIP FIELDS. Both are printed on the cover exactly as you write them, so every character has to come from the article. When the article does not support one, return an empty array — an empty field is correct and normal, a padded one is a defect.
+- "side_labels": 3 to 6 short chips for a column down one side, ONLY when the article actually enumerates parallel items — symptoms, causes, steps, warning signs, categories. Each 2 to 6 characters, a noun or a short noun phrase, no punctuation. If the article does not enumerate anything, return [].
+- "info_chips": at most 2 small free-standing chips. One may be the PLACE the story happens, written as the article writes it (「日本・名古屋」「臺南」). One may be the single most telling FIGURE with its unit or subject attached (「降41%」「5萬名確診」「7級強風」). Each at most 10 characters. Never invent or round a figure, never guess a place, and never repeat something the headline already says.
 """
 
 # 十點不一樣（滿版）：只有一個標題，一律 3 段（每段一行，白／黃／紅）。
@@ -636,6 +1030,10 @@ Return JSON with "title".
 - EXACTLY 3 segments separated by ONE half-width space (two spaces in total, never one, never three); each segment 4–7 characters, NEVER more than 7; whole headline 12–18 characters excluding spaces (fewer than 12 leaves the cover half empty — that is a defect). Each segment becomes one printed line, coloured white / yellow / red in order, so a headline with only two segments loses its red line — that is a defect.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
+
+ALSO SUGGEST THE TWO OPTIONAL CHIP FIELDS. Both are printed on the cover exactly as you write them, so every character has to come from the article. When the article does not support one, return an empty array — an empty field is correct and normal, a padded one is a defect.
+- "side_labels": 3 to 6 short chips for a column down one side, ONLY when the article actually enumerates parallel items — symptoms, causes, steps, warning signs, categories. Each 2 to 6 characters, a noun or a short noun phrase, no punctuation. If the article does not enumerate anything, return [].
+- "info_chips": at most 2 small free-standing chips. One may be the PLACE the story happens, written as the article writes it (「日本・名古屋」「臺南」). One may be the single most telling FIGURE with its unit or subject attached (「降41%」「5萬名確診」「7級強風」). Each at most 10 characters. Never invent or round a figure, never guess a place, and never repeat something the headline already says.
 """
 
 COVER_TITLE_DIGEST_SYSTEM_YT = """You write the headline for a Taiwanese TV news live-stream thumbnail from one news article.
@@ -683,6 +1081,13 @@ def ten_digest_retry_note(data: dict | None) -> str:
             + lines + "\nCount the characters of each segment before you answer.")
 
 
+# 兩個籤欄位（2026-09-11）：strict schema 下一樣要列進 required，
+# 「這篇沒有」用空陣列表達，不是把欄位省略掉。
+_DIGEST_CHIP_PROPS = {
+    "side_labels": {"type": "array", "items": {"type": "string"}},
+    "info_chips": {"type": "array", "items": {"type": "string"}},
+}
+
 COVER_TITLE_DIGEST_SCHEMA_TEN = {
     "type": "object",
     "properties": {
@@ -691,8 +1096,17 @@ COVER_TITLE_DIGEST_SCHEMA_TEN = {
         "topics": {"type": "integer", "enum": [1, 2]},
         "title_left": {"type": "string"},
         "title_right": {"type": "string"},
+        **_DIGEST_CHIP_PROPS,
     },
-    "required": ["topics", "title_left", "title_right"],
+    "required": ["topics", "title_left", "title_right", "side_labels", "info_chips"],
+    "additionalProperties": False,
+}
+
+# 滿版走自己的 schema（以前借 YT 那個，只有 title，籤欄位塞不進去）
+COVER_TITLE_DIGEST_SCHEMA_TEN_FULL = {
+    "type": "object",
+    "properties": {"title": {"type": "string"}, **_DIGEST_CHIP_PROPS},
+    "required": ["title", "side_labels", "info_chips"],
     "additionalProperties": False,
 }
 # YT 直播「直標」（2026-09-09 使用者：貼一段文字 → 自動生兩段標題＋判定來源）。

@@ -1390,6 +1390,13 @@ function updateCoverTitleStyleButton() {
     if (range) range.value = String(state.coverTitleCreativity);
     const label = document.getElementById('coverTitleStyleLabel');
     if (label) label.innerText = COVER_TITLE_CREATIVITY[state.coverTitleCreativity][0];
+    // 側邊標籤與畫面小籤只有 3 級起才畫得出來（後端同一條線），所以前台也只有 3 級起才露。
+    // 2026-09-10 先藏是因為功能還在測；2026-09-11 使用者裁決兩個一起打開。
+    const chipsOn = !hidden && state.coverTitleCreativity >= 3;
+    ['coverSideLabels', 'coverInfoChips'].forEach(function (id) {
+        const el = document.getElementById(id);
+        if (el) el.classList.toggle('hidden', !chipsOn);
+    });
 }
 
 function setCoverTitleCreativity(value) {
@@ -2011,6 +2018,7 @@ function tenCoverFields() {
         title_creativity: state.coverTitleCreativity,
         // 側邊標籤（2026-09-10）：使用者自己打的短詞，後端原樣畫成一排小籤
         side_labels: val('coverSideLabels'),
+        info_chips: val('coverInfoChips'),
         provider: effectiveImageProvider(),
     };
 }
@@ -2186,6 +2194,13 @@ async function handleCoverTitleDigest(target) {
         if (ten) {
             document.getElementById('coverTitleLeft').value = data.title_left || '';
             document.getElementById('coverTitleRight').value = data.title_right || '';
+            // 兩個籤也一起回填（2026-09-11）：消化讀的是編輯貼進來的內文，
+            // 回填後編輯看得到、改得動、清得掉，按生成之前都在人手上。
+            ['coverSideLabels', 'coverInfoChips'].forEach(function (id) {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.value = (id === 'coverSideLabels' ? data.side_labels : data.info_chips) || '';
+            });
             // 回填完版面就跟著變（第二標題空＝滿版），指示器與右附圖位一起更新
             updateCoverLayoutIndicator();
         } else {

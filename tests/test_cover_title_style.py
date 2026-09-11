@@ -48,20 +48,48 @@ class ClauseTests(unittest.TestCase):
 
         字體、顏色、邊框、強調、版位五樣都要明文交出去——只寫「你可以設計」而不
         逐項點名，模型會照前面那幾條保守規則辦，等於沒解放。
+
+        2026-09-11 第四輪改了「交給誰」：字體、配色、版位三樣改由**程式每次抽**
+        （COVER_TYPEFACES／COVER_PALETTES／COVER_ANCHORS），寫進 CANVAS 後面的綱要。
+        因為「你自己決定」這種許可句實測推不動模型——七批下來成品永遠同一種黑體、
+        同一個左下角。解放的意思沒變（不再綁死那幾條保守規則），變的是由誰下決定。
+        邊框與強調仍然留給模型。
         """
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
-        for freed in ("typeface", "colours", "decorative frames", "emphasis",
-                      "where on the frame the block sits"):
+        # 仍然留給模型的兩樣
+        for freed in ("decorative frames", "emphasis"):
             with self.subTest(freed=freed):
                 self.assertIn(freed, clause)
+        # 改由綱要下令的三樣：條文區要明講「照綱要辦、不要自己另外挑」，
+        # 否則就是今天踩過的孤兒規則——模型會挑最寬鬆的那句遵守。
+        self.assertIn("ALREADY FIXES", clause)
+        for pinned in ("letterforms", "the colours", "where the block sits"):
+            with self.subTest(pinned=pinned):
+                self.assertIn(pinned, clause)
+        self.assertIn("do not substitute your own", clause)
+        self.assertNotIn("You choose the typeface", clause)
+        # 而綱要真的每次都給不一樣的命令
+        briefs = {editor_formats.cover_design_brief(4, seed=s) for s in range(8)}
+        self.assertGreater(len(briefs), 1)
 
     def test_designed_clause_cancels_the_white_yellow_red_rule_explicitly(self):
         """本 repo 的慣例：位置在後**加上**明文 OVERRIDE 才壓得過前面的規則。
-        前面那三條（逐行配色、鎖在左下、一行一列）都要被點名取消，含糊帶過沒有用。"""
+        前面那三條（逐行配色、鎖在左下、一行一列）都要被點名取消，含糊帶過沒有用。
+
+        2026-09-11：配色從「白黃紅只是提示、可以忽略」（許可句，實拍照樣白黃紅）
+        改成命令句＋明文禁止那個順序；顏色標記本身也不再輸出（見 main._lines_block）。
+        """
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE
         self.assertIn("OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE", clause)
-        self.assertIn("per-line colour labels (white / yellow / red) are only a hint", clause)
         self.assertIn("no longer binds", clause)
+        # 配色鐵則住在 CANVAS 正後方的 DESIGN BRIEF（第二輪搬過去的，見那支測試），
+        # 模板裡原本那條逐行配色也在 1 級起被換掉，不是靠 OVERRIDE 壓。
+        brief = editor_formats.cover_design_brief(
+            editor_formats.COVER_AI_TITLE_LEVEL_MAX, titles=("尼泊爾災區 無人機空拍",), seed=0)
+        self.assertIn("COLOUR FOLLOWS MEANING, NEVER ROW ORDER", brief)
+        self.assertIn("row 1 white, row 2 yellow and row 3 red is BANNED", brief)
+        self.assertNotIn("(yellow)", editor_formats.cover_title_colour_rule(
+            editor_formats.COVER_AI_TITLE_LEVEL_MAX))
 
     def test_designed_clause_still_locks_the_areas_the_program_pastes_into(self):
         """解放的是設計，不是版面規約：標頭帶／底部飾帶不准被字蓋掉，
@@ -136,9 +164,11 @@ class PromptTests(unittest.TestCase):
         self.assertEqual(res.status_code, 422)
 
     def test_designed_keeps_the_pre_split_lines(self):
-        """設計標題不得取代逐行給定的機制——兩者要同時在 prompt 裡。"""
+        """設計標題不得取代逐行給定的機制——兩者要同時在 prompt 裡。
+        2026-09-11：1 級起行後面不再是顏色標記，而是該行的處理指示（配色已解放）。"""
         prompt = self._prompt(self._split_body(title_style="designed"))
-        self.assertIn("Line 1 (white): 尼泊爾災區", prompt)
+        self.assertIn("Line 1: 尼泊爾災區", prompt)
+        self.assertNotIn("Line 1 (white)", prompt)
         self.assertIn("do NOT re-split, merge or reorder", prompt)
 
 
