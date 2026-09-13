@@ -8,8 +8,8 @@
 字型本來就是台北黑體 Bold，沒有更粗的字重，所以用同色描邊把字幹撐開。描邊是對稱
 長出來的，會把字撐寬也撐高，因此同時釘住「不准爆出牌子」。
 
-字重有兩個（2026-09-13 使用者第二輪：「十點不一樣新的粗度可以，是其他的要取中間
-值」）：十點 BOLD_STROKE_RATIO=0.045，YT 三處 YT_BOLD_STROKE_RATIO=0.022。
+字重是兩個獨立常數（BOLD_STROKE_RATIO／YT_BOLD_STROKE_RATIO），2026-09-13 調了
+三輪後都落在 0.022；同值也不合併，見 compose.py 的註解。
 """
 import io
 import os
@@ -133,15 +133,19 @@ class OtherLayoutsAreBoldToo(unittest.TestCase):
         img = Image.open(io.BytesIO(png))
         box = (round(W * 0.60), 0, round(W * 0.86), round(H * 0.09))
         area = (box[2] - box[0]) * (box[3] - box[1])
-        # 細體 0.068 → 定案 0.125（十點留在 0.045 那個字重，使用者驗收過）
-        self.assertGreater(len(_ink(img, box, _WHITE)) / area, 0.10)
+        # 細體 0.068 → 0.045 版 0.125 → 定案的 0.022 版 0.096
+        self.assertGreater(len(_ink(img, box, _WHITE)) / area, 0.085)
 
 
 class TwoWeightsTests(unittest.TestCase):
-    """十點與 YT 是兩個字重，不是一個預設加一處覆蓋（2026-09-13 使用者第二輪）。"""
+    """十點與 YT 各有自己的字重常數，即使目前同值也不合併（2026-09-13 三輪裁決）。"""
 
-    def test_yt_is_the_lighter_of_the_two(self):
-        self.assertLess(compose.YT_BOLD_STROKE_RATIO, compose.BOLD_STROKE_RATIO)
+    def test_the_two_weights_stay_separate_knobs(self):
+        """合成一個常數之後，下次調其中一邊就會靜默改掉另一邊。"""
+        source = Path(__file__).resolve().parent.parent.joinpath("compose.py").read_text(encoding="utf-8")
+        self.assertIn("BOLD_STROKE_RATIO = ", source)
+        self.assertIn("YT_BOLD_STROKE_RATIO = ", source)
+        self.assertLessEqual(compose.YT_BOLD_STROKE_RATIO, compose.BOLD_STROKE_RATIO)
 
     def test_yt_sits_between_the_hairline_and_the_first_bold_attempt(self):
         """「取中間值」：整點日期的字幹佔比要明顯高於細體 0.184，又明顯低於 0.350。"""
