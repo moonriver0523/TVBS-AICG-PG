@@ -157,20 +157,36 @@ def _draw_text(
 #
 # 描邊會把字整體撐寬 2×stroke。日期紅條／時間白帶的字級是 _fit_font 量出來剛好
 # 塞得下的，直接加描邊就會爆框，所以量字寬時必須把描邊一起算進去（_fit_font_bold）。
-BOLD_STROKE_RATIO = 0.045
+#
+# 2026-09-13 第二輪使用者回饋：第一版 0.045 一律套下去，回報「又太粗了，取中間值」，
+# 追加澄清「十點不一樣新的粗度可以，是其他的要取中間值」。所以**兩個字重**：
+# 十點的兩處日期留在 0.045，YT 三處（整點日期紅條、整點時間白帶、直播日期白條）
+# 折半到 0.022——1920×1080 的整點日期是 80 級字，描邊從 4px 收到 2px，落在原本的
+# 細體與第一版粗體的正中間。
+#
+# 不把它收成一個「預設值」：兩邊都是使用者逐一看過的裁決，寫成一個預設＋一處覆蓋，
+# 下次誰調預設就會靜默改掉另一邊。
+BOLD_STROKE_RATIO = 0.045        # 十點不一樣（使用者驗收：這個粗度可以）
+YT_BOLD_STROKE_RATIO = 0.022     # YT 三處（使用者：取中間值）
 
 
-def _bold_stroke(font: ImageFont.FreeTypeFont) -> int:
+def _bold_stroke(font: ImageFont.FreeTypeFont, ratio: float = BOLD_STROKE_RATIO) -> int:
     """假粗體用的同色描邊寬（依字級等比例，小字才不會被糊掉）。"""
-    return max(1, round(font.size * BOLD_STROKE_RATIO))
+    return max(1, round(font.size * ratio))
 
 
-def _fit_font_bold(text: str, max_width: int, start_size: int, min_size: int) -> ImageFont.FreeTypeFont:
-    """同 _fit_font，但把假粗體描邊撐出來的寬度一起算進去。"""
+def _fit_font_bold(
+    text: str, max_width: int, start_size: int, min_size: int,
+    *, ratio: float = BOLD_STROKE_RATIO,
+) -> ImageFont.FreeTypeFont:
+    """同 _fit_font，但把假粗體描邊撐出來的寬度一起算進去。
+
+    ratio 必須跟等一下實際畫的時候一致，否則量的是 A 字重、畫的是 B 字重，白算。
+    """
     size = start_size
     while size > min_size:
         font = _font(size)
-        if font.getbbox(text)[2] + 2 * _bold_stroke(font) <= max_width:
+        if font.getbbox(text)[2] + 2 * _bold_stroke(font, ratio) <= max_width:
             return font
         size -= 2
     return _font(min_size)
@@ -202,13 +218,16 @@ def _draw_bold_text(
     anchor: str = "la",
     outline: tuple[int, int, int] | None = None,
     outline_width: int = 0,
+    ratio: float = BOLD_STROKE_RATIO,
 ) -> None:
     """把程式壓的日期／時間畫成粗體。
 
     要外框時畫兩趟：第一趟用「外框寬＋假粗體寬」畫出外框，第二趟把粗體字蓋上去。
     一趟畫不出來——Pillow 一次只吃一個 stroke_fill，而這裡外框與字幹是兩個顏色。
+
+    ratio 見 BOLD_STROKE_RATIO／YT_BOLD_STROKE_RATIO：十點與 YT 是兩個字重。
     """
-    bold = _bold_stroke(font)
+    bold = _bold_stroke(font, ratio)
     if anchor[1:2] == "m":
         xy = (xy[0], xy[1] + _ink_centre_shift(font, text))
     if outline is not None and outline_width:
@@ -1509,10 +1528,13 @@ def compose_yt_cover(
         tab_box, radius=14, fill=YT_DATE_FILL,
         outline=YT_DATE_BORDER, width=max(2, round(height * YT_DATE_BORDER_RATIO)),
     )
-    date_font = _fit_font_bold(date_text, tab_w - 28, round(tab_h * 0.72), round(tab_h * 0.4))
+    date_font = _fit_font_bold(
+        date_text, tab_w - 28, round(tab_h * 0.72), round(tab_h * 0.4),
+        ratio=YT_BOLD_STROKE_RATIO,
+    )
     _draw_bold_text(
         draw, ((tab_box[0] + tab_box[2]) // 2, (tab_box[1] + tab_box[3]) // 2 + 2),
-        date_text, date_font, fill=YT_DATE_TEXT, anchor="mm",
+        date_text, date_font, fill=YT_DATE_TEXT, anchor="mm", ratio=YT_BOLD_STROKE_RATIO,
     )
     if ai_translation:
         small = _font(round(height * YT_AI_TRANSLATION_SIZE_RATIO))
@@ -1709,10 +1731,14 @@ def compose_yt_hourly_cover(
         ImageDraw.Draw(layer).rounded_rectangle(band, radius=12, fill=YT_HOURLY_TIME_BAND_FILL)
         canvas.alpha_composite(layer)
         draw = ImageDraw.Draw(canvas)
-        time_font = _fit_font_bold(time_text, band[2] - band[0] - 24, round(band_h * 0.8), round(band_h * 0.4))
+        time_font = _fit_font_bold(
+            time_text, band[2] - band[0] - 24, round(band_h * 0.8), round(band_h * 0.4),
+            ratio=YT_BOLD_STROKE_RATIO,
+        )
         _draw_bold_text(
             draw, ((band[0] + band[2]) // 2, (band[1] + band[3]) // 2 + 2),
             time_text, time_font, fill=YT_HOURLY_TIME_BAND_TEXT, anchor="mm",
+            ratio=YT_BOLD_STROKE_RATIO,
         )
         block_bottom = band[3]
 
@@ -1731,10 +1757,14 @@ def compose_yt_hourly_cover(
         )
         draw.rounded_rectangle(tab_box, radius=10, fill=YT_HOURLY_DATE_FILL)
         tab_w, tab_h = tab_box[2] - tab_box[0], tab_box[3] - tab_box[1]
-        date_font = _fit_font_bold(date_text, tab_w - 28, round(tab_h * 0.78), round(tab_h * 0.4))
+        date_font = _fit_font_bold(
+            date_text, tab_w - 28, round(tab_h * 0.78), round(tab_h * 0.4),
+            ratio=YT_BOLD_STROKE_RATIO,
+        )
         _draw_bold_text(
             draw, ((tab_box[0] + tab_box[2]) // 2, (tab_box[1] + tab_box[3]) // 2 + 2),
             date_text, date_font, fill=YT_HOURLY_DATE_TEXT, anchor="mm",
+            ratio=YT_BOLD_STROKE_RATIO,
         )
 
     # ---- 底部：兩行標題（白／黃、黑描邊），靠左貼邊 ----

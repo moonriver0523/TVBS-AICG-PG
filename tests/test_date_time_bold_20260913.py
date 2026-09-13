@@ -7,6 +7,9 @@
 
 字型本來就是台北黑體 Bold，沒有更粗的字重，所以用同色描邊把字幹撐開。描邊是對稱
 長出來的，會把字撐寬也撐高，因此同時釘住「不准爆出牌子」。
+
+字重有兩個（2026-09-13 使用者第二輪：「十點不一樣新的粗度可以，是其他的要取中間
+值」）：十點 BOLD_STROKE_RATIO=0.045，YT 三處 YT_BOLD_STROKE_RATIO=0.022。
 """
 import io
 import os
@@ -86,10 +89,14 @@ class HourlyDateAndTimeTests(unittest.TestCase):
         return (round(W * b[0]), round(H * b[1]), round(W * b[2]), round(H * b[3]))
 
     def test_the_date_is_visibly_bolder_than_a_hairline(self):
-        """字幹佔紅條的比例：細體版實測 0.184，粗體後 0.35。取 0.27 當門檻。"""
+        """字幹佔紅條的比例：細體 0.184 → 0.045 版 0.350 → 定案的 0.022 版 0.267。
+
+        門檻取 0.23（細體與定案值的中間），只擋「假粗體沒生效」這件事，不去釘死
+        某一個字重——字重是使用者調的（第一版 0.045 被回「又太粗了」）。
+        """
         tab = self._tab()
         area = (tab[2] - tab[0]) * (tab[3] - tab[1])
-        self.assertGreater(len(_ink(self.img, tab, _WHITE)) / area, 0.27)
+        self.assertGreater(len(_ink(self.img, tab, _WHITE)) / area, 0.23)
 
     def test_the_bold_date_stays_inside_the_red_tab(self):
         """2026-09-13 第一版沒改垂直置中，字底壓在紅條下緣上（20 個像素）。"""
@@ -116,8 +123,8 @@ class OtherLayoutsAreBoldToo(unittest.TestCase):
         box = (round(W * 0.02), round(H * 0.19), round(W * 0.26), round(H * 0.33))
         red = _ink(img, box, lambda c: c[0] > 150 and c[1] < 90 and c[2] < 90)
         area = (box[2] - box[0]) * (box[3] - box[1])
-        # 細體版實測 0.309，粗體後 0.394（白條本身也算進紅字以外的面積）
-        self.assertGreater(len(red) / area, 0.35)
+        # 細體 0.309 → 定案 0.364（白條本身也算進紅字以外的面積）
+        self.assertGreater(len(red) / area, 0.33)
 
     def test_the_ten_cover_header_date(self):
         png = compose.compose_ten_cover(
@@ -126,8 +133,26 @@ class OtherLayoutsAreBoldToo(unittest.TestCase):
         img = Image.open(io.BytesIO(png))
         box = (round(W * 0.60), 0, round(W * 0.86), round(H * 0.09))
         area = (box[2] - box[0]) * (box[3] - box[1])
-        # 細體版實測 0.068，粗體後 0.125
+        # 細體 0.068 → 定案 0.125（十點留在 0.045 那個字重，使用者驗收過）
         self.assertGreater(len(_ink(img, box, _WHITE)) / area, 0.10)
+
+
+class TwoWeightsTests(unittest.TestCase):
+    """十點與 YT 是兩個字重，不是一個預設加一處覆蓋（2026-09-13 使用者第二輪）。"""
+
+    def test_yt_is_the_lighter_of_the_two(self):
+        self.assertLess(compose.YT_BOLD_STROKE_RATIO, compose.BOLD_STROKE_RATIO)
+
+    def test_yt_sits_between_the_hairline_and_the_first_bold_attempt(self):
+        """「取中間值」：整點日期的字幹佔比要明顯高於細體 0.184，又明顯低於 0.350。"""
+        png = compose.compose_yt_hourly_cover(
+            _flat(), line1="東北季風", line2="今起增強", date_text=DATE, time_text="20:00")
+        img = Image.open(io.BytesIO(png))
+        b = compose.YT_HOURLY_DATE_TAB_BOX
+        tab = (round(W * b[0]), round(H * b[1]), round(W * b[2]), round(H * b[3]))
+        ratio = len(_ink(img, tab, _WHITE)) / ((tab[2] - tab[0]) * (tab[3] - tab[1]))
+        self.assertGreater(ratio, 0.23)
+        self.assertLess(ratio, 0.31)
 
 
 if __name__ == "__main__":
