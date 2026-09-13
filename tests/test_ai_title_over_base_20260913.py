@@ -222,6 +222,32 @@ class YtCoverOverBase(_Harness):
         self.assertTrue(_near(base.getpixel((w // 4, h // 2)), RED))
         self.assertTrue(_near(base.getpixel((3 * w // 4, h // 2)), BLUE))
 
+    def test_single_two_asis_in_slot_split_in_composite(self):
+        """實拍抓到：單則附圖位放 2 張原圖只出第 1 張——合併時只搬了一張版位圖。"""
+        data, calls = self._run("/api/editor/yt-cover", {
+            "title": "歐洲熱浪破紀錄 馬德里飆42度", "layout": "hourly", "title_mode": "composite",
+            "date_text": "2026/09/13", "slot_left": [_ref(RED, "asis"), _ref(BLUE, "asis")],
+        })
+        self.assertEqual(calls, [])
+        self.assertEqual(data["model"], "yt-cover:asis-split2")
+        img = _decode(data)
+        w, h = img.size
+        y = round(h * 0.30)   # 避開左中的日期紅牌（0.485–0.58）
+        self.assertEqual(img.getpixel((w // 6, y)), RED)
+        self.assertEqual(img.getpixel((5 * w // 6, y)), BLUE)
+
+    def test_single_three_asis_in_slot_ai_title_base_is_three_grid(self):
+        data, calls = self._run("/api/editor/yt-cover", {
+            "title": "歐洲熱浪破紀錄 馬德里飆42度", "layout": "hourly", "title_mode": "ai",
+            "date_text": "2026/09/13", "slot_left": [_ref(RED, "asis"), _ref(GREEN, "asis"), _ref(BLUE, "asis")],
+        })
+        self.assertEqual(len(calls), 1)
+        base = _base_image(calls[0])
+        w, h = base.size
+        self.assertTrue(_near(base.getpixel((w // 6, h // 2)), RED))
+        self.assertTrue(_near(base.getpixel((w // 2, h // 2)), GREEN))
+        self.assertTrue(_near(base.getpixel((5 * w // 6, h // 2)), BLUE))
+
     def test_single_mixed_slot_becomes_all_aiedit(self):
         data, calls = self._run("/api/editor/yt-cover", {
             "title": "川普發布擴張版美國地圖 涵蓋加墨格陵蘭冰島", "layout": "hourly", "title_mode": "ai",

@@ -5701,14 +5701,16 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         # 由 yt_dual_panel_requests 各歸各格。
         # 2026-09-13：清單化後那一格可能只有 AI改圖、沒有版位圖，所以先取版位圖再
         # 補上其餘用途；原本 `next(s for s in ... if s)` 在那種情況會直接 StopIteration。
-        placement = slot_placement_url(req.slot_refs(0) or req.slot_refs(1), "yt-cover")
-        extras = slot_generation_refs(req.slot_refs(0) + req.slot_refs(1))
+        # 2026-09-13 實拍抓到：這裡原本只搬**一張**版位圖（slot_placement_url），單則放
+        # 2–4 張原圖永遠只出第 1 張、切格從來沒觸發。整份原圖清單一起搬，下游
+        # 1 張整版／2 張雙切／3 張三切／4 張四切那條路本來就在。
+        slot_all = req.slot_refs(0) + req.slot_refs(1)
+        placements = [ref for ref in slot_all if ref.purpose == "asis"]
+        extras = slot_generation_refs(slot_all)
         req = req.model_copy(update={
             "reference_images": [
                 ref for ref in req.reference_images if ref.purpose != "asis"
-            ] + extras + (
-                [UserReferenceImage(data_url=placement, purpose="asis")] if placement else []
-            ),
+            ] + extras + placements,
             "asis_left": "", "asis_right": "",
             "slot_left": [], "slot_right": [],
         })
