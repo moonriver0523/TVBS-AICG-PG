@@ -349,12 +349,13 @@ let state = {
     promptTypeSource: 'library',
     // selected 依 chartType 分開存，避免切類型互相污染
     selectedByType: {},
-    // ② 使用者上傳的參考圖：[{dataUrl, purpose:'map'|'scene', name}]
+    // ② 使用者上傳的參考圖：[{dataUrl, purpose, name}]，purpose 見 REF_PURPOSES
     userRefImages: [],
-    // 十點封面左右上傳位（2026-09-07）：{left:{dataUrl,name}|null, right:...}
-    coverAsis: { left: null, right: null },
+    // 十點封面左右上傳位（2026-09-07；2026-09-13 起一格一份清單，與共用附圖區同一個
+    // 資料形狀）：{left: [{dataUrl, purpose, name}], right: [...]}
+    coverAsis: { left: [], right: [] },
     // 整點直播的一標一附圖（2026-09-10，對齊十點）。單則只用 left。
-    ytAsis: { left: null, right: null },
+    ytAsis: { left: [], right: [] },
     // ③ 追加修改用：**置框前**原圖（不是顯示中的成品——成品餵回去會二次拉伸）
     // refineSource = {base64, mimeType}；refineDisplay = 顯示中成品的原始回傳；
     // refineStack 供「退回上一版」
@@ -440,7 +441,7 @@ const EDITOR_FORMATS = {
     // （coverLayout: 'auto'，實際值一律問 coverLayoutNow()）。
     ten_cover: {
         label: '十點不一樣',
-        hint: '只填第一標題＝滿版一張圖；再填第二標題＝左右雙切、兩格各一個標題與附圖位。有附圖的格直接上版，沒附圖的格 AI 生底圖。預設整張由生圖模型設計；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。標頭帶整條由程式貼：Logo、節目標籤、日期與 ON AIR／精華都是正版檔，AI 只負責底圖與標題。',
+        hint: '只填第一標題＝滿版一張圖；再填第二標題＝左右雙切、兩格各一個標題與附圖位。每格可放多張、每張自選用途：「原圖放置」直接上版，「AI改圖」交給 AI 照這張圖重畫一次，其餘當生圖參考；那格沒有原圖放置就由 AI 生底圖。預設整張由生圖模型設計；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。標頭帶整條由程式貼：Logo、節目標籤、日期與 ON AIR／精華都是正版檔，AI 只負責底圖與標題。',
         coverLayout: 'auto',
         inputs: 'cover',
         coverMode: 'ai',
@@ -481,7 +482,7 @@ const EDITOR_FORMATS = {
     // 紅底日期、沒有副標）。
     yt_hourly_cover: {
         label: 'YT整點直播',
-        hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。第二標題填了就是「雙則」：上白＝第一則、下黃＝第二則，每行一整句不拆、最多 18 字，底圖左右兩張羽化拼成一張。附圖跟十點一樣一標一張：每個標題底下各有自己的附圖位，沒放圖的那格由 AI 生底圖。',
+        hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。第二標題填了就是「雙則」：上白＝第一則、下黃＝第二則，每行一整句不拆、最多 18 字，底圖左右兩張羽化拼成一張。附圖跟十點一樣一標一格：每個標題底下各有自己的附圖位，一格可放多張、每張自選用途（原圖放置直接上版、AI改圖由 AI 照這張圖重畫、其餘當參考）；那格沒有原圖放置就由 AI 生底圖。',
         inputs: 'yt_cover',
         ytLayout: 'hourly',
         locks: {},
@@ -706,8 +707,9 @@ window.onload = () => {
         currentLabelClass: 'text-[9px] font-black text-violet-300',
         oninput: 'setCoverTitleCreativity',
         title: '最左＝白／黃／紅逐行配色、版位固定；愈往右愈放給 AI 設計（字句永遠一字不改）',
-        // 沿用既有手寫 HTML 的原文：右端刻度寫的是「奔放」，不是等級 4 的「最狂」。
-        maxLabel: '奔放',
+        // 2026-09-11 使用者裁決：右端刻度改「最狂」。搬家前手寫的 HTML 寫的是
+        // 「奔放」（等級 3 的名字），但拉桿實際拉得到等級 4，刻度與行為對不上。
+        // 拿掉 maxLabel 覆寫後就照 pairs 最後一格，跟另外兩條拉桿一致。
     });
     renderCreativityBar('ytCreativityBar', {
         pairs: YT_CREATIVITY,
@@ -1031,8 +1033,8 @@ function applyEditorFormatInputs() {
         const refHint = document.getElementById('refUploadHint');
         if (refHint) {
             refHint.textContent = ['news', 'hot'].includes(editorFormat().ytLayout || '')
-                ? '地圖底稿／實景參考／肖像照片／原圖放置，單張 ≤1.5MB。原圖放置依張數決定版面：1 張整版、2 張左右雙切、3 張三切，順序就是由左到右'
-                : '地圖底稿／實景參考／肖像照片／原圖放置，單張 ≤1.5MB，最多 3 張';
+                ? '原圖放置／AI改圖／實景參考／肖像照片／地圖底稿，單張 ≤1.5MB。原圖放置依張數決定版面：1 張整版、2 張左右雙切、3 張三切，順序就是由左到右'
+                : '原圖放置／AI改圖／實景參考／肖像照片／地圖底稿，單張 ≤1.5MB，最多 3 張';
         }
         const host = wantsVstrip ? vstrip : (wantsYt ? yt : (wantsCover ? cover : news));
         if (host && refBox.previousElementSibling !== host) host.insertAdjacentElement('afterend', refBox);
@@ -2257,8 +2259,8 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
                     // 十點把通用附圖區整個收起來（hides.refUpload），照片一律走上面那兩顆
                     // 附圖位。那一區殘留的圖不能偷偷跟著送出去，否則使用者看不到卻會影響成圖。
                     reference_images: (editorFormat().hides || {}).refUpload ? [] : userRefImagesPayload(),
-                    asis_left: state.coverAsis.left?.dataUrl || '',
-                    asis_right: fullLayout ? '' : (state.coverAsis.right?.dataUrl || ''),
+                    slot_left: slotPayload(state.coverAsis.left),
+                    slot_right: fullLayout ? [] : slotPayload(state.coverAsis.right),
                 }),
             });
             data = await res.json().catch(() => ({}));
@@ -2406,8 +2408,8 @@ function ytCoverFields() {
         creativity: state.ytCreativity,
         // 一標一附圖（2026-09-10，對齊十點）：只有整點有；其餘版型送空字串，
         // 後端就會走原本的 reference_images 原圖放置清單（1 張整版／2 張雙切／3 張三切）
-        asis_left: ytUsesAsisSlots() ? (state.ytAsis.left?.dataUrl || '') : '',
-        asis_right: ytUsesAsisSlots() && ytLayoutNow() === 'dual' ? (state.ytAsis.right?.dataUrl || '') : '',
+        slot_left: ytUsesAsisSlots() ? slotPayload(state.ytAsis.left) : [],
+        slot_right: ytUsesAsisSlots() && ytLayoutNow() === 'dual' ? slotPayload(state.ytAsis.right) : [],
         // 指令欄（2026-09-08 WP1）：餵給底圖推導當畫面提示
         instruction: coverInstructionForApi(),
     };
@@ -2971,7 +2973,20 @@ const REF_MAX_FILES = 3;
 const REF_MAX_BYTES = 1.5 * 1024 * 1024;
 // portrait＝肖像照：使用者親自上傳時，「兩位以上具名真人不畫臉」鐵律解除
 // （2026-08-17 使用者裁決）；沒附照片的人後端規則仍要求不畫臉。
-const REF_PURPOSES = { map: '地圖底稿', scene: '實景參考', portrait: '肖像照片', asis: '原圖放置' };
+//
+// 2026-09-13 使用者裁決：全站上傳統一成這一組，順序照使用者指定，預設改成「原圖放置」。
+// aiedit（AI改圖）是這次新增的——這張圖就是成品那塊畫面，但交給生圖模型重畫一次。
+// ⚠️ 這裡是 editor_formats.REF_PURPOSE_ORDER 的鏡像，順序與標籤都由
+// tests/test_ref_upload_module_20260913.py 的 parity 測試釘住，改一邊要改兩邊。
+// 刻意用陣列不用物件：順序是規格的一部分，靠物件鍵序保證太脆。
+const REF_PURPOSES = [
+    ['asis', '原圖放置'],
+    ['aiedit', 'AI改圖'],
+    ['scene', '實景參考'],
+    ['portrait', '肖像照片'],
+    ['map', '地圖底稿'],
+];
+const REF_PURPOSE_DEFAULT = 'asis';
 
 // data URL 的 base64 部分解碼回原始 bytes 的實際大小（含 padding 校正）。
 function dataUrlByteLength(dataUrl) {
@@ -3019,43 +3034,69 @@ function compressImageFile(file, maxBytes) {
     });
 }
 
-async function handleRefFilesSelected(input) {
-    const files = Array.from(input.files || []);
-    input.value = '';
-    for (const file of files) {
-        if (state.userRefImages.length >= REF_MAX_FILES) {
-            showToast(`參考圖最多 ${REF_MAX_FILES} 張`);
-            break;
-        }
-        if (file.size <= REF_MAX_BYTES) {
+/* ------------------------------------------------------------
+   上傳圖片共用模組（2026-09-13，見 docs/plan-20260913-上傳圖片模組化.md）
+
+   在此之前有三份幾乎逐字相同的實作：共用附圖區、十點的左右附圖位、整點的
+   左右附圖位。讀檔與壓縮抄三次、render 各寫一份，而且只有共用附圖區有用途
+   下拉——十點與整點固定當原圖放置。這裡收成三支函式：
+
+     readImageFile(file)                 → {dataUrl, name}；超標自動壓縮，失敗丟例外
+     addImageFilesTo(list, input, …)     → 讀進清單（就地 push），滿了 toast 並停
+     renderRefList(listEl, items, cb)    → 一列一張圖：縮圖＋檔名＋用途下拉＋✕
+
+   三處呼叫同一組，用途下拉因此自動長在十點與整點的附圖位上。
+   ------------------------------------------------------------ */
+
+// 讀成 data URL；超過 REF_MAX_BYTES 就壓縮（壓完仍超標視為失敗）。
+// 「已自動壓縮」的 toast 在這裡發——呼叫端只需要處理成功值與例外。
+async function readImageFile(file) {
+    if (file.size <= REF_MAX_BYTES) {
+        const dataUrl = await new Promise((resolve, reject) => {
             const reader = new FileReader();
-            reader.onload = () => {
-                state.userRefImages.push({ dataUrl: reader.result, purpose: 'scene', name: file.name });
-                renderRefUploads();
-            };
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('圖片讀取失敗'));
             reader.readAsDataURL(file);
-            continue;
-        }
-        try {
-            const dataUrl = await compressImageFile(file, REF_MAX_BYTES);
-            if (dataUrlByteLength(dataUrl) > REF_MAX_BYTES) {
-                showToast(`「${file.name}」壓縮後仍過大，請換一張較小的圖`);
-                continue;
-            }
-            showToast(`「${file.name}」已自動壓縮上傳`);
-            state.userRefImages.push({ dataUrl, purpose: 'scene', name: file.name });
-            renderRefUploads();
-        } catch (err) {
-            showToast(`「${file.name}」壓縮失敗：${err.message}`);
-        }
+        });
+        return { dataUrl, name: file.name };
     }
+    const dataUrl = await compressImageFile(file, REF_MAX_BYTES);
+    if (dataUrlByteLength(dataUrl) > REF_MAX_BYTES) {
+        throw new Error('壓縮後仍過大，請換一張較小的圖');
+    }
+    showToast(`「${file.name}」已自動壓縮上傳`);
+    return { dataUrl, name: file.name };
 }
 
-function renderRefUploads() {
-    const list = document.getElementById('refUploadList');
-    if (!list) return;
-    list.innerHTML = '';
-    state.userRefImages.forEach((ref, index) => {
+// 把選到的檔案讀進 list（就地 push），滿了就 toast 並停。回傳有沒有真的加進東西。
+async function addImageFilesTo(list, input, max, onDone) {
+    const files = Array.from(input.files || []);
+    input.value = '';
+    const limit = max || REF_MAX_FILES;
+    let added = false;
+    for (const file of files) {
+        if (list.length >= limit) {
+            showToast(`這一區最多 ${limit} 張`);
+            break;
+        }
+        try {
+            const ref = await readImageFile(file);
+            list.push({ dataUrl: ref.dataUrl, name: ref.name, purpose: REF_PURPOSE_DEFAULT });
+            added = true;
+        } catch (err) {
+            showToast(`「${file.name}」讀取失敗：${err.message}`);
+        }
+        if (onDone) onDone();
+    }
+    if (onDone) onDone();
+    return added;
+}
+
+// 一列一張圖。items 是就地改的陣列；改用途或刪掉都呼叫 onChange 重畫。
+function renderRefList(listEl, items, onChange) {
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    items.forEach((ref, index) => {
         const row = document.createElement('div');
         row.className = 'flex items-center gap-2 bg-slate-950/60 border border-slate-800 rounded-lg px-2 py-1.5';
         const img = document.createElement('img');
@@ -3066,21 +3107,29 @@ function renderRefUploads() {
         name.textContent = ref.name;
         const select = document.createElement('select');
         select.className = 'bg-slate-900 border border-slate-700 rounded text-[10px] text-slate-200 px-1.5 py-1';
-        for (const [value, label] of Object.entries(REF_PURPOSES)) {
+        for (const [value, label] of REF_PURPOSES) {
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
             option.selected = ref.purpose === value;
             select.appendChild(option);
         }
-        select.onchange = () => { ref.purpose = select.value; };
+        select.onchange = () => { ref.purpose = select.value; if (onChange) onChange(); };
         const remove = document.createElement('button');
         remove.className = 'text-[10px] font-black text-slate-500 hover:text-red-400 px-1';
         remove.textContent = '✕';
-        remove.onclick = () => { state.userRefImages.splice(index, 1); renderRefUploads(); };
+        remove.onclick = () => { items.splice(index, 1); if (onChange) onChange(); };
         row.append(img, name, select, remove);
-        list.appendChild(row);
+        listEl.appendChild(row);
     });
+}
+
+async function handleRefFilesSelected(input) {
+    await addImageFilesTo(state.userRefImages, input, REF_MAX_FILES, renderRefUploads);
+}
+
+function renderRefUploads() {
+    renderRefList(document.getElementById('refUploadList'), state.userRefImages, renderRefUploads);
 }
 
 // 具名真人名單與英文原名**必須成對處理**：兩個陣列各自過濾會錯位，
@@ -3115,79 +3164,50 @@ function uploadedAsisCount() {
     return state.userRefImages.filter(ref => ref.purpose === 'asis').length;
 }
 
-// 十點封面左右上傳位：單張，超過大小自動壓縮（與參考圖同一套）。
+/* 十點與整點的附圖位（2026-09-13 起走共用上傳模組）：一格可以放多張，每張各有
+   自己的用途下拉。一格只有一個版位，所以那格的**第一張「原圖放置」**才是直接上版
+   的圖，同格其他張（AI改圖／實景參考／肖像照片／地圖底稿）是那格生底圖時的參考。
+   後端同一套讀法，見 main.slot_reference_list／slot_placement_url。 */
 async function handleCoverAsisSelected(side, input) {
-    const file = (input.files || [])[0];
-    input.value = '';
-    if (!file) return;
-    try {
-        let dataUrl;
-        if (file.size <= REF_MAX_BYTES) {
-            dataUrl = await new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => resolve(reader.result);
-                reader.onerror = () => reject(new Error('圖片讀取失敗'));
-                reader.readAsDataURL(file);
-            });
-        } else {
-            dataUrl = await compressImageFile(file, REF_MAX_BYTES);
-            if (dataUrlByteLength(dataUrl) > REF_MAX_BYTES) return showToast(`「${file.name}」壓縮後仍過大，請換一張較小的圖`);
-            showToast(`「${file.name}」已自動壓縮上傳`);
-        }
-        state.coverAsis[side] = { dataUrl, name: file.name };
-    } catch (err) {
-        return showToast(`「${file.name}」讀取失敗：${err.message}`);
-    }
-    renderCoverAsis();
+    await addImageFilesTo(state.coverAsis[side], input, REF_MAX_FILES, renderCoverAsis);
 }
 
 function clearCoverAsis(side) {
-    state.coverAsis[side] = null;
+    state.coverAsis[side] = [];
     renderCoverAsis();
 }
 
 // 整點直播的附圖位（2026-09-10）：與十點同一組動作，只是存在 state.ytAsis。
 async function handleYtAsisSelected(side, input) {
-    const file = (input.files || [])[0];
-    input.value = '';
-    if (!file) return;
-    try {
-        let dataUrl;
-        if (file.size <= REF_MAX_BYTES) {
-            dataUrl = await new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => resolve(reader.result);
-                reader.onerror = () => reject(new Error('圖片讀取失敗'));
-                reader.readAsDataURL(file);
-            });
-        } else {
-            dataUrl = await compressImageFile(file, REF_MAX_BYTES);
-            if (dataUrlByteLength(dataUrl) > REF_MAX_BYTES) return showToast(`「${file.name}」壓縮後仍過大，請換一張較小的圖`);
-            showToast(`「${file.name}」已自動壓縮上傳`);
-        }
-        state.ytAsis[side] = { dataUrl, name: file.name };
-    } catch (err) {
-        return showToast(`「${file.name}」讀取失敗：${err.message}`);
-    }
-    renderYtAsis();
+    await addImageFilesTo(state.ytAsis[side], input, REF_MAX_FILES, renderYtAsis);
 }
 
 function clearYtAsis(side) {
-    state.ytAsis[side] = null;
+    state.ytAsis[side] = [];
     renderYtAsis();
+}
+
+// 一格裡直接上版的那張圖（第一張原圖放置）；沒有就是「這格由 AI 生底圖」。
+function slotPlacement(list) {
+    return (list || []).find(ref => ref.purpose === 'asis') || null;
+}
+
+// 這一格送給後端的清單（後端欄位 slot_left／slot_right）
+function slotPayload(list) {
+    return (list || []).map(ref => ({ data_url: ref.dataUrl, purpose: ref.purpose }));
+}
+
+function slotHintText(list) {
+    if (!(list || []).length) return '沒圖＝這格由 AI 生底圖';
+    if (slotPlacement(list)) return '這格直接用附圖';
+    return '這格由 AI 生底圖（附圖當參考）';
 }
 
 function renderYtAsis() {
     for (const [side, cap] of [['left', 'Left'], ['right', 'Right']]) {
-        const ref = state.ytAsis[side];
-        const preview = document.getElementById(`ytAsis${cap}Preview`);
-        if (!preview) continue;
-        preview.classList.toggle('hidden', !ref);
-        preview.classList.toggle('flex', !!ref);
-        if (ref) {
-            document.getElementById(`ytAsis${cap}Img`).src = ref.dataUrl;
-            document.getElementById(`ytAsis${cap}Name`).textContent = ref.name;
-        }
+        renderRefList(document.getElementById(`ytAsis${cap}List`), state.ytAsis[side], renderYtAsis);
+        const hint = document.getElementById(`ytAsis${cap}Hint`);
+        if (hint) hint.textContent = slotHintText(state.ytAsis[side]);
     }
 }
 
@@ -3215,28 +3235,22 @@ function updateYtAsisSlots() {
     const leftBtn = document.getElementById('ytAsisLeftBtn');
     if (leftBtn) leftBtn.textContent = dual ? '📁 ＋ 第一附圖（選填）' : '📁 ＋ 附圖（選填）';
     // 從雙則退回單則時，右邊那格的圖不能留著偷偷送出去
-    if (!dual && state.ytAsis.right) state.ytAsis.right = null;
+    if (!dual && state.ytAsis.right.length) state.ytAsis.right = [];
     renderYtAsis();
 }
 
 function renderCoverAsis() {
     for (const [side, cap] of [['left', 'Left'], ['right', 'Right']]) {
-        const ref = state.coverAsis[side];
-        const preview = document.getElementById(`coverAsis${cap}Preview`);
+        renderRefList(document.getElementById(`coverAsis${cap}List`), state.coverAsis[side], renderCoverAsis);
         const hint = document.getElementById(`coverAsis${cap}Hint`);
-        if (!preview) continue;
-        preview.classList.toggle('hidden', !ref);
-        preview.classList.toggle('flex', !!ref);
-        if (hint) hint.textContent = ref ? '這格直接用附圖' : '沒圖＝這格由 AI 生底圖';
-        if (ref) {
-            document.getElementById(`coverAsis${cap}Img`).src = ref.dataUrl;
-            document.getElementById(`coverAsis${cap}Name`).textContent = ref.name;
-        }
+        if (hint) hint.textContent = slotHintText(state.coverAsis[side]);
     }
 }
 
+// 哪一格會「直接用附圖」。只放了 AI改圖／參考圖的格子不算——那格照樣要生底圖，
+// 進度提示與強制壓字都看這個（2026-09-13，後端 slot_placements 同一判準）。
 function coverAsisSlots() {
-    return { left: !!state.coverAsis.left, right: !!state.coverAsis.right };
+    return { left: !!slotPlacement(state.coverAsis.left), right: !!slotPlacement(state.coverAsis.right) };
 }
 
 /* ============================================================

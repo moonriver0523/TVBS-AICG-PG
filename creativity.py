@@ -27,6 +27,16 @@
   "NO NEW TEXT OF ANY KIND"。兩份測試都不歸這次重構動，所以共用文字兩句
   都留——多一句不影響語意，卻讓兩邊的字面釘死同時滿足，出處仍然只有一份。
 
+  2026-09-11 第十批（國旗）：「no flag chips」原本是全面禁令，這裡**就地改寫**成
+  同時帶禁令與界線的一句，不在別處加例外——這個 repo 記過三次「矛盾靠後面覆蓋、
+  模型挑最寬鬆那句遵守」的病灶（見 commit 73ae198 等）。保留的判準跟 (g) 的地圖
+  禁令同一個道理：AI 憑記憶重畫一面旗，條紋比例／色帶順序／徽記畫錯是事實錯誤，
+  不是風格問題。放開的只有「照片裡本來就有的那面旗」——那不是模型畫的，是它本來
+  就在畫面裡的東西，裁下來當設計元素不會有畫錯的風險。真的要用這面旗當招式時，
+  走的是 COVER_ACCESSORY_POOL 的 flag 條目（見下方），不是靠這裡鬆綁就自動生效——
+  那個招式池條目是**確定性換入**，不進隨機抽籤，見 editor_formats.cover_accessories
+  的 visuals 參數與註解。
+
   這段**刻意不編號**（不寫 (a)(b)(c)…）。第一版寫過編號，結果 YT hourly 版
   出現兩個 (b)：yt_fixed_block 依 layout 會整條抽掉日期那句（news／hot 沒有
   日期牌），但日期句留在呼叫端自己的字串裡、編號卻是共用段接續下來的，
@@ -152,8 +162,16 @@ COVER_ACCESSORY_SHAPES: tuple[str, ...] = (
     "starburst-edged",
 )
 
+# 2026-09-11 第十批（配件不看題材）：icon 條目原本帶著
+# "(raincloud, flame, siren, warning triangle, syringe)" 這份災難／氣象例子清單，
+# 條目裡明明已經寫了「taken from the subject」，卻被這份清單當成錨點蓋過去——
+# 實拍國王逝世的封面，L4 抽到的圖示是一朵雨雲，掛在「辭世」旁邊。清單拿掉，正面
+# 方法與語氣（「讀這一則故事，不要讀清單」＋死亡配雨雲的反例）改成共通指示，見
+# editor_formats.cover_accessories() 的 _ICON_SUBJECT_GUIDANCE，一次管住 icon／
+# bubbles／iconrow 三條（都是「畫一個圖示」的招式，不能各自在池子文字裡各寫一次，
+# 那樣下次漏改一條又是同一個坑）。
 COVER_ACCESSORY_POOL: tuple[tuple[str, str], ...] = (
-    ("icon", "A flat WORDLESS PICTOGRAM taken from the subject (raincloud, flame, siren, warning triangle, syringe), hung at one row's start or end at that row's cap height, never covering a stroke."),
+    ("icon", "A flat WORDLESS PICTOGRAM taken from the subject, hung at one row's start or end at that row's cap height, never covering a stroke."),
     ("magnifier", "A {shape} MAGNIFIER INSET: a clean window cut from the photograph enlarging one telling detail, ringed in a bright colour, with a short heavy arrow pointing back to where it came from."),
     ("bubbles", "A CLUSTER OF SMALL {shape} INSETS arcing along one side of the HEADLINE BLOCK (never up beside the main subject, which often sits high in the frame), each holding one wordless pictogram or tiny photographic detail, shrinking as they trail away."),
     ("brush", "A ROUGH BRUSH-STROKE OR TORN BAR of flat saturated colour behind or directly under ONE row — painted edges, not a neat rectangle."),
@@ -162,6 +180,23 @@ COVER_ACCESSORY_POOL: tuple[tuple[str, str], ...] = (
     ("burst", "A WORDLESS BURST behind the block: radiating speed lines, sparks, shards or a torn splash of saturated colour."),
     ("arrow", "ONE HEAVY WORDLESS ARROW in a saturated colour, thick and slightly angled, driving from the photograph towards the headline."),
     ("iconrow", "A SHORT ROW OF SMALL {shape} WORDLESS ICON CHIPS along the lower edge, just ABOVE the navy bottom strip and never inside it, evenly spaced and equal in size, each holding one flat pictogram from the story."),
+)
+
+# 國旗招式（2026-09-11 第十批）。**不進上面那個 tuple**，不跟其他九件一起被
+# rng.shuffle：那九件是「模型自己挑不出花樣，交給程式亂數抽」的東西，這一件不是
+# ——它成不成立取決於照片裡有沒有旗子，是個確定性判斷，不是隨機的。放進池子讓
+# rng 隨機決定「這次要不要用國旗」會有兩個問題：(1) 沒有旗子的照片也可能抽到它，
+# 條文只好又寫一句「不成立時忽略」，模型讀不讀得到全看運氣；(2) 全池子多一顆會
+# 讓 rng.shuffle(pool) 的消耗量變、所有既有 seed 的長相跟著全換，這正是本檔案
+# 開頭「風險 2」要擋的事。改成確定性換入（見 editor_formats.cover_accessories 的
+# visuals 參數）：偵測到旗子才把抽到的最後一件換成這個，沒偵測到就完全不進場、
+# 既有 seed 的長相不變。
+COVER_FLAG_ACCESSORY: tuple[str, str] = (
+    "flag",
+    "THE FLAG ALREADY VISIBLE IN THIS PHOTOGRAPH, cut out at its own stripes,"
+    " proportions and emblem exactly as photographed and enlarged as a backdrop"
+    " panel behind one row — never redrawn from memory, never swapped for a"
+    " different country's flag, and never labelled with a name.",
 )
 
 
@@ -253,8 +288,20 @@ _IMAGE_FIXED = (
     " and legible — no Simplified or Japanese forms, no invented strokes.\n"
     "NO NEW TEXT OF ANY KIND. No text of any kind other than the listed"
     " strings: decorative marks you add are wordless symbols only — no"
-    " letters, no digits, no country names, no place labels, no flag chips,"
-    " no map insets, no extra badges or callouts.\n"
+    " letters, no digits, no country names, no place labels, no flag"
+    " redrawn from memory, no map insets, no extra badges or callouts.\n"
+    # 例外句另起一行，不擠進上面那串 no-X 清單——這個 repo 記過的病灶：排除條文
+    # 埋在一長串否定句中間，模型讀到前面幾個 no 就停了，後面的界線讀不到（見
+    # commit 73ae198）。原本 60 字的括號夾在七個 no 中間正好犯了同一個病；拆開後
+    # 清單裡的那一項維持精確界定（redrawn from memory），例外是另一件事（照片裡
+    # 既有的旗），兩句不衝突，不是「靠後面覆蓋」。
+    "ONE NAMED EXCEPTION TO THAT: a flag ALREADY VISIBLE IN THE PHOTOGRAPH is not"
+    " something you draw — it may be cut out at its own stripes, proportions and"
+    " emblem exactly as photographed and reused as-is, never redrawn, never"
+    " swapped for a different country's, and never labelled with a name."
+    " Redrawing a flag from memory gets the stripes, the proportions or the"
+    " emblem wrong, which is a factual error on air, the same problem as a"
+    " hand-drawn map.\n"
     "Nothing touches or is clipped by the frame edge."
 )
 

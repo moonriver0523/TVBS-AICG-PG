@@ -135,6 +135,12 @@ class LadderTests(unittest.TestCase):
         # →（第四輪，加進字體／落點兩條變化軸）3,000。
         # 3,000 仍是失效那版（7.7KB、坐在第 8,000 字元後）的不到一半，而且照樣坐在
         # CANVAS 正後方——真正決定生死的是位置，長度只是別把自己稀釋掉。
+        # 2026-09-11 第十批（配件不看題材）加了 icon 類招式的共通指示，把 L4 最壞值
+        # 從遠低於 3,000 一路推到 2,978——上限只剩約 22 字元餘裕。**下一個要在
+        # cover_design_brief／cover_accessories 加字的人，先從別處拿掉等量的字，
+        # 不是再放寬一次上限**：上限每次放寬都是為了一件具體的新變化軸，不是給文字
+        # 鋪陳用的預算；上一次砍字（把 guidance 從方法＋反例兩句砍成電報體一句）
+        # 就是在證明「先砍字」是做得到的。
         for level in range(1, 5):
             with self.subTest(level=level):
                 worst = max(
@@ -310,7 +316,11 @@ class LadderTests(unittest.TestCase):
         quoted = editor_formats.cover_line_annotation("「街道成河」", 2)
         self.assertIn("takes its own colour", quoted)
         plain = editor_formats.cover_line_annotation("搜救隊深入泥流區", 1)
-        self.assertIn("must not be one flat colour", plain)
+        # 2026-09-11：原本釘的是無條件禁令「must not be one flat colour」。實拍證明
+        # 那句跟「名詞不准切開」正面矛盾——「哈拉德」整行就是一個詞，遵守換色就
+        # 必然切開名字，模型在 L1 選了聽換色那句。禁令已拆掉（不是覆蓋），所以這裡
+        # 改釘同一件事的新形狀：仍然要求「中途換色」這個預設行為在。
+        self.assertIn("switch colour PART-WAY THROUGH this row", plain)
 
     def test_extra_artwork_never_licenses_extra_words(self):
         """FIXED (e) 仍然管著：清單以外的字一個都不准畫。"""

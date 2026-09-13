@@ -534,10 +534,49 @@ MAX_INPUT_REFERENCES = 6
 # 鐵律解除，但沒附照片的人仍不畫臉——見 USER_REFERENCE_PORTRAIT_RULES）、
 # asis＝原圖放置（2026-08-23 使用者裁決；不重繪、原封不動放進成圖指定
 # 區塊——注意這是 prompt 層級要求，模型仍可能有壓縮/色偏等落差，不保證
-# 像素級一致，見 USER_REFERENCE_ASIS_RULES）。
+# 像素級一致，見 USER_REFERENCE_ASIS_RULES）、aiedit＝AI改圖（2026-09-13
+# 使用者裁決；這張圖就是成品那塊畫面，但交給生圖模型照版型風格重畫一次——
+# 與 asis 差在會被重畫，與 scene 差在畫的是同一個畫面，見 USER_REFERENCE_AIEDIT_RULES）。
+#
+# 這組 key 與前台下拉的順序、標籤由 editor_formats.REF_PURPOSE_ORDER 統一（唯一真相源）。
 class UserReferenceImage(BaseModel):
     data_url: str = Field(min_length=1, max_length=2_800_000)  # 約 2MB base64
-    purpose: Literal["map", "scene", "portrait", "asis"] = "scene"
+    purpose: Literal["map", "scene", "portrait", "asis", "aiedit"] = "scene"
+
+
+# ============================================================
+# 附圖位（十點不一樣／YT整點直播的「一標一附圖」）的共用讀法（2026-09-13）
+#
+# 2026-09-10 的附圖位一格只收一張、固定當原圖放置，欄位就是一個 data URL 字串。
+# 2026-09-13 使用者要求全站上傳統一：每一格改成收一份清單，每張各有自己的用途。
+# 舊的 asis_left／asis_right 字串欄位**保留**並在這裡正規化成「單張 asis 清單」，
+# 舊呼叫端（LINE、既有測試）一字不用改。
+#
+# 一格只放得下一張版位圖：清單裡第一張 asis 才是那格直接上版的圖，同格其他張
+# （aiedit／scene／portrait／map）是那格生底圖時的參考。
+
+
+def slot_reference_list(
+    refs: list[UserReferenceImage], legacy_data_url: str = ""
+) -> list[UserReferenceImage]:
+    """一格的附圖清單。新欄位優先；沒有新欄位才看舊的單張 data URL。"""
+    if refs:
+        return list(refs)
+    url = (legacy_data_url or "").strip()
+    return [UserReferenceImage(data_url=url, purpose="asis")] if url else []
+
+
+def slot_placement_url(refs: list[UserReferenceImage], tag: str = "slot") -> str:
+    """這一格直接上版的那張圖（data URL）；沒有 asis 就回空字串＝這格要生底圖。"""
+    asis = [ref for ref in refs if ref.purpose == "asis"]
+    if len(asis) > 1:
+        print(f"[{tag}] 同一格放了 {len(asis)} 張原圖放置，一格只有一個版位，只取第 1 張", flush=True)
+    return asis[0].data_url if asis else ""
+
+
+def slot_generation_refs(refs: list[UserReferenceImage]) -> list[UserReferenceImage]:
+    """這一格生底圖時要附上的參考圖：原圖放置以外全算（含 AI改圖）。"""
+    return [ref for ref in refs if ref.purpose != "asis"]
 
 
 class ImageGenerateRequest(BaseModel):
@@ -3429,6 +3468,11 @@ def apply_user_references_to_image_request(
     # 寫實照片感＋真名＋沒有示意圖標籤是最糟的組合。
     if req.portrait_reference_data_urls:
         return req.model_copy(update={"prompt": prompt}) if prompt != req.prompt else req
+    # 例外二（2026-09-13 使用者裁決）：AI改圖的畫面是模型重繪出來的，不是使用者
+    # 親自提供的真實素材——那個 override 的語意不成立，「AI示意圖」標籤照舊要留。
+    # 混了別種用途也一樣留：同一張成品只有一個標籤，有任何一塊是 AI 重繪就得標。
+    if any(ref.purpose == "aiedit" for ref in req.reference_images):
+        return req.model_copy(update={"prompt": prompt}) if prompt != req.prompt else req
     if USER_REFERENCE_NO_DISCLAIMER_RULES not in prompt:
         prompt = f"{prompt.rstrip()}\n\n{USER_REFERENCE_NO_DISCLAIMER_RULES}"
     if prompt == req.prompt:
@@ -3813,6 +3857,29 @@ class TenCoverRequest(BaseModel):
     # 兩欄都空時才退回上面 reference_images 的 asis 順序規則（舊呼叫端相容）。
     asis_left: str = Field(default="", max_length=2_800_000)
     asis_right: str = Field(default="", max_length=2_800_000)
+    # 2026-09-13：每一格改收一份清單，每張各有自己的用途（原圖放置／AI改圖／實景／
+    # 肖像／地圖）。上面兩個字串欄位留著給舊呼叫端，讀法一律走 slot_refs()。
+    slot_left: list[UserReferenceImage] = Field(
+        default_factory=list, max_length=MAX_INPUT_REFERENCES
+    )
+    slot_right: list[UserReferenceImage] = Field(
+        default_factory=list, max_length=MAX_INPUT_REFERENCES
+    )
+
+    def slot_refs(self, side: int) -> list[UserReferenceImage]:
+        """第 side 格（0＝左／滿版、1＝右）的附圖清單。"""
+        return slot_reference_list(
+            self.slot_left if side == 0 else self.slot_right,
+            self.asis_left if side == 0 else self.asis_right,
+        )
+
+    def slot_placements(self) -> tuple[str, str]:
+        """左右兩格直接上版的圖（data URL；沒有就是空字串）。"""
+        return (
+            slot_placement_url(self.slot_refs(0), "cover"),
+            slot_placement_url(self.slot_refs(1), "cover"),
+        )
+
     # 追加修改後回來重貼固定元素（2026-09-07，比照 YT 封面的同名欄位）：純 AI 版的
     # 成品是「模型畫的整張圖＋程式後貼的 Logo／節目標籤／AI示意圖」，refine 改的是
     # 貼之前的模型原圖，改完要再走一次後貼才是成品。base64，不是 data URL。
@@ -3870,9 +3937,13 @@ def ten_cover_asis_images(req: "TenCoverRequest") -> list[bytes]:
 
 
 def ten_cover_slot_images(req: "TenCoverRequest") -> tuple[bytes | None, bytes | None]:
-    """左右上傳位的原始 bytes；沒圖的位子是 None。"""
+    """左右上傳位**直接上版**那張圖的原始 bytes；那格沒有原圖放置就是 None。
+
+    None 不代表那格沒附圖——只放了 AI改圖／實景參考的格子也是 None，
+    那格照樣要生底圖，只是生的時候帶著那些參考（見 slot_generation_refs）。
+    """
     out: list[bytes | None] = []
-    for data_url in (req.asis_left, req.asis_right):
+    for data_url in req.slot_placements():
         if not data_url.strip():
             out.append(None)
             continue
@@ -3884,7 +3955,9 @@ def ten_cover_slot_images(req: "TenCoverRequest") -> tuple[bytes | None, bytes |
 
 
 def ten_cover_uses_slots(req: "TenCoverRequest") -> bool:
-    return bool(req.asis_left.strip() or req.asis_right.strip())
+    """有沒有用附圖位。格子裡只放了 AI改圖／參考圖也算——那些圖是指定給那一格的，
+    退回共用清單會被兩格一起吃掉，等於使用者指的那一格失效。"""
+    return bool(req.slot_refs(0) or req.slot_refs(1))
 
 
 class CoverVisuals(tuple):
@@ -4223,8 +4296,10 @@ def _cover_ai(
     # 放在 TYPOGRAPHY 段尾，實拍四級長得一模一樣——L4 的 prompt 14K 字元，條文坐在
     # 第 8,000 字元之後，模型只讀得進前面那幾段（斜切線的數字就是寫在 CANVAS 才生效的）。
     titles = (req.title_left, req.title_right)
+    # visuals=（2026-09-11 第十批）：畫面描述傳進去只為了讓招式段判斷有沒有旗子可用
+    # （見 editor_formats.cover_accessories）——不影響其餘措辭。
     design_brief = editor_formats.cover_design_brief(
-        level, titles=titles, full_width=(req.layout == "full")
+        level, titles=titles, full_width=(req.layout == "full"), visuals=visuals
     )
     colour_rule = editor_formats.cover_title_colour_rule(level)
     # 3 級起才把反色底字釘在行清單上（條文本身也是 3 級起才要求）。
@@ -4280,8 +4355,13 @@ def _cover_ai(
         aspect_ratio="16:9",
         image_size="1K",
         safe_frame=False,
-        # asis 走不到這裡（有 asis 端點就強制 composite）；其他用途依規則當生圖參考
-        reference_images=[ref for ref in req.reference_images if ref.purpose != "asis"],
+        # asis 走不到這裡（有 asis 端點就強制 composite）；其他用途依規則當生圖參考。
+        # 2026-09-13：附圖位裡的 AI改圖／實景／肖像／地圖也要收——整張 AI 版是十點的
+        # 預設模式，漏掉這裡等於使用者在那一格選了 AI改圖 卻完全沒送進模型。
+        # 整張 AI 只有一個畫面，兩格的參考都歸這一張。
+        reference_images=[
+            ref for ref in req.reference_images if ref.purpose != "asis"
+        ] + slot_generation_refs(req.slot_refs(0)) + slot_generation_refs(req.slot_refs(1)),
         portrait_subjects=subjects,
         portrait_subjects_en=english,
     )
@@ -4343,14 +4423,19 @@ def _cover_full_composite(
     slot_mime = ""
     if slot is not None:
         # 附圖的 MIME 照實回報（上傳的可能是 JPEG），不要一律寫死 PNG
-        slot_mime, _, _ = _split_data_url(req.asis_left) if req.asis_left.strip() else ("", "", "")
+        placement = req.slot_placements()[0]
+        slot_mime, _, _ = _split_data_url(placement) if placement else ("", "", "")
     else:
         legacy = ten_cover_asis_images(req)
         slot = legacy[0] if legacy else None
     is_ai = slot is None
     image_model = "ten-cover-full:asis"
     if is_ai:
-        references = [ref for ref in req.reference_images if ref.purpose != "asis"]
+        # 滿版只有一格＝左格：那一格附圖位裡的 AI改圖／實景／肖像／地圖要一起送進去，
+        # 不然使用者對著那一格放的 AI改圖等於沒放（2026-09-13）。
+        references = [
+            ref for ref in req.reference_images if ref.purpose != "asis"
+        ] + slot_generation_refs(req.slot_refs(0))
         subjects, english = cover_portraits(visual, 0)
         slot, image_model = _cover_full_image(
             visual[0] if isinstance(visual, CoverVisuals) else visual, req.provider, references, subjects, english,
@@ -4374,6 +4459,8 @@ def _cover_composite(
     模型名記 `ten-cover:asis`；兩格都生時兩個模型名相同就只記一次。
     """
     references = [ref for ref in req.reference_images if ref.purpose != "asis"]
+    # 每一格自己的參考圖（2026-09-13）：共用清單兩格都吃，附圖位裡的只進那一格。
+    panel_references = [references + slot_generation_refs(req.slot_refs(i)) for i in (0, 1)]
     if ten_cover_uses_slots(req):
         # 左右上傳位（2026-09-07）：有圖的格直接上版，沒圖的格生底圖；只有一格有圖也不做全版
         slot_left, slot_right = ten_cover_slot_images(req)
@@ -4396,7 +4483,7 @@ def _cover_composite(
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             futures = {
                 i: pool.submit(
-                    _cover_panel_image, visuals[i], req.provider, references,
+                    _cover_panel_image, visuals[i], req.provider, panel_references[i],
                     *cover_portraits(visuals, i), excluded=cover_excluded(visuals, i),
                 )
                 for i in todo
@@ -4623,7 +4710,9 @@ def cover_portrait_log_fields(visuals) -> dict:
 
 def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse:
     """十點不一樣（滿版）：一張圖、一個標題。附圖有就放、沒有就生一張。"""
-    has_asis = bool(req.asis_left.strip()) or any(ref.purpose == "asis" for ref in req.reference_images)
+    has_asis = bool(req.slot_placements()[0]) or any(
+        ref.purpose == "asis" for ref in req.reference_images
+    )
     if has_asis and req.mode == editor_formats.COVER_MODE_AI:
         print("[cover] 滿版附圖 → 改合成版（程式壓字）", flush=True)
         req = req.model_copy(update={"mode": editor_formats.COVER_MODE_COMPOSITE})
@@ -4736,8 +4825,10 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     if not req.title_right.strip():
         raise HTTPException(status_code=400, detail="雙切版型左右標題都要填")
 
-    slots = (bool(req.asis_left.strip()), bool(req.asis_right.strip()))
-    if any(slots):
+    # slots＝哪一格有「直接上版」的圖。只放了 AI改圖／參考的格子不算數：那格照樣生底圖，
+    # 也就不該把整個封面拉去強制合成版（2026-09-13 使用者裁決之三）。
+    slots = tuple(bool(url) for url in req.slot_placements())
+    if ten_cover_uses_slots(req):
         asis_count = sum(slots)
         asis_label = "-asis" + ("L" if slots[0] else "") + ("R" if slots[1] else "")
     else:
@@ -4902,19 +4993,44 @@ class YtCoverRequest(BaseModel):
     # 原圖放置清單，1 張整版／2 張左右雙切／3 張三切一字不變。
     asis_left: str = Field(default="", max_length=2_800_000)
     asis_right: str = Field(default="", max_length=2_800_000)
+    # 2026-09-13：每一格改收一份清單，每張各有自己的用途（讀法同十點，見 slot_reference_list）。
+    slot_left: list[UserReferenceImage] = Field(
+        default_factory=list, max_length=MAX_INPUT_REFERENCES
+    )
+    slot_right: list[UserReferenceImage] = Field(
+        default_factory=list, max_length=MAX_INPUT_REFERENCES
+    )
     # 已有底圖時只重疊文字（追加修改後、或只改標題／副標／日期）。base64，不是 data URL。
     background_image_base64: str = Field(default="", max_length=28_000_000)
     background_mime_type: str = "image/png"
     # 那張底圖是不是 AI 生的——決定要不要疊「AI示意圖」。前端原樣帶回上一次的回應值。
     background_is_ai: bool = False
 
+    def slot_refs(self, side: int) -> list[UserReferenceImage]:
+        """第 side 格（0＝第一則／單則、1＝第二則）的附圖清單。"""
+        return slot_reference_list(
+            self.slot_left if side == 0 else self.slot_right,
+            self.asis_left if side == 0 else self.asis_right,
+        )
+
     def asis_slots(self) -> tuple[str, str]:
-        """兩個附圖位的內容（可能其中一格或兩格是空字串）。"""
-        return (self.asis_left.strip(), self.asis_right.strip())
+        """兩個附圖位**直接上版**的那張圖（沒有就是空字串）。
+
+        注意這裡只回原圖放置那張：一格裡的 AI改圖／實景／肖像／地圖不是版位圖，
+        它們走 slot_generation_refs 進那一格的生圖參考。
+        """
+        return (
+            slot_placement_url(self.slot_refs(0), "yt-cover"),
+            slot_placement_url(self.slot_refs(1), "yt-cover"),
+        )
 
     def uses_asis_slots(self) -> bool:
-        """有沒有用新的一標一附圖欄位——沒有就走舊的 reference_images 清單。"""
-        return any(self.asis_slots())
+        """有沒有用新的一標一附圖欄位——沒有就走舊的 reference_images 清單。
+
+        只要格子裡有東西就算數，即使那一格全是 AI改圖／參考、沒有版位圖：
+        那些圖仍然是**指定給那一格**的，不能退回共用清單被兩格一起吃掉。
+        """
+        return any(self.slot_refs(0)) or any(self.slot_refs(1))
 
 
 class YtCoverResponse(ImageGenerateResponse):
@@ -5117,7 +5233,10 @@ def _yt_cover_full_image(
     }.get(req.layout, editor_formats.YT_COVER_FULL_PROMPT_NEWS)
     # 日期條那一條由 compose 的 box 產生（2026-09-11 創意階梯）——prompt 與程式貼附
     # 用的是同一個座標，不會再有「兩邊各寫各的百分比」那種對不上的 bug。
-    # 整點以外的版型模板沒有這個佔位，多給的欄位 format 會忽略。
+    # 整點以外的版型模板沒有 date_clause／date_text_line／date_ban／logo_keep_out／
+    # badge_keep_out 這幾個佔位，多給的欄位 format 會忽略。title_top 是例外
+    # （2026-09-11 第十批起）：news／hot 補了跟 hourly 同源的「標題落到底部邊緣」
+    # 那句，也吃這個值，所以下面這行本來就對三個版型都傳，不用另外接線。
     # 跟 5144 那處算法一致——模型畫的日期與程式後貼的必須是同一天
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
     image_req = ImageGenerateRequest(
@@ -5152,6 +5271,9 @@ def _yt_cover_full_image(
                 # 底帶開著時，整幅底帶與「每行各自一塊底板」是兩個打架的指示——
                 # brief 要知道，才能明講兩者關係而不是讓模型自己挑一個遵守。
                 bottom_band=req.bottom_band,
+                # visual=（2026-09-11 第十批）：只為了讓招式段判斷這張照片裡有沒有
+                # 旗子可用（見 editor_formats.cover_accessories）。
+                visual=visual,
             ),
             layout_rules=editor_formats.yt_layout_rules(req.creativity, req.layout),
             title_top=editor_formats.yt_title_top(req.creativity),
@@ -5218,9 +5340,9 @@ def yt_dual_panel_requests(req: "YtCoverRequest") -> tuple["YtCoverRequest", "Yt
     if req.uses_asis_slots():
         # 一標一附圖（2026-09-10）：哪張進哪格是使用者指定的，不再靠上傳順序猜。
         # 只填右邊那格也不會被誤送到左格——這正是舊寫法會出的錯。
-        slot_left, slot_right = req.asis_slots()
-        asis_left = [UserReferenceImage(data_url=slot_left, purpose="asis")] if slot_left else []
-        asis_right = [UserReferenceImage(data_url=slot_right, purpose="asis")] if slot_right else []
+        # 2026-09-13：一格改收一份清單，所以整份清單直接歸那一格——版位圖與那一格
+        # 專屬的 AI改圖／實景／肖像一起過去，不再只搬一張 asis。
+        asis_left, asis_right = req.slot_refs(0), req.slot_refs(1)
     else:
         asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
         if len(asis) > 2:
@@ -5229,13 +5351,13 @@ def yt_dual_panel_requests(req: "YtCoverRequest") -> tuple["YtCoverRequest", "Yt
     left = req.model_copy(update={
         "title": req.title.strip(), "title_second": "",
         "reference_images": others + asis_left,
-        "asis_left": "", "asis_right": "",
+        "asis_left": "", "asis_right": "", "slot_left": [], "slot_right": [],
         "background_image_base64": "",
     })
     right = req.model_copy(update={
         "title": req.title_second.strip(), "title_second": "",
         "reference_images": others + asis_right,
-        "asis_left": "", "asis_right": "",
+        "asis_left": "", "asis_right": "", "slot_left": [], "slot_right": [],
         "background_image_base64": "",
     })
     return left, right
@@ -5317,21 +5439,38 @@ def yt_dual_background(
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     dual = editor_formats.yt_cover_is_dual(req.layout, req.title_second)
     if not dual and req.uses_asis_slots():
-        # 單則只有一格，附圖位的那張就是整版底圖：正規化成舊的原圖放置清單，
+        # 單則只有一格，附圖位裡的東西就是整版那一格的：整份清單併進共用清單，
         # 下游 1 張＝整版鋪滿那條路完全不用改。雙則不走這裡——它要保留左右格身分，
         # 由 yt_dual_panel_requests 各歸各格。
-        slot = next(s for s in req.asis_slots() if s)
+        # 2026-09-13：清單化後那一格可能只有 AI改圖、沒有版位圖，所以先取版位圖再
+        # 補上其餘用途；原本 `next(s for s in ... if s)` 在那種情況會直接 StopIteration。
+        placement = slot_placement_url(req.slot_refs(0) or req.slot_refs(1), "yt-cover")
+        extras = slot_generation_refs(req.slot_refs(0) + req.slot_refs(1))
         req = req.model_copy(update={
             "reference_images": [
                 ref for ref in req.reference_images if ref.purpose != "asis"
-            ] + [UserReferenceImage(data_url=slot, purpose="asis")],
+            ] + extras + (
+                [UserReferenceImage(data_url=placement, purpose="asis")] if placement else []
+            ),
             "asis_left": "", "asis_right": "",
+            "slot_left": [], "slot_right": [],
         })
     if yt_cover_asis_count(req) >= 1 and req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI:
         # 有原圖放置一律程式壓字（2026-09-07 使用者裁決，與十點封面同一原則）：
         # 原圖放置＝真實新聞照直接上版，交給模型重畫會走樣；原本只在 ≥2 張時強制，
         # 單張仍走整張 AI 生成、把照片當參考圖，和前端提示「直接當底圖不生圖」不符。
         print(f"[yt-cover] 原圖放置附圖 {yt_cover_asis_count(req)} 張 → 直接當底圖，標題改程式壓字", flush=True)
+        req = req.model_copy(update={"title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE})
+    if not req.background_image_base64 and editor_formats.yt_hourly_short_title_needs_composite(
+        req.layout, req.creativity, req.title_mode, req.title, req.title_second
+    ):
+        # 極短標題的整點 0 級一律程式壓字（2026-09-13 使用者裁決，理由與實拍數據見
+        # editor_formats.yt_hourly_short_title_needs_composite）：字少時模型把標題畫得
+        # 太大，會爬上去撞程式壓的日期紅條，prompt 端的字高上限擋不住。
+        # 判定只看第一行（空格前那一段）≤5 格：第二行字級跟著第一行走。
+        # 帶了 background_image_base64 就不能改：那是追加修改回來的圖，標題已經畫在
+        # 上面了，這裡只貼固定元素；改成 composite 會把標題再壓一次、疊成兩層。
+        print(f"[yt-cover] 整點極短標題「{req.title}」→ 改程式壓字，避免撞日期紅條", flush=True)
         req = req.model_copy(update={"title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE})
     hourly = req.layout == editor_formats.YT_COVER_LAYOUT_HOURLY
     hot = req.layout == editor_formats.YT_COVER_LAYOUT_HOT

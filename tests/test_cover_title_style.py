@@ -212,14 +212,16 @@ class FrontendTests(unittest.TestCase):
     def test_the_slider_shows_the_level_name_like_the_effort_bar(self):
         """使用者要的是 effort 那條的樣子：兩端標示＋當前檔位的名字。
 
-        右端刻度沿用既有手寫 HTML 的原文「奔放」（等級 3 的名字，不是等級 4
-        的「最狂」）——這是搬家前就存在的落差，P5 只搬 HTML、不改使用者看得到
-        的字，所以透過 renderCreativityBar 的 maxLabel 覆寫保留原樣。
+        右端刻度是「最狂」。搬家前手寫的 HTML 寫的是「奔放」（等級 3 的名字），
+        但拉桿實際拉得到等級 4，刻度與行為對不上——2026-09-11 使用者裁決改掉。
+        修法是拿掉覆寫、讓它照 pairs 最後一格，所以這裡連帶釘住「不准再出現
+        端點覆寫」，避免哪天又被加回去。比對的是鍵語法 `maxLabel:` 而不是裸字
+        ——呼叫端的中文註解會提到這個名字，用裸字會被自己的註解誤判。
         """
         call = self._cover_title_style_render_call()
         self.assertIn("labelId: 'coverTitleStyleLabel'", call)
         self.assertIn("pairs: COVER_TITLE_CREATIVITY", call)
-        self.assertIn("maxLabel: '奔放'", call)
+        self.assertNotIn("maxLabel:", call)
         block = APP_JS.split("COVER_TITLE_CREATIVITY = [")[1].split("];")[0]
         pairs = re.findall(r"\['([^']+)',\s*'[^']+'\]", block)
         self.assertEqual(len(pairs), 5)

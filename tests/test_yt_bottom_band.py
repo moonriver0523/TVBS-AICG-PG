@@ -122,8 +122,15 @@ class AiPromptTests(unittest.TestCase):
                 self.assertIn("behind the band", prompt)
 
     def test_hourly_prompt_still_renders_and_never_mentions_a_band(self):
-        """整點版模板沒有底帶佔位；帶了開關也不能讓 format 炸掉或冒出帶子。"""
-        prompt = self._prompt(self._body(layout="hourly", bottom_band=True, date_text="2026/09/08"))
+        """整點版模板沒有底帶佔位；帶了開關也不能讓 format 炸掉或冒出帶子。
+
+        標題另外換過（2026-09-13）：這支要驗的是 AI 標題那條 prompt，而原本的
+        「大象來了」第一行只有 4 字，會被極短標題規則轉成程式壓字、根本不組這段
+        prompt（見 test_yt_hourly_short_title_composite_20260913）。
+        """
+        prompt = self._prompt(self._body(
+            layout="hourly", bottom_band=True, date_text="2026/09/08",
+            title="大象來了十萬人 塞爆士林街頭"))
         self.assertIn("No band behind them", prompt)
         self.assertNotIn("about 60% opaque", prompt)
 

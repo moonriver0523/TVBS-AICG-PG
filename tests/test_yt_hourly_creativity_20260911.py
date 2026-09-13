@@ -5,6 +5,12 @@
 十點的 18/24/30/36% 是量十點成品訂的。實測（已排除日期牌）：程式壓字版的兩行
 標題佔畫面高 29.2%，模型自己畫 32.7–36.2% 且四級之間沒有單調趨勢，證實在此之前
 拉桿對標題構圖完全沒有作用。使用者裁決塊高 26/31/36/41%、字級落差照搬十點。
+
+2026-09-11 第十批：26/31/36/41% 訂錯了——L1 的 26% 比播出標準 29.2% 還小，階梯
+第一階是「叫模型往下踩」，模型不肯縮，實拍 L1 兩個版型都畫成 33% 左右（等於沒吃到
+這一級的指示），L2 的 31% 也才剛追平播出標準，L1／L2 幾乎沒有級距。改成
+32/36/40/44%：L1 貼齊播出標準再往上一點（不是往下踩），四級穩定爬升，跨度收到
+1.375 倍。
 """
 
 import os
@@ -32,11 +38,25 @@ class BlockHeightLadderTests(unittest.TestCase):
         self.assertEqual(heights, sorted(heights))
         self.assertEqual(len(set(heights)), 4, "有兩級塊高一樣＝那一段拉桿沒有作用")
 
+    def test_the_ladder_is_pinned_to_the_corrected_numbers(self):
+        """2026-09-11 第十批：26/31/36/41% → 32/36/40/44%。釘死具體數字，不只是
+        釘「有級距」——上一版也是單調遞增，但 L1 訂得比播出標準還小，單調這條測試
+        本身完全看不出來，這正是那次沒踩住的地方。"""
+        self.assertEqual(
+            {level: spec["height"] for level, spec in ef.YT_BRIEF_SPECS.items()},
+            {1: "32%", 2: "36%", 3: "40%", 4: "44%"},
+        )
+
     def test_the_ladder_is_anchored_to_the_measured_broadcast_block(self):
-        """實測程式壓字版（已驗收的播出標準）是 29.2%。L1 要比它小（讓照片突出）、
-        L4 要明顯比它大，否則這條拉桿只是在原地抖動。"""
+        """實測程式壓字版（已驗收的播出標準）是 29.2%。
+
+        2026-09-11 第十批改判準：舊版要求 L1 比播出標準還小（「讓照片突出」），
+        結果 L1 是階梯裡唯一往下踩的一階，模型不肯縮，實拍 L1 兩個版型都畫成
+        33% 左右——訂錯的不是機制，是方向。改成 L1 貼齊播出標準（略大，不刻意
+        更小），L4 仍然要明顯比它大，否則這條拉桿只是在原地抖動。"""
         measured = 0.292
-        self.assertLess(ef._yt_block_height(1), measured)
+        self.assertGreaterEqual(ef._yt_block_height(1), measured)
+        self.assertLess(ef._yt_block_height(1), measured * 1.2, "L1 該是貼齊，不是大跳")
         self.assertGreater(ef._yt_block_height(4), measured * 1.3)
 
     def test_the_title_top_follows_the_block_height(self):
