@@ -636,6 +636,21 @@ def lock_half_slot_asis(refs: list[UserReferenceImage], tag: str = "slot") -> li
     return [ref.model_copy(update={"purpose": "aiedit"}) if ref.purpose == "asis" else ref for ref in refs]
 
 
+def reject_excess_asis(refs: list[UserReferenceImage], *, where: str) -> None:
+    """滿版一格的原圖放置超過自動切格上限就 400（2026-09-14 使用者裁決：「限制滿版最多 4 張」）。
+
+    以前 _cover_full_base／_yt_cover_background 默默只取前 4 張，使用者以為 5 張都上了。
+    在端點入口就擋，擋在斷句／消化任何模型呼叫之前，白燒不到一通。只管會自動切格的
+    滿版格（十點滿版、整點單則）；雙切的半格 ≥2 張本來就鎖成 AI改圖，不歸這裡。
+    """
+    n = sum(1 for ref in refs if ref.purpose == "asis")
+    if n > compose.YT_SPLIT_MAX_PANELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{where}原圖放置最多 {compose.YT_SPLIT_MAX_PANELS} 張（收到 {n} 張），請移除多的再送",
+        )
+
+
 class ImageGenerateRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=20_000)
     provider: Literal["gemini", "gpt"] = "gemini"
@@ -5059,13 +5074,16 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
             detail=f"未知的標籤：{req.badge}（可用：{list(compose.COVER_BADGES)}）",
         )
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
-    # 斷句交給消化模型（2026-09-14）：入口登記詞組邊界，下游所有斷行都只在邊界上切
-    apply_title_break_hints(req.title_left, req.title_right)
     # 版面在入口就正規化成 split／full 一次（2026-09-08 WP1）：下游那一票
     # `req.layout == "full"` 的判斷因此完全不用動，也不會有人再看到 None。
     req = req.model_copy(
         update={"layout": editor_formats.resolve_cover_layout(req.layout, req.title_right)}
     )
+    if req.layout == "full":
+        # 滿版原圖放置最多 4 張（2026-09-14），擋在下面的斷句模型之前
+        reject_excess_asis(req.slot_refs(0) or req.reference_images, where="滿版")
+    # 斷句交給消化模型（2026-09-14）：入口登記詞組邊界，下游所有斷行都只在邊界上切
+    apply_title_break_hints(req.title_left, req.title_right)
     if req.layout == "full":
         return _editor_cover_full(req, date_text)
     if not req.title_right.strip():
@@ -5754,9 +5772,6 @@ def yt_dual_background(
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     live24 = req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
-    # 斷句交給消化模型（2026-09-14）：live24 單行不拆，不必打
-    if not live24:
-        apply_title_break_hints(req.title, req.title_second)
     if live24 and req.creativity < 1:
         # 0 級＝規矩：標題由程式壓，位置／字級／斜度／顏色都是從實際播出範本量到的，
         # 像素級精準且零錯字。1 級起交給模型（2026-09-13 使用者裁決：「標題完全沒有
@@ -5772,6 +5787,12 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         and bool(req.slot_refs(0)) and bool(req.slot_refs(1)) if live24
         else editor_formats.yt_cover_is_dual(req.layout, req.title_second)
     )
+    if not dual:
+        # 單則整版原圖放置最多 4 張（2026-09-14），擋在下面的斷句模型之前
+        reject_excess_asis(req.slot_refs(0) + req.slot_refs(1) + req.reference_images, where="單則")
+    # 斷句交給消化模型（2026-09-14）：live24 單行不拆，不必打
+    if not live24:
+        apply_title_break_hints(req.title, req.title_second)
     if not dual and req.uses_asis_slots():
         # 單則只有一格，附圖位裡的東西就是整版那一格的：整份清單併進共用清單，
         # 下游 1 張＝整版鋪滿那條路完全不用改。雙則不走這裡——它要保留左右格身分，
