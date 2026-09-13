@@ -36,6 +36,33 @@ PIPELINE_YT_COVER = "yt_cover"
 # 疊在直播訊號上，所以自成一條 pipeline，跟三種 YT 封面不是同一件事。
 PIPELINE_YT_OVERLAY = "yt_overlay"
 
+# ============================================================
+# 上傳圖片的用途（2026-09-13 使用者裁決：全站統一成同一組，順序照使用者指定）
+#
+# 這裡是唯一真相源：app.js 的 REF_PURPOSES 照抄一份，由
+# tests/test_ref_upload_module_20260913.py 的 parity 測試釘住（比照 test_prompt_parity）。
+#
+# 刻意用「有序的 (key, label) 陣列」而不是 dict：使用者明確指定了下拉的排列順序，
+# 靠 Python dict 與 JS 物件的鍵序去保證兩邊一致太脆——順序是規格的一部分。
+#
+# asis    ＝原圖放置：原封不動放進成圖，一次生圖 API 都不打
+# aiedit  ＝AI改圖：這張圖當底交給生圖模型重繪成版型風格（2026-09-13 新增）
+# scene   ＝實景參考：場景／建物／器材外觀依附圖
+# portrait＝肖像照片：使用者親自上傳的臉，解除「兩位以上具名真人不畫臉」鐵律
+# map     ＝地圖底稿：地理關係以附圖為準
+REF_PURPOSE_ORDER: list[tuple[str, str]] = [
+    ("asis", "原圖放置"),
+    ("aiedit", "AI改圖"),
+    ("scene", "實景參考"),
+    ("portrait", "肖像照片"),
+    ("map", "地圖底稿"),
+]
+# 預設用途 2026-09-13 由 scene 改成 asis（使用者：「原圖放置(預設)」）。
+# 連帶影響見 docs/plan-20260913-上傳圖片模組化.md：主流程附圖預設變成直接上版，
+# YT 國內外／今日熱搜的張數也就直接決定版面。
+REF_PURPOSE_DEFAULT = "asis"
+REF_PURPOSE_KEYS = tuple(key for key, _ in REF_PURPOSE_ORDER)
+
 # 封面的兩種做法。ai＝整張交給生圖模型（只有 Logo 後製）；
 # composite＝AI 只出兩張無文字底圖、文字全部由 Pillow 畫（見 compose.compose_ten_cover）。
 COVER_MODE_AI = "ai"

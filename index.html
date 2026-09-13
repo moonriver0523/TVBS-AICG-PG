@@ -312,7 +312,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260913-06</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260913-07</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -366,14 +366,14 @@
                     <p id="instructionOverrideHint" class="hidden text-[10px] text-amber-400/90 italic mt-1"></p>
                     </div>
 
-                    <!-- ② 上傳參考圖：地圖底稿／實景參考／肖像照片／原圖放置。
+                    <!-- ② 上傳參考圖：原圖放置／AI改圖／實景參考／肖像照片／地圖底稿。
                          放在 newsInputs 外面：主流程與 YT 直播封面共用同一組附圖，
                          十點不一樣不收附圖時由 applyEditorFormatInputs 收起來 -->
                     <div id="refUploadBox" class="mt-2">
                         <div class="flex items-center gap-2">
                             <button type="button" onclick="document.getElementById('refFileInput').click()"
                                     class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 附參考圖（選填）</button>
-                            <span id="refUploadHint" class="text-[9px] text-slate-600">地圖底稿／實景參考／肖像照片／原圖放置，單張 ≤1.5MB，最多 3 張</span>
+                            <span id="refUploadHint" class="text-[9px] text-slate-600">原圖放置／AI改圖／實景參考／肖像照片／地圖底稿，單張 ≤1.5MB，最多 3 張</span>
                         </div>
                         <input id="refFileInput" type="file" accept="image/*" multiple class="hidden"
                                onchange="handleRefFilesSelected(this)" />
@@ -399,16 +399,16 @@
                             <input id="coverTitleLeft" type="text" maxlength="40"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                    placeholder="勞保撥補 上看1300億（半形空格分行，最多 3 段、每段 ≤ 8 字）" />
-                            <div class="mt-1 flex items-center gap-2">
-                                <button type="button" id="coverAsisLeftBtn" onclick="document.getElementById('coverAsisLeftInput').click()"
-                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 附圖（選填）</button>
-                                <input id="coverAsisLeftInput" type="file" accept="image/*" class="hidden" onchange="handleCoverAsisSelected('left', this)" />
-                                <div id="coverAsisLeftPreview" class="hidden items-center gap-2">
-                                    <img id="coverAsisLeftImg" class="w-10 h-10 object-cover rounded border border-slate-700" alt="" />
-                                    <span id="coverAsisLeftName" class="text-[10px] text-slate-400 truncate max-w-[140px]"></span>
-                                    <button type="button" onclick="clearCoverAsis('left')" class="text-[10px] font-black text-slate-500 hover:text-red-400 px-1">✕</button>
+                            <!-- 2026-09-13：附圖位改走共用上傳模組（可多張＋用途下拉），
+                                 清單由 renderRefList 灌進 coverAsisLeftList -->
+                            <div class="mt-1">
+                                <div class="flex items-center gap-2">
+                                    <button type="button" id="coverAsisLeftBtn" onclick="document.getElementById('coverAsisLeftInput').click()"
+                                            class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 附圖（選填）</button>
+                                    <input id="coverAsisLeftInput" type="file" accept="image/*" multiple class="hidden" onchange="handleCoverAsisSelected('left', this)" />
+                                    <span id="coverAsisLeftHint" class="text-[9px] text-slate-600">沒圖＝這格由 AI 生底圖</span>
                                 </div>
-                                <span id="coverAsisLeftHint" class="text-[9px] text-slate-600">沒圖＝這格由 AI 生底圖</span>
+                                <div id="coverAsisLeftList" class="mt-1.5 flex flex-col gap-1.5"></div>
                             </div>
                         </div>
                         <div>
@@ -418,16 +418,14 @@
                                    oninput="updateCoverLayoutIndicator()"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                    placeholder="留空＝滿版；填了＝雙切（例：病理醫師 月薪65萬仍缺工）" />
-                            <div class="mt-1 flex items-center gap-2 cover-split-only">
-                                <button type="button" onclick="document.getElementById('coverAsisRightInput').click()"
-                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 第二附圖（選填）</button>
-                                <input id="coverAsisRightInput" type="file" accept="image/*" class="hidden" onchange="handleCoverAsisSelected('right', this)" />
-                                <div id="coverAsisRightPreview" class="hidden items-center gap-2">
-                                    <img id="coverAsisRightImg" class="w-10 h-10 object-cover rounded border border-slate-700" alt="" />
-                                    <span id="coverAsisRightName" class="text-[10px] text-slate-400 truncate max-w-[140px]"></span>
-                                    <button type="button" onclick="clearCoverAsis('right')" class="text-[10px] font-black text-slate-500 hover:text-red-400 px-1">✕</button>
+                            <div class="mt-1 cover-split-only">
+                                <div class="flex items-center gap-2">
+                                    <button type="button" onclick="document.getElementById('coverAsisRightInput').click()"
+                                            class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 第二附圖（選填）</button>
+                                    <input id="coverAsisRightInput" type="file" accept="image/*" multiple class="hidden" onchange="handleCoverAsisSelected('right', this)" />
+                                    <span id="coverAsisRightHint" class="text-[9px] text-slate-600">沒圖＝這格由 AI 生底圖</span>
                                 </div>
-                                <span id="coverAsisRightHint" class="text-[9px] text-slate-600">沒圖＝這格由 AI 生底圖</span>
+                                <div id="coverAsisRightList" class="mt-1.5 flex flex-col gap-1.5"></div>
                             </div>
                         </div>
                         <!-- 滿版／雙切是**判定結果**不是輸入（2026-09-08 WP1）：
@@ -500,16 +498,14 @@
                             <!-- 整點直播的附圖位（2026-09-10，對齊十點不一樣）：一標一附圖。
                                  只有整點會顯示；國內外新聞直播與今日熱搜仍走共用附圖區，
                                  因為那兩個支援 1 張整版／2 張左右雙切／3 張三切。 -->
-                            <div id="ytAsisLeftRow" class="hidden mt-1 items-center gap-2">
-                                <button type="button" id="ytAsisLeftBtn" onclick="document.getElementById('ytAsisLeftInput').click()"
-                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 附圖（選填）</button>
-                                <input id="ytAsisLeftInput" type="file" accept="image/*" class="hidden" onchange="handleYtAsisSelected('left', this)" />
-                                <div id="ytAsisLeftPreview" class="hidden items-center gap-2">
-                                    <img id="ytAsisLeftImg" class="w-10 h-10 object-cover rounded border border-slate-700" alt="" />
-                                    <span id="ytAsisLeftName" class="text-[10px] text-slate-400 truncate max-w-[140px]"></span>
-                                    <button type="button" onclick="clearYtAsis('left')" class="text-[10px] font-black text-slate-500 hover:text-red-400 px-1">✕</button>
+                            <div id="ytAsisLeftRow" class="hidden mt-1 flex-col">
+                                <div class="flex items-center gap-2">
+                                    <button type="button" id="ytAsisLeftBtn" onclick="document.getElementById('ytAsisLeftInput').click()"
+                                            class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 附圖（選填）</button>
+                                    <input id="ytAsisLeftInput" type="file" accept="image/*" multiple class="hidden" onchange="handleYtAsisSelected('left', this)" />
+                                    <span id="ytAsisLeftHint" class="text-[9px] text-slate-600">沒圖＝這格由 AI 生底圖</span>
                                 </div>
-                                <span class="text-[9px] text-slate-600">沒圖＝這格由 AI 生底圖</span>
+                                <div id="ytAsisLeftList" class="mt-1.5 flex flex-col gap-1.5"></div>
                             </div>
                         </div>
                         <!-- 整點直播的第二標題（2026-09-08 WP2）：填了就是「雙則」，做法對齊十點不一樣 -->
@@ -519,16 +515,14 @@
                                    oninput="updateYtLayoutIndicator()"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                    placeholder="直播帶貨美國爆紅砸數十億" />
-                            <div id="ytAsisRightRow" class="hidden mt-1 items-center gap-2">
-                                <button type="button" onclick="document.getElementById('ytAsisRightInput').click()"
-                                        class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 第二附圖（選填）</button>
-                                <input id="ytAsisRightInput" type="file" accept="image/*" class="hidden" onchange="handleYtAsisSelected('right', this)" />
-                                <div id="ytAsisRightPreview" class="hidden items-center gap-2">
-                                    <img id="ytAsisRightImg" class="w-10 h-10 object-cover rounded border border-slate-700" alt="" />
-                                    <span id="ytAsisRightName" class="text-[10px] text-slate-400 truncate max-w-[140px]"></span>
-                                    <button type="button" onclick="clearYtAsis('right')" class="text-[10px] font-black text-slate-500 hover:text-red-400 px-1">✕</button>
+                            <div id="ytAsisRightRow" class="hidden mt-1 flex-col">
+                                <div class="flex items-center gap-2">
+                                    <button type="button" onclick="document.getElementById('ytAsisRightInput').click()"
+                                            class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 第二附圖（選填）</button>
+                                    <input id="ytAsisRightInput" type="file" accept="image/*" multiple class="hidden" onchange="handleYtAsisSelected('right', this)" />
+                                    <span id="ytAsisRightHint" class="text-[9px] text-slate-600">沒圖＝這格由 AI 生底圖</span>
                                 </div>
-                                <span class="text-[9px] text-slate-600">沒圖＝這格由 AI 生底圖</span>
+                                <div id="ytAsisRightList" class="mt-1.5 flex flex-col gap-1.5"></div>
                             </div>
                             <div id="ytLayoutIndicator" class="hidden flex items-center gap-1.5 mt-1.5">
                                 <span class="text-[9px] font-black text-slate-600">版面</span>

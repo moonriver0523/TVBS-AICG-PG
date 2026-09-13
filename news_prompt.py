@@ -325,11 +325,27 @@ ATTACHED IMAGE — PLACE AS-IS, DO NOT REDRAW (CRITICAL)
 - This attached image is exempt from the "re-draw in the graphic's own visual style" instruction that applies to other attached reference images; place it as its own distinct element in the composition (e.g. an inset panel or designated area), not blended or repainted into the surrounding artwork.
 - Any brand marks, logos, readable text or real human faces already present in this attached image may remain exactly as supplied — the BRANDS rule and the face-rendering rules above govern what you generate elsewhere in the graphic, not this attached image's own untouched content."""
 
+# AI改圖（2026-09-13 使用者裁決）：介於 asis 與 scene 之間的第三種用途。
+# * asis  ＝原圖原封不動貼進去，完全不經過生圖模型
+# * scene ＝只拿來參考外觀，成品畫的是 STRUCTURE 描述的另一個畫面
+# * aiedit＝**這張圖就是成品那塊畫面**，但由模型照版型風格重畫一次
+# 措辭核心因此是「同一個畫面重畫一次」，而不是「參考它去畫別的」——沒有這句，
+# 模型會把它當成 scene，畫出一個構圖完全不同、只有器材外觀像的畫面。
+USER_REFERENCE_AIEDIT_RULES = """==================================================
+ATTACHED IMAGE — REDRAW THIS SAME PICTURE (CRITICAL)
+==================================================
+- One of the attached images is the picture this graphic's main visual is to BE. Re-draw that same picture in the graphic's own visual style: the same subject, the same framing, the same camera angle, the same arrangement of what is near and far.
+- This is NOT a loose style reference. Someone who saw the attached image must recognise your output as the same moment redrawn, not as a different picture of a similar topic. Do not substitute another scene, another angle, another action or another setting for it.
+- Do redraw it: repaint, restyle and colour-grade it into this graphic's illustration style, and extend or crop the edges as the layout needs. It is the treatment that changes, never the content.
+- Do not copy readable text or brand marks visible inside the attached image, except a brand the source material names — that one may be reproduced on its own objects; the BRANDS rule above still applies in full.
+- Do not copy any recognisable human face from the attached image; how to depict named real people is governed solely by the NAMED REAL PERSON rules."""
+
 USER_REFERENCE_MODES = {
     "map": USER_REFERENCE_MAP_RULES,
     "scene": USER_REFERENCE_SCENE_RULES,
     "portrait": USER_REFERENCE_PORTRAIT_RULES,
     "asis": USER_REFERENCE_ASIS_RULES,
+    "aiedit": USER_REFERENCE_AIEDIT_RULES,
 }
 
 # 消化階段（build_digest_instructions）專用，與上面 USER_REFERENCE_ASIS_RULES
