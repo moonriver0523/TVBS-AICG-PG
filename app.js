@@ -3237,25 +3237,30 @@ function slotPayload(list) {
     return (list || []).map(ref => ({ data_url: ref.dataUrl, purpose: ref.purpose }));
 }
 
-function slotHintText(list, lockAsis) {
+function slotHintText(list, lockAsis, isHalf) {
     if (!(list || []).length) return '沒圖＝這格由 AI 生底圖';
-    if (lockAsis) return '半版放多張＝AI 把它們融成一張（不能原圖放置）';
+    if (lockAsis) return isHalf ? '半版放多張＝AI 把它們融成一張（不能原圖放置）'
+                                : '有 AI改圖＝整版交給 AI 合成一張（不能原圖放置）';
     if (slotPlacement(list)) return '這格直接用附圖';
     return '這格由 AI 生底圖（附圖當參考）';
 }
 
-// 半版格子 ≥2 張就鎖原圖放置；滿版（十點滿版的左格、YT 單則）不鎖——多張原圖走自動切格
-function halfSlotLocked(list, isHalf) {
-    return isHalf && (list || []).length >= 2;
+// 原圖放置什麼時候不能選（2026-09-13 使用者裁決，後端 lock_half_slot_asis／merge_mixed_slot_to_aiedit 同一套）：
+// 半版格子 ≥2 張就鎖；滿版（十點滿版的左格、YT 單則）只在混了 AI改圖 時鎖——
+// 多張都是原圖走自動切格，任一張選了 AI改圖 就整版交給 AI 合成一張。
+function slotAsisLocked(list, isHalf) {
+    const items = list || [];
+    if (isHalf) return items.length >= 2;
+    return items.some(ref => ref.purpose === 'aiedit');
 }
 
 function renderYtAsis() {
     const dual = ytLayoutNow() === 'dual';
     for (const [side, cap] of [['left', 'Left'], ['right', 'Right']]) {
-        const lock = halfSlotLocked(state.ytAsis[side], dual);
+        const lock = slotAsisLocked(state.ytAsis[side], dual);
         renderRefList(document.getElementById(`ytAsis${cap}List`), state.ytAsis[side], renderYtAsis, { lockAsis: lock });
         const hint = document.getElementById(`ytAsis${cap}Hint`);
-        if (hint) hint.textContent = slotHintText(state.ytAsis[side], lock);
+        if (hint) hint.textContent = slotHintText(state.ytAsis[side], lock, dual);
     }
 }
 
@@ -3298,10 +3303,10 @@ function updateYtAsisSlots() {
 function renderCoverAsis() {
     const split = coverLayoutNow() === 'split';
     for (const [side, cap] of [['left', 'Left'], ['right', 'Right']]) {
-        const lock = halfSlotLocked(state.coverAsis[side], split);
+        const lock = slotAsisLocked(state.coverAsis[side], split);
         renderRefList(document.getElementById(`coverAsis${cap}List`), state.coverAsis[side], renderCoverAsis, { lockAsis: lock });
         const hint = document.getElementById(`coverAsis${cap}Hint`);
-        if (hint) hint.textContent = slotHintText(state.coverAsis[side], lock);
+        if (hint) hint.textContent = slotHintText(state.coverAsis[side], lock, split);
     }
 }
 

@@ -97,9 +97,11 @@ class FrontendLock(unittest.TestCase):
         self.assertIn("if (ref.purpose === 'asis') ref.purpose = 'aiedit';", APP_JS)
 
     def test_half_slot_rule_applied_to_both_slots(self):
-        self.assertIn("halfSlotLocked(state.coverAsis[side], split)", APP_JS)
-        self.assertIn("halfSlotLocked(state.ytAsis[side], dual)", APP_JS)
-        self.assertRegex(APP_JS, re.compile(r"function halfSlotLocked\(list, isHalf\) \{\s*return isHalf && \(list \|\| \[\]\)\.length >= 2;"))
+        self.assertIn("slotAsisLocked(state.coverAsis[side], split)", APP_JS)
+        self.assertIn("slotAsisLocked(state.ytAsis[side], dual)", APP_JS)
+        block = re.search(r"function slotAsisLocked\(list, isHalf\) \{(.*?)\n\}", APP_JS, re.S).group(1)
+        self.assertIn("if (isHalf) return items.length >= 2;", block)
+        self.assertIn("items.some(ref => ref.purpose === 'aiedit')", block)
 
     def test_layout_change_rerenders_slots(self):
         block = re.search(r"function updateCoverLayoutIndicator\(\) \{(.*?)\n\}\n", APP_JS, re.S).group(1)

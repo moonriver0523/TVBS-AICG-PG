@@ -606,6 +606,20 @@ def slot_generation_refs(refs: list[UserReferenceImage]) -> list[UserReferenceIm
     return [ref for ref in refs if ref.purpose != "asis"]
 
 
+def merge_mixed_slot_to_aiedit(refs: list[UserReferenceImage], tag: str = "slot") -> list[UserReferenceImage]:
+    """滿版（單格）同時放了原圖放置與 AI改圖：原圖全部轉 AI改圖（2026-09-13 使用者裁決：
+    任一張選 AI改圖 → 整版鎖成 AI改圖、合成一張）。
+
+    不轉的話原圖那條路會搶先（裁滿版／切格），AI改圖 那張就被靜靜丟掉。
+    只在滿版／單則用；雙切半格另有 lock_half_slot_asis（≥2 張就鎖）。
+    """
+    if not (any(ref.purpose == "aiedit" for ref in refs) and any(ref.purpose == "asis" for ref in refs)):
+        return list(refs)
+    n = sum(1 for ref in refs if ref.purpose == "asis")
+    print(f"[{tag}] 滿版附圖混了 AI改圖 → {n} 張原圖放置一併改 AI改圖，整版合成一張", flush=True)
+    return [ref.model_copy(update={"purpose": "aiedit"}) if ref.purpose == "asis" else ref for ref in refs]
+
+
 def lock_half_slot_asis(refs: list[UserReferenceImage], tag: str = "slot") -> list[UserReferenceImage]:
     """半版格子放了 2 張以上：原圖放置一律改成 AI改圖（2026-09-13 使用者裁決）。
 
@@ -3932,6 +3946,8 @@ class TenCoverRequest(BaseModel):
         )
         if editor_formats.resolve_cover_layout(self.layout, self.title_right) == "split":
             refs = lock_half_slot_asis(refs, "cover")
+        elif side == 0:
+            refs = merge_mixed_slot_to_aiedit(refs, "cover")
         return refs
 
     def slot_placements(self) -> tuple[str, str]:
@@ -4439,7 +4455,8 @@ def _cover_ai(
         ),
         portrait_subjects=[] if base is not None else subjects,
         portrait_subjects_en=[] if base is not None else english,
-        editor_instruction=req.instruction,
+        # 有 base 時指令欄不再帶：第一段每格已經吃過了，第二段再帶會對著拼好的底圖再改一次畫面
+        editor_instruction="" if base is not None else req.instruction,
     )
     if base is None:
         image_req = _cover_apply_portraits(image_req, "ai", excluded=ai_excluded)
@@ -4851,6 +4868,8 @@ def cover_portrait_log_fields(visuals) -> dict:
 
 def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse:
     """十點不一樣（滿版）：一張圖、一個標題。附圖有就放、沒有就生一張。"""
+    # 舊共用清單（LINE 等呼叫端）也套「混了 AI改圖 就整版 AI改圖」；附圖位那份在 slot_refs 裡套
+    req = req.model_copy(update={"reference_images": merge_mixed_slot_to_aiedit(req.reference_images, "cover")})
     has_asis = bool(req.slot_placements()[0]) or any(
         ref.purpose == "asis" for ref in req.reference_images
     )
@@ -5493,7 +5512,7 @@ def _yt_cover_full_image(
         ),
         portrait_subjects=[] if base is not None else subjects,
         portrait_subjects_en=[] if base is not None else english,
-        editor_instruction=req.instruction,
+        editor_instruction="" if base is not None else req.instruction,
     )
     image_req = image_req.model_copy(
         update={"prompt": editor_formats.with_base_image_note(image_req.prompt, base is not None)}
@@ -5693,6 +5712,9 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             "asis_left": "", "asis_right": "",
             "slot_left": [], "slot_right": [],
         })
+    if not dual:
+        # 單則＝一格：混了 AI改圖 就整版 AI改圖（2026-09-13 使用者裁決），與十點滿版同一條
+        req = req.model_copy(update={"reference_images": merge_mixed_slot_to_aiedit(req.reference_images, "yt-cover")})
     # 2026-09-13 使用者裁決：原圖放置＋AI 標題不再強制程式壓字（2026-09-07 的舊裁決作廢）。
     # 底圖照舊由程式取得（單則：裁滿版／多圖分切；雙則：兩格各自原圖或 AI改圖 後拼起來），
     # 再當唯一附圖送進模型畫標題（見 _yt_cover_full_image 的 base）。

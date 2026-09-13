@@ -154,6 +154,35 @@ class TenCoverOverBase(_Harness):
         self.assertEqual(len(calls), 1)
         self.assertNotIn("FINISHED PICTURE", calls[0].prompt)
 
+    def test_full_mixed_asis_and_aiedit_becomes_all_aiedit_single_call(self):
+        """任一張選 AI改圖 → 整版鎖 AI改圖、合成一張：原圖那張不再搶先裁滿版把 AI改圖 丟掉。"""
+        data, calls = self._run("/api/editor/cover", {
+            **self.BASE, "title_right": "", "layout": "full", "mode": "ai",
+            "slot_left": [_ref(RED, "asis"), _ref(BLUE, "aiedit")],
+        })
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([r.purpose for r in calls[0].reference_images], ["aiedit", "aiedit"])
+        self.assertNotIn("FINISHED PICTURE", calls[0].prompt, "沒有程式底圖，模型自己合成")
+
+    def test_full_mixed_in_composite_generates_with_both_as_aiedit(self):
+        data, calls = self._run("/api/editor/cover", {
+            **self.BASE, "title_right": "", "layout": "full", "mode": "composite",
+            "slot_left": [_ref(RED, "asis"), _ref(BLUE, "aiedit")],
+        })
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].aspect_ratio, "16:9")
+        self.assertEqual([r.purpose for r in calls[0].reference_images], ["aiedit", "aiedit"])
+        self.assertTrue(data["left_is_ai"])
+
+    def test_stage_two_does_not_carry_the_instruction_again(self):
+        data, calls = self._run("/api/editor/cover", {
+            **self.BASE, "title_right": "涵蓋加墨格陵蘭冰島等", "layout": "split", "mode": "ai",
+            "instruction": "改成夜景",
+            "slot_left": [_ref(RED, "asis")], "slot_right": [_ref(BLUE, "aiedit")],
+        })
+        self.assertEqual(calls[0].editor_instruction, "改成夜景", "第一段那格吃指令")
+        self.assertEqual(calls[1].editor_instruction, "", "第二段不再對底圖改畫面")
+
     def test_full_composite_two_asis_auto_grid(self):
         data, calls = self._run("/api/editor/cover", {
             **self.BASE, "title_right": "", "layout": "full", "mode": "composite",
@@ -192,6 +221,16 @@ class YtCoverOverBase(_Harness):
         w, h = base.size
         self.assertTrue(_near(base.getpixel((w // 4, h // 2)), RED))
         self.assertTrue(_near(base.getpixel((3 * w // 4, h // 2)), BLUE))
+
+    def test_single_mixed_slot_becomes_all_aiedit(self):
+        data, calls = self._run("/api/editor/yt-cover", {
+            "title": "川普發布擴張版美國地圖 涵蓋加墨格陵蘭冰島", "layout": "hourly", "title_mode": "ai",
+            "date_text": "2026/09/13",
+            "slot_left": [_ref(RED, "asis"), _ref(BLUE, "aiedit")],
+        })
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([r.purpose for r in calls[0].reference_images], ["aiedit", "aiedit"])
+        self.assertNotIn("FINISHED PICTURE", calls[0].prompt)
 
     def test_refine_return_trip_does_not_rebuild_the_base(self):
         # 追加修改帶 background 回來：只重貼固定元素，不該再打模型
