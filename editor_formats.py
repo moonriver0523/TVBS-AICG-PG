@@ -1692,6 +1692,9 @@ def _yt_size_cap_clause(ratio: float) -> str:
 # 0 級的三條，各版型的原文一字不改。1 級起由 _loud_layout_rules 取代。
 # YT 三個版型只差在「靠左／置中」與開場那句的措辭；拆的位置與理由完全相同。
 _YT_PLAIN_LAYOUT = {
+    # live24 的 0 級不會走到這裡（0 級是程式壓字），留一筆只為了別讓 KeyError
+    # 在有人改接線時才爆出來。
+    YT_COVER_LAYOUT_LIVE24: "",
     "hourly": (
         "- Both headline lines sit in the lower third, LEFT-ALIGNED near the left edge,"
         " stacked, each on one line, huge and heavy Chinese display type. No band behind"
@@ -1722,7 +1725,7 @@ _YT_PLAIN_LAYOUT = {
 _YT_PLAIN_LAYOUT["hot"] = _YT_PLAIN_LAYOUT["news"]
 
 
-def _loud_layout_rules(level: int, *, centred: bool) -> str:
+def _loud_layout_rules(level: int, *, centred: bool, single_line: bool = False) -> str:
     """1 級起的 LAYOUT 三條：**拆掉**與創意梯子打架的那兩條，換成讓路的說法。
 
     拆而不是覆蓋：2026-09-11 一天之內因為留著矛盾句踩了三次，模型每次都挑最寬鬆
@@ -1734,6 +1737,19 @@ def _loud_layout_rules(level: int, *, centred: bool) -> str:
         else "in the LOWER LEFT of the frame, LEFT-ALIGNED near the left edge"
     )
     narrower = "comes out narrower" if centred else "ends earlier"
+    if single_line:
+        # live24 是單行版型。兩行版的措辭（stacked／row sizes／shorter line）在這裡
+        # 全部無意義，留著只會跟模板的「ONE line, never split」互相矛盾。
+        return (
+            f"- The headline sits {where}, on ONE single row, huge and heavy Chinese display"
+            " type. THE DESIGN BRIEF NEAR THE TOP OF THIS PROMPT FIXES its block height and its"
+            " colours — follow it exactly and do not substitute your own.\n"
+            "- IT IS ONE ROW. Never break it, stack it or reflow it into two; a long headline is"
+            " handled by condensing the characters, never by adding a second row.\n"
+            "- Every character keeps a thick dark outline and a hard offset drop shadow so it"
+            " reads over photography.\n"
+            + _YT_STYLE_CLAUSES[min(level, 4)]
+        )
     return (
         f"- Both headline lines sit {where}, stacked, each on one line, huge and heavy Chinese"
         " display type. THE DESIGN BRIEF NEAR THE TOP OF THIS PROMPT FIXES their block height,"
@@ -1755,7 +1771,10 @@ def yt_layout_rules(level: int, layout: str = "hourly") -> str:
     """LAYOUT 段裡會被創意階梯改掉的那幾條。0 級一字不改，1 級起換成創意版。"""
     if level < 1:
         return _YT_PLAIN_LAYOUT[layout]
-    return _loud_layout_rules(level, centred=layout in ("news", "hot"))
+    return _loud_layout_rules(
+        level, centred=layout in ("news", "hot"),
+        single_line=layout == YT_COVER_LAYOUT_LIVE24,
+    )
 
 
 def yt_hourly_layout_rules(level: int) -> str:
@@ -1814,6 +1833,9 @@ def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
     spec = YT_BRIEF_SPECS.get(level)
     if not spec:
         return ""
+    # live24 只有一行。下面每一條「兩行」的措辭都要改寫，不能留著矛盾句
+    # ——2026-09-11 一天之內因為留矛盾句踩了三次，模型每次都挑最寬鬆的那句遵守。
+    single_line = layout == YT_COVER_LAYOUT_LIVE24
     # 日期牌只有整點是交給模型畫的；news 的日期由程式貼在左上角，hot 根本沒有日期。
     has_date_tab = layout == "hourly"
     # 底帶（紅／藍套色，2026-09-11 起預設關）。開著的時候整幅底帶與「每行各自一塊
@@ -1836,19 +1858,33 @@ def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
     rows = [
         "=== HEADLINE DESIGN BRIEF — THESE NUMBERS ARE FIXED AND THEY OVERRIDE ANY TYPOGRAPHY WORDING FURTHER DOWN ===",
         f"- Headline block height: about {spec['height']} of the frame height, its baseline near"
-        f" the bottom edge, so the TOP of the first row lands around {top:.0%} of the frame height."
+        f" the bottom edge, so the TOP of the {'row' if single_line else 'first row'} lands around"
+        f" {top:.0%} of the frame height."
         + (" It is the loudest thing in the frame." if level >= 3
            else " The photograph keeps the rest of the frame — do not let the type grow past this."),
     ]
-    if spec["ratio"]:
-        rows.append(_size_hierarchy_line(spec["ratio"], lines, False))
+    if single_line:
+        # 單行沒有「行與行的落差」與「錯位」可言——那兩條是兩行版的梯子。
+        # 換成同一級該有的音量，但落在一行之內：字級落差改成句內的重音。
+        if spec["ratio"]:
+            rows.append(
+                "- ONE ROW, so there is no row-to-row size step. Instead put the emphasis INSIDE"
+                " the row: the key noun or number is the largest thing in the line, about"
+                f" {spec['ratio']} times the height of the smallest characters in it, and the"
+                " rest tucks around it. The row still reads as one continuous line."
+            )
+        else:
+            rows.append("- ONE ROW at an even size throughout.")
     else:
-        rows.append("- Both rows are the SAME size at this setting.")
-    rows.append(
-        f"- The two rows are STAGGERED: {stagger}. They do not share a left edge."
-        if spec["stagger"]
-        else "- The two rows stay flush with one another, aligned on the same left edge."
-    )
+        if spec["ratio"]:
+            rows.append(_size_hierarchy_line(spec["ratio"], lines, False))
+        else:
+            rows.append("- Both rows are the SAME size at this setting.")
+        rows.append(
+            f"- The two rows are STAGGERED: {stagger}. They do not share a left edge."
+            if spec["stagger"]
+            else "- The two rows stay flush with one another, aligned on the same left edge."
+        )
     if band_on:
         # 底帶是使用者開的，它贏——底板退成「字後面的小塊」，不再是整行的載體。
         rows.append(
@@ -1858,6 +1894,11 @@ def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
             f" row's characters — {plate}"
             + (", both cut the same way." if level < 2 else ", and the two are not cut alike.")
             + " The band stays the widest element; nothing you draw spans further than it does."
+        )
+    elif single_line:
+        rows.append(
+            "- The row sits on its OWN plate, bar or ribbon, no wider than its own characters"
+            f" — never a band across the frame. The plate is {plate}."
         )
     else:
         rows.append(
@@ -1880,9 +1921,14 @@ def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
             + (", each block a different colour." if spec["knockouts"] > 1 else ".")
         )
     rows.append(
-        "- COLOUR FOLLOWS MEANING, NEVER ROW ORDER. Colouring row 1 white and row 2 yellow is"
-        f" BANNED. Use {spec['colours'].format(*palette)}."
-        " A colour switch may happen part-way through a row."
+        (
+            "- COLOUR FOLLOWS MEANING. Use {} — the palette is fully open, and a colour switch"
+            " may happen part-way through the row.".format(spec["colours"].format(*palette))
+            if single_line else
+            "- COLOUR FOLLOWS MEANING, NEVER ROW ORDER. Colouring row 1 white and row 2 yellow is"
+            f" BANNED. Use {spec['colours'].format(*palette)}."
+            " A colour switch may happen part-way through a row."
+        )
     )
     # 配色池會遞四個顏色過去，日期牌是頻道識別的一部分，不跟著抽（house style）。
     if has_date_tab:
@@ -1989,6 +2035,48 @@ Photographic, news-documentary quality, filling the frame.
 === HARD CONSTRAINTS ===
 - Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms. Every digit likewise: a date is read as a fact, so a malformed or wrong digit is a factual error, not a typographic one.
 - No text anywhere other than the strings listed at the top: {date_ban}no times, no LIVE word, no logos, no watermark, no tickers, no 示意圖 label, no captions.
+- Nothing may touch or be clipped by any edge.
+{fixed_block}"""
+
+
+# ---- live24 的 AI 標題模板（2026-09-13 使用者：「標題完全沒有被創意階梯影響 這是錯的」）----
+#
+# 原本我把 live24 裁成純合成版，理由是標題規格太精確怕模型打不中。那是**使用者沒
+# 要求過的限縮**，而且跟站上其他版型不一致——十點／整點／熱搜的創意階梯都是靠
+# 標題生效的。使用者裁決：跟其他版型一樣走 AI 標題。
+#
+# 與 hourly 模板的差別：
+#   * **一行**標題，不是兩行（那個版型只有一句）
+#   * 角標在**左上**、Logo 在**右上**（hourly 相反）
+#   * 沒有日期佔位——日期是程式壓在角標的玻璃板上，模型一個字都不准畫
+#   * 標題外觀寫進 prompt：範本量到的深紅 (159,19,20)、淺灰白描邊、向右上約 3.5°、
+#     窄長體。0 級走程式壓字，那些數字才是像素級精準的；1 級起交給模型，這裡只能
+#     用文字描述，本來就會飄——這是使用者知情選擇的代價。
+YT_COVER_FULL_PROMPT_LIVE24 = """Design a complete Taiwanese TV news 24-hour LIVE-stream thumbnail (YouTube cover), 16:9.
+
+=== TEXT TO RENDER (Traditional Chinese, Taiwan) ===
+Render EXACTLY this one string, character for character, nothing else:
+- Headline (ONE single line, never broken across two rows): {line1}
+
+{design_brief}=== LAYOUT ===
+{layout_rules}- Keep the UPPER-LEFT corner ({badge_keep_out}) free: a 24H LIVE badge carrying the date is pasted there afterwards.
+- Keep the UPPER-RIGHT corner ({logo_keep_out}) free: a channel logo is pasted there afterwards.
+- BECAUSE OF THAT, THE HEADLINE STARTS LOW: the TOP of its characters must sit at or below {title_top:.0%} of the frame height, and the line fits between there and the bottom edge.
+
+=== HEADLINE LOOK ===
+- ONE line. Never split it onto two rows, never stack it, never reflow it — however long it is, it stays a single row running left to right.
+- Heavy CONDENSED display type — the characters are noticeably taller than they are wide, packed tight, so one line can span most of the frame width.
+- Deep broadcast RED characters with a pale grey-white outline and a dark drop shadow, so they stand off the photograph.
+- The whole line tilts gently UP TOWARDS THE RIGHT — a few degrees, as one rigid block. Do not rotate the characters individually.
+- It sits low and left, its left edge near the left margin.
+
+=== IMAGERY ===
+{visual}
+Photographic, news-documentary quality, filling the frame.
+
+=== HARD CONSTRAINTS ===
+- Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
+- No text anywhere other than the one headline string listed above: NO date, NO digits, NO clock time, NO "24H", NO "LIVE", no logos, no watermark, no tickers, no 示意圖 label, no captions. The date and the 24H LIVE mark are pasted in afterwards — drawing them here produces a duplicate.
 - Nothing may touch or be clipped by any edge.
 {fixed_block}"""
 

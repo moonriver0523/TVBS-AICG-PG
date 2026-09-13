@@ -2037,16 +2037,32 @@ def compose_live24_inset_background(base: bytes, inset: bytes) -> bytes:
     return buffer.getvalue()
 
 
+def live24_badge_keep_out_height() -> float:
+    """角標貼上去之後佔畫面高的比例（含落點）。
+
+    給 AI 標題模板宣告左上保留區用。**由素材長寬比實算**，不手打——2026-09-11 在
+    hourly 踩過：手打的保留區比實際小，模型畫的東西就爬上去撞到程式貼的元素。
+    """
+    with Image.open(LIVE24_BADGE) as badge:
+        ratio = badge.height / badge.width
+    return LIVE24_BADGE_TOP_RATIO + LIVE24_BADGE_WIDTH_RATIO * ratio * (
+        YT_CANVAS[0] / YT_CANVAS[1]
+    )
+
+
 def compose_yt_live24_cover(
     background: bytes,
     *,
     title: str,
     date_text: str,
     ai_note: bool = False,
+    draw_title: bool = True,
 ) -> bytes:
     """合成 YT 24H LIVE 封面：底圖＋左上角標（含日期）＋右上兩層 Logo＋單行紅標題。
 
-    沒有 draw_titles 開關——這個版型的標題一律程式壓（見上面版型段的說明）。
+    draw_title=False：標題已由生圖模型畫在 background 上（創意 ≥1），這裡只貼固定
+    元素。角標、日期與 Logo **任何模式下都是程式貼的**——那三個是頻道識別，
+    交給模型畫就會有錯字與走樣的版本。
     """
     title = (title or "").strip()
     if not title:
@@ -2077,8 +2093,9 @@ def compose_yt_live24_cover(
     if ai_note:
         _draw_live24_ai_note(canvas, round(height * LIVE24_BADGE_TOP_RATIO) + badge_h + 16)
 
-    # ---- 底部：單行紅標題 ----
-    _draw_live24_title(canvas, title)
+    # ---- 底部：單行紅標題（AI 標題模式下模型已經畫了，不再壓一次）----
+    if draw_title:
+        _draw_live24_title(canvas, title)
 
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")

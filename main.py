@@ -5265,7 +5265,9 @@ def _yt_cover_full_image(
     template = {
         editor_formats.YT_COVER_LAYOUT_HOURLY: editor_formats.YT_COVER_FULL_PROMPT_HOURLY,
         editor_formats.YT_COVER_LAYOUT_HOT: editor_formats.YT_COVER_FULL_PROMPT_HOT,
+        editor_formats.YT_COVER_LAYOUT_LIVE24: editor_formats.YT_COVER_FULL_PROMPT_LIVE24,
     }.get(req.layout, editor_formats.YT_COVER_FULL_PROMPT_NEWS)
+    live24 = req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
     # 日期條那一條由 compose 的 box 產生（2026-09-11 創意階梯）——prompt 與程式貼附
     # 用的是同一個座標，不會再有「兩邊各寫各的百分比」那種對不上的 bug。
     # 整點以外的版型模板沒有 date_clause／date_text_line／date_ban／logo_keep_out／
@@ -5276,7 +5278,11 @@ def _yt_cover_full_image(
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
     image_req = ImageGenerateRequest(
         prompt=template.format(
-            line1=lines[0], line2=lines[1], visual=visual.strip() or req.title.strip(),
+            # live24 是**單行**版型：lines 是依空格拆出來的兩段，模板只列 line1 的話
+            # 後半段整段消失（2026-09-13 實拍抓到：「東北季風剩1天 假日回溫」四級全被
+            # 畫成「東北季風剩1天」）。所以那個版型傳整句，不傳拆過的前半段。
+            line1=req.title.strip() if live24 else lines[0],
+            line2=lines[1], visual=visual.strip() or req.title.strip(),
             # 兩級都用同一個框：0 級是程式實際貼牌的位置（模型只要留白），
             # 1 級起模型自己畫牌、跟著標題走，這個框只當護欄（見
             # compose.YT_HOURLY_DATE_TAB_BOX 上方的註解）。
@@ -5288,10 +5294,24 @@ def _yt_cover_full_image(
             # 右上角維持手打的 27%×32%：實測 LIVE 章只佔 25.1%×18.9%，宣告值比實際
             # **大**＝過度保留，不會撞；收緊會放出右上那塊現在空著的區域，
             # 等於改掉已驗收的構圖，不值得。
-            logo_keep_out="about {:.0%} wide and {:.0%} tall".format(
-                *compose.yt_hourly_logo_keep_out()
+            # live24 是 hourly 的鏡像：角標在左上、Logo 在右上，兩個保留區也跟著換邊。
+            # 角標的宣告值直接由程式實際貼上的比例算（LIVE24_BADGE_WIDTH_RATIO 是寬，
+            # 高度由素材長寬比推）——手打的數字比實際小時，標題會爬上去撞（2026-09-11
+            # 在 hourly 踩過一模一樣的坑）。
+            logo_keep_out=(
+                "about {:.0%} wide and {:.0%} tall".format(
+                    compose.LIVE24_LOGO_WIDTH_RATIO + 0.04,
+                    compose.LIVE24_LOGO_TOP_RATIO + compose.LIVE24_LOGO_WIDTH_RATIO,
+                ) if live24 else "about {:.0%} wide and {:.0%} tall".format(
+                    *compose.yt_hourly_logo_keep_out()
+                )
             ),
-            badge_keep_out="about 27% wide and 32% tall",
+            badge_keep_out=(
+                "about {:.0%} wide and {:.0%} tall".format(
+                    compose.LIVE24_BADGE_LEFT_RATIO + compose.LIVE24_BADGE_WIDTH_RATIO + 0.02,
+                    compose.live24_badge_keep_out_height(),
+                ) if live24 else "about 27% wide and 32% tall"
+            ),
             date_text_line=editor_formats.yt_hourly_date_text_line(req.creativity, date_text),
             date_ban=editor_formats.yt_hourly_date_ban(req.creativity),
             # 創意階梯（2026-09-11）：brief 釘在 CANVAS 正後方（鐵律一——數字寫在
@@ -5491,9 +5511,11 @@ def yt_dual_background(
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     live24 = req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
-    if live24:
-        # live24 是純合成版：標題／角標／日期／Logo 全程式壓，創意階梯只作用在底圖。
-        # 標題規格（單行、指定紅、淺描邊、3.5° 斜度）精確到模型打不中，不開 AI 標題路徑。
+    if live24 and req.creativity < 1:
+        # 0 級＝規矩：標題由程式壓，位置／字級／斜度／顏色都是從實際播出範本量到的，
+        # 像素級精準且零錯字。1 級起交給模型（2026-09-13 使用者裁決：「標題完全沒有
+        # 被創意階梯影響 這是錯的」）——這個版型原本被我裁成純合成版，是沒人要求過的
+        # 限縮，而且跟十點／整點／熱搜不一致，那三個的階梯都是靠標題生效的。
         req = req.model_copy(update={
             "title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE,
         })
@@ -5625,6 +5647,8 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             # 單行標題：這個版型不拆段，req.title 整句就是那一行。
             cover = compose.compose_yt_live24_cover(
                 background, title=req.title.strip(), date_text=date_text, ai_note=is_ai,
+                # AI 標題模式下標題已經畫在底圖上了，再壓一次會疊成兩層
+                draw_title=not ai_title,
             )
         elif hot:
             cover = compose.compose_yt_hot_cover(

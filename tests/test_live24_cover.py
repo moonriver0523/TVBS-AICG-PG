@@ -495,9 +495,16 @@ class BackgroundCreativityTests(unittest.TestCase):
         self.assertNotIn("LOOK (level", self._prompt(creativity=0))
 
     def test_every_level_above_zero_reaches_the_background_prompt(self):
+        """用 hourly＋composite 測：live24 在 1 級起改走 AI 標題，沒有合成版底圖。
+
+        底圖階梯本身是**所有合成版共用**的，不是 live24 專屬——用還留在合成版的
+        版型來測，才測得到 1–4 級。
+        """
         for level in (1, 2, 3, 4):
             with self.subTest(level=level):
-                self.assertIn(f"LOOK (level {level})", self._prompt(creativity=level))
+                prompt = self._prompt(layout="hourly", title_mode="composite",
+                                      creativity=level)
+                self.assertIn(f"LOOK (level {level})", prompt)
 
     def test_the_levels_are_all_different(self):
         import editor_formats
@@ -527,3 +534,103 @@ class BackgroundCreativityTests(unittest.TestCase):
                          editor_formats.yt_background_creativity(4))
         self.assertEqual(editor_formats.yt_background_creativity(-3),
                          editor_formats.yt_background_creativity(0))
+
+
+class AiTitleLadderTests(unittest.TestCase):
+    """live24 的標題要吃到創意階梯（2026-09-13 使用者：「標題完全沒有被創意階梯影響 這是錯的」）。
+
+    原本我把 live24 裁成純合成版，理由是標題規格太精確怕模型打不中——那是使用者
+    沒要求過的限縮，而且跟十點／整點／熱搜不一致，那三個的階梯都是靠標題生效的。
+    裁決：跟其他版型一樣走 AI 標題，0 級維持程式壓字。
+    """
+
+    def _run(self, **payload):
+        import base64
+        import os
+        from unittest.mock import patch
+
+        from fastapi.testclient import TestClient
+
+        import main
+
+        base = {"title": "東北季風剩1天 假日回溫", "layout": "live24", "date_text": "2026.09.13"}
+        base.update(payload)
+
+        def fake(req):
+            buffer = io.BytesIO()
+            Image.new("RGB", (1920, 1080), (70, 80, 100)).save(buffer, format="PNG")
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(buffer.getvalue()).decode("ascii"),
+                mime_type="image/png", model="fake-model",
+            )
+
+        with patch.object(main, "generate_image_raw", side_effect=fake) as raw, \
+             patch.object(main, "derive_yt_cover_plan", return_value={}), \
+             patch.object(main, "_archive_generation", lambda **k: None), \
+             patch.object(main.compose, "_draw_live24_title",
+                          wraps=main.compose._draw_live24_title) as stamp:
+            res = TestClient(main.app).post(
+                "/api/editor/yt-cover", json=base,
+                headers={"X-API-Key": os.environ["NEWS_IMAGE_API_KEY"]},
+            )
+        self.assertEqual(res.status_code, 200, res.text)
+        return res.json(), raw.call_args_list[0].args[0].prompt, stamp
+
+    def test_level_zero_still_stamps_the_title_in_code(self):
+        """0 級＝規矩：位置／字級／斜度／顏色都是量到的，像素級精準且零錯字。"""
+        body, prompt, stamp = self._run(creativity=0)
+        self.assertEqual(body["title_mode"], "composite")
+        self.assertEqual(stamp.call_count, 1)
+
+    def test_level_one_and_above_hand_the_title_to_the_model(self):
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                body, prompt, stamp = self._run(creativity=level)
+                self.assertEqual(body["title_mode"], "ai")
+                self.assertEqual(stamp.call_count, 0, "AI 畫過了就不該再壓一次")
+                self.assertIn("東北季風剩1天 假日回溫", prompt)
+
+    def test_the_title_wording_actually_changes_between_levels(self):
+        """階梯要真的影響標題，不是只換一個旗標。"""
+        prompts = [self._run(creativity=n)[1] for n in (1, 2, 3, 4)]
+        self.assertEqual(len(set(prompts)), 4)
+
+    def test_the_prompt_never_asks_for_two_rows(self):
+        """共用的 brief／LAYOUT 原本整段為兩行寫的，跟「ONE line」直接打架。"""
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                prompt = self._run(creativity=level)[1]
+                for banned in ("Both headline lines", "The two rows", "Both rows",
+                               "rows GROW FROM TOP TO BOTTOM"):
+                    self.assertNotIn(banned, prompt)
+                self.assertIn("ONE ROW", prompt)
+
+    def test_the_badge_and_logo_corners_are_reserved_the_right_way_round(self):
+        """live24 是 hourly 的鏡像：角標左上、Logo 右上。講反了就會直接撞。"""
+        prompt = self._run(creativity=2)[1]
+        badge_at = prompt.index("24H LIVE badge carrying the date")
+        logo_at = prompt.index("a channel logo is pasted there")
+        self.assertIn("UPPER-LEFT", prompt[:badge_at][-200:])
+        self.assertIn("UPPER-RIGHT", prompt[:logo_at][-200:])
+
+    def test_the_model_is_told_not_to_draw_the_date_or_the_mark(self):
+        """日期與 24H LIVE 都是程式後貼的，模型畫了就是重複。"""
+        prompt = self._run(creativity=3)[1]
+        self.assertIn('NO date', prompt)
+        self.assertIn('NO "24H"', prompt)
+
+    def test_the_badge_keep_out_is_computed_from_the_real_asset(self):
+        """手打的保留區比實際小時，標題會爬上去撞（2026-09-11 在 hourly 踩過）。"""
+        height = compose.live24_badge_keep_out_height()
+        self.assertGreater(height, compose.LIVE24_BADGE_TOP_RATIO)
+        self.assertLess(height, 0.5)
+
+    def test_the_whole_headline_reaches_the_model_not_just_the_first_segment(self):
+        """lines 是依空格拆出來的兩段。live24 只列 line1 的話後半段整段消失——
+        2026-09-13 實拍抓到：四級全被畫成「東北季風剩1天」，「假日回溫」不見了。"""
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                prompt = self._run(creativity=level)[1]
+                head = prompt[:prompt.index("=== LAYOUT")]
+                self.assertIn("東北季風剩1天 假日回溫", head)
+                self.assertNotIn("Headline line 2", head)
