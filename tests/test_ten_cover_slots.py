@@ -29,7 +29,8 @@ def _payload(left=None, right=None, **extra):
     body = {
         "title_left": "尼泊爾災區 無人機空拍 滅村慘況",
         "title_right": "台南易淹水 成氣候衝擊區",
-        "mode": "ai",
+        # 2026-09-13 起 ai＋附圖位＝兩段生圖（會打模型），這裡的版位測試一律走合成版
+        "mode": "composite",
         "asis_left": _data_url(_png_bytes(colour=left)) if left else "",
         "asis_right": _data_url(_png_bytes(colour=right)) if right else "",
     }
@@ -99,9 +100,31 @@ class SlotTests(unittest.TestCase):
         self.assertEqual(img.getpixel((w // 4, round(h * 0.3))), GREEN)
         self.assertEqual(img.getpixel((3 * w // 4, round(h * 0.3))), BLUE)
 
-    def test_one_slot_still_forces_composite_even_with_ai_title(self):
-        res, _, _ = self._post(_payload(left=RED, mode="ai"))
-        self.assertEqual(res.json()["mode"], "composite")
+    def test_one_slot_with_ai_title_keeps_ai_mode_and_draws_over_the_base(self):
+        """2026-09-13 使用者裁決：原圖放置＋AI 標題不再強制壓字——右格生 1:1，拼成底圖後
+        整張送模型畫字（第二段只收那張底圖，一張 aiedit）。"""
+        whole = []
+
+        def fake_raw(req):
+            whole.append(req)
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(_png_bytes(size=(1280, 720))).decode("ascii"),
+                mime_type="image/png", model="fake-whole",
+            )
+
+        with patch.object(main, "_cover_panel_image", return_value=(_png_bytes(colour=GREEN), "fake-panel")) as panel, \
+             patch.object(main, "resolve_cover_visuals", return_value=("左景", "右景")), \
+             patch.object(main, "supports_multiple_reference_images", return_value=True), \
+             patch.object(main, "generate_image_raw", side_effect=fake_raw):
+            res = client.post("/api/editor/cover", json=_payload(left=RED, mode="ai"), headers=_headers())
+        self.assertEqual(res.status_code, 200, res.text)
+        data = res.json()
+        self.assertEqual(data["mode"], "ai")
+        self.assertEqual(panel.call_count, 1, "只有右格要生")
+        self.assertEqual(len(whole), 1)
+        self.assertEqual([r.purpose for r in whole[0].reference_images], ["aiedit"])
+        self.assertIn("THE ATTACHED IMAGE IS THE FINISHED PICTURE", whole[0].prompt)
+        self.assertEqual(data["model"], "ten-cover:ai-asisL")   # 回應的 model 是路徑標籤，生圖模型名記在落檔
 
     def test_visual_supplied_for_generated_side_skips_the_text_model(self):
         res, calls, resolve = self._post(_payload(left=RED, visual_right="淹水街道"), visuals=("x", "x"))

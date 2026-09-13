@@ -672,6 +672,30 @@ def cover_accessories(level: int, titles=(), seed=None, full_width: bool = False
     return picked
 
 
+# ---- AI 標題疊在程式拼好的底圖上（2026-09-13 使用者裁決）----
+#
+# 「原圖放置＋AI 標題」以前一律強制程式壓字（真照不進模型）。使用者裁決改成允許：
+# 原圖（或雙切時每格各自 AI改圖 後拼成的底圖）當唯一附圖送進模型，由模型在上面畫字。
+# 這一段釘在 CANVAS 正後方——與設計綱要同一個理由：L4 的 prompt 上萬字元，
+# 附在最尾巴的 AIEDIT 區塊到那時已經被稀釋，模型會把整張重新構圖。
+AI_TITLE_BASE_IMAGE_NOTE = """=== THE ATTACHED IMAGE IS THE FINISHED PICTURE ===
+One image is attached. It is the COMPLETE photograph layer of this cover, already composed edge to edge — its panels, seam, crops and framing are final. Reproduce it as the picture: same subjects, same framing, same left/right arrangement, same crops. On top of it add ONLY the typography and graphic furniture described below. Do not replace it with another scene, do not re-compose, re-crop, mirror or zoom it, and do not move anything from one side to the other.
+
+"""
+
+
+def with_base_image_note(prompt: str, has_base: bool) -> str:
+    """有程式拼好的底圖才注入，釘在第一個 TEXT TO RENDER 段之前（十點＝CANVAS 與設計綱要之後，
+    YT＝整份 prompt 開頭）。沒有底圖原樣回傳。不做成模板佔位：既有測試直接 format 模板，
+    多一個必填欄位會全部炸掉；執行期注入兩邊都不用改。"""
+    if not has_base:
+        return prompt
+    marker = "=== TEXT TO RENDER"
+    if marker not in prompt:
+        return AI_TITLE_BASE_IMAGE_NOTE + prompt
+    return prompt.replace(marker, AI_TITLE_BASE_IMAGE_NOTE + marker, 1)
+
+
 # ---- 設計綱要：插在 CANVAS 正後方（2026-09-11 第二輪）----
 #
 # 第一輪把整份級距條文放在 TYPOGRAPHY 段尾，實拍（創意梯子-260911 A／B 兩組）四級長得

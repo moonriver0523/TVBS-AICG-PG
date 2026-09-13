@@ -253,10 +253,11 @@ class TenCoverSlotEndpointTests(unittest.TestCase):
         refs = full.call_args.args[2]
         self.assertEqual([r.purpose for r in refs], ["aiedit"])
 
-    def test_an_as_is_slot_still_places_the_photo_and_forces_composite(self):
-        """回歸：2026-09-07 的一標一附圖行為一字不變。"""
+    def test_an_as_is_slot_still_places_the_photo_in_composite(self):
+        """回歸：合成版的一標一附圖行為一字不變（2026-09-13 起 ai＋原圖改走 AI 疊底圖，
+        見 test_ai_title_over_base_20260913，這裡明送 composite）。"""
         data, panel, full = self._post(
-            {"title_right": "病理醫師 月薪65萬仍缺工", "mode": "ai",
+            {"title_right": "病理醫師 月薪65萬仍缺工", "mode": "composite",
              "slot_left": [_ref("asis", (200, 30, 30))]}
         )
         self.assertEqual(data["mode"], "composite")
@@ -265,7 +266,7 @@ class TenCoverSlotEndpointTests(unittest.TestCase):
 
     def test_the_legacy_asis_left_string_behaves_exactly_as_before(self):
         data, _, _ = self._post(
-            {"title_right": "病理醫師 月薪65萬仍缺工", "mode": "ai", "asis_left": _data_url((200, 30, 30))}
+            {"title_right": "病理醫師 月薪65萬仍缺工", "mode": "composite", "asis_left": _data_url((200, 30, 30))}
         )
         self.assertEqual(data["mode"], "composite")
         self.assertFalse(data["left_is_ai"])
@@ -273,11 +274,15 @@ class TenCoverSlotEndpointTests(unittest.TestCase):
     def test_the_default_all_ai_mode_also_sends_the_slot_image(self):
         """整張 AI 版是十點的**預設**模式。漏掉這條，使用者在格子裡選了 AI改圖
         卻一張都沒送進模型——2026-08-23 那兩次「附圖被忽略」就是這個形狀。"""
-        fake = main.ImageGenerateResponse(
-            image_data_base64=base64.b64encode(_png((1920, 1080))).decode("ascii"),
-            mime_type="image/png", model="fake-model",
-        )
-        with patch.object(main, "generate_image_raw", return_value=fake) as raw,              patch.object(main, "supports_multiple_reference_images", return_value=True),              patch.object(main, "resolve_cover_visuals", return_value=("左邊畫面", "右邊畫面")):
+        # 2026-09-13 起雙切 ai＋附圖位＝兩段生圖：第一段那一格 1:1、第二段整張 16:9，
+        # 假生圖要依比例回圖，不然比例驗證會把 1:1 那格擋掉
+        def fake_raw(req):
+            size = (1024, 1024) if req.aspect_ratio == "1:1" else (1920, 1080)
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(_png(size)).decode("ascii"),
+                mime_type="image/png", model="fake-model",
+            )
+        with patch.object(main, "generate_image_raw", side_effect=fake_raw) as raw,              patch.object(main, "supports_multiple_reference_images", return_value=True),              patch.object(main, "resolve_cover_visuals", return_value=("左邊畫面", "右邊畫面")):
             res = client.post("/api/editor/cover", json={
                 "title_left": "勞保撥補 上看1300億",
                 "title_right": "病理醫師 月薪65萬仍缺工",
@@ -285,6 +290,10 @@ class TenCoverSlotEndpointTests(unittest.TestCase):
                 "slot_left": [_ref("aiedit")],
             }, headers=headers())
         self.assertEqual(res.status_code, 200, res.text)
+        # 第一段：左格自己的 AI改圖 進了那一格的 1:1 生圖
+        panel_req = raw.call_args_list[0].args[0]
+        self.assertEqual(panel_req.aspect_ratio, "1:1")
+        self.assertIn("aiedit", [r.purpose for r in panel_req.reference_images])
         image_req = raw.call_args.args[0]
         self.assertIn("aiedit", [r.purpose for r in image_req.reference_images])
         # 附上去還不夠：沒有這段措辭，模型會把它當成鬆散的風格參考去畫別的畫面
@@ -336,20 +345,23 @@ class YtCoverSlotEndpointTests(unittest.TestCase):
         })
         self.assertEqual(data["title_mode"], "ai")
 
-    def test_an_as_is_slot_still_forces_the_program_drawn_title(self):
-        """回歸：2026-09-07 的裁決沒被這次掃到。"""
-        data, _, _ = self._post({
+    def test_an_as_is_slot_with_ai_title_draws_over_the_photo(self):
+        """2026-09-13 使用者裁決：原圖放置＋AI 標題不再強制壓字，原圖當唯一附圖送模型畫字。"""
+        data, raw, _ = self._post({
             "title": "挪威國王哈拉德辭世 開放公眾瞻仰遺容",
             "slot_left": [_ref("asis")],
         })
-        self.assertEqual(data["title_mode"], "composite")
+        self.assertEqual(data["title_mode"], "ai")
+        self.assertEqual(raw.call_count, 1)
+        self.assertEqual([r.purpose for r in raw.call_args.args[0].reference_images], ["aiedit"])
 
-    def test_the_legacy_asis_left_string_still_forces_it_too(self):
-        data, _, _ = self._post({
+    def test_the_legacy_asis_left_string_also_draws_over_the_photo(self):
+        data, raw, _ = self._post({
             "title": "挪威國王哈拉德辭世 開放公眾瞻仰遺容",
             "asis_left": _data_url(),
         })
-        self.assertEqual(data["title_mode"], "composite")
+        self.assertEqual(data["title_mode"], "ai")
+        self.assertEqual(raw.call_count, 1)
 
     def test_dual_keeps_each_slots_extra_references_in_its_own_panel(self):
         left, right = main.yt_dual_panel_requests(main.YtCoverRequest(

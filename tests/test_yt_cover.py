@@ -375,10 +375,11 @@ class SplitBackgroundTests(unittest.TestCase):
         self.assertEqual(img.getpixel((w // 4, h // 2)), (200, 30, 30))
         self.assertEqual(img.getpixel((3 * w // 4, h // 2)), (30, 30, 200))
 
-    def test_endpoint_forces_composite_title_when_splitting(self):
+    def test_endpoint_splits_three_asis_without_any_model_in_composite(self):
+        # 2026-09-13 起 ai＋原圖＝AI 標題疊底圖（會打模型），無 API 的分切要明送 composite
         payload = {
             "title": "閃兵案第四波 14人自首遭起訴",
-            "title_mode": "ai",
+            "title_mode": "composite",
             "reference_images": [
                 {"data_url": _data_url(_png_bytes((800, 800), (200, 30, 30))), "purpose": "asis"},
                 {"data_url": _data_url(_png_bytes((800, 800), (30, 30, 200))), "purpose": "asis"},
@@ -417,21 +418,36 @@ class EndpointTests(unittest.TestCase):
         with Image.open(io.BytesIO(base64.b64decode(data["image_data_base64"]))) as image:
             self.assertEqual(image.size, compose.YT_CANVAS)
 
-    def test_single_asis_forces_composite_even_when_ai_title_checked(self):
-        """單張原圖放置＋「標題由 AI 生成」仍勾選：後端要改程式壓字，不把照片丟給模型重畫。"""
+    def test_single_asis_with_ai_title_draws_the_title_over_the_photo(self):
+        """2026-09-13 使用者裁決（2026-09-07 的強制壓字作廢）：單張原圖放置＋AI 標題＝
+        程式裁滿版當唯一附圖，模型只在上面畫字；一次生圖、零張肖像。"""
+        calls = []
+
+        def fake_raw(req):
+            calls.append(req)
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(_png_bytes((1280, 720))).decode("ascii"),
+                mime_type="image/png", model="fake",
+            )
+
         payload = {
             "title": "北北基宜大雨特報 台北12處道路封閉",
             "title_mode": "ai",
             "date_text": "2026/09/07",
             "reference_images": [{"data_url": _data_url(_png_bytes((1200, 700))), "purpose": "asis"}],
         }
-        with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")),              patch.object(main, "derive_yt_cover_plan", side_effect=AssertionError("不該打文字模型")):
+        with patch.object(main, "generate_image_raw", side_effect=fake_raw), \
+             patch.object(main, "supports_multiple_reference_images", return_value=True), \
+             patch.object(main, "derive_yt_cover_plan", return_value={"visual": "雨中街景"}):
             res = client.post("/api/editor/yt-cover", json=payload, headers=HEADERS)
         self.assertEqual(res.status_code, 200, res.text)
         data = res.json()
-        self.assertEqual(data["title_mode"], "composite")
-        self.assertFalse(data["background_is_ai"])
-        self.assertEqual((data["line1"], data["line2"]), ("北北基宜大雨特報", "台北12處道路封閉"))
+        self.assertEqual(data["title_mode"], "ai")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([r.purpose for r in calls[0].reference_images], ["aiedit"])
+        self.assertEqual(calls[0].portrait_subjects, [])
+        self.assertIn("THE ATTACHED IMAGE IS THE FINISHED PICTURE", calls[0].prompt)
+        self.assertEqual(data["model"], "yt-cover:asis、fake")
 
     def test_hourly_layout_ignores_subtitle_and_takes_time(self):
         payload = {

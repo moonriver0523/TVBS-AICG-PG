@@ -2254,10 +2254,15 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
             if (fullLayout) slots.right = false;   // 滿版只有一個附圖位
             const slotCount = (slots.left ? 1 : 0) + (slots.right ? 1 : 0);
             const asisCount = slotCount || uploadedAsisCount();
-            // 有原圖放置一律程式壓字（後端也會強制），這裡只是把提示講對
-            const composite = document.getElementById('coverAiTitle')?.checked === false || asisCount > 0;
+            // 2026-09-13 使用者裁決：原圖放置＋AI 標題不再強制程式壓字——後端把原圖（或雙切
+            // 每格各自處理後拼好的底圖）當唯一附圖送模型畫字（兩段生圖）。模式只看勾選框。
+            const composite = document.getElementById('coverAiTitle')?.checked === false;
+            const anySlotImage = state.coverAsis.left.length > 0 || (!fullLayout && state.coverAsis.right.length > 0);
             const deriving = true;   // 畫面描述欄移除後一律由 AI 推導（2026-09-08 WP1）
-            showToast(fullLayout ? (slots.left ? '附圖鋪滿，合成中…' : (composite ? '生成底圖中，約 30–90 秒…' : '設計封面中，約 30–120 秒…'))
+            showToast(!composite && (asisCount > 0 || anySlotImage)
+                    ? (fullLayout && slots.left ? '原圖鋪滿後交給 AI 畫標題，約 30–90 秒…'
+                                                : '附圖先各自處理、拼好底圖後交給 AI 畫標題（兩段），約 60–150 秒…')
+                : fullLayout ? (slots.left ? '附圖鋪滿，合成中…' : (composite ? '生成底圖中，約 30–90 秒…' : '設計封面中，約 30–120 秒…'))
                 : slots.left && slots.right ? '兩格都用附圖，合成中…'
                 : slots.left ? '左格用附圖，右格生底圖中，約 30–90 秒…'
                 : slots.right ? '右格用附圖，左格生底圖中，約 30–90 秒…'
