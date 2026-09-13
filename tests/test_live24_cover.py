@@ -449,3 +449,81 @@ class BackgroundModeTests(unittest.TestCase):
         self.assertIsNotNone(block, "index.html 沒有底圖模式下拉")
         values = re.findall(r'value="([a-z]+)"', block.group(0))
         self.assertEqual(sorted(values), sorted(editor_formats.LIVE24_BG_MODES))
+
+
+class BackgroundCreativityTests(unittest.TestCase):
+    """合成版底圖的創意階梯（2026-09-13）。
+
+    在此之前 YT 的拉桿**只接在 AI 標題那條路**，合成版底圖的模板一個創意變數都沒有，
+    所以 live24 這種純合成版的版型，拉桿等於完全沒作用。
+    """
+
+    def _prompt(self, **payload):
+        import base64
+        import os
+        from unittest.mock import patch
+
+        from fastapi.testclient import TestClient
+
+        import main
+
+        base = {"title": "東北季風剩1天 假日回溫", "layout": "live24", "date_text": "2026.09.13"}
+        base.update(payload)
+
+        def fake(req):
+            buffer = io.BytesIO()
+            Image.new("RGB", (1920, 1080), (70, 80, 100)).save(buffer, format="PNG")
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(buffer.getvalue()).decode("ascii"),
+                mime_type="image/png", model="fake-model",
+            )
+
+        with patch.object(main, "generate_image_raw", side_effect=fake) as raw, \
+             patch.object(main, "derive_yt_cover_plan", return_value={}), \
+             patch.object(main, "_archive_generation", lambda **k: None):
+            res = TestClient(main.app).post(
+                "/api/editor/yt-cover", json=base,
+                headers={"X-API-Key": os.environ["NEWS_IMAGE_API_KEY"]},
+            )
+        self.assertEqual(res.status_code, 200, res.text)
+        return raw.call_args_list[0].args[0].prompt
+
+    def test_level_zero_changes_nothing(self):
+        """0 級一律等於改動前的行為，不然這次改動就動到既有版型的成品。"""
+        import editor_formats
+        self.assertEqual(editor_formats.yt_background_creativity(0), "")
+        self.assertNotIn("LOOK (level", self._prompt(creativity=0))
+
+    def test_every_level_above_zero_reaches_the_background_prompt(self):
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                self.assertIn(f"LOOK (level {level})", self._prompt(creativity=level))
+
+    def test_the_levels_are_all_different(self):
+        import editor_formats
+        texts = [editor_formats.yt_background_creativity(n) for n in range(5)]
+        self.assertEqual(len(set(texts)), 5)
+
+    def test_every_level_restates_the_overlay_keep_out(self):
+        """放大戲劇性最容易換來的就是主體壓進下三分之一、蓋掉標題區。"""
+        import editor_formats
+        for level in (2, 3, 4):
+            with self.subTest(level=level):
+                self.assertIn("overlay areas below still stay clear",
+                              editor_formats.yt_background_creativity(level))
+
+    def test_live24_is_told_the_headline_is_one_line(self):
+        """共用模板本來寫死 two lines，live24 是一行——講錯會留錯地方的白。"""
+        self.assertIn("one line of large headline type", self._prompt())
+
+    def test_the_other_layouts_still_say_two_lines(self):
+        prompt = self._prompt(layout="hourly", title_mode="composite",
+                              title="東北季風剩1天 假日回溫")
+        self.assertIn("two lines of large headline type", prompt)
+
+    def test_an_out_of_range_level_is_clamped_not_crashed(self):
+        import editor_formats
+        self.assertEqual(editor_formats.yt_background_creativity(99),
+                         editor_formats.yt_background_creativity(4))
+        self.assertEqual(editor_formats.yt_background_creativity(-3),
+                         editor_formats.yt_background_creativity(0))

@@ -1334,6 +1334,37 @@ def yt_cover_is_dual(layout: str, title_second: str) -> bool:
     return layout == YT_COVER_LAYOUT_HOURLY and bool((title_second or "").strip())
 
 
+# ---- 合成版底圖的創意階梯（2026-09-13 使用者：「套創意階梯 TRY 一輪」）----
+#
+# 在此之前 YT 的創意階梯**只接在 AI 標題那條路**（yt_layout_rules／yt_title_top／
+# yt_fixed_block 全在 _yt_cover_full_image 裡）。合成版底圖走的是下面這個模板，
+# 一個創意變數都沒有——所以 live24 這種純合成版的版型，拉桿等於完全沒作用。
+#
+# 這裡補的是**攝影指向**，不是版面：合成版的版面全部由程式壓，模型只負責那張照片。
+# 每一級都要重申「疊字區照舊留白」——放大戲劇性最容易換來的就是主體壓進下三分之一。
+_YT_BG_CREATIVITY: dict[int, str] = {
+    0: "",
+    1: """
+- LOOK (level 1): shape the light a little harder than a plain news still — one clear key light, visible falloff, a touch more contrast. Keep the framing straightforward.""",
+    2: """
+- LOOK (level 2): make a deliberate photographic choice rather than a neutral record — a longer lens with the background falling out of focus, or a low angle that puts the subject against sky. Push the colour grade towards one dominant temperature. The overlay areas below still stay clear.""",
+    3: """
+- LOOK (level 3): shoot it like a title card. Strong directional or rim light, a tilted or unusually low/high camera, atmosphere in the air (haze, spray, dust, rain), a graded palette with one saturated accent. Motion is welcome — a blurred pass, streaked lights. The overlay areas below still stay clear.""",
+    4: """
+- LOOK (level 4): the most cinematic version of this scene. Extreme lighting, heavy atmosphere, a bold camera position, deep colour grading, long exposure or motion streaks if the subject allows. It must still read as a news photograph of THIS subject — not an abstract, not an illustration, not a composite of several scenes. The overlay areas below still stay clear.""",
+}
+
+
+def yt_background_creativity(level: int) -> str:
+    """合成版底圖的攝影指向。0 級回空字串＝現行行為一個像素都沒變。"""
+    return _YT_BG_CREATIVITY.get(max(0, min(4, int(level or 0))), "")
+
+
+# headline_note：疊在底圖上的標題有幾行。整點／國內外／熱搜是兩行，live24 是一行——
+# 講錯會讓模型留錯地方的白（2026-09-13）。
+YT_COVER_HEADLINE_NOTE_TWO = "two lines of large headline type will be placed across the lower part of the frame"
+YT_COVER_HEADLINE_NOTE_ONE = "one line of large headline type will be placed across the lower part of the frame"
+
 YT_COVER_VISUAL_PROMPT_TEMPLATE = """Generate a text-free photographic background for a live-stream news thumbnail.
 
 Subject:
@@ -1342,8 +1373,8 @@ Subject:
 Requirements:
 - 16:9 horizontal, photographic, broadcast news quality, dramatic lighting, high contrast.
 - ABSOLUTELY NO text, no numbers, no letters, no captions, no logos, no watermarks, no signage, no readable writing of any kind anywhere in the image.
-- No borders, no frames, no split-screen, no collage: one single continuous scene.
-- COMPOSITION FOR OVERLAYS: two lines of large headline type will be placed across the lower part of the frame afterwards, and a badge will sit in each upper corner. Keep the main subject in the upper-middle of the frame, keep the lower third free of essential detail (a plain or darker area there is ideal), and keep the extreme corners free of faces and key objects.
+- No borders, no frames, no split-screen, no collage: one single continuous scene.{creativity}
+- COMPOSITION FOR OVERLAYS: {headline_note} afterwards, and a badge will sit in each upper corner. Keep the main subject in the upper-middle of the frame, keep the lower third free of essential detail (a plain or darker area there is ideal), and keep the extreme corners free of faces and key objects.
 """
 
 # 標題由 AI 生成模式（2026-09-06 使用者試做後裁決：兩種並存、預設 AI 生成）。

@@ -5207,7 +5207,17 @@ def _yt_cover_background(
         return compose.split_backgrounds(raws), "image/png", False, f"yt-cover:asis-split{len(raws)}"
 
     image_req = ImageGenerateRequest(
-        prompt=editor_formats.YT_COVER_VISUAL_PROMPT_TEMPLATE.format(visual=visual.strip()),
+        prompt=editor_formats.YT_COVER_VISUAL_PROMPT_TEMPLATE.format(
+            visual=visual.strip(),
+            # 2026-09-13：合成版底圖也吃創意階梯。在此之前拉桿只接在 AI 標題那條路，
+            # live24 這種純合成版的版型等於完全沒作用。
+            creativity=editor_formats.yt_background_creativity(req.creativity),
+            headline_note=(
+                editor_formats.YT_COVER_HEADLINE_NOTE_ONE
+                if req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
+                else editor_formats.YT_COVER_HEADLINE_NOTE_TWO
+            ),
+        ),
         provider=req.provider,
         aspect_ratio="16:9",
         image_size=req.image_size,
