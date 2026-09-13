@@ -2777,6 +2777,9 @@ async function handleOneClickGenerate() {
                 portrait_subjects: state.portraitSubjects,
                 portrait_subjects_en: state.portraitSubjectsEn,
                 reference_images: userRefImagesPayload(),
+                // AI改圖 專用（2026-09-13）：指令欄要直接送到生圖模型手上，當成
+                // 「這張附圖要改哪裡」。沒附 AI改圖 的圖時後端會忽略這個欄位。
+                editor_instruction: currentUserInstruction(),
             }),
         });
         const data = await imgRes.json().catch(() => ({}));

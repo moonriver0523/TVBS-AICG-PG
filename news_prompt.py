@@ -335,10 +335,29 @@ USER_REFERENCE_AIEDIT_RULES = """===============================================
 ATTACHED IMAGE — REDRAW THIS SAME PICTURE (CRITICAL)
 ==================================================
 - One of the attached images is the picture this graphic's main visual is to BE. Re-draw that same picture in the graphic's own visual style: the same subject, the same framing, the same camera angle, the same arrangement of what is near and far.
-- This is NOT a loose style reference. Someone who saw the attached image must recognise your output as the same moment redrawn, not as a different picture of a similar topic. Do not substitute another scene, another angle, another action or another setting for it.
-- Do redraw it: repaint, restyle and colour-grade it into this graphic's illustration style, and extend or crop the edges as the layout needs. It is the treatment that changes, never the content.
+- This is NOT a loose style reference. Someone who saw the attached image must recognise your output as the same moment redrawn, not as a different picture of a similar topic. Except where an editor's instruction below asks for a change, do not substitute another scene, another angle, another action or another setting for it.
+- Do redraw it: repaint, restyle and colour-grade it into this graphic's illustration style, and extend or crop the edges as the layout needs. Apart from whatever an editor's instruction below asks you to change, the treatment changes and the content does not.
 - Do not copy readable text or brand marks visible inside the attached image, except a brand the source material names — that one may be reproduced on its own objects; the BRANDS rule above still applies in full.
 - Do not copy any recognisable human face from the attached image; how to depict named real people is governed solely by the NAMED REAL PERSON rules."""
+
+# 使用者在指令欄寫的需求（2026-09-13 使用者裁決：「AI改圖 如果使用者在給 AI 指令欄
+# 寫需求 會吃到嗎? 應該要吃到」，權限＝**可以改內容**）。
+#
+# 為什麼要獨立一段、而不是沿用既有的那條路：指令欄本來只送給推導「畫面描述」的
+# 文字模型，推出來的句子最後變成生圖 prompt 裡的一行 `The photograph: ...`。
+# 2026-09-13 實拍證明那條路在 AI改圖 下會被蓋掉——推導出的描述寫「工人正在架設
+# 遮陽棚」，成品卻是照片原本那群站在已搭好棚下的遊客，一個工人都沒有。上面的
+# REDRAW 區塊贏了畫面描述，指令欄走同一條路自然也贏不了。
+#
+# 這一段的權限：凌駕上面「內容不變」那句（該句已同步改寫，不是疊 override），
+# 但**不**凌駕同區塊的商標、人臉與 NAMED REAL PERSON 規則。
+# 措辭沿用 resolve_cover_visuals 的框法，明講它是「要改畫面哪裡」而不是要畫的字
+# ——不講的話「改成夜晚」會被模型當成字幕畫上去。
+USER_REFERENCE_AIEDIT_INSTRUCTION_TEMPLATE = """
+
+THE EDITOR'S INSTRUCTION FOR THIS REDRAW (OUTRANKS "the content does not change"):
+The editor has asked for the following change to the attached picture. It is a direction about what to change in the picture, never words to render — do not write any of it, or any translation of it, anywhere in the image. Carry it out, and leave everything it does not mention exactly as it is in the attached image. It does not relax the brand-mark, human-face or NAMED REAL PERSON rules above; satisfy the rest of the instruction within those.
+{instruction}"""
 
 USER_REFERENCE_MODES = {
     "map": USER_REFERENCE_MAP_RULES,
