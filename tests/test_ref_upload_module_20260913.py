@@ -270,6 +270,26 @@ class TenCoverSlotEndpointTests(unittest.TestCase):
         self.assertEqual(data["mode"], "composite")
         self.assertFalse(data["left_is_ai"])
 
+    def test_the_default_all_ai_mode_also_sends_the_slot_image(self):
+        """整張 AI 版是十點的**預設**模式。漏掉這條，使用者在格子裡選了 AI改圖
+        卻一張都沒送進模型——2026-08-23 那兩次「附圖被忽略」就是這個形狀。"""
+        fake = main.ImageGenerateResponse(
+            image_data_base64=base64.b64encode(_png((1920, 1080))).decode("ascii"),
+            mime_type="image/png", model="fake-model",
+        )
+        with patch.object(main, "generate_image_raw", return_value=fake) as raw,              patch.object(main, "supports_multiple_reference_images", return_value=True),              patch.object(main, "resolve_cover_visuals", return_value=("左邊畫面", "右邊畫面")):
+            res = client.post("/api/editor/cover", json={
+                "title_left": "勞保撥補 上看1300億",
+                "title_right": "病理醫師 月薪65萬仍缺工",
+                "date_text": "2026/09/14", "mode": "ai",
+                "slot_left": [_ref("aiedit")],
+            }, headers=headers())
+        self.assertEqual(res.status_code, 200, res.text)
+        image_req = raw.call_args.args[0]
+        self.assertIn("aiedit", [r.purpose for r in image_req.reference_images])
+        # 附上去還不夠：沒有這段措辭，模型會把它當成鬆散的風格參考去畫別的畫面
+        self.assertIn(news_prompt.USER_REFERENCE_AIEDIT_RULES, image_req.prompt)
+
     def test_each_panel_only_gets_its_own_slots_references(self):
         """左格放的 AI改圖 不該跑去影響右格——那正是附圖位存在的理由。"""
         _, panel, _ = self._post({
@@ -339,6 +359,9 @@ class YtCoverSlotEndpointTests(unittest.TestCase):
         ))
         self.assertEqual([r.purpose for r in left.reference_images], ["aiedit"])
         self.assertEqual([r.purpose for r in right.reference_images], ["asis"])
+        # 拆完的單格請求不能再自認為「有附圖位」——那是拆格前才有的身分
+        for panel in (left, right):
+            self.assertFalse(panel.uses_asis_slots())
 
 
 if __name__ == "__main__":

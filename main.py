@@ -4355,8 +4355,13 @@ def _cover_ai(
         aspect_ratio="16:9",
         image_size="1K",
         safe_frame=False,
-        # asis 走不到這裡（有 asis 端點就強制 composite）；其他用途依規則當生圖參考
-        reference_images=[ref for ref in req.reference_images if ref.purpose != "asis"],
+        # asis 走不到這裡（有 asis 端點就強制 composite）；其他用途依規則當生圖參考。
+        # 2026-09-13：附圖位裡的 AI改圖／實景／肖像／地圖也要收——整張 AI 版是十點的
+        # 預設模式，漏掉這裡等於使用者在那一格選了 AI改圖 卻完全沒送進模型。
+        # 整張 AI 只有一個畫面，兩格的參考都歸這一張。
+        reference_images=[
+            ref for ref in req.reference_images if ref.purpose != "asis"
+        ] + slot_generation_refs(req.slot_refs(0)) + slot_generation_refs(req.slot_refs(1)),
         portrait_subjects=subjects,
         portrait_subjects_en=english,
     )
@@ -5346,13 +5351,13 @@ def yt_dual_panel_requests(req: "YtCoverRequest") -> tuple["YtCoverRequest", "Yt
     left = req.model_copy(update={
         "title": req.title.strip(), "title_second": "",
         "reference_images": others + asis_left,
-        "asis_left": "", "asis_right": "",
+        "asis_left": "", "asis_right": "", "slot_left": [], "slot_right": [],
         "background_image_base64": "",
     })
     right = req.model_copy(update={
         "title": req.title_second.strip(), "title_second": "",
         "reference_images": others + asis_right,
-        "asis_left": "", "asis_right": "",
+        "asis_left": "", "asis_right": "", "slot_left": [], "slot_right": [],
         "background_image_base64": "",
     })
     return left, right
