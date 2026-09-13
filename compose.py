@@ -149,6 +149,76 @@ def _draw_text(
     )
 
 
+# ---- 程式壓的日期／時間一律粗體（2026-09-13 使用者：「現行都偏細」）----
+#
+# 字型已經是台北黑體 Bold（見 FONT_CANDIDATES_BUNDLED），沒有更粗的字重可換，
+# 所以靠「同色描邊」把字幹撐開——Pillow 沒有合成粗體，這是唯一做得到的方式，
+# 標題那條 _draw_yt_title_line 早就在用同一招。
+#
+# 描邊會把字整體撐寬 2×stroke。日期紅條／時間白帶的字級是 _fit_font 量出來剛好
+# 塞得下的，直接加描邊就會爆框，所以量字寬時必須把描邊一起算進去（_fit_font_bold）。
+BOLD_STROKE_RATIO = 0.045
+
+
+def _bold_stroke(font: ImageFont.FreeTypeFont) -> int:
+    """假粗體用的同色描邊寬（依字級等比例，小字才不會被糊掉）。"""
+    return max(1, round(font.size * BOLD_STROKE_RATIO))
+
+
+def _fit_font_bold(text: str, max_width: int, start_size: int, min_size: int) -> ImageFont.FreeTypeFont:
+    """同 _fit_font，但把假粗體描邊撐出來的寬度一起算進去。"""
+    size = start_size
+    while size > min_size:
+        font = _font(size)
+        if font.getbbox(text)[2] + 2 * _bold_stroke(font) <= max_width:
+            return font
+        size -= 2
+    return _font(min_size)
+
+
+def _ink_centre_shift(font: ImageFont.FreeTypeFont, text: str) -> int:
+    """anchor 的 'm'（垂直置中）要補多少 y，才是把**墨跡**置中。
+
+    Pillow 的 'm' 是照字型的 ascent／descent 置中，不是照實際墨跡。日期字串的數字
+    頂不到 ascent、而斜線又伸到基線以下，墨跡因此整片偏低——1920×1080 的整點日期
+    紅條實測上緣留 20px、下緣只留 4px。原本勉強看不出來，加了假粗體之後字幹往下
+    多撐 4px，直接貼到紅條下緣（2026-09-13 量到 20 個像素壓在邊線上）。
+    中文字填滿度量框，這個差值是 0，所以只有數字牌會被挪動。
+
+    所以這裡按墨跡置中；粗體是對稱長出來的，不影響這個差值。
+    """
+    x0, ink_top, x1, ink_bottom = font.getbbox(text)
+    ascent, descent = font.getmetrics()
+    return round((ascent + descent) / 2 - (ink_top + ink_bottom) / 2)
+
+
+def _draw_bold_text(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    text: str,
+    font: ImageFont.FreeTypeFont,
+    *,
+    fill: tuple[int, int, int],
+    anchor: str = "la",
+    outline: tuple[int, int, int] | None = None,
+    outline_width: int = 0,
+) -> None:
+    """把程式壓的日期／時間畫成粗體。
+
+    要外框時畫兩趟：第一趟用「外框寬＋假粗體寬」畫出外框，第二趟把粗體字蓋上去。
+    一趟畫不出來——Pillow 一次只吃一個 stroke_fill，而這裡外框與字幹是兩個顏色。
+    """
+    bold = _bold_stroke(font)
+    if anchor[1:2] == "m":
+        xy = (xy[0], xy[1] + _ink_centre_shift(font, text))
+    if outline is not None and outline_width:
+        _draw_text(
+            draw, xy, text, font, fill=fill, stroke=outline,
+            stroke_width=outline_width + bold, anchor=anchor,
+        )
+    _draw_text(draw, xy, text, font, fill=fill, stroke=fill, stroke_width=bold, anchor=anchor)
+
+
 def _paste_logo(canvas: Image.Image, box: tuple[int, int], width: int) -> None:
     """把白色 TVBS Logo 貼在 box（左上角座標），等比例縮到 width。"""
     if not TVBS_LOGO_WHITE.exists():
@@ -553,10 +623,10 @@ def paste_cover_header_right(
         # 比「把帶補到剛好」穩，因為帶厚是模型決定的、我們控制不了。
         # 紅標不需要：它自己有紅底。Logo 與節目標籤是圖檔，本來就不受影響。
         date_font = _font(round(band_h * 0.40))
-        _draw_text(
+        _draw_bold_text(
             draw, (badge_x1 - badge_w - round(width * 0.02), dot_cy), date_text,
-            date_font, stroke=(0, 0, 0), stroke_width=max(2, round(band_h * 0.05)),
-            anchor="rm",
+            date_font, fill=(255, 255, 255), outline=(0, 0, 0),
+            outline_width=max(2, round(band_h * 0.05)), anchor="rm",
         )
 
 
@@ -740,7 +810,10 @@ def _draw_cover_header(draw: ImageDraw.ImageDraw, canvas: Image.Image, date_text
     # 日期：ON AIR 左側
     if date_text:
         date_font = _font(round(band_h * 0.40))
-        _draw_text(draw, (badge_x1 - badge_w - round(width * 0.02), tag_y0 + tag_h // 2), date_text, date_font, stroke_width=0, anchor="rm")
+        _draw_bold_text(
+            draw, (badge_x1 - badge_w - round(width * 0.02), tag_y0 + tag_h // 2),
+            date_text, date_font, fill=(255, 255, 255), anchor="rm",
+        )
     return band_h
 
 
@@ -1436,10 +1509,10 @@ def compose_yt_cover(
         tab_box, radius=14, fill=YT_DATE_FILL,
         outline=YT_DATE_BORDER, width=max(2, round(height * YT_DATE_BORDER_RATIO)),
     )
-    date_font = _fit_font(date_text, tab_w - 28, round(tab_h * 0.72), round(tab_h * 0.4))
-    _draw_text(
+    date_font = _fit_font_bold(date_text, tab_w - 28, round(tab_h * 0.72), round(tab_h * 0.4))
+    _draw_bold_text(
         draw, ((tab_box[0] + tab_box[2]) // 2, (tab_box[1] + tab_box[3]) // 2 + 2),
-        date_text, date_font, fill=YT_DATE_TEXT, stroke_width=0, anchor="mm",
+        date_text, date_font, fill=YT_DATE_TEXT, anchor="mm",
     )
     if ai_translation:
         small = _font(round(height * YT_AI_TRANSLATION_SIZE_RATIO))
@@ -1636,10 +1709,10 @@ def compose_yt_hourly_cover(
         ImageDraw.Draw(layer).rounded_rectangle(band, radius=12, fill=YT_HOURLY_TIME_BAND_FILL)
         canvas.alpha_composite(layer)
         draw = ImageDraw.Draw(canvas)
-        time_font = _fit_font(time_text, band[2] - band[0] - 24, round(band_h * 0.8), round(band_h * 0.4))
-        _draw_text(
+        time_font = _fit_font_bold(time_text, band[2] - band[0] - 24, round(band_h * 0.8), round(band_h * 0.4))
+        _draw_bold_text(
             draw, ((band[0] + band[2]) // 2, (band[1] + band[3]) // 2 + 2),
-            time_text, time_font, fill=YT_HOURLY_TIME_BAND_TEXT, stroke_width=0, anchor="mm",
+            time_text, time_font, fill=YT_HOURLY_TIME_BAND_TEXT, anchor="mm",
         )
         block_bottom = band[3]
 
@@ -1658,10 +1731,10 @@ def compose_yt_hourly_cover(
         )
         draw.rounded_rectangle(tab_box, radius=10, fill=YT_HOURLY_DATE_FILL)
         tab_w, tab_h = tab_box[2] - tab_box[0], tab_box[3] - tab_box[1]
-        date_font = _fit_font(date_text, tab_w - 28, round(tab_h * 0.78), round(tab_h * 0.4))
-        _draw_text(
+        date_font = _fit_font_bold(date_text, tab_w - 28, round(tab_h * 0.78), round(tab_h * 0.4))
+        _draw_bold_text(
             draw, ((tab_box[0] + tab_box[2]) // 2, (tab_box[1] + tab_box[3]) // 2 + 2),
-            date_text, date_font, fill=YT_HOURLY_DATE_TEXT, stroke_width=0, anchor="mm",
+            date_text, date_font, fill=YT_HOURLY_DATE_TEXT, anchor="mm",
         )
 
     # ---- 底部：兩行標題（白／黃、黑描邊），靠左貼邊 ----
