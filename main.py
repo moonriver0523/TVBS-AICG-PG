@@ -4971,6 +4971,11 @@ class YtCoverRequest(BaseModel):
     title_second: str = Field(default="", max_length=60)
     # news＝國內外新聞直播；hourly＝整點直播；hot＝今日熱搜（見 editor_formats.YT_COVER_LAYOUTS）
     layout: Literal["news", "hourly", "hot", "live24"] = "news"
+    # live24 的底圖模式（2026-09-13）。只有 live24 看這一欄，其他版型帶了也忽略。
+    # blend 是預設＝接線當天的行為（兩格都有圖就羽化拼接）。
+    # full／blend／inset 三者都需要左格的圖；blend 與 inset 還需要右格也有圖，
+    # 只有一格時一律退回滿版——半塊空白的雙切不是使用者要的東西。
+    live24_bg: Literal["full", "blend", "inset"] = "blend"
     # ai＝整張連標題字交給生圖模型畫，程式只後貼固定元素（2026-09-06 使用者裁決預設）；
     # composite＝模型只生無文字底圖，標題由程式壓字（零錯字）。
     title_mode: Literal["ai", "composite"] = "ai"
@@ -5376,7 +5381,13 @@ def yt_dual_panel_requests(req: "YtCoverRequest") -> tuple["YtCoverRequest", "Yt
         "background_image_base64": "",
     })
     right = req.model_copy(update={
-        "title": req.title_second.strip(), "title_second": "",
+        # live24 只有一行標題，兩格共用同一句——拿空的 title_second 當右格標題的話，
+        # 右格的畫面推導會拿到空字串，底圖就變成模型自由發揮。
+        "title": (
+            req.title if req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
+            else req.title_second
+        ).strip(),
+        "title_second": "",
         "reference_images": others + asis_right,
         "asis_left": "", "asis_right": "", "slot_left": [], "slot_right": [],
         "background_image_base64": "",
@@ -5410,7 +5421,8 @@ def yt_dual_panel_plan(panel_req: "YtCoverRequest") -> "YtCoverPlan":
 
 
 def yt_dual_background(
-    panel_reqs: tuple["YtCoverRequest", "YtCoverRequest"], plans: list
+    panel_reqs: tuple["YtCoverRequest", "YtCoverRequest"], plans: list,
+    mode: str = editor_formats.LIVE24_BG_BLEND,
 ) -> tuple[bytes, bool, str]:
     """雙則的底圖：左右兩格各自取得後羽化拼成一張，回 (PNG bytes, 有沒有 AI 生的格, 模型名)。
 
@@ -5432,11 +5444,16 @@ def yt_dual_background(
         panels[i] = base64.b64decode(encoded)
         if "yt-cover:asis" not in models:
             models.append("yt-cover:asis")
+    # 疊圖：兩張都是 16:9——大的鋪滿整個畫面，小的是右側那塊白框斜照片，兩者都不是
+    # 半個畫面的方格。用 1:1 生會被拉扁（2026-09-13）。
+    panel_maker = (
+        _cover_full_image if mode == editor_formats.LIVE24_BG_INSET else _cover_panel_image
+    )
     if todo:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             futures = {
                 i: pool.submit(
-                    _cover_panel_image,
+                    panel_maker,
                     plans[i][1] or panel_reqs[i].title.strip(),
                     panel_reqs[i].provider,
                     [ref for ref in panel_reqs[i].reference_images if ref.purpose != "asis"],
@@ -5449,6 +5466,11 @@ def yt_dual_background(
                 panels[i], model = future.result()
                 if model not in models:
                     models.append(model)
+    if mode == editor_formats.LIVE24_BG_INSET:
+        return (
+            compose.compose_live24_inset_background(panels[0], panels[1]),
+            bool(todo), "、".join(models),
+        )
     return compose.blend_backgrounds_lr(panels[0], panels[1]), bool(todo), "、".join(models)
 
 
@@ -5468,7 +5490,8 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     # live24 只有一個標題，hourly 那條「有第二標題＝雙則」的規則用不上。
     # 2026-09-13 使用者裁決：**兩個附圖位都有東西**才雙切，只放一格或都沒放＝滿版。
     dual = (
-        bool(req.slot_refs(0)) and bool(req.slot_refs(1)) if live24
+        req.live24_bg != editor_formats.LIVE24_BG_FULL
+        and bool(req.slot_refs(0)) and bool(req.slot_refs(1)) if live24
         else editor_formats.yt_cover_is_dual(req.layout, req.title_second)
     )
     if not dual and req.uses_asis_slots():
@@ -5575,7 +5598,10 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             )
             is_ai = True
         elif dual and not req.background_image_base64:
-            background, is_ai, image_model = yt_dual_background(panel_reqs, plans)
+            background, is_ai, image_model = yt_dual_background(
+                panel_reqs, plans,
+                mode=req.live24_bg if live24 else editor_formats.LIVE24_BG_BLEND,
+            )
             bg_mime = "image/png"
         else:
             background, bg_mime, is_ai, image_model = _yt_cover_background(

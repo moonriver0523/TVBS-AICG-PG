@@ -357,3 +357,95 @@ class InsetBackgroundTests(unittest.TestCase):
         self.assertIsNotNone(left)
         self.assertIsNotNone(right)
         self.assertLess(right, left, "右端應該比左端高")
+
+
+class BackgroundModeTests(unittest.TestCase):
+    """底圖模式（2026-09-13 使用者裁決「前台加一題底圖模式」）。
+
+    漸層與疊圖都要「兩格都有圖」，共用同一個觸發訊號分不開，所以獨立一欄。
+    """
+
+    def _post(self, payload):
+        import base64
+        import os
+        from unittest.mock import patch
+
+        from fastapi.testclient import TestClient
+
+        import main
+
+        base = {"title": "東北季風剩1天 假日回溫", "layout": "live24", "date_text": "2026.09.13"}
+        base.update(payload)
+
+        def fake(req):
+            size = (1080, 1080) if req.aspect_ratio == "1:1" else (1920, 1080)
+            buffer = io.BytesIO()
+            Image.new("RGB", size, (70, 80, 100)).save(buffer, format="PNG")
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(buffer.getvalue()).decode("ascii"),
+                mime_type="image/png", model="fake-model",
+            )
+
+        with patch.object(main, "generate_image_raw", side_effect=fake), \
+             patch.object(main, "supports_multiple_reference_images", return_value=True), \
+             patch.object(main, "derive_yt_cover_plan", return_value={}), \
+             patch.object(main, "_archive_generation", lambda **k: None), \
+             patch.object(main.compose, "blend_backgrounds_lr",
+                          wraps=main.compose.blend_backgrounds_lr) as blend, \
+             patch.object(main.compose, "compose_live24_inset_background",
+                          wraps=main.compose.compose_live24_inset_background) as inset:
+            res = TestClient(main.app).post(
+                "/api/editor/yt-cover", json=base,
+                headers={"X-API-Key": os.environ["NEWS_IMAGE_API_KEY"]},
+            )
+        return res, blend, inset
+
+    def _ref(self, colour=(30, 30, 30)):
+        import base64
+        buffer = io.BytesIO()
+        Image.new("RGB", (640, 640), colour).save(buffer, format="PNG")
+        return {
+            "data_url": "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii"),
+            "purpose": "asis",
+        }
+
+    def _both(self):
+        return {"slot_left": [self._ref((180, 40, 40))], "slot_right": [self._ref((40, 60, 180))]}
+
+    def test_blend_is_the_default(self):
+        import main
+        self.assertEqual(main.YtCoverRequest(title="x").live24_bg, "blend")
+
+    def test_blend_mode_uses_the_feathered_join(self):
+        res, blend, inset = self._post(self._both())
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(blend.call_count, 1)
+        self.assertEqual(inset.call_count, 0)
+
+    def test_inset_mode_uses_the_inset_compositor(self):
+        res, blend, inset = self._post({**self._both(), "live24_bg": "inset"})
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(inset.call_count, 1)
+        self.assertEqual(blend.call_count, 0)
+
+    def test_full_mode_never_splits_even_with_two_slots(self):
+        """選了滿版就是滿版，不能因為兩格都有圖又偷偷切開。"""
+        res, blend, inset = self._post({**self._both(), "live24_bg": "full"})
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(blend.call_count, 0)
+        self.assertEqual(inset.call_count, 0)
+
+    def test_one_slot_falls_back_to_full_even_in_inset_mode(self):
+        """半塊空白的疊圖不是使用者要的東西。"""
+        res, blend, inset = self._post({"slot_left": [self._ref()], "live24_bg": "inset"})
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(inset.call_count, 0)
+
+    def test_the_front_end_offers_all_three_and_matches_the_backend(self):
+        import re
+        import editor_formats
+        html = pathlib.Path(__file__).resolve().parent.parent.joinpath("index.html").read_text("utf-8")
+        block = re.search(r'<select id="live24BgMode".*?</select>', html, re.S)
+        self.assertIsNotNone(block, "index.html 沒有底圖模式下拉")
+        values = re.findall(r'value="([a-z]+)"', block.group(0))
+        self.assertEqual(sorted(values), sorted(editor_formats.LIVE24_BG_MODES))

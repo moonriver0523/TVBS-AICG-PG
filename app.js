@@ -382,6 +382,7 @@ let state = {
     // YT 封面底部壓色框：2026-09-08 晚使用者裁決預設**開**（60% 半透明、第二行上緣起羽化，見 compose）。
     // 整點直播的版面沒有底帶，按鈕不顯示。
     ytBottomBand: false,   // 2026-09-11 使用者：預設改關閉
+    live24Bg: 'blend',     // live24 底圖模式：full／blend／inset（2026-09-13）
     // YT 直播直標（2026-09-08 WP3）的五組開關。刻意**不**在 setEditorFormat 重置：
     // 直標是同一位導播一整場重複用的東西，換版型回來還要再選一次靠左／Logo 右上很煩。
     vstrip: {
@@ -543,8 +544,17 @@ function displayWidth(text) {
 }
 
 function ytLayoutNow() {
-    if ((editorFormat().ytLayout || '') !== 'hourly') return 'single';
+    const layout = editorFormat().ytLayout || '';
+    // live24 只有一行標題，判不了「有沒有第二標題」；改看底圖模式（2026-09-13 使用者裁決）
+    if (layout === 'live24') return state.live24Bg === 'full' ? 'single' : 'dual';
+    if (layout !== 'hourly') return 'single';
     return (document.getElementById('ytCoverTitleSecond')?.value || '').trim() ? 'dual' : 'single';
+}
+
+// live24 的底圖模式下拉：切到滿版時右格要收起來，免得填了卻不生效
+function onLive24BgChange(select) {
+    state.live24Bg = select.value;
+    updateYtAsisSlots();
 }
 
 /* ============================================================
@@ -2416,6 +2426,8 @@ function ytCoverFields() {
         date_text: val('ytCoverDate'),
         time_text: layout === 'hourly' ? val('ytCoverTime') : '',
         bottom_band: layout !== 'hourly' && state.ytBottomBand,
+        // live24 的底圖模式（2026-09-13）：其他版型帶了後端也忽略，照送不影響
+        live24_bg: state.live24Bg,
         // 創意拉桿（P5，2026-09-11）：三個版型共用同一顆值，後端依 layout 各自套用。
         creativity: state.ytCreativity,
         // 一標一附圖（2026-09-10，對齊十點）：只有整點有；其餘版型送空字串，
@@ -3230,7 +3242,7 @@ function renderYtAsis() {
    1 張整版／2 張左右雙切／3 張三切——改成一標一圖會把雙切與三切砍掉。
    第二個附圖位再多一層條件：判定成雙則（第二標題有填）時才出現，比照十點的滿版／雙切。 */
 function ytUsesAsisSlots() {
-    return (editorFormat().ytLayout || '') === 'hourly';
+    return ['hourly', 'live24'].includes(editorFormat().ytLayout || '');
 }
 
 function updateYtAsisSlots() {
@@ -3248,7 +3260,15 @@ function updateYtAsisSlots() {
     }
     // 單則時左邊那顆就是整版的附圖位，字要跟著改（比照十點的滿版）
     const leftBtn = document.getElementById('ytAsisLeftBtn');
-    if (leftBtn) leftBtn.textContent = dual ? '📁 ＋ 第一附圖（選填）' : '📁 ＋ 附圖（選填）';
+    const live24 = (editorFormat().ytLayout || '') === 'live24';
+    if (leftBtn) {
+        leftBtn.textContent = live24
+            ? (dual ? '📁 ＋ 大底圖（選填）' : '📁 ＋ 附圖（選填）')
+            : (dual ? '📁 ＋ 第一附圖（選填）' : '📁 ＋ 附圖（選填）');
+    }
+    // 底圖模式那一列只有 live24 有
+    const bgRow = document.getElementById('live24BgRow');
+    if (bgRow) bgRow.classList.toggle('hidden', !live24);
     // 從雙則退回單則時，右邊那格的圖不能留著偷偷送出去
     if (!dual && state.ytAsis.right.length) state.ytAsis.right = [];
     renderYtAsis();
