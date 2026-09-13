@@ -4265,8 +4265,13 @@ def _cover_panel_image(
     return base64.b64decode(result.image_data_base64), result.model
 
 
-def _png_data_url(raw: bytes) -> str:
-    return "data:image/png;base64," + base64.b64encode(raw).decode("ascii")
+def _base_data_url(raw: bytes) -> str:
+    """程式拼好的底圖 → 送模型用的 data URL。轉 JPEG（q=90）：1920×1080 的真照 PNG 動輒
+    3–4MB，base64 後超過 UserReferenceImage 的 2.8M 字元上限（實拍抓到）；JPEG 幾百 KB。"""
+    with Image.open(io.BytesIO(raw)) as opened:
+        buffer = io.BytesIO()
+        opened.convert("RGB").save(buffer, format="JPEG", quality=90)
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 def _cover_ai(
@@ -4427,7 +4432,7 @@ def _cover_ai(
         # 預設模式，漏掉這裡等於使用者在那一格選了 AI改圖 卻完全沒送進模型。
         # 整張 AI 只有一個畫面，兩格的參考都歸這一張。
         reference_images=(
-            [UserReferenceImage(data_url=_png_data_url(base), purpose="aiedit")]
+            [UserReferenceImage(data_url=_base_data_url(base), purpose="aiedit")]
             if base is not None else
             [ref for ref in req.reference_images if ref.purpose != "asis"]
             + slot_generation_refs(req.slot_refs(0)) + slot_generation_refs(req.slot_refs(1))
@@ -5483,7 +5488,7 @@ def _yt_cover_full_image(
         image_size=req.image_size,
         safe_frame=False,
         reference_images=(
-            [UserReferenceImage(data_url=_png_data_url(base), purpose="aiedit")]
+            [UserReferenceImage(data_url=_base_data_url(base), purpose="aiedit")]
             if base is not None else list(req.reference_images)
         ),
         portrait_subjects=[] if base is not None else subjects,

@@ -40,6 +40,16 @@ def _decode(data) -> Image.Image:
     return Image.open(io.BytesIO(base64.b64decode(data["image_data_base64"]))).convert("RGB")
 
 
+def _base_image(req) -> Image.Image:
+    """第二段送模型的底圖（JPEG data URL，見 main._base_data_url）。"""
+    return Image.open(io.BytesIO(base64.b64decode(req.reference_images[0].data_url.split(",", 1)[1]))).convert("RGB")
+
+
+def _near(pixel, colour, tol=3) -> bool:
+    # 底圖走 JPEG q=90，純色塊會差 1–2
+    return all(abs(a - b) <= tol for a, b in zip(pixel, colour))
+
+
 class _Harness(unittest.TestCase):
     def _run(self, url, body):
         calls = []
@@ -96,9 +106,9 @@ class TenCoverOverBase(_Harness):
         self.assertIn("THE ATTACHED IMAGE IS THE FINISHED PICTURE", req.prompt)
         self.assertIn(main.USER_REFERENCE_MODES["aiedit"], req.prompt)
         # 唯一附圖就是那張原圖裁滿版
-        base = Image.open(io.BytesIO(base64.b64decode(req.reference_images[0].data_url.split(",", 1)[1]))).convert("RGB")
+        base = _base_image(req)
         self.assertEqual(base.size, compose.COVER_CANVAS)
-        self.assertEqual(base.getpixel((base.width // 2, base.height // 2)), RED)
+        self.assertTrue(_near(base.getpixel((base.width // 2, base.height // 2)), RED))
 
     def test_full_two_asis_ai_title_base_is_a_two_panel_grid(self):
         data, calls = self._run("/api/editor/cover", {
@@ -106,10 +116,10 @@ class TenCoverOverBase(_Harness):
             "slot_left": [_ref(RED, "asis"), _ref(BLUE, "asis")],
         })
         self.assertEqual(len(calls), 1)
-        base = Image.open(io.BytesIO(base64.b64decode(calls[0].reference_images[0].data_url.split(",", 1)[1]))).convert("RGB")
+        base = _base_image(calls[0])
         w, h = base.size
-        self.assertEqual(base.getpixel((w // 4, h // 2)), RED)
-        self.assertEqual(base.getpixel((3 * w // 4, h // 2)), BLUE)
+        self.assertTrue(_near(base.getpixel((w // 4, h // 2)), RED))
+        self.assertTrue(_near(base.getpixel((3 * w // 4, h // 2)), BLUE))
 
     def test_split_asis_left_aiedit_right_two_stage(self):
         data, calls = self._run("/api/editor/cover", {
@@ -120,10 +130,10 @@ class TenCoverOverBase(_Harness):
         self.assertEqual([c.aspect_ratio for c in calls], ["1:1", "16:9"])
         self.assertEqual([r.purpose for r in calls[0].reference_images], ["aiedit"], "右格帶自己的 AI改圖")
         self.assertEqual([r.purpose for r in calls[1].reference_images], ["aiedit"], "第二段只收拼好的底圖")
-        base = Image.open(io.BytesIO(base64.b64decode(calls[1].reference_images[0].data_url.split(",", 1)[1]))).convert("RGB")
+        base = _base_image(calls[1])
         w, h = base.size
-        self.assertEqual(base.getpixel((w // 4, h // 2)), RED, "左格＝原圖")
-        self.assertEqual(base.getpixel((3 * w // 4, h // 2)), GREEN, "右格＝生出來的圖")
+        self.assertTrue(_near(base.getpixel((w // 4, h // 2)), RED), "左格＝原圖")
+        self.assertTrue(_near(base.getpixel((3 * w // 4, h // 2)), GREEN), "右格＝生出來的圖")
         self.assertIn("THE ATTACHED IMAGE IS THE FINISHED PICTURE", calls[1].prompt)
 
     def test_split_each_side_aiedit_gets_its_own_reference(self):
@@ -178,10 +188,10 @@ class YtCoverOverBase(_Harness):
             "reference_images": [_ref(RED, "asis"), _ref(BLUE, "asis")],
         })
         self.assertEqual(len(calls), 1)
-        base = Image.open(io.BytesIO(base64.b64decode(calls[0].reference_images[0].data_url.split(",", 1)[1]))).convert("RGB")
+        base = _base_image(calls[0])
         w, h = base.size
-        self.assertEqual(base.getpixel((w // 4, h // 2)), RED)
-        self.assertEqual(base.getpixel((3 * w // 4, h // 2)), BLUE)
+        self.assertTrue(_near(base.getpixel((w // 4, h // 2)), RED))
+        self.assertTrue(_near(base.getpixel((3 * w // 4, h // 2)), BLUE))
 
     def test_refine_return_trip_does_not_rebuild_the_base(self):
         # 追加修改帶 background 回來：只重貼固定元素，不該再打模型
