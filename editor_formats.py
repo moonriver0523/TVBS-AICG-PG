@@ -1298,6 +1298,50 @@ YT_COVER_TITLE_MODE_AI = "ai"
 YT_COVER_TITLE_MODE_COMPOSITE = "composite"
 YT_COVER_TITLE_MODES = (YT_COVER_TITLE_MODE_AI, YT_COVER_TITLE_MODE_COMPOSITE)
 
+
+# ---- 極短標題的整點封面強制走程式壓字（2026-09-13 使用者裁決）----
+#
+# 使用者回報：整點 0 級「標題字少時字級太大，會被日期紅條蓋到」，附實拍。
+#
+# 先在 prompt 端加了絕對字高上限（見 YT_HOURLY_TITLE_CAP_RATIO）。實拍四張的結論
+# 是**擋不住**：4＋4 字的成品塊高仍是 36.4%（上限推出來應該 ~32%），字頂落在 61.6%，
+# 而紅條下緣就在 61.5%——餘裕 1 個像素。而且修正前那張也剛好沒撞，所以那批連
+# 「有沒有變好」都證明不出來。模型不吃百分比／不肯縮，本專案已經踩過三次。
+#
+# 所以改成程式端保證：極短標題直接切成 composite（模型只生無文字底圖、標題程式壓），
+# 程式壓字版的塊高是 29.2%、字頂 66%，離紅條有 4.5% 的真實距離，物理上不可能撞。
+# 代價是極短標題就沒有 AI 標題的設計感——使用者知道並選了這條。
+#
+# 判定只看「字夠不夠少」，不看使用者是怎麼輸入的（2026-09-13 使用者補充：
+# 「不只兩行，如果使用者只輸入第一行『東北季風 今起增強』但因為空格自動斷句成兩行，
+# 也是字太少」）。所以單則看**整句總寬**（8 全形字寬＝拆完兩行各 4 字），
+# 雙則看兩行各自的寬——那兩行是兩則不同新聞，不會互相補長度。
+#
+# 只管 0 級。1 級起日期牌是模型自己畫、而且明令貼著標題走，沒有這個碰撞；
+# 在那邊強制 composite 等於把整條創意階梯關掉。
+YT_HOURLY_SHORT_TITLE_TOTAL = 8.0    # 單則：整句總寬，這個數以下算極短
+YT_HOURLY_SHORT_TITLE_PER_LINE = 4.0  # 雙則：每行各自的寬
+
+
+def yt_hourly_short_title_needs_composite(
+    layout: str, creativity: int, title_mode: str, title: str, title_second: str = ""
+) -> bool:
+    """這張整點封面的標題是不是短到會撞日期紅條，必須改走程式壓字。"""
+    if layout != YT_COVER_LAYOUT_HOURLY or creativity >= 1:
+        return False
+    if title_mode != YT_COVER_TITLE_MODE_AI:
+        return False
+    # 分隔用的空白不算字：使用者打的「東北季風 今起增強」是 8 個字，不是 8.5
+    def width(text: str) -> float:
+        return compose.title_display_width(re.sub(r"\s+", "", text or ""))
+
+    if yt_cover_is_dual(layout, title_second):
+        return all(
+            width(text) <= YT_HOURLY_SHORT_TITLE_PER_LINE
+            for text in (title, title_second)
+        )
+    return width(title) <= YT_HOURLY_SHORT_TITLE_TOTAL
+
 # 底部壓色框開關（2026-09-08 使用者裁決；同日晚改預設 ON）。合成版由 compose 的 bottom_band
 # 決定畫不畫，AI 版只能靠 prompt——所以 LAYOUT 的第一條與 IMAGERY 的結尾都要換句話說，
 # 不然模型看到「filling the frame behind the band」還是會自己畫一條帶子出來。
