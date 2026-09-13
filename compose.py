@@ -878,6 +878,18 @@ def _draw_cover_ai_note(canvas: Image.Image, x_anchor: int, y0: int, align_right
 
 # 拆行點偏好：切在「數量詞結尾」之後（5年｜各自…、184億元｜提升…），比純粹對半自然得多。
 _SPLIT_AFTER_CHARS = set("年月日元億萬千人次件位家戶%％度歲倍條棟艘架台場波班組隊起成")
+# 量詞前面要有數（2026-09-13 實拍抓到「歐洲熱浪台｜灣豪雨」：「台」在量詞集合裡，
+# 沒有數字也被當「3台｜車」切）。「台灣／人民／成長／制度」這些字尾都在集合裡，
+# 沒有數在前面的量詞字就只是普通字，不能當斷點。
+_NUMBER_WORD_CHARS = set("一二三四五六七八九十百千萬億兩幾數多半")
+
+
+def _quantifier_after_number(text: str, end: int) -> bool:
+    """text[end] 是量詞字：往回跳過連續量詞字（億元、萬人），前面是不是數字／數字字。"""
+    j = end
+    while j >= 0 and text[j] in _SPLIT_AFTER_CHARS:
+        j -= 1
+    return j >= 0 and (text[j].isdigit() or text[j] in _NUMBER_WORD_CHARS)
 
 # 虛詞邊界（2026-09-10）：切在這些字**之後**很少會腰斬一個詞——「容易被忽略的｜前兆」。
 _SPLIT_AFTER_PARTICLES = set("的了與和及至到後前中上下內外時起才又也都就再")
@@ -904,8 +916,10 @@ _BRACKET_CLOSERS = set(_BRACKET_PAIRS.values())
 
 # 常見專有名詞小詞典：沒有斷詞器（本機與 Cloud Run 都沒裝），只能用一份短名單擋最常見的
 # 腰斬——「格陵蘭」被切成「格／陵蘭」（2026-09-13 同一則回報）。只收 3 字以上、新聞高頻的
-# 國名／地名／機構名；2 字詞交給虛詞規則（切到 2 字詞中間的機率本來就低）。
+# 國名／地名／機構名；2 字詞交給虛詞規則（切到 2 字詞中間的機率本來就低）——
+# 例外是「台灣／臺灣」：新聞標題出現頻率最高，且「台」同時是量詞字（2026-09-13）。
 _SPLIT_KEEP_TOGETHER = (
+    "台灣", "臺灣",
     "格陵蘭", "加拿大", "墨西哥", "冰島", "巴拿馬", "委內瑞拉", "阿根廷", "哥倫比亞", "巴西", "古巴",
     "烏克蘭", "俄羅斯", "白俄羅斯", "波蘭", "立陶宛", "愛沙尼亞", "拉脫維亞", "羅馬尼亞", "保加利亞",
     "塞爾維亞", "克羅埃西亞", "斯洛伐克", "斯洛維尼亞", "匈牙利", "捷克", "奧地利", "瑞士", "比利時",
@@ -968,7 +982,11 @@ def _split_line_near_middle(text: str) -> tuple[str, str]:
         return at_edge
     for offset in range(0, 4):
         for i in (mid - offset, mid + offset):
-            if 2 <= i <= n - 2 and i not in inner and text[i - 1] in _SPLIT_AFTER_CHARS and not text[i].isdigit():
+            if (
+                2 <= i <= n - 2 and i not in inner and text[i - 1] in _SPLIT_AFTER_CHARS
+                and _quantifier_after_number(text, i - 1) and not text[i].isdigit()
+                and text[i] not in _SPLIT_AFTER_CHARS   # 184億｜元：量詞串要整串在前行
+            ):
                 return text[:i], text[i:]
     # 虛詞邊界（2026-09-10）：純粹取中點會把詞腰斬——使用者回報「容易被忽略的前兆」
     # 被切成「容易被忽／略的前兆」。沒有斷詞器可用（本機與 Cloud Run 都沒裝），
