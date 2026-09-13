@@ -2496,6 +2496,30 @@ def _split_data_url(data_url: str) -> tuple[str, str, str]:
     return mime_type or "image/jpeg", encoding, encoded
 
 
+def decode_attached_image(data_url: str, *, what: str = "附圖") -> bytes:
+    """附圖 data URL → 原始 bytes，並保證 PIL 開得起來；壞的一律 400。
+
+    2026-09-14 抓 bug 輪：text/plain 或 base64 壞掉的 data URL 以前一路走到
+    compose 的 Image.open 才炸 UnidentifiedImageError，對外是 500。使用者貼錯檔
+    是輸入問題，要在入口就用 400 講清楚。
+    """
+    _, _, encoded = _split_data_url(data_url)
+    if not encoded:
+        raise HTTPException(status_code=400, detail=f"{what}格式不對（不是 data URL）")
+    try:
+        raw = base64.b64decode(encoded)
+    except Exception:  # noqa: BLE001 — 任何解碼失敗都是輸入壞掉
+        raise HTTPException(status_code=400, detail=f"{what}的 base64 內容壞了，請重新上傳")
+    try:
+        with Image.open(io.BytesIO(raw)) as opened:
+            opened.verify()
+    except Exception:  # noqa: BLE001 — PIL 認不得就是不是圖
+        raise HTTPException(
+            status_code=400, detail=f"{what}不是可讀的圖片檔（支援 JPEG／PNG／WebP），請重新上傳"
+        )
+    return raw
+
+
 def supports_map_basemap(provider: str) -> bool:
     """這次的路徑能不能把真實地圖底圖送進生圖模型。
 
@@ -4004,10 +4028,7 @@ def ten_cover_asis_images(req: "TenCoverRequest") -> list[bytes]:
     raws: list[bytes] = []
     asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
     for ref in asis[:2]:
-        _, _, encoded = _split_data_url(ref.data_url)
-        if not encoded:
-            raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
-        raws.append(base64.b64decode(encoded))
+        raws.append(decode_attached_image(ref.data_url))
     if len(asis) > 2:
         print(f"[cover] 原圖放置附圖 {len(asis)} 張，十點封面只有兩格，只取前 2 張", flush=True)
     return raws
@@ -4024,10 +4045,7 @@ def ten_cover_slot_images(req: "TenCoverRequest") -> tuple[bytes | None, bytes |
         if not data_url.strip():
             out.append(None)
             continue
-        _, _, encoded = _split_data_url(data_url)
-        if not encoded:
-            raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
-        out.append(base64.b64decode(encoded))
+        out.append(decode_attached_image(data_url))
     return out[0], out[1]
 
 
@@ -4646,10 +4664,7 @@ def ten_cover_full_asis_images(req: TenCoverRequest) -> list[bytes]:
         return ten_cover_asis_images(req)
     out = []
     for ref in refs:
-        _, _, encoded = _split_data_url(ref.data_url)
-        if not encoded:
-            raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
-        out.append(base64.b64decode(encoded))
+        out.append(decode_attached_image(ref.data_url))
     return out
 
 
@@ -5348,10 +5363,7 @@ def _yt_cover_background(
     if asis:
         raws = []
         for ref in asis[: compose.YT_SPLIT_MAX_PANELS]:
-            _, _, encoded = _split_data_url(ref.data_url)
-            if not encoded:
-                raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
-            raws.append(base64.b64decode(encoded))
+            raws.append(decode_attached_image(ref.data_url))
         if len(asis) > compose.YT_SPLIT_MAX_PANELS:
             print(f"[yt-cover] 原圖放置附圖 {len(asis)} 張，只取前 {compose.YT_SPLIT_MAX_PANELS} 張分切", flush=True)
         if len(raws) == 1:
@@ -5637,10 +5649,7 @@ def yt_dual_background(
         if not asis:
             todo.append(i)
             continue
-        _, _, encoded = _split_data_url(asis[0].data_url)
-        if not encoded:
-            raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
-        panels[i] = base64.b64decode(encoded)
+        panels[i] = decode_attached_image(asis[0].data_url)
         if "yt-cover:asis" not in models:
             models.append("yt-cover:asis")
     # 疊圖：兩張都是 16:9——大的鋪滿整個畫面，小的是右側那塊白框斜照片，兩者都不是
