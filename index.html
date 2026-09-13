@@ -312,7 +312,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260913-09</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260913-15</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -495,6 +495,18 @@
                             <input id="ytCoverTitle" type="text" maxlength="60"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                    placeholder="挪威國王哈拉德辭世 開放公眾瞻仰遺容" />
+                            <!-- live24 的底圖模式（2026-09-13 使用者裁決「前台加一題底圖模式」）：
+                                 漸層與疊圖都要兩格都有圖，共用一個觸發訊號分不開，所以獨立一欄。
+                                 只有 24H LIVE 會顯示（updateYtAsisSlots 控制）。 -->
+                            <div id="live24BgRow" class="hidden mt-1.5 flex items-center gap-2">
+                                <label class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">底圖模式</label>
+                                <select id="live24BgMode" onchange="onLive24BgChange(this)"
+                                        class="bg-slate-950/80 border border-slate-800 rounded px-2 py-1 text-[10px] text-slate-200 input-focus-ring">
+                                    <option value="blend" selected>雙切漸層（兩張羽化拼接）</option>
+                                    <option value="inset">雙切疊圖（大底圖＋右側白框斜照片）</option>
+                                    <option value="full">滿版（一張鋪滿）</option>
+                                </select>
+                            </div>
                             <!-- 整點直播的附圖位（2026-09-10，對齊十點不一樣）：一標一附圖。
                                  只有整點會顯示；國內外新聞直播與今日熱搜仍走共用附圖區，
                                  因為那兩個支援 1 張整版／2 張左右雙切／3 張三切。 -->

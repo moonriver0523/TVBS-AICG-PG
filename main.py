@@ -4970,7 +4970,12 @@ class YtCoverRequest(BaseModel):
     # 沒有雙則版面，帶了也忽略。判定在 editor_formats.yt_cover_is_dual。
     title_second: str = Field(default="", max_length=60)
     # news＝國內外新聞直播；hourly＝整點直播；hot＝今日熱搜（見 editor_formats.YT_COVER_LAYOUTS）
-    layout: Literal["news", "hourly", "hot"] = "news"
+    layout: Literal["news", "hourly", "hot", "live24"] = "news"
+    # live24 的底圖模式（2026-09-13）。只有 live24 看這一欄，其他版型帶了也忽略。
+    # blend 是預設＝接線當天的行為（兩格都有圖就羽化拼接）。
+    # full／blend／inset 三者都需要左格的圖；blend 與 inset 還需要右格也有圖，
+    # 只有一格時一律退回滿版——半塊空白的雙切不是使用者要的東西。
+    live24_bg: Literal["full", "blend", "inset"] = "blend"
     # ai＝整張連標題字交給生圖模型畫，程式只後貼固定元素（2026-09-06 使用者裁決預設）；
     # composite＝模型只生無文字底圖，標題由程式壓字（零錯字）。
     title_mode: Literal["ai", "composite"] = "ai"
@@ -5202,7 +5207,17 @@ def _yt_cover_background(
         return compose.split_backgrounds(raws), "image/png", False, f"yt-cover:asis-split{len(raws)}"
 
     image_req = ImageGenerateRequest(
-        prompt=editor_formats.YT_COVER_VISUAL_PROMPT_TEMPLATE.format(visual=visual.strip()),
+        prompt=editor_formats.YT_COVER_VISUAL_PROMPT_TEMPLATE.format(
+            visual=visual.strip(),
+            # 2026-09-13：合成版底圖也吃創意階梯。在此之前拉桿只接在 AI 標題那條路，
+            # live24 這種純合成版的版型等於完全沒作用。
+            creativity=editor_formats.yt_background_creativity(req.creativity),
+            headline_note=(
+                editor_formats.YT_COVER_HEADLINE_NOTE_ONE
+                if req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
+                else editor_formats.YT_COVER_HEADLINE_NOTE_TWO
+            ),
+        ),
         provider=req.provider,
         aspect_ratio="16:9",
         image_size=req.image_size,
@@ -5250,7 +5265,9 @@ def _yt_cover_full_image(
     template = {
         editor_formats.YT_COVER_LAYOUT_HOURLY: editor_formats.YT_COVER_FULL_PROMPT_HOURLY,
         editor_formats.YT_COVER_LAYOUT_HOT: editor_formats.YT_COVER_FULL_PROMPT_HOT,
+        editor_formats.YT_COVER_LAYOUT_LIVE24: editor_formats.YT_COVER_FULL_PROMPT_LIVE24,
     }.get(req.layout, editor_formats.YT_COVER_FULL_PROMPT_NEWS)
+    live24 = req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
     # 日期條那一條由 compose 的 box 產生（2026-09-11 創意階梯）——prompt 與程式貼附
     # 用的是同一個座標，不會再有「兩邊各寫各的百分比」那種對不上的 bug。
     # 整點以外的版型模板沒有 date_clause／date_text_line／date_ban／logo_keep_out／
@@ -5261,7 +5278,11 @@ def _yt_cover_full_image(
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
     image_req = ImageGenerateRequest(
         prompt=template.format(
-            line1=lines[0], line2=lines[1], visual=visual.strip() or req.title.strip(),
+            # live24 是**單行**版型：lines 是依空格拆出來的兩段，模板只列 line1 的話
+            # 後半段整段消失（2026-09-13 實拍抓到：「東北季風剩1天 假日回溫」四級全被
+            # 畫成「東北季風剩1天」）。所以那個版型傳整句，不傳拆過的前半段。
+            line1=req.title.strip() if live24 else lines[0],
+            line2=lines[1], visual=visual.strip() or req.title.strip(),
             # 兩級都用同一個框：0 級是程式實際貼牌的位置（模型只要留白），
             # 1 級起模型自己畫牌、跟著標題走，這個框只當護欄（見
             # compose.YT_HOURLY_DATE_TAB_BOX 上方的註解）。
@@ -5273,10 +5294,24 @@ def _yt_cover_full_image(
             # 右上角維持手打的 27%×32%：實測 LIVE 章只佔 25.1%×18.9%，宣告值比實際
             # **大**＝過度保留，不會撞；收緊會放出右上那塊現在空著的區域，
             # 等於改掉已驗收的構圖，不值得。
-            logo_keep_out="about {:.0%} wide and {:.0%} tall".format(
-                *compose.yt_hourly_logo_keep_out()
+            # live24 是 hourly 的鏡像：角標在左上、Logo 在右上，兩個保留區也跟著換邊。
+            # 角標的宣告值直接由程式實際貼上的比例算（LIVE24_BADGE_WIDTH_RATIO 是寬，
+            # 高度由素材長寬比推）——手打的數字比實際小時，標題會爬上去撞（2026-09-11
+            # 在 hourly 踩過一模一樣的坑）。
+            logo_keep_out=(
+                "about {:.0%} wide and {:.0%} tall".format(
+                    compose.LIVE24_LOGO_WIDTH_RATIO + 0.04,
+                    compose.LIVE24_LOGO_TOP_RATIO + compose.LIVE24_LOGO_WIDTH_RATIO,
+                ) if live24 else "about {:.0%} wide and {:.0%} tall".format(
+                    *compose.yt_hourly_logo_keep_out()
+                )
             ),
-            badge_keep_out="about 27% wide and 32% tall",
+            badge_keep_out=(
+                "about {:.0%} wide and {:.0%} tall".format(
+                    compose.LIVE24_BADGE_LEFT_RATIO + compose.LIVE24_BADGE_WIDTH_RATIO + 0.02,
+                    compose.live24_badge_keep_out_height(),
+                ) if live24 else "about 27% wide and 32% tall"
+            ),
             date_text_line=editor_formats.yt_hourly_date_text_line(req.creativity, date_text),
             date_ban=editor_formats.yt_hourly_date_ban(req.creativity),
             # 創意階梯（2026-09-11）：brief 釘在 CANVAS 正後方（鐵律一——數字寫在
@@ -5376,7 +5411,13 @@ def yt_dual_panel_requests(req: "YtCoverRequest") -> tuple["YtCoverRequest", "Yt
         "background_image_base64": "",
     })
     right = req.model_copy(update={
-        "title": req.title_second.strip(), "title_second": "",
+        # live24 只有一行標題，兩格共用同一句——拿空的 title_second 當右格標題的話，
+        # 右格的畫面推導會拿到空字串，底圖就變成模型自由發揮。
+        "title": (
+            req.title if req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
+            else req.title_second
+        ).strip(),
+        "title_second": "",
         "reference_images": others + asis_right,
         "asis_left": "", "asis_right": "", "slot_left": [], "slot_right": [],
         "background_image_base64": "",
@@ -5410,7 +5451,8 @@ def yt_dual_panel_plan(panel_req: "YtCoverRequest") -> "YtCoverPlan":
 
 
 def yt_dual_background(
-    panel_reqs: tuple["YtCoverRequest", "YtCoverRequest"], plans: list
+    panel_reqs: tuple["YtCoverRequest", "YtCoverRequest"], plans: list,
+    mode: str = editor_formats.LIVE24_BG_BLEND,
 ) -> tuple[bytes, bool, str]:
     """雙則的底圖：左右兩格各自取得後羽化拼成一張，回 (PNG bytes, 有沒有 AI 生的格, 模型名)。
 
@@ -5432,11 +5474,16 @@ def yt_dual_background(
         panels[i] = base64.b64decode(encoded)
         if "yt-cover:asis" not in models:
             models.append("yt-cover:asis")
+    # 疊圖：兩張都是 16:9——大的鋪滿整個畫面，小的是右側那塊白框斜照片，兩者都不是
+    # 半個畫面的方格。用 1:1 生會被拉扁（2026-09-13）。
+    panel_maker = (
+        _cover_full_image if mode == editor_formats.LIVE24_BG_INSET else _cover_panel_image
+    )
     if todo:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             futures = {
                 i: pool.submit(
-                    _cover_panel_image,
+                    panel_maker,
                     plans[i][1] or panel_reqs[i].title.strip(),
                     panel_reqs[i].provider,
                     [ref for ref in panel_reqs[i].reference_images if ref.purpose != "asis"],
@@ -5449,6 +5496,11 @@ def yt_dual_background(
                 panels[i], model = future.result()
                 if model not in models:
                     models.append(model)
+    if mode == editor_formats.LIVE24_BG_INSET:
+        return (
+            compose.compose_live24_inset_background(panels[0], panels[1]),
+            bool(todo), "、".join(models),
+        )
     return compose.blend_backgrounds_lr(panels[0], panels[1]), bool(todo), "、".join(models)
 
 
@@ -5458,7 +5510,22 @@ def yt_dual_background(
     dependencies=[Depends(verify_internal_api_key)],
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
-    dual = editor_formats.yt_cover_is_dual(req.layout, req.title_second)
+    live24 = req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
+    if live24 and req.creativity < 1:
+        # 0 級＝規矩：標題由程式壓，位置／字級／斜度／顏色都是從實際播出範本量到的，
+        # 像素級精準且零錯字。1 級起交給模型（2026-09-13 使用者裁決：「標題完全沒有
+        # 被創意階梯影響 這是錯的」）——這個版型原本被我裁成純合成版，是沒人要求過的
+        # 限縮，而且跟十點／整點／熱搜不一致，那三個的階梯都是靠標題生效的。
+        req = req.model_copy(update={
+            "title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE,
+        })
+    # live24 只有一個標題，hourly 那條「有第二標題＝雙則」的規則用不上。
+    # 2026-09-13 使用者裁決：**兩個附圖位都有東西**才雙切，只放一格或都沒放＝滿版。
+    dual = (
+        req.live24_bg != editor_formats.LIVE24_BG_FULL
+        and bool(req.slot_refs(0)) and bool(req.slot_refs(1)) if live24
+        else editor_formats.yt_cover_is_dual(req.layout, req.title_second)
+    )
     if not dual and req.uses_asis_slots():
         # 單則只有一格，附圖位裡的東西就是整版那一格的：整份清單併進共用清單，
         # 下游 1 張＝整版鋪滿那條路完全不用改。雙則不走這裡——它要保留左右格身分，
@@ -5505,12 +5572,15 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                     detail=f"{label}超過 {compose.YT_HOURLY_LINE_MAX_CHARS} 字：「{text.strip()}」（請縮短這一行）",
                 )
     # 整點直播與今日熱搜沒有原音呈現／AI即時翻譯（2026-09-06 使用者裁決），後端直接忽略
-    original_audio = bool(req.original_audio) and not (hourly or hot)
-    ai_translation = bool(req.ai_translation) and not (hourly or hot)
+    original_audio = bool(req.original_audio) and not (hourly or hot or live24)
+    ai_translation = bool(req.ai_translation) and not (hourly or hot or live24)
     # 整點直播的版面本來就沒有底帶（compose_yt_hourly_cover 不畫、AI 模板也明文 no band），
     # 這個開關對它沒有意義，直接忽略——比照原音呈現／AI即時翻譯。
-    bottom_band = bool(req.bottom_band) and not hourly
-    date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
+    bottom_band = bool(req.bottom_band) and not (hourly or live24)
+    # live24 的日期是 YYYY.MM.DD（點），不是 hourly 的斜線——實際播出用的是點。
+    date_text = req.date_text.strip() or datetime.date.today().strftime(
+        compose.LIVE24_DATE_FORMAT if live24 else "%Y/%m/%d"
+    )
 
     if dual:
         # 雙則：兩行各是一則新聞的完整標題，**不拆段**——所以不走 split_live_title，
@@ -5560,7 +5630,10 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             )
             is_ai = True
         elif dual and not req.background_image_base64:
-            background, is_ai, image_model = yt_dual_background(panel_reqs, plans)
+            background, is_ai, image_model = yt_dual_background(
+                panel_reqs, plans,
+                mode=req.live24_bg if live24 else editor_formats.LIVE24_BG_BLEND,
+            )
             bg_mime = "image/png"
         else:
             background, bg_mime, is_ai, image_model = _yt_cover_background(
@@ -5570,7 +5643,14 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         _log_failure(exc)
         raise
     try:
-        if hot:
+        if live24:
+            # 單行標題：這個版型不拆段，req.title 整句就是那一行。
+            cover = compose.compose_yt_live24_cover(
+                background, title=req.title.strip(), date_text=date_text, ai_note=is_ai,
+                # AI 標題模式下標題已經畫在底圖上了，再壓一次會疊成兩層
+                draw_title=not ai_title,
+            )
+        elif hot:
             cover = compose.compose_yt_hot_cover(
                 background,
                 line1=lines[0],
