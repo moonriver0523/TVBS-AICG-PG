@@ -33,6 +33,9 @@ import safe_area_spec
 
 BRAND_DIR = pathlib.Path(__file__).resolve().parent / "static" / "brand"
 TVBS_LOGO_WHITE = BRAND_DIR / "tvbs-logo-white.png"
+# TVBS＋NEWS 兩層版（2026-09-11 從實際播出畫面摳出）。只有 live24 用：那個版型的
+# Logo 在右上、跟頻道實際播出一致，其他版型維持單層版不動。
+TVBS_LOGO_NEWS_WHITE = BRAND_DIR / "tvbs-logo-news-white.png"
 # 2026-09-07：節目／單元標籤改貼固定模板（gpt-image-2 依型錄原版重繪、透明底），
 # 程式畫的圓角矩形＋字型版本被使用者裁定不好看。模板只縮放不變形，缺檔直接報錯。
 TEN_SHOW_TAG = BRAND_DIR / "ten-show-tag.png"  # 2026-09-07 換成正版樣式：藍色斜切、金「十」＋白字、NEWS NIGHT
@@ -1787,6 +1790,254 @@ def compose_yt_hourly_cover(
     buffer = io.BytesIO()
     canvas.convert("RGB").save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+# ============================================================
+# 版型：YT 24H LIVE（live24）——hourly 的鏡像
+# ============================================================
+#
+# 與 hourly 的差別：Logo 換成兩層版移到右上、LIVE 章換成左上的 24H LIVE 角標素材、
+# 標題從兩行白黃改成一行深紅斜體。詳見 docs/plan-20260913-live24版型.md。
+#
+# **這個版型是純合成版**：標題／角標／日期／Logo 一律程式壓，創意階梯只作用在底圖。
+# 標題規格（單行、指定紅、淺描邊、3.5° 斜度）精確到模型打不中，而這條線本來就有
+# 零錯字的合成版可用，所以不開 AI 標題路徑。
+#
+# 角標是**一張生成好的固定素材**（2026-09-13 使用者裁決：不用向量畫、生一次固定壓），
+# 程式只在上面壓日期。素材與日期框的關係見 LIVE24_BADGE_DATE_BOX。
+LIVE24_BADGE = BRAND_DIR / "live24-badge.png"
+
+# 素材的原始尺寸。釘死是為了擋「有人重新去背／重裁 PNG」——下面的日期框是相對
+# **這一份裁切**量出來的，bbox 一變日期就會掉到鉚金屬框上，而且不會報錯，只會歪掉。
+LIVE24_BADGE_SIZE = (2675, 1225)
+
+# 日期壓字區（相對角標素材的比例）。已內縮避開 V2 那圈粗鉚金屬框，量法是
+# 「從字標與板子之間那道透明縫切開，縫以下的不透明範圍＝板子」，再上下左右內縮。
+# 材質板沒有單一實色區塊，不能用「最大實色塊」那套找（2026-09-13）。
+LIVE24_BADGE_DATE_BOX = (0.097, 0.602, 0.911, 0.924)
+# 日期跟著角標的斜度走，不然字是正的、板是斜的，一眼就看得出來是後貼的
+LIVE24_DATE_SHEAR = 0.20
+# **點**不是斜線。hourly 的 %Y/%m/%d 是另一個版型的格式，照抄會跟實際播出不一致。
+LIVE24_DATE_FORMAT = "%Y.%m.%d"
+
+# 以下三組全部量自 24H LIVE範本/Still0911_00009.jpg（1920×1080 實際播出 HD 截圖）。
+# 不要拿 Sleekshot 那些螢幕截圖來量——有縮放與視窗邊框。
+LIVE24_BADGE_WIDTH_RATIO = 0.31       # 角標寬佔畫面（範本量到 24H LIVE＋日期整塊 33%）
+LIVE24_BADGE_LEFT_RATIO = 0.028
+LIVE24_BADGE_TOP_RATIO = 0.045
+LIVE24_LOGO_WIDTH_RATIO = 0.138       # 兩層版 Logo：範本 x 0.828–0.966
+LIVE24_LOGO_RIGHT_RATIO = 0.966       # 右緣（不是左緣——這個版型的 Logo 靠右對齊）
+LIVE24_LOGO_TOP_RATIO = 0.053
+LIVE24_TITLE_SIZE_RATIO = 0.231       # 範本字高 249/1080
+LIVE24_TITLE_BASELINE_RATIO = 0.894   # 範本紅字底緣
+LIVE24_TITLE_LEFT_RATIO = 0.053       # 範本紅字左緣
+LIVE24_TITLE_MAX_WIDTH_RATIO = 0.896  # 0.949 - 0.053
+# 標題向右上斜。範本實測 +3.5°（斜率 0.0607）——2026-09-11 目視估的「2–3 度」偏小。
+LIVE24_TITLE_SHEAR = 0.0607
+# 範本紅字取樣中位色。memo 當初估 #901010，實測比那個亮一些。
+LIVE24_TITLE_FILL = (159, 19, 20)
+# 描邊是淺灰白（不是純白）：純白在亮底圖上跟背景黏在一起，範本用的是帶灰的白。
+LIVE24_TITLE_STROKE = (236, 236, 236)
+# 字太長時容許縮到這裡，再短就報錯要求改標題。0.150 是刻意訂高的下限：
+# 這個版型的標題是唯一的文字主體，縮到跟內文一樣小就失去存在意義。
+LIVE24_TITLE_MIN_SIZE_RATIO = 0.150
+# 橫向壓縮下限。範本用的是**窄長體**——量到字高 249px、每字前進約 143px，
+# 寬高比 0.63；台北黑體是方的，照原比例畫同樣字數只能用 0.132 的字高，
+# 比範本小掉四成、氣勢整個垮掉。所以照範本比例把字橫向壓扁，壓到 0.60 為止；
+# 再擠就變形得看得出來，那時改縮字級。
+LIVE24_TITLE_SQUEEZE_FLOOR = 0.60
+
+
+def _paste_live24_badge(canvas: Image.Image, box: tuple[int, int], width: int,
+                        date_text: str) -> int:
+    """貼 24H LIVE 角標並在它的日期板上壓日期，回傳貼上後的高度。
+
+    日期在**素材原尺寸**上先壓好再整張縮到版面寬，而不是縮完再壓：素材 2675px 寬、
+    版面只有 595px，先縮再壓等於用 1/4.5 的解析度畫字，數字邊緣會糊。
+    """
+    if not LIVE24_BADGE.exists():
+        raise ComposeError(f"找不到 24H LIVE 角標素材：{LIVE24_BADGE}")
+    with Image.open(LIVE24_BADGE) as badge_file:
+        badge = badge_file.convert("RGBA")
+        if badge.size != LIVE24_BADGE_SIZE:
+            raise ComposeError(
+                f"24H LIVE 角標素材尺寸是 {badge.size}，不是定版的 {LIVE24_BADGE_SIZE}。"
+                "日期框的比例是相對定版那一份裁切量的，換了素材要重量一次"
+                "（見 docs/plan-20260913-live24版型.md）"
+            )
+        badge = _stamp_live24_date(badge, date_text)
+        height = round(badge.height * width / badge.width)
+        badge = badge.resize((width, height), Image.LANCZOS)
+        canvas.alpha_composite(badge, box)
+    return height
+
+
+def _stamp_live24_date(badge: Image.Image, date_text: str) -> Image.Image:
+    """在角標的日期板上壓日期（白字、跟著角標斜）。"""
+    text = (date_text or "").strip()
+    if not text:
+        raise ComposeError("YT 24H LIVE 封面需要日期")
+    bw, bh = badge.size
+    l, t, r, b = LIVE24_BADGE_DATE_BOX
+    x0, y0, x1, y1 = round(bw * l), round(bh * t), round(bw * r), round(bh * b)
+    box_w, box_h = x1 - x0, y1 - y0
+
+    size = round(box_h * 0.95)
+    while size > 8:
+        font = _font(size)
+        bb = font.getbbox(text)
+        if bb[2] - bb[0] <= box_w and bb[3] - bb[1] <= box_h:
+            break
+        size -= 2
+    layer = Image.new("RGBA", (box_w * 2, box_h * 2), (0, 0, 0, 0))
+    ImageDraw.Draw(layer).text((box_w // 3, box_h // 3), text, font=font, fill=(255, 255, 255))
+    bb = layer.getbbox()
+    if bb is None:
+        raise ComposeError(f"日期「{text}」畫不出任何墨跡")
+    layer = layer.crop(bb)
+    shear = LIVE24_DATE_SHEAR
+    layer = layer.transform(
+        (layer.width + int(layer.height * shear), layer.height), Image.AFFINE,
+        (1, shear, -shear * layer.height, 0, 1, 0), resample=Image.BICUBIC,
+    )
+    layer = layer.crop(layer.getbbox())
+    out = badge.copy()
+    out.alpha_composite(layer, (x0 + (box_w - layer.width) // 2, y0 + (box_h - layer.height) // 2))
+    return out
+
+
+def _draw_live24_title(canvas: Image.Image, text: str) -> None:
+    """一行深紅標題，淺灰白描邊＋深色陰影，整行向右上斜 LIVE24_TITLE_SHEAR。
+
+    斜度是**把畫好的字整層做仿射**，不是逐字旋轉：範本上那行字是整條一起斜的，
+    逐字旋轉會讓每個字自己歪掉、字間距也跟著亂。
+    """
+    width, height = canvas.size
+    max_w = round(width * LIVE24_TITLE_MAX_WIDTH_RATIO)
+    start = round(height * LIVE24_TITLE_SIZE_RATIO)
+    smallest = round(height * LIVE24_TITLE_MIN_SIZE_RATIO)
+    # 先用範本字高，塞不下就先靠橫向壓縮；壓到下限還塞不下才降字級（見 SQUEEZE_FLOOR）
+    size = start
+    while size > smallest:
+        if _font(size).getbbox(text)[2] * LIVE24_TITLE_SQUEEZE_FLOOR <= max_w:
+            break
+        size -= 2
+    font = _font(size)
+    natural_w = font.getbbox(text)[2]
+    if natural_w * LIVE24_TITLE_SQUEEZE_FLOOR > max_w:
+        raise ComposeError(
+            f"標題太長，縮到最小字級、壓到最扁仍超出版面：「{text}」"
+            "（24H LIVE 是單行版型，全形上限約 17 字，請縮短）"
+        )
+    squeeze = min(1.0, max_w / natural_w)
+
+    # 畫布要照**壓縮前**的自然寬度開。用 max_w 開會在壓縮之前就把字裁掉——
+    # 壓縮是後面才做的，這裡的字還是原寬（2026-09-13 樣張抓到：12 字只畫出 8 字）。
+    pad = round(size * 0.9)
+    layer = Image.new("RGBA", (natural_w + pad * 2, round(size * 2.2)), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    bold = round(size * YT_TITLE_BOLD_RATIO)
+    outline = max(4, round(size * YT_TITLE_STROKE_RATIO)) + bold
+    shadow = round(size * YT_TITLE_SHADOW_RATIO)
+    baseline = round(size * 1.5)
+    if shadow > 0:
+        _draw_text(d, (pad + shadow, baseline + shadow), text, font, fill=(0, 0, 0),
+                   stroke=(0, 0, 0), stroke_width=outline, anchor="ls")
+    _draw_text(d, (pad, baseline), text, font, fill=LIVE24_TITLE_FILL,
+               stroke=LIVE24_TITLE_STROKE, stroke_width=outline, anchor="ls")
+    if bold > 0:
+        _draw_text(d, (pad, baseline), text, font, fill=LIVE24_TITLE_FILL,
+                   stroke=LIVE24_TITLE_FILL, stroke_width=bold, anchor="ls")
+
+    # 橫向壓縮成窄長體。壓在斜度**之前**：先壓再斜，斜度才是成品上看到的角度；
+    # 先斜再壓會把角度一起壓掉（壓 0.63 會讓 3.5° 變成 5.5°）。
+    if squeeze < 1.0:
+        layer = layer.resize(
+            (max(1, round(layer.width * squeeze)), layer.height), Image.LANCZOS
+        )
+
+    # 仿射：左端低、右端高。shear 為正時 x 越大 y 越小，所以係數帶負號。
+    sh = LIVE24_TITLE_SHEAR
+    lift = round(layer.width * sh)
+    tall = Image.new("RGBA", (layer.width, layer.height + lift), (0, 0, 0, 0))
+    tall.alpha_composite(layer, (0, lift))
+    tall = tall.transform(tall.size, Image.AFFINE, (1, 0, 0, sh, 1, 0), resample=Image.BICUBIC)
+    bb = tall.getbbox()
+    if bb is None:
+        raise ComposeError(f"標題「{text}」畫不出任何墨跡")
+    tall = tall.crop(bb)
+    # tall 已經裁到墨跡 bbox，pad 不在裡面了——這裡再扣一次 pad 會把字推到貼齊左邊框
+    x = round(width * LIVE24_TITLE_LEFT_RATIO)
+    y = round(height * LIVE24_TITLE_BASELINE_RATIO) - tall.height
+    canvas.alpha_composite(tall, (max(0, x), max(0, y)))
+
+
+def compose_yt_live24_cover(
+    background: bytes,
+    *,
+    title: str,
+    date_text: str,
+    ai_note: bool = False,
+) -> bytes:
+    """合成 YT 24H LIVE 封面：底圖＋左上角標（含日期）＋右上兩層 Logo＋單行紅標題。
+
+    沒有 draw_titles 開關——這個版型的標題一律程式壓（見上面版型段的說明）。
+    """
+    title = (title or "").strip()
+    if not title:
+        raise ComposeError("YT 24H LIVE 封面需要一行標題")
+
+    canvas = _cover_panel(background, YT_CANVAS).convert("RGBA")
+    width, height = YT_CANVAS
+
+    # ---- 左上：24H LIVE 角標（日期壓在它的玻璃日期板上）----
+    badge_w = round(width * LIVE24_BADGE_WIDTH_RATIO)
+    badge_h = _paste_live24_badge(
+        canvas,
+        (round(width * LIVE24_BADGE_LEFT_RATIO), round(height * LIVE24_BADGE_TOP_RATIO)),
+        badge_w, date_text,
+    )
+
+    # ---- 右上：TVBS＋NEWS 兩層版 Logo，靠右對齊 ----
+    logo_w = round(width * LIVE24_LOGO_WIDTH_RATIO)
+    logo_x = round(width * LIVE24_LOGO_RIGHT_RATIO) - logo_w
+    if not TVBS_LOGO_NEWS_WHITE.exists():
+        raise ComposeError(f"找不到兩層版 Logo：{TVBS_LOGO_NEWS_WHITE}")
+    with Image.open(TVBS_LOGO_NEWS_WHITE) as logo_file:
+        logo = logo_file.convert("RGBA")
+        logo = logo.resize((logo_w, round(logo.height * logo_w / logo.width)), Image.LANCZOS)
+        canvas.alpha_composite(logo, (logo_x, round(height * LIVE24_LOGO_TOP_RATIO)))
+
+    # ---- 左側：AI示意圖小標。掛在角標正下方——右上被 Logo 佔走了，不能照 hourly 放右邊 ----
+    if ai_note:
+        _draw_live24_ai_note(canvas, round(height * LIVE24_BADGE_TOP_RATIO) + badge_h + 16)
+
+    # ---- 底部：單行紅標題 ----
+    _draw_live24_title(canvas, title)
+
+    buffer = io.BytesIO()
+    canvas.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _draw_live24_ai_note(canvas: Image.Image, y0: int) -> None:
+    """live24 的「AI示意圖」小標：**靠左**，貼在角標下方。
+
+    與 _draw_ai_note 分開一支的理由：那支寫死靠右，而 live24 的右上是 Logo，
+    共用會直接壓在 Logo 上。
+    """
+    width, height = YT_CANVAS
+    x0 = round(width * LIVE24_BADGE_LEFT_RATIO)
+    note_font = _font(round(height * YT_AI_NOTE_SIZE_RATIO))
+    note_w = note_font.getbbox(YT_AI_NOTE)[2]
+    note_h = round(height * YT_AI_NOTE_SIZE_RATIO * 1.5)
+    plate = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    ImageDraw.Draw(plate).rounded_rectangle(
+        (x0, y0, x0 + note_w + 24, y0 + note_h), radius=8, fill=YT_AI_NOTE_PLATE
+    )
+    canvas.alpha_composite(plate)
+    _draw_text(ImageDraw.Draw(canvas), (x0 + 12, y0 + note_h // 2), YT_AI_NOTE, note_font,
+               stroke_width=0, anchor="lm")
 
 
 # ---- 左右兩張底圖的羽化拼接（2026-09-08 WP2）----
