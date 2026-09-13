@@ -606,6 +606,22 @@ def slot_generation_refs(refs: list[UserReferenceImage]) -> list[UserReferenceIm
     return [ref for ref in refs if ref.purpose != "asis"]
 
 
+def lock_half_slot_asis(refs: list[UserReferenceImage], tag: str = "slot") -> list[UserReferenceImage]:
+    """半版格子放了 2 張以上：原圖放置一律改成 AI改圖（2026-09-13 使用者裁決）。
+
+    一個半格只有一個版位，塞兩張原圖本來就放不下（以前是默默只取第 1 張）；
+    放多張的用意是讓模型把它們重新構圖融成同一張示意圖，所以整格鎖成 AI改圖。
+    前端下拉同步鎖（renderRefList 的 lockAsis），這裡是給 LINE 等繞過 UI 的呼叫端兜底。
+    只管半格：滿版那一格多張原圖是「自動切 N 格」，另一條規則。
+    """
+    if len(refs) <= 1:
+        return list(refs)
+    n = sum(1 for ref in refs if ref.purpose == "asis")
+    if n:
+        print(f"[{tag}] 半版附圖位放了 {len(refs)} 張、其中 {n} 張原圖放置 → 整格改 AI改圖", flush=True)
+    return [ref.model_copy(update={"purpose": "aiedit"}) if ref.purpose == "asis" else ref for ref in refs]
+
+
 class ImageGenerateRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=20_000)
     provider: Literal["gemini", "gpt"] = "gemini"
@@ -3908,11 +3924,15 @@ class TenCoverRequest(BaseModel):
     )
 
     def slot_refs(self, side: int) -> list[UserReferenceImage]:
-        """第 side 格（0＝左／滿版、1＝右）的附圖清單。"""
-        return slot_reference_list(
+        """第 side 格（0＝左／滿版、1＝右）的附圖清單。雙切的半格 >1 張時原圖放置轉 AI改圖
+        （見 lock_half_slot_asis）；滿版那一格不鎖——多張原圖走自動切格。"""
+        refs = slot_reference_list(
             self.slot_left if side == 0 else self.slot_right,
             self.asis_left if side == 0 else self.asis_right,
         )
+        if editor_formats.resolve_cover_layout(self.layout, self.title_right) == "split":
+            refs = lock_half_slot_asis(refs, "cover")
+        return refs
 
     def slot_placements(self) -> tuple[str, str]:
         """左右兩格直接上版的圖（data URL；沒有就是空字串）。"""
@@ -5412,7 +5432,11 @@ def yt_dual_panel_requests(req: "YtCoverRequest") -> tuple["YtCoverRequest", "Yt
         # 只填右邊那格也不會被誤送到左格——這正是舊寫法會出的錯。
         # 2026-09-13：一格改收一份清單，所以整份清單直接歸那一格——版位圖與那一格
         # 專屬的 AI改圖／實景／肖像一起過去，不再只搬一張 asis。
-        asis_left, asis_right = req.slot_refs(0), req.slot_refs(1)
+        # 雙則的格子是半版：>1 張時原圖放置轉 AI改圖（2026-09-13 使用者裁決）
+        asis_left, asis_right = (
+            lock_half_slot_asis(req.slot_refs(0), "yt-cover:dual"),
+            lock_half_slot_asis(req.slot_refs(1), "yt-cover:dual"),
+        )
     else:
         asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
         if len(asis) > 2:

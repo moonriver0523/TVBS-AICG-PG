@@ -1425,6 +1425,8 @@ function updateCoverLayoutIndicator() {
         });
     }
     if (isCover) applyCoverLayoutFields();
+    // 版型（滿版↔雙切）一變，附圖位的「半版鎖原圖放置」也要跟著重算
+    if (typeof renderCoverAsis === 'function') renderCoverAsis();
 }
 
 // 指示器不是開關，點「雙切」只是把游標帶去第二標題；點「滿版」要清空第二標題才會變，
@@ -3120,8 +3122,13 @@ async function addImageFilesTo(list, input, max, onDone) {
 }
 
 // 一列一張圖。items 是就地改的陣列；改用途或刪掉都呼叫 onChange 重畫。
-function renderRefList(listEl, items, onChange) {
+// opts.lockAsis（2026-09-13 使用者裁決）：半版附圖位放了 2 張以上時，原圖放置不能選——
+// 一個半格只有一個版位，多張的用意是讓 AI 重新構圖融成一張，所以整格鎖成 AI改圖。
+// 既有已選原圖放置的那幾張在這裡就地翻成 AI改圖，跟後端 main.lock_half_slot_asis 同一套。
+function renderRefList(listEl, items, onChange, opts) {
     if (!listEl) return;
+    const lockAsis = !!(opts && opts.lockAsis);
+    if (lockAsis) items.forEach(ref => { if (ref.purpose === 'asis') ref.purpose = 'aiedit'; });
     listEl.innerHTML = '';
     items.forEach((ref, index) => {
         const row = document.createElement('div');
@@ -3135,6 +3142,7 @@ function renderRefList(listEl, items, onChange) {
         const select = document.createElement('select');
         select.className = 'bg-slate-900 border border-slate-700 rounded text-[10px] text-slate-200 px-1.5 py-1';
         for (const [value, label] of REF_PURPOSES) {
+            if (lockAsis && value === 'asis') continue;
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
@@ -3224,17 +3232,25 @@ function slotPayload(list) {
     return (list || []).map(ref => ({ data_url: ref.dataUrl, purpose: ref.purpose }));
 }
 
-function slotHintText(list) {
+function slotHintText(list, lockAsis) {
     if (!(list || []).length) return '沒圖＝這格由 AI 生底圖';
+    if (lockAsis) return '半版放多張＝AI 把它們融成一張（不能原圖放置）';
     if (slotPlacement(list)) return '這格直接用附圖';
     return '這格由 AI 生底圖（附圖當參考）';
 }
 
+// 半版格子 ≥2 張就鎖原圖放置；滿版（十點滿版的左格、YT 單則）不鎖——多張原圖走自動切格
+function halfSlotLocked(list, isHalf) {
+    return isHalf && (list || []).length >= 2;
+}
+
 function renderYtAsis() {
+    const dual = ytLayoutNow() === 'dual';
     for (const [side, cap] of [['left', 'Left'], ['right', 'Right']]) {
-        renderRefList(document.getElementById(`ytAsis${cap}List`), state.ytAsis[side], renderYtAsis);
+        const lock = halfSlotLocked(state.ytAsis[side], dual);
+        renderRefList(document.getElementById(`ytAsis${cap}List`), state.ytAsis[side], renderYtAsis, { lockAsis: lock });
         const hint = document.getElementById(`ytAsis${cap}Hint`);
-        if (hint) hint.textContent = slotHintText(state.ytAsis[side]);
+        if (hint) hint.textContent = slotHintText(state.ytAsis[side], lock);
     }
 }
 
@@ -3275,10 +3291,12 @@ function updateYtAsisSlots() {
 }
 
 function renderCoverAsis() {
+    const split = coverLayoutNow() === 'split';
     for (const [side, cap] of [['left', 'Left'], ['right', 'Right']]) {
-        renderRefList(document.getElementById(`coverAsis${cap}List`), state.coverAsis[side], renderCoverAsis);
+        const lock = halfSlotLocked(state.coverAsis[side], split);
+        renderRefList(document.getElementById(`coverAsis${cap}List`), state.coverAsis[side], renderCoverAsis, { lockAsis: lock });
         const hint = document.getElementById(`coverAsis${cap}Hint`);
-        if (hint) hint.textContent = slotHintText(state.coverAsis[side]);
+        if (hint) hint.textContent = slotHintText(state.coverAsis[side], lock);
     }
 }
 
