@@ -1499,6 +1499,36 @@ def yt_hourly_date_guide_box(level: int) -> tuple[float, float, float, float]:
 COVER_YT_MARGIN_RATIO = 0.026
 
 
+# ---- 字級上限（2026-09-13 使用者回報）----
+#
+# 回報：整點 0 級「標題字少時字級太大，會被程式壓的日期紅條蓋到」。實拍為證
+# （東北季風／今起增強，4＋4 字，字頂爬到約 60%，日期條下緣在 61.5%）。
+#
+# 這不是「漏掉一條約束」，而是**現行條文正面叫模型放大**：原本那句寫
+# 「Choose that size from the LONGER line — it is the size at which the LONGER line
+# spans almost the full width」。兩行一樣長時「短行不准撐大」根本不會觸發，而
+# 「長行要撐到接近滿寬」還在生效——四個字要撐滿 1920，字就必然巨大，塊高爆掉。
+#
+# 原本唯一的防線是模板裡那句「字頂要在畫面高 66% 以下」——純位置的百分比框，
+# 而模型不遵守百分比框已經是本專案的定論（見 project_aicg_live24_template 的實測，
+# 以及 YT 塊高 L1 要 26% 它畫 33%）。所以改用**絕對字高上限**。
+#
+# 數字不是新編的：程式壓字版用 compose.YT_HOURLY_TITLE_SIZE_RATIO = 0.15（單字高
+# ＝畫面高 15%），產出的 29.2% 塊高就是使用者驗收過的播出標準。把那個數字直接
+# 告訴模型。
+#
+# 「撐滿寬」與「字高上限」在四字標題上直接衝突，所以**明寫誰贏**（whichever is
+# smaller），不是留著兩句讓模型自己挑——矛盾句留著讓新規則去壓舊規則，2026-09-11
+# 一天之內踩了三次。
+#
+# 只給整點（cap 有值），news／hot 傳空字串＝送出去的字一個都沒變：那兩個版型沒有
+# 程式壓的日期條可撞，而且它們的模板另有一句
+# `_YT_TITLE_REACHES_BOTTOM_CLAUSE`「從字頂一路填到底緣」，加上限就是製造新矛盾。
+#
+# 與 compose.YT_HOURLY_TITLE_SIZE_RATIO 同值；這裡不 import compose（會循環），
+# 所以各持一份，測試釘住兩邊相等（同 YT_HOURLY_DATE_TAB_HEIGHT_RATIO 的做法）。
+YT_HOURLY_TITLE_CAP_RATIO = 0.15
+
 _SHARED_SIZE_CLAUSE = (
     "- THE TWO HEADLINE LINES ARE SET AT ONE SINGLE TYPE SIZE: identical cap height,"
     " identical stroke weight, identical character width. Choose that size from the"
@@ -1507,7 +1537,25 @@ _SHARED_SIZE_CLAUSE = (
     " NEVER enlarge the shorter line to make it reach the same width as the other one."
     " A line with far fewer characters MUST end up visibly shorter, never bigger;"
     " two lines at different type sizes is a defect.\n"
+    "{cap}"
 )
+
+
+def _yt_size_cap_clause(ratio: float) -> str:
+    """字高天花板。自成一條，不插進上一條的破折號中間。
+
+    2026-09-13：第一版把它塞進「Choose that size from the LONGER line — ... —
+    then set the SHORTER line」那組破折號裡，結果「then set the SHORTER line」被
+    推到三行之後，跟拆編號那次一樣把最後一段擠掉（本專案第三條教訓）。
+    """
+    return (
+        f"- THAT SIZE HAS A CEILING: no character is taller than {ratio:.0%} of the frame"
+        " height. This CEILING BEATS 'spans almost the full width' whenever the two"
+        " disagree — take whichever is smaller. A headline of only three or four"
+        " characters therefore does NOT grow to span the frame: it stays at the ceiling"
+        " and simply ends early, leaving the photograph visible beside it. Type past the"
+        " ceiling runs up into the date tab that sits above the headline.\n"
+    )
 # 0 級的三條，各版型的原文一字不改。1 級起由 _loud_layout_rules 取代。
 # YT 三個版型只差在「靠左／置中」與開場那句的措辭；拆的位置與理由完全相同。
 _YT_PLAIN_LAYOUT = {
@@ -1515,7 +1563,10 @@ _YT_PLAIN_LAYOUT = {
         "- Both headline lines sit in the lower third, LEFT-ALIGNED near the left edge,"
         " stacked, each on one line, huge and heavy Chinese display type. No band behind"
         " them: the type sits directly on the photograph.\n"
-        + _SHARED_SIZE_CLAUSE.format(tail="ends earlier and leaves empty space to its right")
+        + _SHARED_SIZE_CLAUSE.format(
+            cap=_yt_size_cap_clause(YT_HOURLY_TITLE_CAP_RATIO),
+            tail="ends earlier and leaves empty space to its right",
+        )
         + "- Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline."
         " Flat type: no gradient, no metallic, no 3-D.\n"
     ),
@@ -1528,7 +1579,8 @@ _YT_PLAIN_LAYOUT = {
         " and separated — the counters (the enclosed white spaces inside characters) must stay"
         " open; do not thicken the type until the strokes merge.\n"
         + _SHARED_SIZE_CLAUSE.format(
-            tail="comes out narrower and sits centred with empty space at both ends"
+            cap="",  # news／hot 不設上限，理由見 YT_HOURLY_TITLE_CAP_RATIO 註解
+            tail="comes out narrower and sits centred with empty space at both ends",
         )
         + "- Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline."
         " Flat type: no gradient, no metallic, no 3-D.\n"
