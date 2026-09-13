@@ -1598,9 +1598,12 @@ YT_HOURLY_BADGE_TOP_RATIO = 0.024
 YT_HOURLY_TIME_BAND_HEIGHT_RATIO = 0.086  # 章下時間帶高（原 0.095）
 YT_HOURLY_TIME_BAND_FILL = (255, 255, 255)   # 頻道實際：白底紅字
 YT_HOURLY_TIME_BAND_TEXT = (200, 20, 30)
-YT_HOURLY_DATE_TAB_WIDTH_RATIO = 0.30   # 日期紅條寬（125/415）
+# 2026-09-13 使用者：「日期 BAR 稍微縮小且往上一點點，不影響創意階梯」——只動 0 級程式畫的
+# 寬與上緣（0.30→0.27、0.52→0.485）；高度不動，因為 editor_formats 那份同值常數是 1 級起
+# 模型畫牌的護欄，動了就等於改到階梯。
+YT_HOURLY_DATE_TAB_WIDTH_RATIO = 0.27   # 日期紅條寬（原 0.30＝125/415）
 YT_HOURLY_DATE_TAB_HEIGHT_RATIO = 0.095
-YT_HOURLY_DATE_TOP_RATIO = 0.52         # 日期紅條上緣（114/220）
+YT_HOURLY_DATE_TOP_RATIO = 0.485        # 日期紅條上緣（原 0.52＝114/220）；取 .485 讓 prompt 的 :.0% 取整後仍包住牌
 YT_HOURLY_DATE_FILL = (214, 22, 32)
 YT_HOURLY_DATE_TEXT = (255, 255, 255)
 YT_HOURLY_LINE1_BASELINE_RATIO = 0.815   # 2026-09-08 晚使用者「行距可略縮」：0.80→0.815（第二行不動）
