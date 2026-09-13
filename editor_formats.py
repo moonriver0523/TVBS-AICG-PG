@@ -990,6 +990,37 @@ Rules for every description:
 Also return, per side, "portrait_subjects_left" / "portrait_subjects_right": every specific named real person whose face that side's photograph would show, names exactly as the headline writes them (no title, no organisation), at most three per side; an empty array when the scene shows no named real person. "portrait_subjects_left_en" / "portrait_subjects_right_en": the same people, same order, as the name Wikipedia uses in English (e.g. 梅爾茨 → "Friedrich Merz"); empty string when unsure.
 """
 
+# ---- 標題斷句（2026-09-14 使用者裁決：斷句交給消化模型，規則只當退路）----
+# 只要詞組，不要行：一行放幾個字由版面寬度決定（compose 量像素），模型不知道；
+# 它只負責「哪裡是一個詞的邊界」。紅線：接回去必須等於原段，一個字都不能改。
+TITLE_BREAK_SYSTEM = """You segment Taiwanese TV news headline fragments into phrases so a layout engine can break lines only between phrases.
+
+Rules:
+- For each input string, return its phrases in order. Concatenating the phrases MUST reproduce the input exactly — same characters, same order, nothing added, dropped, translated or reordered.
+- A phrase is the smallest unit that must never be split across two lines: a personal name, a place name (台灣, 台積電, 格陵蘭), an organisation, a job title, a figure with its unit (9000億, 42度, 35%關稅), a quoted term with its quotes (「擴張版」), a verb with its object when they read as one beat (上看9000億, 發布地圖).
+- Prefer 2–4 phrases per input of 2–5 characters each; never return a single phrase for an input longer than 5 characters unless it truly is one unbreakable term.
+- Output JSON only."""
+
+TITLE_BREAK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "segments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "phrases": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["text", "phrases"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["segments"],
+    "additionalProperties": False,
+}
+
 COVER_VISUAL_SCHEMA = {
     "type": "object",
     "properties": {
@@ -1116,6 +1147,12 @@ def fallback_split_title(title: str) -> tuple[str, str]:
         head, _, tail = text.partition(" ")
         if head.strip() and tail.strip():
             return head.strip(), tail.strip()
+    # 2026-09-14：不再純對半——走 compose 那支（模型邊界優先、規則退路），跟十點同一套。
+    from compose import _split_line_near_middle
+
+    head, tail = _split_line_near_middle(text)
+    if head.strip() and tail.strip():
+        return head, tail
     mid = max(1, len(text) // 2)
     return text[:mid], text[mid:]
 

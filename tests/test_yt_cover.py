@@ -264,7 +264,8 @@ class PlanTests(unittest.TestCase):
     def test_derive_failure_still_yields_a_cover_plan(self):
         with patch.object(main, "derive_yt_cover_plan", return_value={}):
             lines, visual, *_ = main.resolve_yt_cover_plan(self.req("沒有空格的標題"))
-        self.assertEqual(lines, ("沒有空", "格的標題"))
+        # 2026-09-14：退路不再純對半（會切成「沒有空／格的標題」），改走 compose 斷句引擎
+        self.assertEqual(lines, ("沒有空格的", "標題"))
         self.assertEqual(visual, "沒有空格的標題")
 
 

@@ -19,6 +19,7 @@
 出現第三個版型時再抽表。
 """
 
+import contextvars
 import functools
 import io
 import math
@@ -982,8 +983,55 @@ def _bracket_edge_split(text: str, inner: set[int]) -> tuple[str, str] | None:
     return text[:i], text[i:]
 
 
+# ---- 模型給的斷句邊界（2026-09-14 使用者裁決）----
+#
+# 使用者：「為何要依賴斷詞機制，這個機制會一直長胖」——下面那套規則（量詞／虛詞／括號／
+# 小詞典）每被抓到一次腰斬就長一條，追不完。改成：封面請求一進來就請消化模型把每段
+# 標題切成詞組（main.segment_titles_for_breaks），這裡只在詞組邊界上切；模型沒回、
+# 回得不忠實（接回去不等於原句）、或邊界踩到數字中間，才退回原本的規則。規則集從此
+# 只當退路，不再加條目。
+#
+# 用 ContextVar 而不是改簽名：斷行從 wrap／fill／split_cover_title 好幾條路進來，
+# 每一條都要穿參數太吵；FastAPI 的同步端點每個請求各自一份 context，互不污染。
+_BREAK_HINTS: contextvars.ContextVar[dict[str, tuple[int, ...]]] = contextvars.ContextVar(
+    "cover_break_hints", default={}
+)
+
+
+def set_break_hints(phrases_by_text: dict[str, list[str]]) -> None:
+    """登記模型切好的詞組：{原段: [詞組, ...]}。詞組接回去不等於原段的一律丟掉。"""
+    hints: dict[str, tuple[int, ...]] = {}
+    for text, phrases in (phrases_by_text or {}).items():
+        parts = [str(p) for p in (phrases or []) if str(p)]
+        if len(parts) < 2 or "".join(parts) != text:
+            continue
+        cuts, pos = [], 0
+        for part in parts[:-1]:
+            pos += len(part)
+            cuts.append(pos)
+        hints[text] = tuple(cuts)
+    _BREAK_HINTS.set(hints)
+
+
+def clear_break_hints() -> None:
+    _BREAK_HINTS.set({})
+
+
+def _hint_cuts(text: str) -> list[int]:
+    """這一行可用的模型邊界。行可能是登記段的子字串（拆過一次再拆），位移對回去。"""
+    out: list[int] = []
+    for seg, cuts in _BREAK_HINTS.get().items():
+        start = seg.find(text)
+        while start != -1:
+            out.extend(c - start for c in cuts if 0 < c - start < len(text))
+            start = seg.find(text, start + 1)
+    return sorted(set(out))
+
+
 def _split_line_near_middle(text: str) -> tuple[str, str]:
     """把一行從中間附近切成兩行。
+
+    模型邊界優先（見 _BREAK_HINTS）：有可用邊界就取最靠近中點的那一個。
 
     偏好順序：數量詞結尾 → 虛詞結尾 → 虛詞開頭 → 最靠近中點且不切在數字中間。
     最後那條是保底，切出來的詞可能被腰斬（184億元 不能變 18／4億元 已由 inner 擋掉，
@@ -992,6 +1040,10 @@ def _split_line_near_middle(text: str) -> tuple[str, str]:
     n = len(text)
     mid = n // 2
     inner = _protected_inner_indices(text)
+    hinted = [i for i in _hint_cuts(text) if 1 <= i <= n - 1 and i not in inner]
+    if hinted:
+        i = min(hinted, key=lambda e: (abs(e - mid), e))
+        return text[:i], text[i:]
     # 括號邊緣最優先（2026-09-13）：「川普發布「擴張版」美國地圖」→「川普發布／「擴張版」美國地圖」
     at_edge = _bracket_edge_split(text, inner)
     if at_edge is not None:

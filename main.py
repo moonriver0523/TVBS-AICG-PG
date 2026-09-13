@@ -4169,6 +4169,67 @@ def keep_subjects_with_photos(
     return [name for name, _ in kept], [en for _, en in kept], photos, missing
 
 
+# ---- 標題斷句交給消化模型（2026-09-14 使用者裁決）----
+# 使用者：「為何要依賴斷詞機制，這個機制會一直長胖，不讓生圖階段時自己判斷斷句」。
+# 生圖模型畫出來的字沒辦法逐字驗，行數一變版面全連動，所以斷點要在能檢查的階段決定：
+# 請消化模型把標題切成詞組，程式只做硬檢查（接回去等於原段），compose 只在詞組邊界上切。
+# 失敗（逾時、格式壞、改了字）一律退回原本的規則，封面不會因此失敗。
+TITLE_BREAK_TIMEOUT_SECONDS = 20.0
+# 一段 ≤ 7 字（COVER_TITLE_FILL_MIN_CHARS）永遠不會被拆，這種標題不必打模型。
+TITLE_BREAK_MIN_CHARS = compose.COVER_TITLE_FILL_MIN_CHARS + 1
+
+
+def title_break_inputs(*titles: str) -> list[str]:
+    """要送去切詞組的段：使用者用空白分好的每一段，只留長到可能被拆的。"""
+    out: list[str] = []
+    for title in titles:
+        for seg in editor_formats._COVER_TITLE_SPLIT_RE.split((title or "").strip()):
+            seg = seg.strip()
+            if len(seg) >= TITLE_BREAK_MIN_CHARS and seg not in out:
+                out.append(seg)
+    return out
+
+
+def segment_titles_for_breaks(segments: list[str]) -> dict[str, list[str]]:
+    """{段: [詞組...]}。模型沒回、回錯、改字的段不會出現在結果裡（那些退回規則）。"""
+    segments = [s for s in segments if s]
+    if not segments:
+        return {}
+    material = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(segments))
+    try:
+        response = digest_completion(
+            model=resolve_digest_model(),
+            system_prompt=editor_formats.TITLE_BREAK_SYSTEM,
+            news_text=material,
+            max_output_tokens=1200,
+            schema_name="title_breaks",
+            schema=editor_formats.TITLE_BREAK_SCHEMA,
+            site="title-break",
+            timeout=TITLE_BREAK_TIMEOUT_SECONDS,
+        )
+        data = parse_digest_json(response.choices[0].message.content or "")
+    except Exception as exc:  # noqa: BLE001 — 斷句失敗退回規則，封面照出
+        print(f"[title-break] 模型斷句失敗，退回規則：{type(exc).__name__}: {exc}", flush=True)
+        return {}
+    out: dict[str, list[str]] = {}
+    for row in data.get("segments") or []:
+        if not isinstance(row, dict):
+            continue
+        text = str(row.get("text") or "")
+        phrases = [str(x) for x in (row.get("phrases") or []) if str(x)]
+        if text in segments and len(phrases) >= 2 and "".join(phrases) == text:
+            out[text] = phrases
+        elif text:
+            print(f"[title-break] 不採用（改了字或沒切）：{text!r} → {phrases!r}", flush=True)
+    return out
+
+
+def apply_title_break_hints(*titles: str) -> None:
+    """封面端點入口呼叫：切詞組並登記給 compose；沒有要切的段就一次模型都不打。"""
+    inputs = title_break_inputs(*titles)
+    compose.set_break_hints(segment_titles_for_breaks(inputs) if inputs else {})
+
+
 def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
     """畫面描述留空時依標題補齊，並列出每格的具名真人。
 
@@ -4998,6 +5059,8 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
             detail=f"未知的標籤：{req.badge}（可用：{list(compose.COVER_BADGES)}）",
         )
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
+    # 斷句交給消化模型（2026-09-14）：入口登記詞組邊界，下游所有斷行都只在邊界上切
+    apply_title_break_hints(req.title_left, req.title_right)
     # 版面在入口就正規化成 split／full 一次（2026-09-08 WP1）：下游那一票
     # `req.layout == "full"` 的判斷因此完全不用動，也不會有人再看到 None。
     req = req.model_copy(
@@ -5691,6 +5754,9 @@ def yt_dual_background(
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     live24 = req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
+    # 斷句交給消化模型（2026-09-14）：live24 單行不拆，不必打
+    if not live24:
+        apply_title_break_hints(req.title, req.title_second)
     if live24 and req.creativity < 1:
         # 0 級＝規矩：標題由程式壓，位置／字級／斜度／顏色都是從實際播出範本量到的，
         # 像素級精準且零錯字。1 級起交給模型（2026-09-13 使用者裁決：「標題完全沒有
