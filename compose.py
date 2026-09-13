@@ -1972,6 +1972,71 @@ def _draw_live24_title(canvas: Image.Image, text: str) -> None:
     canvas.alpha_composite(tall, (max(0, x), max(0, y)))
 
 
+# ---- live24 的第三種底圖：雙切疊圖（2026-09-13）----
+#
+# 大底圖鋪滿，右側再疊一張白框斜照片。三種底圖裡只有這一種要新寫合成器——
+# 滿版就是原圖，雙切漸層用現成的 blend_backgrounds_lr。
+#
+# 幾何量自 24H LIVE範本/Still0911_00009.jpg 的右側照片面板：
+#   上緣 (0.476, 0.231) → (0.917, 0.113)，斜率 -0.151（-8.7°，逆時針）
+#   白框粗細中位數 6px / 1080 = 0.0056
+# 高度：範本上那張照片的**下緣被標題壓住**，量不到。改量左邊緣——它從 (741,287)
+# 一路到 (805,707) 都還在（0.655 佔高處被標題蓋掉，實際還更長）。上緣長 856px，
+# 取 16:9 時高 481px、下緣落在 0.68，跟左邊緣量到的延伸方向一致；4:3 會算到 0.83，
+# 整塊蓋過標題，與範本不符（第一版就是這樣做錯的）。
+# ⚠️ 仍是**由左邊緣反推**，不是直接量到下緣。拿到下緣沒被壓住的範本要重量一次。
+LIVE24_INSET_TOP_LEFT = (0.476, 0.231)     # 旋轉前的左上角（相對整張畫面）
+LIVE24_INSET_WIDTH_RATIO = 0.446           # 上緣長度 856/1920
+LIVE24_INSET_ASPECT = 16 / 9               # ⚠️ 由左邊緣反推，不是直接量到（見上）
+LIVE24_INSET_ANGLE_DEG = 8.7               # 逆時針
+LIVE24_INSET_BORDER_RATIO = 0.0056         # 白框粗細佔畫面高
+LIVE24_INSET_BORDER_FILL = (255, 255, 255)
+# 投影：範本上照片下緣有一圈可見的暗影，讓它浮在底圖上。偏移與模糊都用畫面高換算，
+# 換解析度時才會跟著縮。
+LIVE24_INSET_SHADOW_OFFSET_RATIO = 0.011
+LIVE24_INSET_SHADOW_BLUR_RATIO = 0.014
+LIVE24_INSET_SHADOW_ALPHA = 120
+
+
+def compose_live24_inset_background(base: bytes, inset: bytes) -> bytes:
+    """大底圖鋪滿＋右側白框斜照片，回傳 PNG bytes（16:9）。
+
+    回傳的是**底圖**，不是成品：再送進 compose_yt_live24_cover 才會有角標、Logo 與標題。
+    分兩支的理由與 blend_backgrounds_lr 相同——底圖三態共用同一個版面合成器。
+    """
+    canvas = _cover_panel(base, YT_CANVAS).convert("RGBA")
+    width, height = YT_CANVAS
+
+    inset_w = round(width * LIVE24_INSET_WIDTH_RATIO)
+    inset_h = round(inset_w / LIVE24_INSET_ASPECT)
+    border = max(2, round(height * LIVE24_INSET_BORDER_RATIO))
+
+    photo = _cover_panel(inset, (inset_w, inset_h)).convert("RGBA")
+    framed = Image.new("RGBA", (inset_w + border * 2, inset_h + border * 2),
+                       LIVE24_INSET_BORDER_FILL + (255,))
+    framed.alpha_composite(photo, (border, border))
+
+    # 先做投影再轉正片：兩層要同一個角度，分開轉會對不齊
+    shadow = Image.new("RGBA", framed.size, (0, 0, 0, LIVE24_INSET_SHADOW_ALPHA))
+    rotated = framed.rotate(LIVE24_INSET_ANGLE_DEG, resample=Image.BICUBIC, expand=True)
+    rotated_shadow = shadow.rotate(LIVE24_INSET_ANGLE_DEG, resample=Image.BICUBIC, expand=True)
+    blur = max(1, round(height * LIVE24_INSET_SHADOW_BLUR_RATIO))
+    rotated_shadow = rotated_shadow.filter(ImageFilter.GaussianBlur(blur))
+
+    # 落點：旋轉前左上角的位置。expand=True 之後畫布變大，左上角會往左上跑一點，
+    # 這裡不去反推精確的角點——用旋轉後畫布的左上角對齊量到的比例，誤差在一兩個
+    # 百分點內，而這個版型的疊圖本來就沒有像素級對位需求。
+    x = round(width * LIVE24_INSET_TOP_LEFT[0])
+    y = round(height * LIVE24_INSET_TOP_LEFT[1])
+    offset = round(height * LIVE24_INSET_SHADOW_OFFSET_RATIO)
+    canvas.alpha_composite(rotated_shadow, (x + offset, y + offset))
+    canvas.alpha_composite(rotated, (x, y))
+
+    buffer = io.BytesIO()
+    canvas.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def compose_yt_live24_cover(
     background: bytes,
     *,

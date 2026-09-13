@@ -287,3 +287,73 @@ class EndpointTests(unittest.TestCase):
         res, _ = self._post({"title": "東" * 30})
         self.assertEqual(res.status_code, 500)
         self.assertIn("單行版型", res.json()["detail"])
+
+
+class InsetBackgroundTests(unittest.TestCase):
+    """雙切疊圖：大底圖鋪滿＋右側白框斜照片。"""
+
+    def _bg2(self, size, colour):
+        buffer = io.BytesIO()
+        Image.new("RGB", size, colour).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def _out(self):
+        png = compose.compose_live24_inset_background(
+            self._bg2((1920, 1080), (20, 50, 110)),
+            self._bg2((1200, 675), (220, 180, 140)),
+        )
+        return Image.open(io.BytesIO(png)).convert("RGB")
+
+    def test_it_returns_a_16x9_background(self):
+        self.assertEqual(self._out().size, compose.YT_CANVAS)
+
+    def test_the_inset_lands_on_the_right_half(self):
+        """範本上那塊在右上；跑到左邊會直接壓到 24H LIVE 角標。"""
+        image = self._out()
+        w, h = image.size
+        px = image.load()
+        hits = [
+            x for y in range(0, h, 6) for x in range(0, w, 6)
+            if abs(px[x, y][0] - 220) < 60 and px[x, y][0] > px[x, y][2] + 40
+        ]
+        self.assertTrue(hits, "找不到疊上去的照片")
+        self.assertGreater(min(hits) / w, 0.40, "疊圖不該伸進畫面左半的角標區")
+
+    def test_the_inset_stops_above_the_title(self):
+        """4:3 會算到 0.83、整塊蓋過標題（第一版就是這樣錯的）。"""
+        image = self._out()
+        w, h = image.size
+        px = image.load()
+        ys = [
+            y for y in range(0, h, 4) for x in range(0, w, 6)
+            if abs(px[x, y][0] - 220) < 60 and px[x, y][0] > px[x, y][2] + 40
+        ]
+        self.assertLess(max(ys) / h, 0.80, "疊圖底緣壓到標題區了")
+
+    def test_it_has_a_white_border(self):
+        image = self._out()
+        w, h = image.size
+        px = image.load()
+        whites = [
+            (x, y) for y in range(0, h, 4) for x in range(round(w * 0.40), w, 4)
+            if all(c > 235 for c in px[x, y])
+        ]
+        self.assertGreater(len(whites), 80, "找不到白框")
+
+    def test_the_top_edge_tilts_counter_clockwise(self):
+        """範本量到 -8.7°：右端比左端高。畫成水平就不是這個版面。"""
+        image = self._out()
+        w, h = image.size
+        px = image.load()
+
+        def top_white(x):
+            for y in range(0, h):
+                if all(c > 235 for c in px[x, y]):
+                    return y
+            return None
+
+        left = top_white(round(w * 0.52))
+        right = top_white(round(w * 0.88))
+        self.assertIsNotNone(left)
+        self.assertIsNotNone(right)
+        self.assertLess(right, left, "右端應該比左端高")

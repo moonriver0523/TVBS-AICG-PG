@@ -45,6 +45,10 @@ def main() -> None:
             gradient((1000, 1000), (122, 140, 166), (48, 60, 78)),
             gradient((1000, 1000), (166, 142, 116), (82, 66, 50)),
         ), "颱風外圍環流 北部防大雨"),
+        ("雙切疊圖", compose.compose_live24_inset_background(
+            gradient((1920, 1080), (40, 92, 150), (16, 34, 66)),
+            gradient((1200, 900), (210, 180, 150), (90, 70, 55)),
+        ), "入秋首波冷氣團 週末下探18度"),
     ]
     tiles = []
     for name, background, title in cases:
