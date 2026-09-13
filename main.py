@@ -5888,7 +5888,8 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     except compose.ComposeError as exc:
         print(f"[compose] YT 直播封面失敗：{exc}", flush=True)
         _log_failure(exc)
-        raise HTTPException(status_code=500, detail=f"封面生成失敗：{exc}") from exc
+        # 2026-09-14 抓 bug 輪：標題太長是使用者改得掉的輸入問題，比照十點回 400，不是 500
+        raise HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}") from exc
 
     request_log.log_generation(
         request_id=request_id,
