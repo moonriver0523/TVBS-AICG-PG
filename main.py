@@ -2499,17 +2499,25 @@ def supports_reference_image(provider: str) -> bool:
     return provider != "gpt"
 
 
-def supports_multiple_reference_images() -> bool:
-    """多張參考圖（reference_images 陣列）只有 OpenRouter 路徑送得出去。
+def supports_multiple_reference_images(provider: str | None = None) -> bool:
+    """多張參考圖（reference_images 陣列）這條路送不送得出去。
 
     存在理由：supports_reference_image() 對 native-gemini 回 True，但那條
     只送單張 reference_image_data_url——若拿它當放行條件，使用者上傳的
     reference_images 會被靜默丟掉、prompt 卻已寫著「依附圖」，正是
     「叫模型參考不存在的附圖」這個最糟情境。判斷必須用這支。
+
+    2026-09-13：原生 GPT 也放行。2026-09-10 起 generate_gpt_image 有參考圖就改走
+    images.edit，_native_reference_files 送的是整個 reference_images 陣列——能力早就
+    有了，這裡卻還只認 OpenRouter，本機切 IMAGE_BACKEND=openai 後 AI改圖 直接 400。
+    原生 Gemini 仍只送單張，維持 False。provider 不給時視為 gpt（舊呼叫端相容）。
     """
-    return os.getenv("IMAGE_BACKEND", "openrouter") == "openrouter" and bool(
-        os.getenv("OPENROUTER_API_KEY")
-    )
+    backend = os.getenv("IMAGE_BACKEND", "openrouter")
+    if backend == "openrouter":
+        return bool(os.getenv("OPENROUTER_API_KEY"))
+    if backend == "openai":
+        return (provider or "gpt") == "gpt"
+    return False
 
 
 # 一家一個模型，OpenRouter 與原生兩條路徑共用同一個——否則切 IMAGE_BACKEND 會連模型一起
@@ -3257,7 +3265,7 @@ def resolve_portraits(
         )
         return "no_reference", []
     # 2 位以上要靠多張參考圖通道，原生路徑送不出去（措辭與能力必須一致）
-    if len(portrait_subjects) > 1 and not supports_multiple_reference_images():
+    if len(portrait_subjects) > 1 and not supports_multiple_reference_images(provider):
         print("[portrait] 目前後端送不出多張參考圖，多人肖像退回不生成臉孔", flush=True)
         return "no_reference", []
     if photos is None:
@@ -3471,7 +3479,7 @@ def apply_user_references_to_image_request(
     # 而且原生 GPT 已改走 images.edit 送得出去（見 supports_map_basemap）。
     # 使用者親自上傳的參考圖仍照舊擋：那條路的措辭與能力必須一致。
     only_auto_basemap = all(ref.purpose == "map" for ref in req.reference_images)
-    if not supports_multiple_reference_images() and not (
+    if not supports_multiple_reference_images(req.provider) and not (
         only_auto_basemap and supports_map_basemap(req.provider)
     ):
         raise HTTPException(
