@@ -169,7 +169,7 @@ class CoverLayoutAutoTests(unittest.TestCase):
              patch.object(main, "_cover_ai", side_effect=fake_ai):
             res = client.post(
                 "/api/editor/cover",
-                json={"title_left": "第一 標題 在此", "title_right": "第二 標題 在此"},
+                json={"title_left": "第一 標題 在此", "title_right": "第二 標題 在此", "title_creativity": 1},
                 headers=_headers(),
             )
         self.assertEqual(res.status_code, 200, res.text)

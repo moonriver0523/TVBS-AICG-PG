@@ -87,7 +87,7 @@ class AiPromptTests(unittest.TestCase):
         prompt = self._prompt({
             "title_left": "尼泊爾災區 無人機空拍 滅村慘況",
             "title_right": "台南易淹水 成氣候衝擊區",
-            "layout": "split", "mode": "ai",
+            "layout": "split", "mode": "ai", "title_creativity": 1,
         })
         # 2026-09-08：行數與顏色逐行標在清單上（顏色依行序：白／黃／紅）
         #
@@ -98,21 +98,23 @@ class AiPromptTests(unittest.TestCase):
         # （葉門的青年運動＝胡塞武裝 → 讀成葉門的年輕人在運動）後裁決：
         # 段數交給 AI 判斷，只有兩段就白＋黃，不再硬湊第三行。
         # 實測那一刀也換不到字級：切與不切最終都是 138。
+        # 2026-09-14 起創意 0 一律程式壓字，AI 標題 prompt 只在 1 級起組得出來；
+        # 1 級起的行清單不帶 (white)/(yellow)/(red)（配色跟語意走，見 cover_title_colour_rule）。
         for expected in (
             "(exactly 3 lines",
-            "Line 1 (white): 尼泊爾災區", "Line 2 (yellow): 無人機空拍", "Line 3 (red): 滅村慘況",
+            "Line 1: 尼泊爾災區", "Line 2: 無人機空拍", "Line 3: 滅村慘況",
             "(exactly 2 lines",
-            "Line 1 (white): 台南易淹水", "Line 2 (yellow): 成氣候衝擊區",
+            "Line 1: 台南易淹水", "Line 2: 成氣候衝擊區",
         ):
             self.assertIn(expected, prompt)
-        self.assertNotIn("Line 3 (red): 衝擊區", prompt)
+        self.assertNotIn("Line 3: 衝擊區", prompt)
         # 未分行的整條標題不再出現在 prompt 裡
         self.assertNotIn("尼泊爾災區 無人機空拍 滅村慘況", prompt)
 
     def test_full_ai_prompt_carries_the_pre_split_lines(self):
-        prompt = self._prompt({"title_left": "全球3100條 躍動冰川", "layout": "full", "mode": "ai"})
-        self.assertIn("Line 1 (white): 全球3100條", prompt)
-        self.assertIn("Line 2 (yellow): 躍動冰川", prompt)
+        prompt = self._prompt({"title_left": "全球3100條 躍動冰川", "layout": "full", "mode": "ai", "title_creativity": 1})
+        self.assertIn("Line 1: 全球3100條", prompt)
+        self.assertIn("Line 2: 躍動冰川", prompt)
 
 
 if __name__ == "__main__":

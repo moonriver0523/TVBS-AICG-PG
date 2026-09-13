@@ -285,7 +285,7 @@ class EndpointTests(unittest.TestCase):
 
     def test_a_title_too_long_is_reported_not_silently_cropped(self):
         res, _ = self._post({"title": "東" * 30})
-        self.assertEqual(res.status_code, 500)
+        self.assertEqual(res.status_code, 400)  # 2026-09-14：標題太長是輸入問題，比照十點回 400
         self.assertIn("單行版型", res.json()["detail"])
 
 

@@ -672,6 +672,30 @@ def cover_accessories(level: int, titles=(), seed=None, full_width: bool = False
     return picked
 
 
+# ---- AI 標題疊在程式拼好的底圖上（2026-09-13 使用者裁決）----
+#
+# 「原圖放置＋AI 標題」以前一律強制程式壓字（真照不進模型）。使用者裁決改成允許：
+# 原圖（或雙切時每格各自 AI改圖 後拼成的底圖）當唯一附圖送進模型，由模型在上面畫字。
+# 這一段釘在 CANVAS 正後方——與設計綱要同一個理由：L4 的 prompt 上萬字元，
+# 附在最尾巴的 AIEDIT 區塊到那時已經被稀釋，模型會把整張重新構圖。
+AI_TITLE_BASE_IMAGE_NOTE = """=== THE ATTACHED IMAGE IS THE FINISHED PICTURE ===
+One image is attached. It is the COMPLETE photograph layer of this cover, already composed edge to edge — its panels, seam, crops and framing are final. Reproduce it as the picture: same subjects, same framing, same left/right arrangement, same crops. On top of it add ONLY the typography and graphic furniture described below. Do not replace it with another scene, do not re-compose, re-crop, mirror or zoom it, and do not move anything from one side to the other.
+
+"""
+
+
+def with_base_image_note(prompt: str, has_base: bool) -> str:
+    """有程式拼好的底圖才注入，釘在第一個 TEXT TO RENDER 段之前（十點＝CANVAS 與設計綱要之後，
+    YT＝整份 prompt 開頭）。沒有底圖原樣回傳。不做成模板佔位：既有測試直接 format 模板，
+    多一個必填欄位會全部炸掉；執行期注入兩邊都不用改。"""
+    if not has_base:
+        return prompt
+    marker = "=== TEXT TO RENDER"
+    if marker not in prompt:
+        return AI_TITLE_BASE_IMAGE_NOTE + prompt
+    return prompt.replace(marker, AI_TITLE_BASE_IMAGE_NOTE + marker, 1)
+
+
 # ---- 設計綱要：插在 CANVAS 正後方（2026-09-11 第二輪）----
 #
 # 第一輪把整份級距條文放在 TYPOGRAPHY 段尾，實拍（創意梯子-260911 A／B 兩組）四級長得
@@ -705,7 +729,7 @@ COVER_TITLE_BRIEF_SPECS = {
     3: dict(height="30%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True, anchor=True,
             colours="THREE colours plus ONE accent: {0} dominant, {1} second, {2} on the word that carries the news, {3} as the accent"),
     4: dict(height="36%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True, anchor=True,
-            colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open"),
+            colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open (never green)"),
 }
 
 
@@ -813,6 +837,7 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
         f" red is BANNED. Use {spec['colours'].format(*palette)}."
         " A colour switch may happen part-way through a row."
     )
+    # 禁綠條文不放這裡：十點 prompt 另帶 cover_title_colour_rule（整段禁令），brief 有字數上限。
     picked = cover_accessories(level, titles=titles, full_width=full_width, rng=rng,
                                visuals=visuals)
     if picked:
@@ -827,6 +852,27 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
     return "\n".join(rows) + "\n\n"
 
 
+# 2026-09-14 使用者鐵則：創意階梯產出的**任何文字都不可以是綠色**——成品疊在攝影棚
+# 綠屏前，綠色系會被去背吃掉、當場穿幫。適用所有版型、所有等級，含描邊、陰影、
+# 反色底字的色塊、小籤、日期牌。放在配色規則本體（每一級都會帶到），不放 OVERRIDE
+# 段——2026-09-11 已證明離得遠的條文壓不過釘在行上的指示。
+COVER_NO_GREEN_RULE = (
+    "- NO GREEN ANYWHERE ON TEXT — THIS OUTRANKS EVERY PALETTE INSTRUCTION. The finished"
+    " image is keyed over a studio green screen, so any green-family colour (green, lime,"
+    " teal, mint, olive, chartreuse, emerald, yellow-green, blue-green) on a character, an"
+    " outline, a shadow, a filled block behind characters, a tag, a chip or a plate will be"
+    " keyed out on air. If a palette, a brief or the story suggests green, substitute a"
+    " non-green colour. This applies at every creativity level.\n"
+)
+
+# brief 版（CANVAS 後面那塊有 3000 字上限，塞不下整段）：一行就夠，完整條文在配色規則。
+COVER_NO_GREEN_ROW = (
+    "- NO GREEN ON ANY TEXT — no green-family colour (green, lime, teal, mint, olive) on a"
+    " character, outline, shadow, filled block, tag or plate: the image is keyed over a studio"
+    " green screen. This outranks the palette."
+)
+
+
 def cover_title_colour_rule(level: int) -> str:
     """逐行配色那一條。0 級照舊；1 級起把矛盾**拆掉**，不是靠後面 OVERRIDE 壓。"""
     if level < 1:
@@ -835,7 +881,7 @@ def cover_title_colour_rule(level: int) -> str:
             " (yellow) = bright golden yellow, (red) = vivid red with a white outline. Follow the"
             " labels literally — never recolour a line, and never give a whole headline one flat"
             " colour.\n"
-        )
+        ) + COVER_NO_GREEN_RULE
     # 2026-09-11 使用者：「名詞應該整個套色 不是單一字套色 不合邏輯」。實拍把
     # 「哈拉德」切成「哈拉」＋變色的「德」——那是國王的名字，拆開讀起來像兩件事。
     # 根因跟「葉門青年運動」被腰斬同一個：中文沒有空格，只說「換一個 word」模型
@@ -850,7 +896,7 @@ def cover_title_colour_rule(level: int) -> str:
         " its unit — each is ONE unbroken unit, and every character of it takes the SAME colour."
         " Colouring 「哈拉德」as 「哈拉」plus a differently coloured 「德」is wrong: it is one"
         " king's name, and splitting it reads as two separate things.\n"
-    )
+    ) + COVER_NO_GREEN_RULE
 
 
 # 每一級的條文（TYPOGRAPHY 段尾）。2026-09-11 第二輪起這裡**只留質感與做法**，
@@ -943,6 +989,37 @@ Rules for every description:
 
 Also return, per side, "portrait_subjects_left" / "portrait_subjects_right": every specific named real person whose face that side's photograph would show, names exactly as the headline writes them (no title, no organisation), at most three per side; an empty array when the scene shows no named real person. "portrait_subjects_left_en" / "portrait_subjects_right_en": the same people, same order, as the name Wikipedia uses in English (e.g. 梅爾茨 → "Friedrich Merz"); empty string when unsure.
 """
+
+# ---- 標題斷句（2026-09-14 使用者裁決：斷句交給消化模型，規則只當退路）----
+# 只要詞組，不要行：一行放幾個字由版面寬度決定（compose 量像素），模型不知道；
+# 它只負責「哪裡是一個詞的邊界」。紅線：接回去必須等於原段，一個字都不能改。
+TITLE_BREAK_SYSTEM = """You segment Taiwanese TV news headline fragments into phrases so a layout engine can break lines only between phrases.
+
+Rules:
+- For each input string, return its phrases in order. Concatenating the phrases MUST reproduce the input exactly — same characters, same order, nothing added, dropped, translated or reordered.
+- A phrase is the smallest unit that must never be split across two lines: a personal name, a place name (台灣, 台積電, 格陵蘭), an organisation, a job title, a figure with its unit (9000億, 42度, 35%關稅), a quoted term with its quotes (「擴張版」), a verb with its object when they read as one beat (上看9000億, 發布地圖).
+- Prefer 2–4 phrases per input of 2–5 characters each; never return a single phrase for an input longer than 5 characters unless it truly is one unbreakable term.
+- Output JSON only."""
+
+TITLE_BREAK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "segments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "phrases": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["text", "phrases"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["segments"],
+    "additionalProperties": False,
+}
 
 COVER_VISUAL_SCHEMA = {
     "type": "object",
@@ -1070,6 +1147,12 @@ def fallback_split_title(title: str) -> tuple[str, str]:
         head, _, tail = text.partition(" ")
         if head.strip() and tail.strip():
             return head.strip(), tail.strip()
+    # 2026-09-14：不再純對半——走 compose 那支（模型邊界優先、規則退路），跟十點同一套。
+    from compose import _split_line_near_middle
+
+    head, tail = _split_line_near_middle(text)
+    if head.strip() and tail.strip():
+        return head, tail
     mid = max(1, len(text) // 2)
     return text[:mid], text[mid:]
 
@@ -1092,9 +1175,14 @@ def split_cover_title(title: str) -> list[str]:
     if len(parts) > COVER_TITLE_MAX_LINES:
         parts = parts[: COVER_TITLE_MAX_LINES - 1] + ["".join(parts[COVER_TITLE_MAX_LINES - 1 :])]
     if len(parts) == 1 and len(parts[0]) > COVER_TITLE_AUTO_SPLIT_LEN:
-        whole = parts[0]
-        mid = (len(whole) + 1) // 2
-        parts = [whole[:mid], whole[mid:]]
+        # 2026-09-13 使用者回報「勞保撥補上看1300億元大關」被切成「…看1／300億…」、
+        # 「擴張版」被腰斬：這裡原本是純粹對切。改走 compose 那套（數字／括號／專有名詞
+        # 不切、虛詞邊界優先），跟超寬防呆同一支函式，斷句只有一種規則。
+        # compose 在函式內才 import 本模組，這裡也延後 import 避免循環。
+        from compose import _split_line_near_middle
+
+        head, tail = _split_line_near_middle(parts[0])
+        parts = [head, tail] if head.strip() and tail.strip() else parts
     return parts
 
 
@@ -1385,51 +1473,19 @@ YT_COVER_TITLE_MODE_COMPOSITE = "composite"
 YT_COVER_TITLE_MODES = (YT_COVER_TITLE_MODE_AI, YT_COVER_TITLE_MODE_COMPOSITE)
 
 
-# ---- 極短標題的整點封面強制走程式壓字（2026-09-13 使用者裁決）----
-#
-# 使用者回報：整點 0 級「標題字少時字級太大，會被日期紅條蓋到」，附實拍。
-#
-# 先在 prompt 端加了絕對字高上限（見 YT_HOURLY_TITLE_CAP_RATIO）。實拍四張的結論
-# 是**擋不住**：4＋4 字的成品塊高仍是 36.4%（上限推出來應該 ~32%），字頂落在 61.6%，
-# 而紅條下緣就在 61.5%——餘裕 1 個像素。而且修正前那張也剛好沒撞，所以那批連
-# 「有沒有變好」都證明不出來。模型不吃百分比／不肯縮，本專案已經踩過三次。
-#
-# 所以改成程式端保證：極短標題直接切成 composite（模型只生無文字底圖、標題程式壓），
-# 程式壓字版的塊高是 29.2%、字頂 66%，離紅條有 4.5% 的真實距離，物理上不可能撞。
-# 代價是極短標題就沒有 AI 標題的設計感——使用者知道並選了這條。
-#
-# **只看第一行**（2026-09-13 使用者第二輪裁決）：第二行的字級是跟著第一行走的，
-# 所以決定塊高的是第一行有幾個字。門檻 **5 格（含）**——使用者實拍為證：
-# 「東北季風好冷」（6 字）不會蓋到，「東北季風冷」（5 字）會。
-#
-# 「第一行」的定義也是使用者給的：**空格前那一段**；整句沒有空格就是整句本身
-# （「第一句 空格前5是5字(含)以內，或第一句全部只有5字(含)以內」）。
-# 所以沒打空格的長標題不算極短——那種情況分行是後面才決定的，不在這裡猜。
-#
-# 只管 0 級。1 級起日期牌是模型自己畫、而且明令貼著標題走，沒有這個碰撞；
-# 在那邊強制 composite 等於把整條創意階梯關掉。
-YT_HOURLY_SHORT_LINE1_MAX = 5.0   # 第一行這個格數（含）以下算極短
-
-
-def yt_hourly_first_line(title: str) -> str:
-    """使用者打的這串標題，第一行是哪幾個字：空格前那一段，沒空格就是整句。"""
-    return re.split(r"[\s　]+", (title or "").strip(), maxsplit=1)[0]
-
-
-def yt_hourly_short_title_needs_composite(
-    layout: str, creativity: int, title_mode: str, title: str, title_second: str = ""
-) -> bool:
-    """這張整點封面的第一行是不是短到會撞日期紅條，必須改走程式壓字。
-
-    雙則的第一行就是 title 本身（title_second 是第二則、另一行），而 title 這一欄
-    同樣是「空格前那一段」的規則——所以兩種模式共用同一支判斷，不用分岔。
-    """
-    if layout != YT_COVER_LAYOUT_HOURLY or creativity >= 1:
-        return False
-    if title_mode != YT_COVER_TITLE_MODE_AI:
-        return False
-    line1 = yt_hourly_first_line(title)
-    return bool(line1) and compose.title_display_width(line1) <= YT_HOURLY_SHORT_LINE1_MAX
+# 創意 0 → 一律程式壓字（2026-09-14 使用者裁決，十點／整點／新聞直播／熱搜／live24 全套）。
+# 0 級的 AI 標題只是「規矩排版」，模型畫出來理論上跟程式壓字一樣，卻多了三種已實拍過的
+# 風險：錯字、原圖放置那格被整張重畫而漂移（第三輪案 04、創意階梯輪 C08）、字太大撞
+# 整點日期紅條（2026-09-13 極短標題那條局部修補，現已被本規則涵蓋而移除）。
+# 1 級起標題造型（底板、材質字面、立體字）只有模型畫得出來，才送生圖；原圖放置的格子
+# 跟著整張重畫、接受漂移——使用者主動開創意就是選了風格優先。
+# 追加修改帶回底圖（has_background）不動：標題已經畫在上面了，改成 composite 會再壓一層。
+# 十點的 mode 與 YT 的 title_mode 用同一組字串（ai／composite），所以共用這一支。
+def title_mode_for_creativity(creativity: int, title_mode: str, has_background: bool) -> str:
+    """回傳這張封面實際該走的標題模式：創意 0 且沒帶現成底圖 → 程式壓字，其餘照呼叫端。"""
+    if has_background or creativity >= 1:
+        return title_mode
+    return YT_COVER_TITLE_MODE_COMPOSITE
 
 # 底部壓色框開關（2026-09-08 使用者裁決；同日晚改預設 ON）。合成版由 compose 的 bottom_band
 # 決定畫不畫，AI 版只能靠 prompt——所以 LAYOUT 的第一條與 IMAGERY 的結尾都要換句話說，
@@ -1590,7 +1646,7 @@ YT_BRIEF_SPECS = {
     3: dict(height="40%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True,
             colours="THREE colours plus ONE accent: {0} dominant, {1} second, {2} on the word that carries the news, {3} as the accent"),
     4: dict(height="44%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True,
-            colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open"),
+            colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open (never green)"),
 }
 # 兩行標題的字底。程式壓字版實測落在 97.9%，取整。
 YT_HOURLY_TITLE_BOTTOM_RATIO = 0.98
@@ -1930,6 +1986,7 @@ def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
             " A colour switch may happen part-way through a row."
         )
     )
+    rows.append(COVER_NO_GREEN_ROW)
     # 配色池會遞四個顏色過去，日期牌是頻道識別的一部分，不跟著抽（house style）。
     if has_date_tab:
         rows.append(

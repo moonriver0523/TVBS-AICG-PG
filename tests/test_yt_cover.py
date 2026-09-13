@@ -264,7 +264,8 @@ class PlanTests(unittest.TestCase):
     def test_derive_failure_still_yields_a_cover_plan(self):
         with patch.object(main, "derive_yt_cover_plan", return_value={}):
             lines, visual, *_ = main.resolve_yt_cover_plan(self.req("沒有空格的標題"))
-        self.assertEqual(lines, ("沒有空", "格的標題"))
+        # 2026-09-14：退路不再純對半（會切成「沒有空／格的標題」），改走 compose 斷句引擎
+        self.assertEqual(lines, ("沒有空格的", "標題"))
         self.assertEqual(visual, "沒有空格的標題")
 
 
@@ -353,10 +354,17 @@ class SplitBackgroundTests(unittest.TestCase):
         out = compose.split_backgrounds([_png_bytes((900, 900), (10, 20, 30))])
         self.assertEqual(out, compose.crop_background_16x9(_png_bytes((900, 900), (10, 20, 30))))
 
-    def test_more_than_three_only_takes_the_first_three(self):
+    def test_four_images_make_four_panels(self):
+        # 2026-09-13 使用者：4 格放寬（原上限 3）
         img = self._split([(200, 30, 30), (30, 200, 30), (30, 30, 200), (250, 250, 30)])
         w, h = img.size
-        self.assertEqual(img.getpixel((5 * w // 6, h // 2)), (30, 30, 200))
+        self.assertEqual(img.getpixel((7 * w // 8, h // 2)), (250, 250, 30))
+        self.assertEqual(img.getpixel((w // 8, h // 2)), (200, 30, 30))
+
+    def test_more_than_four_only_takes_the_first_four(self):
+        img = self._split([(200, 30, 30), (30, 200, 30), (30, 30, 200), (250, 250, 30), (30, 250, 250)])
+        w, h = img.size
+        self.assertEqual(img.getpixel((7 * w // 8, h // 2)), (250, 250, 30))
 
     def test_two_asis_references_split_without_generating(self):
         req = main.YtCoverRequest(
@@ -375,10 +383,11 @@ class SplitBackgroundTests(unittest.TestCase):
         self.assertEqual(img.getpixel((w // 4, h // 2)), (200, 30, 30))
         self.assertEqual(img.getpixel((3 * w // 4, h // 2)), (30, 30, 200))
 
-    def test_endpoint_forces_composite_title_when_splitting(self):
+    def test_endpoint_splits_three_asis_without_any_model_in_composite(self):
+        # 2026-09-13 起 ai＋原圖＝AI 標題疊底圖（會打模型），無 API 的分切要明送 composite
         payload = {
             "title": "閃兵案第四波 14人自首遭起訴",
-            "title_mode": "ai",
+            "title_mode": "composite",
             "reference_images": [
                 {"data_url": _data_url(_png_bytes((800, 800), (200, 30, 30))), "purpose": "asis"},
                 {"data_url": _data_url(_png_bytes((800, 800), (30, 30, 200))), "purpose": "asis"},
@@ -417,21 +426,36 @@ class EndpointTests(unittest.TestCase):
         with Image.open(io.BytesIO(base64.b64decode(data["image_data_base64"]))) as image:
             self.assertEqual(image.size, compose.YT_CANVAS)
 
-    def test_single_asis_forces_composite_even_when_ai_title_checked(self):
-        """單張原圖放置＋「標題由 AI 生成」仍勾選：後端要改程式壓字，不把照片丟給模型重畫。"""
+    def test_single_asis_with_ai_title_draws_the_title_over_the_photo(self):
+        """2026-09-13 使用者裁決（2026-09-07 的強制壓字作廢）：單張原圖放置＋AI 標題＝
+        程式裁滿版當唯一附圖，模型只在上面畫字；一次生圖、零張肖像。"""
+        calls = []
+
+        def fake_raw(req):
+            calls.append(req)
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(_png_bytes((1280, 720))).decode("ascii"),
+                mime_type="image/png", model="fake",
+            )
+
         payload = {
             "title": "北北基宜大雨特報 台北12處道路封閉",
-            "title_mode": "ai",
+            "title_mode": "ai", "creativity": 1,
             "date_text": "2026/09/07",
             "reference_images": [{"data_url": _data_url(_png_bytes((1200, 700))), "purpose": "asis"}],
         }
-        with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")),              patch.object(main, "derive_yt_cover_plan", side_effect=AssertionError("不該打文字模型")):
+        with patch.object(main, "generate_image_raw", side_effect=fake_raw), \
+             patch.object(main, "supports_multiple_reference_images", return_value=True), \
+             patch.object(main, "derive_yt_cover_plan", return_value={"visual": "雨中街景"}):
             res = client.post("/api/editor/yt-cover", json=payload, headers=HEADERS)
         self.assertEqual(res.status_code, 200, res.text)
         data = res.json()
-        self.assertEqual(data["title_mode"], "composite")
-        self.assertFalse(data["background_is_ai"])
-        self.assertEqual((data["line1"], data["line2"]), ("北北基宜大雨特報", "台北12處道路封閉"))
+        self.assertEqual(data["title_mode"], "ai")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([r.purpose for r in calls[0].reference_images], ["aiedit"])
+        self.assertEqual(calls[0].portrait_subjects, [])
+        self.assertIn("THE ATTACHED IMAGE IS THE FINISHED PICTURE", calls[0].prompt)
+        self.assertEqual(data["model"], "yt-cover:asis、fake")
 
     def test_hourly_layout_ignores_subtitle_and_takes_time(self):
         payload = {
@@ -452,7 +476,7 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(res.json()["line1"], "遭撞趴引擎蓋一路載走200公尺")
 
     def test_ai_title_mode_generates_whole_cover_with_text(self):
-        payload = {"title": "前段 後段", "title_mode": "ai", "original_audio": True, "date_text": "2026/09/06"}
+        payload = {"title": "前段 後段", "title_mode": "ai", "creativity": 1, "original_audio": True, "date_text": "2026/09/06"}
         fake = main.ImageGenerateResponse(
             image_data_base64=base64.b64encode(_png_bytes((1536, 864), colour=(30, 30, 30))).decode("ascii"),
             mime_type="image/png", model="fake-model",
@@ -475,7 +499,7 @@ class EndpointTests(unittest.TestCase):
 
     def test_ai_title_mode_with_background_only_overlays(self):
         payload = {
-            "title": "前段 後段", "title_mode": "ai", "layout": "hourly", "time_text": "20:00",
+            "title": "前段 後段", "title_mode": "ai", "creativity": 1, "layout": "hourly", "time_text": "20:00",
             "background_image_base64": base64.b64encode(_png_bytes((1536, 864))).decode("ascii"),
             "background_is_ai": True,
         }
@@ -539,7 +563,11 @@ class FrontendParityTests(unittest.TestCase):
         self.assertIn("state.ytCoverTitleMode !== 'ai'", js)
         with open(self.INDEX, encoding="utf-8") as fh:
             html = fh.read()
-        self.assertRegex(html, r'id="ytCoverAiTitle"[^>]*checked', "預設標題由 AI 生成（使用者裁決）")
+        # 2026-09-14 使用者裁決：創意 0 一律程式壓字，勾選框降成唯讀鏡像（預設創意 0＝不勾）
+        box = re.search(r'<input id="ytCoverAiTitle"[^>]*>', html).group(0)
+        self.assertIn("disabled", box)
+        self.assertNotIn("checked", box)
+        self.assertIn("title_mode: state.ytCreativity >= 1 ? 'ai' : 'composite'", js)
 
     def test_hot_format_registered_on_both_sides(self):
         # 2026-09-06 型錄 H 類「今日熱搜」
@@ -574,7 +602,9 @@ class FrontendParityTests(unittest.TestCase):
         """
         with open(self.APP_JS, encoding="utf-8") as fh:
             js = fh.read()
-        self.assertIn("editorFormat().inputs !== 'yt_cover' || !aiMode", js)
+        # 2026-09-14 起勾選框只是拉桿的鏡像，拉桿永遠露出，只剩版型檢查
+        self.assertIn("editorFormat().inputs !== 'yt_cover';", js)
+        self.assertIn("aiBox.checked = state.ytCreativity >= 1", js)
 
     def test_flag_labels_match_backend(self):
         with open(self.INDEX, encoding="utf-8") as fh:
@@ -665,7 +695,7 @@ class HotCoverTests(unittest.TestCase):
 
         with patch.object(main, "generate_image_raw", side_effect=fake_generate), \
              patch.object(main, "derive_yt_cover_plan", return_value={"visual": "夜間廣場人潮", "portrait_subjects": [], "portrait_subjects_en": []}):
-            res = client.post("/api/editor/yt-cover", json={"title": "大象來了 10萬人塞爆士林", "layout": "hot", "title_mode": "ai"}, headers=HEADERS)
+            res = client.post("/api/editor/yt-cover", json={"title": "大象來了 10萬人塞爆士林", "layout": "hot", "title_mode": "ai", "creativity": 1}, headers=HEADERS)
         self.assertEqual(res.status_code, 200, res.text)
         self.assertIn("trending", seen["prompt"])
         self.assertIn("no LIVE word", seen["prompt"])

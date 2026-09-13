@@ -107,7 +107,7 @@ class FullCompositeReturnsBackgroundTests(unittest.TestCase):
              patch.object(main, "resolve_cover_visuals", return_value=("冰川崩落", "冰川崩落")):
             res = client.post(
                 "/api/editor/cover",
-                json={"title_left": "全球3100條 躍動冰川", "layout": "full", "mode": "ai"},
+                json={"title_left": "全球3100條 躍動冰川", "layout": "full", "mode": "ai", "title_creativity": 1},
                 headers=_headers(),
             )
         self.assertEqual(res.status_code, 200, res.text)
@@ -203,7 +203,7 @@ class SplitRejectsBackgroundTests(unittest.TestCase):
              patch.object(main, "digest_completion", side_effect=AssertionError("不該打文字模型")):
             res = client.post("/api/editor/cover", json={
                 "title_left": "尼泊爾災區 滅村慘況", "title_right": "台南易淹水 成氣候衝擊區",
-                "layout": "split", "mode": "ai",
+                "layout": "split", "mode": "ai", "title_creativity": 1,
                 "background_image_base64": raw, "background_mime_type": "image/png",
             }, headers=_headers())
         self.assertEqual(res.status_code, 200, res.text)

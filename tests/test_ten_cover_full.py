@@ -72,7 +72,8 @@ class FullEndpointTests(unittest.TestCase):
 
     def test_full_with_asis_places_image_and_single_title_without_api(self):
         res, calls, resolve = self._post({
-            "title_left": "全球3100條 躍動冰川 成氣候致命危機", "layout": "full", "mode": "ai",
+            # 2026-09-13 起 mode=ai＋原圖＝AI 標題疊底圖（會打模型），無 API 的原圖鋪滿要明送 composite
+            "title_left": "全球3100條 躍動冰川 成氣候致命危機", "layout": "full", "mode": "composite",
             "asis_left": _data_url(_png_bytes(size=(1600, 900), colour=RED)),
         })
         self.assertEqual(res.status_code, 200, res.text)
@@ -128,7 +129,7 @@ class FullEndpointTests(unittest.TestCase):
 
         with patch.object(main, "generate_image_raw", side_effect=fake_raw), \
              patch.object(main, "resolve_cover_visuals", return_value=("冰川崩落", "冰川崩落")):
-            res = client.post("/api/editor/cover", json={"title_left": "全球3100條 躍動冰川", "layout": "full", "mode": "ai"}, headers=_headers())
+            res = client.post("/api/editor/cover", json={"title_left": "全球3100條 躍動冰川", "layout": "full", "mode": "ai", "title_creativity": 1}, headers=_headers())
         self.assertEqual(res.status_code, 200, res.text)
         self.assertEqual(res.json()["model"], "ten-cover-full:ai")
         self.assertIn("ONE single photograph", seen["prompt"])

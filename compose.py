@@ -19,6 +19,7 @@
 出現第三個版型時再抽表。
 """
 
+import contextvars
 import functools
 import io
 import math
@@ -60,6 +61,12 @@ TEN_HIGHLIGHT_STAMP = BRAND_DIR / "ten-highlight-stamp.png"  # 舊版精華圓�
 # 悄悄改用預設點陣字會畫出一整排豆腐，比直接失敗糟得多。
 FONT_DIR = pathlib.Path(__file__).resolve().parent / "static" / "fonts"
 FONT_CANDIDATES_BUNDLED = (FONT_DIR / "TaipeiSansTCBeta-Bold.ttf",)
+# 整點時間帶（XX:XX）專用字型（2026-09-13 使用者裁決：Times New Roman）。
+# 直接包 Windows 的 timesbd.ttf 進 repo——Cloud Run 是 Linux，系統沒有這個字型，
+# 不包進來正式站永遠看不到效果。Monotype 再散布的授權疑慮已告知使用者，由其裁決。
+# 不走 discover_font() 那條 CJK 退路鏈：那條是「找得到什麼中文粗體就用什麼」，
+# 時間帶只有數字與冒號，要的是釘死這一支。
+TIME_FONT_PATH = FONT_DIR / "timesbd.ttf"
 FONT_CANDIDATES_WINDOWS = (
     pathlib.Path("C:/Windows/Fonts/msjhbd.ttc"),
     pathlib.Path("C:/Windows/Fonts/NotoSansTC-VF.ttf"),
@@ -178,21 +185,31 @@ def _bold_stroke(font: ImageFont.FreeTypeFont, ratio: float = BOLD_STROKE_RATIO)
     return max(1, round(font.size * ratio))
 
 
+def _time_font(size: int) -> ImageFont.FreeTypeFont:
+    """整點時間帶的 Times New Roman Bold（見 TIME_FONT_PATH）。找不到就報錯，不退回黑體——
+    退回會靜靜畫成另一個字型，使用者驗收時看不出是字型檔沒進 image。"""
+    if not TIME_FONT_PATH.exists():
+        raise ComposeError(f"找不到時間帶字型：{TIME_FONT_PATH}")
+    return ImageFont.truetype(str(TIME_FONT_PATH), size)
+
+
 def _fit_font_bold(
     text: str, max_width: int, start_size: int, min_size: int,
-    *, ratio: float = BOLD_STROKE_RATIO,
+    *, ratio: float = BOLD_STROKE_RATIO, loader=None,
 ) -> ImageFont.FreeTypeFont:
     """同 _fit_font，但把假粗體描邊撐出來的寬度一起算進去。
 
     ratio 必須跟等一下實際畫的時候一致，否則量的是 A 字重、畫的是 B 字重，白算。
+    loader＝哪一支字型載入器（預設 _font 的中文粗體；時間帶傳 _time_font）。
     """
+    load = loader or _font
     size = start_size
     while size > min_size:
-        font = _font(size)
+        font = load(size)
         if font.getbbox(text)[2] + 2 * _bold_stroke(font, ratio) <= max_width:
             return font
         size -= 2
-    return _font(min_size)
+    return load(min_size)
 
 
 def _ink_centre_shift(font: ImageFont.FreeTypeFont, text: str) -> int:
@@ -652,6 +669,22 @@ def paste_cover_header_right(
         )
 
 
+def fit_cover_canvas(image_bytes: bytes) -> bytes:
+    """把模型出的圖等比例放大裁滿十點定版尺寸；已經是定版尺寸就原樣回。
+
+    2026-09-14 抓 bug 輪：原生 GPT 的 16:9 生成尺寸是 1280×720，十點 AI 模式以前照模型
+    原尺寸出去（合成版與 YT 的 AI 標題都是 1920×1080）。只給十點 AI 路徑在貼 Logo 之前
+    呼叫——paste_cover_logo 本身是多處共用的原始函式，量像素的測試都拿小圖打它。
+    """
+    with Image.open(io.BytesIO(image_bytes)) as opened:
+        if opened.size == COVER_CANVAS:
+            return image_bytes
+    canvas = _cover_panel(image_bytes, COVER_CANVAS)
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def paste_cover_logo(
     image_bytes: bytes, date_text: str = "", badge: str = COVER_DEFAULT_BADGE
 ) -> bytes:
@@ -862,6 +895,18 @@ def _draw_cover_ai_note(canvas: Image.Image, x_anchor: int, y0: int, align_right
 
 # 拆行點偏好：切在「數量詞結尾」之後（5年｜各自…、184億元｜提升…），比純粹對半自然得多。
 _SPLIT_AFTER_CHARS = set("年月日元億萬千人次件位家戶%％度歲倍條棟艘架台場波班組隊起成")
+# 量詞前面要有數（2026-09-13 實拍抓到「歐洲熱浪台｜灣豪雨」：「台」在量詞集合裡，
+# 沒有數字也被當「3台｜車」切）。「台灣／人民／成長／制度」這些字尾都在集合裡，
+# 沒有數在前面的量詞字就只是普通字，不能當斷點。
+_NUMBER_WORD_CHARS = set("一二三四五六七八九十百千萬億兩幾數多半")
+
+
+def _quantifier_after_number(text: str, end: int) -> bool:
+    """text[end] 是量詞字：往回跳過連續量詞字（億元、萬人），前面是不是數字／數字字。"""
+    j = end
+    while j >= 0 and text[j] in _SPLIT_AFTER_CHARS:
+        j -= 1
+    return j >= 0 and (text[j].isdigit() or text[j] in _NUMBER_WORD_CHARS)
 
 # 虛詞邊界（2026-09-10）：切在這些字**之後**很少會腰斬一個詞——「容易被忽略的｜前兆」。
 _SPLIT_AFTER_PARTICLES = set("的了與和及至到後前中上下內外時起才又也都就再")
@@ -881,8 +926,112 @@ def _number_inner_indices(text: str) -> set[int]:
     return inner
 
 
+# 括號（2026-09-13 使用者回報「川普發布「擴張版」美國地圖」被切成「擴／張版」）：
+# 引號裡的是一個詞，裡面一律不准切；引號兩側反而是最好的斷點。
+_BRACKET_PAIRS = {"「": "」", "『": "』", "《": "》", "〈": "〉", "（": "）", "(": ")", "【": "】", "“": "”"}
+_BRACKET_CLOSERS = set(_BRACKET_PAIRS.values())
+
+# 常見專有名詞小詞典：沒有斷詞器（本機與 Cloud Run 都沒裝），只能用一份短名單擋最常見的
+# 腰斬——「格陵蘭」被切成「格／陵蘭」（2026-09-13 同一則回報）。只收 3 字以上、新聞高頻的
+# 國名／地名／機構名；2 字詞交給虛詞規則（切到 2 字詞中間的機率本來就低）——
+# 例外是「台灣／臺灣」：新聞標題出現頻率最高，且「台」同時是量詞字（2026-09-13）。
+_SPLIT_KEEP_TOGETHER = (
+    "台灣", "臺灣",
+    "格陵蘭", "加拿大", "墨西哥", "冰島", "巴拿馬", "委內瑞拉", "阿根廷", "哥倫比亞", "巴西", "古巴",
+    "烏克蘭", "俄羅斯", "白俄羅斯", "波蘭", "立陶宛", "愛沙尼亞", "拉脫維亞", "羅馬尼亞", "保加利亞",
+    "塞爾維亞", "克羅埃西亞", "斯洛伐克", "斯洛維尼亞", "匈牙利", "捷克", "奧地利", "瑞士", "比利時",
+    "荷蘭", "丹麥", "挪威", "瑞典", "芬蘭", "葡萄牙", "西班牙", "義大利", "希臘", "土耳其", "以色列",
+    "巴勒斯坦", "加薩", "黎巴嫩", "敘利亞", "伊拉克", "伊朗", "沙烏地", "阿拉伯", "卡達", "阿聯",
+    "葉門", "埃及", "利比亞", "蘇丹", "衣索比亞", "索馬利亞", "肯亞", "奈及利亞", "南非",
+    "巴基斯坦", "阿富汗", "孟加拉", "斯里蘭卡", "尼泊爾", "印尼", "馬來西亞", "新加坡", "菲律賓",
+    "越南", "柬埔寨", "泰國", "緬甸", "澳洲", "紐西蘭", "北韓", "南韓", "日本", "印度",
+    "加州", "德州", "佛州", "紐約", "華府", "華盛頓", "白宮", "五角大廈", "國會山莊",
+    "北約", "歐盟", "聯合國", "世衛", "國際刑警", "國際法院", "海牙",
+    "格陵蘭島", "巴拿馬運河", "墨西哥灣", "阿拉斯加", "夏威夷", "波多黎各",
+    "無人機", "太空船", "核電廠", "半導體", "台積電", "航空母艦", "潛艦", "飛彈",
+)
+
+
+def _protected_inner_indices(text: str) -> set[int]:
+    """所有**不准當斷點**的索引：數字中間、括號內、專有名詞中間。"""
+    inner = _number_inner_indices(text)
+    stack: list[str] = []
+    for i, ch in enumerate(text):
+        if ch in _BRACKET_PAIRS:
+            stack.append(_BRACKET_PAIRS[ch])
+        elif stack and ch == stack[-1]:
+            stack.pop()
+        elif stack:
+            inner.add(i)          # 括號內：切在這個字**之前**＝把引號裡的詞腰斬
+    for word in _SPLIT_KEEP_TOGETHER:
+        start = text.find(word)
+        while start != -1:
+            inner.update(range(start + 1, start + len(word)))
+            start = text.find(word, start + 1)
+    return inner
+
+
+def _bracket_edge_split(text: str, inner: set[int]) -> tuple[str, str] | None:
+    """最靠近中點的括號邊緣（開括號之前、閉括號之後）當斷點；沒有括號回 None。"""
+    n = len(text)
+    mid = n // 2
+    edges = [i for i in range(2, n - 1) if (text[i] in _BRACKET_PAIRS or text[i - 1] in _BRACKET_CLOSERS)]
+    edges = [i for i in edges if i not in inner]
+    if not edges:
+        return None
+    i = min(edges, key=lambda e: (abs(e - mid), e))
+    return text[:i], text[i:]
+
+
+# ---- 模型給的斷句邊界（2026-09-14 使用者裁決）----
+#
+# 使用者：「為何要依賴斷詞機制，這個機制會一直長胖」——下面那套規則（量詞／虛詞／括號／
+# 小詞典）每被抓到一次腰斬就長一條，追不完。改成：封面請求一進來就請消化模型把每段
+# 標題切成詞組（main.segment_titles_for_breaks），這裡只在詞組邊界上切；模型沒回、
+# 回得不忠實（接回去不等於原句）、或邊界踩到數字中間，才退回原本的規則。規則集從此
+# 只當退路，不再加條目。
+#
+# 用 ContextVar 而不是改簽名：斷行從 wrap／fill／split_cover_title 好幾條路進來，
+# 每一條都要穿參數太吵；FastAPI 的同步端點每個請求各自一份 context，互不污染。
+_BREAK_HINTS: contextvars.ContextVar[dict[str, tuple[int, ...]]] = contextvars.ContextVar(
+    "cover_break_hints", default={}
+)
+
+
+def set_break_hints(phrases_by_text: dict[str, list[str]]) -> None:
+    """登記模型切好的詞組：{原段: [詞組, ...]}。詞組接回去不等於原段的一律丟掉。"""
+    hints: dict[str, tuple[int, ...]] = {}
+    for text, phrases in (phrases_by_text or {}).items():
+        parts = [str(p) for p in (phrases or []) if str(p)]
+        if len(parts) < 2 or "".join(parts) != text:
+            continue
+        cuts, pos = [], 0
+        for part in parts[:-1]:
+            pos += len(part)
+            cuts.append(pos)
+        hints[text] = tuple(cuts)
+    _BREAK_HINTS.set(hints)
+
+
+def clear_break_hints() -> None:
+    _BREAK_HINTS.set({})
+
+
+def _hint_cuts(text: str) -> list[int]:
+    """這一行可用的模型邊界。行可能是登記段的子字串（拆過一次再拆），位移對回去。"""
+    out: list[int] = []
+    for seg, cuts in _BREAK_HINTS.get().items():
+        start = seg.find(text)
+        while start != -1:
+            out.extend(c - start for c in cuts if 0 < c - start < len(text))
+            start = seg.find(text, start + 1)
+    return sorted(set(out))
+
+
 def _split_line_near_middle(text: str) -> tuple[str, str]:
     """把一行從中間附近切成兩行。
+
+    模型邊界優先（見 _BREAK_HINTS）：有可用邊界就取最靠近中點的那一個。
 
     偏好順序：數量詞結尾 → 虛詞結尾 → 虛詞開頭 → 最靠近中點且不切在數字中間。
     最後那條是保底，切出來的詞可能被腰斬（184億元 不能變 18／4億元 已由 inner 擋掉，
@@ -890,10 +1039,22 @@ def _split_line_near_middle(text: str) -> tuple[str, str]:
     """
     n = len(text)
     mid = n // 2
-    inner = _number_inner_indices(text)
+    inner = _protected_inner_indices(text)
+    hinted = [i for i in _hint_cuts(text) if 1 <= i <= n - 1 and i not in inner]
+    if hinted:
+        i = min(hinted, key=lambda e: (abs(e - mid), e))
+        return text[:i], text[i:]
+    # 括號邊緣最優先（2026-09-13）：「川普發布「擴張版」美國地圖」→「川普發布／「擴張版」美國地圖」
+    at_edge = _bracket_edge_split(text, inner)
+    if at_edge is not None:
+        return at_edge
     for offset in range(0, 4):
         for i in (mid - offset, mid + offset):
-            if 2 <= i <= n - 2 and text[i - 1] in _SPLIT_AFTER_CHARS and not text[i].isdigit():
+            if (
+                2 <= i <= n - 2 and i not in inner and text[i - 1] in _SPLIT_AFTER_CHARS
+                and _quantifier_after_number(text, i - 1) and not text[i].isdigit()
+                and text[i] not in _SPLIT_AFTER_CHARS   # 184億｜元：量詞串要整串在前行
+            ):
                 return text[:i], text[i:]
     # 虛詞邊界（2026-09-10）：純粹取中點會把詞腰斬——使用者回報「容易被忽略的前兆」
     # 被切成「容易被忽／略的前兆」。沒有斷詞器可用（本機與 Cloud Run 都沒裝），
@@ -902,7 +1063,7 @@ def _split_line_near_middle(text: str) -> tuple[str, str]:
     reach = n // 4 + 1
     for offset in range(0, reach + 1):
         for i in (mid - offset, mid + offset):
-            if 2 <= i <= n - 2 and text[i - 1] in _SPLIT_AFTER_PARTICLES and not text[i].isdigit():
+            if 2 <= i <= n - 2 and i not in inner and text[i - 1] in _SPLIT_AFTER_PARTICLES and not text[i].isdigit():
                 return text[:i], text[i:]
     for offset in range(0, reach + 1):
         for i in (mid - offset, mid + offset):
@@ -1582,9 +1743,12 @@ YT_HOURLY_BADGE_TOP_RATIO = 0.024
 YT_HOURLY_TIME_BAND_HEIGHT_RATIO = 0.086  # 章下時間帶高（原 0.095）
 YT_HOURLY_TIME_BAND_FILL = (255, 255, 255)   # 頻道實際：白底紅字
 YT_HOURLY_TIME_BAND_TEXT = (200, 20, 30)
-YT_HOURLY_DATE_TAB_WIDTH_RATIO = 0.30   # 日期紅條寬（125/415）
+# 2026-09-13 使用者：「日期 BAR 稍微縮小且往上一點點，不影響創意階梯」——只動 0 級程式畫的
+# 寬與上緣（0.30→0.27、0.52→0.485）；高度不動，因為 editor_formats 那份同值常數是 1 級起
+# 模型畫牌的護欄，動了就等於改到階梯。
+YT_HOURLY_DATE_TAB_WIDTH_RATIO = 0.27   # 日期紅條寬（原 0.30＝125/415）
 YT_HOURLY_DATE_TAB_HEIGHT_RATIO = 0.095
-YT_HOURLY_DATE_TOP_RATIO = 0.52         # 日期紅條上緣（114/220）
+YT_HOURLY_DATE_TOP_RATIO = 0.485        # 日期紅條上緣（原 0.52＝114/220）；取 .485 讓 prompt 的 :.0% 取整後仍包住牌
 YT_HOURLY_DATE_FILL = (214, 22, 32)
 YT_HOURLY_DATE_TEXT = (255, 255, 255)
 YT_HOURLY_LINE1_BASELINE_RATIO = 0.815   # 2026-09-08 晚使用者「行距可略縮」：0.80→0.815（第二行不動）
@@ -1734,9 +1898,10 @@ def compose_yt_hourly_cover(
         ImageDraw.Draw(layer).rounded_rectangle(band, radius=12, fill=YT_HOURLY_TIME_BAND_FILL)
         canvas.alpha_composite(layer)
         draw = ImageDraw.Draw(canvas)
+        # 時間用 Times New Roman Bold（2026-09-13 使用者裁決），不跟標題共用台北黑體
         time_font = _fit_font_bold(
             time_text, band[2] - band[0] - 24, round(band_h * 0.8), round(band_h * 0.4),
-            ratio=YT_BOLD_STROKE_RATIO,
+            ratio=YT_BOLD_STROKE_RATIO, loader=_time_font,
         )
         _draw_bold_text(
             draw, ((band[0] + band[2]) // 2, (band[1] + band[3]) // 2 + 2),
@@ -2744,7 +2909,7 @@ def compose_yt_overlay(
 
 # 多圖分切底圖（2026-09-06 使用者裁決：「原圖放置」附圖 2 張＝左右雙切、3 張＝三切，
 # 分隔線用斜切＋白色細線，比照頻道「閃兵案第四波」與十點不一樣的畫法）。
-YT_SPLIT_MAX_PANELS = 3
+YT_SPLIT_MAX_PANELS = 4   # 2026-09-13 使用者：4 格放寬（原 3）
 YT_SPLIT_SLANT_RATIO = 0.05          # 斜切：分隔線頂端比底端偏右多少（佔畫面寬）
 YT_SPLIT_LINE_RATIO = 0.0055         # 白色分隔線寬（6/1080）
 YT_SPLIT_LINE_FILL = (255, 255, 255)

@@ -312,7 +312,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260913-15</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260914-01</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -373,7 +373,7 @@
                         <div class="flex items-center gap-2">
                             <button type="button" onclick="document.getElementById('refFileInput').click()"
                                     class="px-2.5 py-1 rounded text-[9px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all">📁 ＋ 附參考圖（選填）</button>
-                            <span id="refUploadHint" class="text-[9px] text-slate-600">原圖放置／AI改圖／實景參考／肖像照片／地圖底稿，單張 ≤1.5MB，最多 3 張</span>
+                            <span id="refUploadHint" class="text-[9px] text-slate-600">原圖放置／AI改圖／實景參考／肖像照片／地圖底稿，單張 ≤1.5MB，最多 4 張</span>
                         </div>
                         <input id="refFileInput" type="file" accept="image/*" multiple class="hidden"
                                onchange="handleRefFilesSelected(this)" />
@@ -461,10 +461,10 @@
                                     class="hidden px-2.5 py-1.5 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all disabled:opacity-40">只改文字</button>
                         </div>
                         <div class="flex items-center gap-2">
-                            <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-300 cursor-pointer"
-                                   title="開：整張連標題字交給 AI 畫（美術字有設計感，但可能出錯字）；關：AI 只生左右底圖、所有文字由程式壓字，零錯字">
-                                <input id="coverAiTitle" type="checkbox" class="accent-red-600" checked onchange="updateCoverTitleStyleButton()" />標題由 AI 生成
-                                <span class="text-[9px] font-normal text-slate-500">（關閉＝程式壓字，零錯字）</span>
+                            <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-300"
+                                   title="由標題創意拉桿決定：0＝所有文字由程式壓字（零錯字、原圖零漂移）；1 級起整張連標題字交給 AI 畫（有設計感，但可能出錯字、原圖會被重畫）">
+                                <input id="coverAiTitle" type="checkbox" class="accent-red-600" disabled />標題由 AI 生成
+                                <span class="text-[9px] font-normal text-slate-500">（創意 0＝程式壓字零錯字，1 以上才交 AI）</span>
                             </label>
                             <!-- 標題創意拉桿（2026-09-08 ON/OFF → 2026-09-09 改 0–4 五段，
                                  2026-09-11 P5 起 DOM 由 app.js 的 renderCreativityBar() 共用元件灌入）：
@@ -573,11 +573,10 @@
                                     class="px-2.5 py-1.5 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-200 transition-all disabled:opacity-40">只改文字</button>
                         </div>
                         <div class="flex items-center gap-2">
-                            <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-300 cursor-pointer"
-                                   title="開：整張連標題字交給 AI 畫（更像頻道實際版，但可能出錯字）；關：AI 只生底圖、標題由程式壓字，零錯字">
-                                <input id="ytCoverAiTitle" type="checkbox" class="accent-red-600" checked
-                                       onchange="updateYtCreativityBar()" />標題由 AI 生成
-                                <span class="text-[9px] font-normal text-slate-500">（關閉＝程式壓字，零錯字）</span>
+                            <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-300"
+                                   title="由創意拉桿決定：0＝標題由程式壓字（零錯字、原圖零漂移）；1 級起整張連標題字交給 AI 畫（更像頻道實際版，但可能出錯字、原圖會被重畫）">
+                                <input id="ytCoverAiTitle" type="checkbox" class="accent-red-600" disabled />標題由 AI 生成
+                                <span class="text-[9px] font-normal text-slate-500">（創意 0＝程式壓字零錯字，1 以上才交 AI）</span>
                             </label>
                             <!-- 底部壓色框（2026-09-08）：整點直播的版面沒有底帶，那個版型不顯示 -->
                             <button id="ytBottomBandBtn" type="button" onclick="toggleYtBottomBand()"

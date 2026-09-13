@@ -178,6 +178,23 @@ class ParticleBoundarySplitTests(unittest.TestCase):
         head, tail = compose._split_line_near_middle("全球3100條躍動冰川")
         self.assertEqual((head, tail), ("全球3100條", "躍動冰川"))
 
+    def test_a_measure_word_without_a_number_is_not_a_break(self):
+        """2026-09-13 實拍：「台」在量詞集合裡，「歐洲熱浪台灣豪雨」被切成 熱浪台／灣豪雨。"""
+        for text, bad in (("歐洲熱浪台灣豪雨", "台灣"), ("外資看好台股成長動能", "成長"), ("人民幣走貶壓力升高", "人民")):
+            with self.subTest(text=text):
+                head, tail = compose._split_line_near_middle(text)
+                self.assertNotEqual(head[-1] + tail[0], bad)
+        self.assertEqual(compose._split_line_near_middle("歐洲熱浪台灣豪雨"), ("歐洲熱浪", "台灣豪雨"))
+
+    def test_a_quantifier_run_stays_on_one_line(self):
+        # 以前切成「184億｜元計畫」；現在量詞串不當斷點，退回整段數量詞前面。
+        head, tail = compose._split_line_near_middle("投資產業184億元計畫")
+        self.assertEqual((head, tail), ("投資產業", "184億元計畫"))
+
+    def test_a_number_word_still_counts_as_a_number(self):
+        head, tail = compose._split_line_near_middle("連續五年虧損今年轉盈")
+        self.assertEqual((head, tail), ("連續五年", "虧損今年轉盈"))
+
     def test_a_number_is_never_cut_in_half(self):
         for text in ("投資產業184億元計畫", "古羅馬浴場9/12開放參觀"):
             with self.subTest(text=text):

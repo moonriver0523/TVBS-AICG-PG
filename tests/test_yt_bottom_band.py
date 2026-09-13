@@ -101,7 +101,8 @@ class AiPromptTests(unittest.TestCase):
         return seen["prompt"]
 
     def _body(self, **kw):
-        body = {"title": "大象來了 10萬人塞爆士林", "title_mode": "ai", "visual": ""}
+        # 2026-09-14 起創意 0 一律程式壓字，要驗 AI 標題 prompt 就得帶 1
+        body = {"title": "大象來了 10萬人塞爆士林", "title_mode": "ai", "creativity": 1, "visual": ""}
         body.update(kw)
         return body
 
@@ -124,15 +125,14 @@ class AiPromptTests(unittest.TestCase):
     def test_hourly_prompt_still_renders_and_never_mentions_a_band(self):
         """整點版模板沒有底帶佔位；帶了開關也不能讓 format 炸掉或冒出帶子。
 
-        標題另外換過（2026-09-13）：這支要驗的是 AI 標題那條 prompt，而原本的
-        「大象來了」第一行只有 4 字，會被極短標題規則轉成程式壓字、根本不組這段
-        prompt（見 test_yt_hourly_short_title_composite_20260913）。
+        這支要驗的是 AI 標題那條 prompt，所以要帶創意 ≥1（2026-09-14 起創意 0 一律程式壓字，
+        根本不組這段 prompt）。
         """
         prompt = self._prompt(self._body(
             layout="hourly", bottom_band=True, date_text="2026/09/08",
             title="大象來了十萬人 塞爆士林街頭"))
-        self.assertIn("No band behind them", prompt)
         self.assertNotIn("about 60% opaque", prompt)
+        self.assertNotIn("behind the band", prompt)
 
 
 class HourlyCompositeTests(unittest.TestCase):

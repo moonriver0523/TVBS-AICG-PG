@@ -1055,8 +1055,8 @@ function applyEditorFormatInputs() {
         const refHint = document.getElementById('refUploadHint');
         if (refHint) {
             refHint.textContent = ['news', 'hot'].includes(editorFormat().ytLayout || '')
-                ? '原圖放置／AI改圖／實景參考／肖像照片／地圖底稿，單張 ≤1.5MB。原圖放置依張數決定版面：1 張整版、2 張左右雙切、3 張三切，順序就是由左到右'
-                : '原圖放置／AI改圖／實景參考／肖像照片／地圖底稿，單張 ≤1.5MB，最多 3 張';
+                ? '原圖放置／AI改圖／實景參考／肖像照片／地圖底稿，單張 ≤1.5MB。原圖放置依張數決定版面：1 張整版、2 張左右雙切、3 張三切、4 張四切，順序就是由左到右'
+                : '原圖放置／AI改圖／實景參考／肖像照片／地圖底稿，單張 ≤1.5MB，最多 4 張';
         }
         const host = wantsVstrip ? vstrip : (wantsYt ? yt : (wantsCover ? cover : news));
         if (host && refBox.previousElementSibling !== host) host.insertAdjacentElement('afterend', refBox);
@@ -1425,6 +1425,8 @@ function updateCoverLayoutIndicator() {
         });
     }
     if (isCover) applyCoverLayoutFields();
+    // 版型（滿版↔雙切）一變，附圖位的「半版鎖原圖放置」也要跟著重算
+    if (typeof renderCoverAsis === 'function') renderCoverAsis();
 }
 
 // 指示器不是開關，點「雙切」只是把游標帶去第二標題；點「滿版」要清空第二標題才會變，
@@ -1492,9 +1494,13 @@ const COVER_TITLE_CREATIVITY = [
 function updateCoverTitleStyleButton() {
     const bar = document.getElementById('coverTitleStyleBar');
     if (!bar) return;
-    const aiMode = document.getElementById('coverAiTitle')?.checked !== false;
-    const hidden = editorFormat().inputs !== 'cover' || !aiMode;
+    // 2026-09-14 使用者裁決：創意 0 一律程式壓字、1 級起才由 AI 畫標題。拉桿變成唯一的
+    // 開關，「標題由 AI 生成」勾選框降成唯讀鏡像（disabled，勾不勾跟著拉桿走），
+    // 所以拉桿永遠露出，不再被勾選框藏起來。後端同一條規則兜底（title_mode_for_creativity）。
+    const hidden = editorFormat().inputs !== 'cover';
     bar.className = (hidden ? 'hidden ' : '') + 'flex items-center gap-2';
+    const aiBox = document.getElementById('coverAiTitle');
+    if (aiBox) aiBox.checked = state.coverTitleCreativity >= 1;
     const range = document.getElementById('coverTitleStyleRange');
     if (range) range.value = String(state.coverTitleCreativity);
     const label = document.getElementById('coverTitleStyleLabel');
@@ -1541,10 +1547,13 @@ function updateYtCreativityBar() {
     // - composite 模式標題由程式壓字，creativity 這條線只影響 _yt_cover_full_image
     //   （AI 整張），對程式壓字沒有作用——跟十點的 coverTitleStyleBar 同一個理由
     //   （見 updateCoverTitleStyleButton）。
-    const aiMode = document.getElementById('ytCoverAiTitle')?.checked !== false;
-    const hidden = editorFormat().inputs !== 'yt_cover' || !aiMode;
+    // 2026-09-14 使用者裁決：創意 0 一律程式壓字、1 級起才由 AI 畫標題——拉桿是唯一開關，
+    // 勾選框只是唯讀鏡像（與十點的 updateCoverTitleStyleButton 同一套）。
+    const hidden = editorFormat().inputs !== 'yt_cover';
     const bar = document.getElementById('ytCreativityBar');
     if (bar) bar.classList.toggle('hidden', hidden);
+    const aiBox = document.getElementById('ytCoverAiTitle');
+    if (aiBox) aiBox.checked = state.ytCreativity >= 1;
     const range = document.getElementById('ytCreativityRange');
     if (range) range.value = String(state.ytCreativity);
     const label = document.getElementById('ytCreativityLabel');
@@ -2252,10 +2261,15 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
             if (fullLayout) slots.right = false;   // 滿版只有一個附圖位
             const slotCount = (slots.left ? 1 : 0) + (slots.right ? 1 : 0);
             const asisCount = slotCount || uploadedAsisCount();
-            // 有原圖放置一律程式壓字（後端也會強制），這裡只是把提示講對
-            const composite = document.getElementById('coverAiTitle')?.checked === false || asisCount > 0;
+            // 2026-09-14 使用者裁決：模式由創意拉桿決定——0＝程式壓字，1 級起才交 AI 畫標題
+            //（原圖放置那格跟著整張重畫、接受漂移）。勾選框只是鏡像，不再讀它。
+            const composite = state.coverTitleCreativity === 0;
+            const anySlotImage = state.coverAsis.left.length > 0 || (!fullLayout && state.coverAsis.right.length > 0);
             const deriving = true;   // 畫面描述欄移除後一律由 AI 推導（2026-09-08 WP1）
-            showToast(fullLayout ? (slots.left ? '附圖鋪滿，合成中…' : (composite ? '生成底圖中，約 30–90 秒…' : '設計封面中，約 30–120 秒…'))
+            showToast(!composite && (asisCount > 0 || anySlotImage)
+                    ? (fullLayout && slots.left ? '原圖鋪滿後交給 AI 畫標題，約 30–90 秒…'
+                                                : '附圖先各自處理、拼好底圖後交給 AI 畫標題（兩段），約 60–150 秒…')
+                : fullLayout ? (slots.left ? '附圖鋪滿，合成中…' : (composite ? '生成底圖中，約 30–90 秒…' : '設計封面中，約 30–120 秒…'))
                 : slots.left && slots.right ? '兩格都用附圖，合成中…'
                 : slots.left ? '左格用附圖，右格生底圖中，約 30–90 秒…'
                 : slots.right ? '右格用附圖，左格生底圖中，約 30–90 秒…'
@@ -2264,7 +2278,9 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
                 : composite
                     ? '生成左右底圖中，兩張平行跑，約 60–120 秒…'
                     : (deriving ? 'AI 補畫面描述後開始設計封面，約 40–140 秒…' : '設計封面中，約 30–120 秒…'));
-            beginGenerationProgress('image', asisCount >= 2 ? 0.3 : slotCount === 1 ? 1.0 : asisCount === 1 ? 0.3 : (composite ? 1.6 : 1.3));
+            // 兩段生圖（附圖＋AI 標題）＝一輪平行的格底圖＋一張整張，預算約 180 秒（2026-09-13）
+            const twoStage = !composite && (asisCount > 0 || anySlotImage);
+            beginGenerationProgress('image', twoStage ? 2.4 : asisCount >= 2 ? 0.3 : slotCount === 1 ? 1.0 : asisCount === 1 ? 0.3 : (composite ? 1.6 : 1.3));
             const res = await fetch(COVER_BACKEND_URL, {
                 method: 'POST',
                 headers: _apiHeaders(),
@@ -2420,7 +2436,8 @@ function ytCoverFields() {
         // 整點直播＋這一欄有值＝雙則（後端 editor_formats.yt_cover_is_dual）
         title_second: layout === 'hourly' ? val('ytCoverTitleSecond') : '',
         layout,
-        title_mode: document.getElementById('ytCoverAiTitle')?.checked === false ? 'composite' : 'ai',
+        // 2026-09-14：模式由創意拉桿決定（0＝程式壓字），勾選框只是鏡像
+        title_mode: state.ytCreativity >= 1 ? 'ai' : 'composite',
         original_audio: layout === 'news' && !!document.getElementById('ytCoverOriginalAudio')?.checked,
         ai_translation: layout === 'news' && !!document.getElementById('ytCoverAiTranslation')?.checked,
         date_text: val('ytCoverDate'),
@@ -2517,9 +2534,13 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
         } else {
             const asis = state.userRefImages.some(ref => ref.purpose === 'asis');
             const aiTitle = fields.title_mode === 'ai';
-            showToast(aiTitle ? 'AI 整張生成（含標題），約 30–120 秒…'
+            // 附圖（共用區的原圖放置、或附圖位裡任何圖）＋AI 標題＝兩段生圖（2026-09-13）
+            const slotImages = (fields.slot_left || []).length + (fields.slot_right || []).length;
+            const twoStage = aiTitle && (asis || slotImages > 0);
+            showToast(twoStage ? '附圖先處理成底圖，再交給 AI 畫標題（兩段），約 60–180 秒…'
+                : aiTitle ? 'AI 整張生成（含標題），約 30–120 秒…'
                 : asis ? '用附圖當底圖，合成中…' : 'AI 生底圖後合成，約 30–120 秒…');
-            beginGenerationProgress('image', (asis && !aiTitle) ? 0.3 : 1.3);
+            beginGenerationProgress('image', twoStage ? 2.4 : (asis && !aiTitle) ? 0.3 : 1.3);
             const res = await fetch(YT_COVER_BACKEND_URL, {
                 method: 'POST',
                 headers: _apiHeaders(),
@@ -2995,7 +3016,7 @@ function updateInstructionOverrideHint() {
    ② 使用者上傳參考圖（地圖底稿／實景參考）
    肖像照仍由後端 resolve_portrait 自動查，這裡刻意不開人臉上傳。
    ============================================================ */
-const REF_MAX_FILES = 3;
+const REF_MAX_FILES = 4;   // 2026-09-13 使用者：4 格放寬（原 3）
 // 後端 data_url 上限約 2MB base64；1.5MB 原檔編碼後約 2MB，貼著上限
 const REF_MAX_BYTES = 1.5 * 1024 * 1024;
 // portrait＝肖像照：使用者親自上傳時，「兩位以上具名真人不畫臉」鐵律解除
@@ -3120,8 +3141,13 @@ async function addImageFilesTo(list, input, max, onDone) {
 }
 
 // 一列一張圖。items 是就地改的陣列；改用途或刪掉都呼叫 onChange 重畫。
-function renderRefList(listEl, items, onChange) {
+// opts.lockAsis（2026-09-13 使用者裁決）：半版附圖位放了 2 張以上時，原圖放置不能選——
+// 一個半格只有一個版位，多張的用意是讓 AI 重新構圖融成一張，所以整格鎖成 AI改圖。
+// 既有已選原圖放置的那幾張在這裡就地翻成 AI改圖，跟後端 main.lock_half_slot_asis 同一套。
+function renderRefList(listEl, items, onChange, opts) {
     if (!listEl) return;
+    const lockAsis = !!(opts && opts.lockAsis);
+    if (lockAsis) items.forEach(ref => { if (ref.purpose === 'asis') ref.purpose = 'aiedit'; });
     listEl.innerHTML = '';
     items.forEach((ref, index) => {
         const row = document.createElement('div');
@@ -3135,6 +3161,7 @@ function renderRefList(listEl, items, onChange) {
         const select = document.createElement('select');
         select.className = 'bg-slate-900 border border-slate-700 rounded text-[10px] text-slate-200 px-1.5 py-1';
         for (const [value, label] of REF_PURPOSES) {
+            if (lockAsis && value === 'asis') continue;
             const option = document.createElement('option');
             option.value = value;
             option.textContent = label;
@@ -3224,17 +3251,30 @@ function slotPayload(list) {
     return (list || []).map(ref => ({ data_url: ref.dataUrl, purpose: ref.purpose }));
 }
 
-function slotHintText(list) {
+function slotHintText(list, lockAsis, isHalf) {
     if (!(list || []).length) return '沒圖＝這格由 AI 生底圖';
+    if (lockAsis) return isHalf ? '半版放多張＝AI 把它們融成一張（不能原圖放置）'
+                                : '有 AI改圖＝整版交給 AI 合成一張（不能原圖放置）';
     if (slotPlacement(list)) return '這格直接用附圖';
     return '這格由 AI 生底圖（附圖當參考）';
 }
 
+// 原圖放置什麼時候不能選（2026-09-13 使用者裁決，後端 lock_half_slot_asis／merge_mixed_slot_to_aiedit 同一套）：
+// 半版格子 ≥2 張就鎖；滿版（十點滿版的左格、YT 單則）只在混了 AI改圖 時鎖——
+// 多張都是原圖走自動切格，任一張選了 AI改圖 就整版交給 AI 合成一張。
+function slotAsisLocked(list, isHalf) {
+    const items = list || [];
+    if (isHalf) return items.length >= 2;
+    return items.some(ref => ref.purpose === 'aiedit');
+}
+
 function renderYtAsis() {
+    const dual = ytLayoutNow() === 'dual';
     for (const [side, cap] of [['left', 'Left'], ['right', 'Right']]) {
-        renderRefList(document.getElementById(`ytAsis${cap}List`), state.ytAsis[side], renderYtAsis);
+        const lock = slotAsisLocked(state.ytAsis[side], dual);
+        renderRefList(document.getElementById(`ytAsis${cap}List`), state.ytAsis[side], renderYtAsis, { lockAsis: lock });
         const hint = document.getElementById(`ytAsis${cap}Hint`);
-        if (hint) hint.textContent = slotHintText(state.ytAsis[side]);
+        if (hint) hint.textContent = slotHintText(state.ytAsis[side], lock, dual);
     }
 }
 
@@ -3275,10 +3315,12 @@ function updateYtAsisSlots() {
 }
 
 function renderCoverAsis() {
+    const split = coverLayoutNow() === 'split';
     for (const [side, cap] of [['left', 'Left'], ['right', 'Right']]) {
-        renderRefList(document.getElementById(`coverAsis${cap}List`), state.coverAsis[side], renderCoverAsis);
+        const lock = slotAsisLocked(state.coverAsis[side], split);
+        renderRefList(document.getElementById(`coverAsis${cap}List`), state.coverAsis[side], renderCoverAsis, { lockAsis: lock });
         const hint = document.getElementById(`coverAsis${cap}Hint`);
-        if (hint) hint.textContent = slotHintText(state.coverAsis[side]);
+        if (hint) hint.textContent = slotHintText(state.coverAsis[side], lock, split);
     }
 }
 

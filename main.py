@@ -50,6 +50,7 @@ from news_prompt import (
     PORTRAIT_MODES,
     PROMPT_VERSION,
     USER_REFERENCE_ASIS_DIGEST_RULES,
+    USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE,
     USER_REFERENCE_AIEDIT_INSTRUCTION_TEMPLATE,
     USER_REFERENCE_MODES,
     USER_REFERENCE_NO_DISCLAIMER_RULES,
@@ -85,6 +86,7 @@ if DIGEST_BACKEND == "gemini":
         api_key=_gemini_key,
     )
     DEFAULT_DIGEST_MODEL = os.getenv("GEMINI_DIGEST_MODEL", "gemini-3.6-flash")
+    DEFAULT_TITLE_BREAK_MODEL = DEFAULT_DIGEST_MODEL   # flash 本來就快
 # 2026-09-03：這裡原本寫 `elif _openrouter_key:`，等於只要環境裡有一把
 # OPENROUTER_API_KEY 就一定走 OpenRouter，DIGEST_BACKEND=native 完全沒有效果——
 # 上面那段註解講的「設回 openrouter 即可切回」暗示這個變數是說了算的，實際上
@@ -95,9 +97,53 @@ elif DIGEST_BACKEND == "openrouter" and _openrouter_key:
         base_url="https://openrouter.ai/api/v1", api_key=_openrouter_key
     )
     DEFAULT_DIGEST_MODEL = "anthropic/claude-sonnet-5"
+    # 斷句走小模型（2026-09-14 使用者裁決）。.env 與線上都是 OpenRouter 後端，只改原生分支
+    # 等於沒改。slug 已查 GET /api/v1/models（2026-09-14）確有 openai/gpt-5.4-mini。
+    DEFAULT_TITLE_BREAK_MODEL = "openai/gpt-5.4-mini"
 else:
     openai_client = OpenAI()
-    DEFAULT_DIGEST_MODEL = "gpt-5.6-terra"
+    # 2026-09-13：原生預設從 gpt-5.6-terra 換成 gpt-5.5。terra 在使用者 key 上
+    # 其實存在，但 2026-09-05 已實測會頻道洩漏（.env 註解與 test_digest_quality）；
+    # 5.5 是 /v1/models 列得到且 chat.completions 打得通的，內容乾淨與否待實拍。
+    DEFAULT_DIGEST_MODEL = "gpt-5.5"
+    # 標題斷句（2026-09-14 使用者裁決）：分詞不需要推理模型。實測同一組標題
+    # gpt-5.5 8.6 秒（reasoning_tokens=512）、gpt-5.4-mini 4.6 秒、gpt-5.4-nano 2.0 秒
+    # （皆 reasoning_tokens=0），mini 與 5.5 切出來的詞組一樣，取 mini。
+    DEFAULT_TITLE_BREAK_MODEL = "gpt-5.4-mini"
+
+
+def resolve_title_break_model() -> str:
+    """標題斷句用的模型：TITLE_BREAK_MODEL → 後端預設的小模型。
+
+    刻意**不**繼承 DIGEST_MODEL／OPENAI_DIGEST_MODEL：那兩個是主消化的覆寫，
+    可能是 OpenRouter slug（見 resolve_digest_model 的 2026-09-13 真因），而且
+    使用者要的就是斷句走比主消化更快的模型。
+    """
+    override = (os.getenv("TITLE_BREAK_MODEL") or "").strip()
+    return override or DEFAULT_TITLE_BREAK_MODEL
+
+
+def resolve_digest_model() -> str:
+    """回傳這次消化要用的模型：DIGEST_MODEL → OPENAI_DIGEST_MODEL → 後端預設。
+
+    2026-09-13 真因：.env 的 `DIGEST_MODEL=anthropic/claude-sonnet-5` 是 OpenRouter
+    slug，`load_dotenv()` 後五處 `os.getenv("DIGEST_MODEL")` 不分後端照單全收，
+    本機 `DIGEST_BACKEND=native` 時就把這串送進 api.openai.com → 400
+    「invalid model ID」，畫面描述整段走退路、指令欄被丟掉。之前快照誤判成
+    「gpt-5.6-terra 不存在」。
+
+    規則：帶 `/` 的 OpenRouter 式 slug 只在 client 真的指向 openrouter 時才採用；
+    否則當作沒設，退回該後端的預設。判斷看 `openai_client.base_url` 而不是
+    `DIGEST_BACKEND` 字串——`DIGEST_BACKEND=openrouter` 但沒 key 也會落到原生
+    client，那時字串仍寫 openrouter。讀模組全域而非重讀 env，測試才 patch 得到。
+    """
+    override = (os.getenv("DIGEST_MODEL") or os.getenv("OPENAI_DIGEST_MODEL") or "").strip()
+    if not override:
+        return DEFAULT_DIGEST_MODEL
+    on_openrouter = "openrouter" in str(getattr(openai_client, "base_url", ""))
+    if "/" in override and not on_openrouter:
+        return DEFAULT_DIGEST_MODEL
+    return override
 
 # Gemini 的 OpenAI 相容端點有大量『看不見』的內部思考 token——實測一個一句話的
 # 玩具範例，可見的 completion_tokens 只有 51，但 total_tokens 高達 613
@@ -578,6 +624,51 @@ def slot_placement_url(refs: list[UserReferenceImage], tag: str = "slot") -> str
 def slot_generation_refs(refs: list[UserReferenceImage]) -> list[UserReferenceImage]:
     """這一格生底圖時要附上的參考圖：原圖放置以外全算（含 AI改圖）。"""
     return [ref for ref in refs if ref.purpose != "asis"]
+
+
+def merge_mixed_slot_to_aiedit(refs: list[UserReferenceImage], tag: str = "slot") -> list[UserReferenceImage]:
+    """滿版（單格）同時放了原圖放置與 AI改圖：原圖全部轉 AI改圖（2026-09-13 使用者裁決：
+    任一張選 AI改圖 → 整版鎖成 AI改圖、合成一張）。
+
+    不轉的話原圖那條路會搶先（裁滿版／切格），AI改圖 那張就被靜靜丟掉。
+    只在滿版／單則用；雙切半格另有 lock_half_slot_asis（≥2 張就鎖）。
+    """
+    if not (any(ref.purpose == "aiedit" for ref in refs) and any(ref.purpose == "asis" for ref in refs)):
+        return list(refs)
+    n = sum(1 for ref in refs if ref.purpose == "asis")
+    print(f"[{tag}] 滿版附圖混了 AI改圖 → {n} 張原圖放置一併改 AI改圖，整版合成一張", flush=True)
+    return [ref.model_copy(update={"purpose": "aiedit"}) if ref.purpose == "asis" else ref for ref in refs]
+
+
+def lock_half_slot_asis(refs: list[UserReferenceImage], tag: str = "slot") -> list[UserReferenceImage]:
+    """半版格子放了 2 張以上：原圖放置一律改成 AI改圖（2026-09-13 使用者裁決）。
+
+    一個半格只有一個版位，塞兩張原圖本來就放不下（以前是默默只取第 1 張）；
+    放多張的用意是讓模型把它們重新構圖融成同一張示意圖，所以整格鎖成 AI改圖。
+    前端下拉同步鎖（renderRefList 的 lockAsis），這裡是給 LINE 等繞過 UI 的呼叫端兜底。
+    只管半格：滿版那一格多張原圖是「自動切 N 格」，另一條規則。
+    """
+    if len(refs) <= 1:
+        return list(refs)
+    n = sum(1 for ref in refs if ref.purpose == "asis")
+    if n:
+        print(f"[{tag}] 半版附圖位放了 {len(refs)} 張、其中 {n} 張原圖放置 → 整格改 AI改圖", flush=True)
+    return [ref.model_copy(update={"purpose": "aiedit"}) if ref.purpose == "asis" else ref for ref in refs]
+
+
+def reject_excess_asis(refs: list[UserReferenceImage], *, where: str) -> None:
+    """滿版一格的原圖放置超過自動切格上限就 400（2026-09-14 使用者裁決：「限制滿版最多 4 張」）。
+
+    以前 _cover_full_base／_yt_cover_background 默默只取前 4 張，使用者以為 5 張都上了。
+    在端點入口就擋，擋在斷句／消化任何模型呼叫之前，白燒不到一通。只管會自動切格的
+    滿版格（十點滿版、整點單則）；雙切的半格 ≥2 張本來就鎖成 AI改圖，不歸這裡。
+    """
+    n = sum(1 for ref in refs if ref.purpose == "asis")
+    if n > compose.YT_SPLIT_MAX_PANELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{where}原圖放置最多 {compose.YT_SPLIT_MAX_PANELS} 張（收到 {n} 張），請移除多的再送",
+        )
 
 
 class ImageGenerateRequest(BaseModel):
@@ -1951,11 +2042,7 @@ def apply_photo_availability(
 )
 def generate(req: GenerateRequest):
     # DIGEST_MODEL 可覆寫；沿用舊環境變數 OPENAI_DIGEST_MODEL 作為次要相容
-    model = (
-        os.getenv("DIGEST_MODEL")
-        or os.getenv("OPENAI_DIGEST_MODEL")
-        or DEFAULT_DIGEST_MODEL
-    )
+    model = resolve_digest_model()
     # 兩段式（條件注入）：分類成功就整段當成使用者指定了該類型——組 prompt、
     # 選 schema、給預算、chart_type 退路四處一致；分類失敗則 type_label 原樣，
     # 下面每一行都與舊路徑逐字元相同。
@@ -2234,11 +2321,7 @@ Rules:
     dependencies=[Depends(verify_internal_api_key)],
 )
 def hybrid_digest(req: HybridDigestRequest):
-    model = (
-        os.getenv("DIGEST_MODEL")
-        or os.getenv("OPENAI_DIGEST_MODEL")
-        or DEFAULT_DIGEST_MODEL
-    )
+    model = resolve_digest_model()
     # 一鍵成圖是無人值守流程：上游偶發失敗（provider 輪替錯誤、輸出截斷、
     # 不合 schema 的回傳）都必須在後端自動吸收重試，不能丟回給外勤記者
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
@@ -2448,6 +2531,30 @@ def _split_data_url(data_url: str) -> tuple[str, str, str]:
     return mime_type or "image/jpeg", encoding, encoded
 
 
+def decode_attached_image(data_url: str, *, what: str = "附圖") -> bytes:
+    """附圖 data URL → 原始 bytes，並保證 PIL 開得起來；壞的一律 400。
+
+    2026-09-14 抓 bug 輪：text/plain 或 base64 壞掉的 data URL 以前一路走到
+    compose 的 Image.open 才炸 UnidentifiedImageError，對外是 500。使用者貼錯檔
+    是輸入問題，要在入口就用 400 講清楚。
+    """
+    _, _, encoded = _split_data_url(data_url)
+    if not encoded:
+        raise HTTPException(status_code=400, detail=f"{what}格式不對（不是 data URL）")
+    try:
+        raw = base64.b64decode(encoded)
+    except Exception:  # noqa: BLE001 — 任何解碼失敗都是輸入壞掉
+        raise HTTPException(status_code=400, detail=f"{what}的 base64 內容壞了，請重新上傳")
+    try:
+        with Image.open(io.BytesIO(raw)) as opened:
+            opened.verify()
+    except Exception:  # noqa: BLE001 — PIL 認不得就是不是圖
+        raise HTTPException(
+            status_code=400, detail=f"{what}不是可讀的圖片檔（支援 JPEG／PNG／WebP），請重新上傳"
+        )
+    return raw
+
+
 def supports_map_basemap(provider: str) -> bool:
     """這次的路徑能不能把真實地圖底圖送進生圖模型。
 
@@ -2481,17 +2588,25 @@ def supports_reference_image(provider: str) -> bool:
     return provider != "gpt"
 
 
-def supports_multiple_reference_images() -> bool:
-    """多張參考圖（reference_images 陣列）只有 OpenRouter 路徑送得出去。
+def supports_multiple_reference_images(provider: str | None = None) -> bool:
+    """多張參考圖（reference_images 陣列）這條路送不送得出去。
 
     存在理由：supports_reference_image() 對 native-gemini 回 True，但那條
     只送單張 reference_image_data_url——若拿它當放行條件，使用者上傳的
     reference_images 會被靜默丟掉、prompt 卻已寫著「依附圖」，正是
     「叫模型參考不存在的附圖」這個最糟情境。判斷必須用這支。
+
+    2026-09-13：原生 GPT 也放行。2026-09-10 起 generate_gpt_image 有參考圖就改走
+    images.edit，_native_reference_files 送的是整個 reference_images 陣列——能力早就
+    有了，這裡卻還只認 OpenRouter，本機切 IMAGE_BACKEND=openai 後 AI改圖 直接 400。
+    原生 Gemini 仍只送單張，維持 False。provider 不給時視為 gpt（舊呼叫端相容）。
     """
-    return os.getenv("IMAGE_BACKEND", "openrouter") == "openrouter" and bool(
-        os.getenv("OPENROUTER_API_KEY")
-    )
+    backend = os.getenv("IMAGE_BACKEND", "openrouter")
+    if backend == "openrouter":
+        return bool(os.getenv("OPENROUTER_API_KEY"))
+    if backend == "openai":
+        return (provider or "gpt") == "gpt"
+    return False
 
 
 # 一家一個模型，OpenRouter 與原生兩條路徑共用同一個——否則切 IMAGE_BACKEND 會連模型一起
@@ -3239,7 +3354,7 @@ def resolve_portraits(
         )
         return "no_reference", []
     # 2 位以上要靠多張參考圖通道，原生路徑送不出去（措辭與能力必須一致）
-    if len(portrait_subjects) > 1 and not supports_multiple_reference_images():
+    if len(portrait_subjects) > 1 and not supports_multiple_reference_images(provider):
         print("[portrait] 目前後端送不出多張參考圖，多人肖像退回不生成臉孔", flush=True)
         return "no_reference", []
     if photos is None:
@@ -3453,7 +3568,7 @@ def apply_user_references_to_image_request(
     # 而且原生 GPT 已改走 images.edit 送得出去（見 supports_map_basemap）。
     # 使用者親自上傳的參考圖仍照舊擋：那條路的措辭與能力必須一致。
     only_auto_basemap = all(ref.purpose == "map" for ref in req.reference_images)
-    if not supports_multiple_reference_images() and not (
+    if not supports_multiple_reference_images(req.provider) and not (
         only_auto_basemap and supports_map_basemap(req.provider)
     ):
         raise HTTPException(
@@ -3463,8 +3578,13 @@ def apply_user_references_to_image_request(
         )
     prompt = req.prompt
     purposes = dict.fromkeys(ref.purpose for ref in req.reference_images)
+    aiedit_count = sum(1 for ref in req.reference_images if ref.purpose == "aiedit")
     for purpose in purposes:
         block = USER_REFERENCE_MODES.get(purpose, "")
+        if purpose == "aiedit" and aiedit_count >= 2:
+            # 2026-09-14：多張 AI改圖 走融合版——單張版的「One of the attached images」
+            # 會讓模型只挑一張畫（第四輪 A2：4 張參考只剩 1 張）
+            block = USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE.format(count=aiedit_count)
         if block and block not in prompt:
             prompt = f"{prompt.rstrip()}\n\n{block}"
     # AI改圖 專屬：使用者指令欄要真的送到生圖模型手上（2026-09-13 使用者裁決）。
@@ -3882,11 +4002,17 @@ class TenCoverRequest(BaseModel):
     )
 
     def slot_refs(self, side: int) -> list[UserReferenceImage]:
-        """第 side 格（0＝左／滿版、1＝右）的附圖清單。"""
-        return slot_reference_list(
+        """第 side 格（0＝左／滿版、1＝右）的附圖清單。雙切的半格 >1 張時原圖放置轉 AI改圖
+        （見 lock_half_slot_asis）；滿版那一格不鎖——多張原圖走自動切格。"""
+        refs = slot_reference_list(
             self.slot_left if side == 0 else self.slot_right,
             self.asis_left if side == 0 else self.asis_right,
         )
+        if editor_formats.resolve_cover_layout(self.layout, self.title_right) == "split":
+            refs = lock_half_slot_asis(refs, "cover")
+        elif side == 0:
+            refs = merge_mixed_slot_to_aiedit(refs, "cover")
+        return refs
 
     def slot_placements(self) -> tuple[str, str]:
         """左右兩格直接上版的圖（data URL；沒有就是空字串）。"""
@@ -3942,10 +4068,7 @@ def ten_cover_asis_images(req: "TenCoverRequest") -> list[bytes]:
     raws: list[bytes] = []
     asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
     for ref in asis[:2]:
-        _, _, encoded = _split_data_url(ref.data_url)
-        if not encoded:
-            raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
-        raws.append(base64.b64decode(encoded))
+        raws.append(decode_attached_image(ref.data_url))
     if len(asis) > 2:
         print(f"[cover] 原圖放置附圖 {len(asis)} 張，十點封面只有兩格，只取前 2 張", flush=True)
     return raws
@@ -3962,10 +4085,7 @@ def ten_cover_slot_images(req: "TenCoverRequest") -> tuple[bytes | None, bytes |
         if not data_url.strip():
             out.append(None)
             continue
-        _, _, encoded = _split_data_url(data_url)
-        if not encoded:
-            raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
-        out.append(base64.b64decode(encoded))
+        out.append(decode_attached_image(data_url))
     return out[0], out[1]
 
 
@@ -4089,6 +4209,93 @@ def keep_subjects_with_photos(
     return [name for name, _ in kept], [en for _, en in kept], photos, missing
 
 
+# ---- 標題斷句交給消化模型（2026-09-14 使用者裁決）----
+# 使用者：「為何要依賴斷詞機制，這個機制會一直長胖，不讓生圖階段時自己判斷斷句」。
+# 生圖模型畫出來的字沒辦法逐字驗，行數一變版面全連動，所以斷點要在能檢查的階段決定：
+# 請消化模型把標題切成詞組，程式只做硬檢查（接回去等於原段），compose 只在詞組邊界上切。
+# 失敗（逾時、格式壞、改了字）一律退回原本的規則，封面不會因此失敗。
+# 2026-09-14 改小模型後 20 → 8 秒：mini 實測 4.6 秒，8 秒是它的近兩倍；超過就退回規則，
+# 封面不會因此失敗，只是斷句差一點。
+TITLE_BREAK_TIMEOUT_SECONDS = 8.0
+# 小模型（gpt-5.4-mini／nano）會把送去的「1. 」清單編號原樣抄回 text 與第一個詞組，
+# 接回去就不等於原段、整段被丟掉——等於模型切了白切。送的時候不編號，回來的再剝一次。
+_LIST_NUMBER_RE = re.compile(r"^\s*\d+\s*[.、)]\s*")
+
+
+def _strip_list_number(text: str) -> str:
+    return _LIST_NUMBER_RE.sub("", text, count=1)
+
+
+def _normalise_break_phrases(phrases: list[str]) -> list[str]:
+    """丟掉純編號的詞組（"1."／"1. "），第一個詞組前面黏的編號也剝掉。"""
+    out = [p for p in phrases if not re.fullmatch(r"\s*\d+\s*[.、)]?\s*", p)]
+    if out:
+        out[0] = _strip_list_number(out[0])
+    return [p for p in out if p]
+# 一段 ≤ 7 字（COVER_TITLE_FILL_MIN_CHARS）永遠不會被拆，這種標題不必打模型。
+TITLE_BREAK_MIN_CHARS = compose.COVER_TITLE_FILL_MIN_CHARS + 1
+
+
+def title_break_inputs(*titles: str) -> list[str]:
+    """要送去切詞組的段：使用者用空白分好的每一段，只留長到可能被拆的。"""
+    out: list[str] = []
+    for title in titles:
+        for seg in editor_formats._COVER_TITLE_SPLIT_RE.split((title or "").strip()):
+            seg = seg.strip()
+            if len(seg) >= TITLE_BREAK_MIN_CHARS and seg not in out:
+                out.append(seg)
+    return out
+
+
+def segment_titles_for_breaks(segments: list[str]) -> dict[str, list[str]]:
+    """{段: [詞組...]}。模型沒回、回錯、改字的段不會出現在結果裡（那些退回規則）。"""
+    segments = [s for s in segments if s]
+    if not segments:
+        return {}
+    material = "\n".join(segments)
+    started = time.monotonic()
+    try:
+        response = digest_completion(
+            model=resolve_title_break_model(),
+            system_prompt=editor_formats.TITLE_BREAK_SYSTEM,
+            news_text=material,
+            max_output_tokens=1200,
+            schema_name="title_breaks",
+            schema=editor_formats.TITLE_BREAK_SCHEMA,
+            site="title-break",
+            timeout=TITLE_BREAK_TIMEOUT_SECONDS,
+        )
+        data = parse_digest_json(response.choices[0].message.content or "")
+    except Exception as exc:  # noqa: BLE001 — 斷句失敗退回規則，封面照出
+        print(
+            f"[title-break] 模型斷句失敗，退回規則（{time.monotonic() - started:.1f}s）："
+            f"{type(exc).__name__}: {exc}", flush=True,
+        )
+        return {}
+    print(f"[title-break] {resolve_title_break_model()} {time.monotonic() - started:.1f}s", flush=True)
+    out: dict[str, list[str]] = {}
+    for row in data.get("segments") or []:
+        if not isinstance(row, dict):
+            continue
+        # 編號只在對不上原段時才剝：無條件剝會把「1.2兆資本支出」吃成「2兆資本支出」
+        raw_text = str(row.get("text") or "")
+        text = raw_text if raw_text in segments else _strip_list_number(raw_text)
+        phrases = [str(x) for x in (row.get("phrases") or []) if str(x)]
+        if "".join(phrases) != text:
+            phrases = _normalise_break_phrases(phrases)
+        if text in segments and len(phrases) >= 2 and "".join(phrases) == text:
+            out[text] = phrases
+        elif text:
+            print(f"[title-break] 不採用（改了字或沒切）：{text!r} → {phrases!r}", flush=True)
+    return out
+
+
+def apply_title_break_hints(*titles: str) -> None:
+    """封面端點入口呼叫：切詞組並登記給 compose；沒有要切的段就一次模型都不打。"""
+    inputs = title_break_inputs(*titles)
+    compose.set_break_hints(segment_titles_for_breaks(inputs) if inputs else {})
+
+
 def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
     """畫面描述留空時依標題補齊，並列出每格的具名真人。
 
@@ -4113,11 +4320,7 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
             "(applies to both sides; it is guidance for the scene, never text to render): "
             + instruction
         )
-    model = (
-        os.getenv("DIGEST_MODEL")
-        or os.getenv("OPENAI_DIGEST_MODEL")
-        or DEFAULT_DIGEST_MODEL
-    )
+    model = resolve_digest_model()
     try:
         response = digest_completion(
             model=model,
@@ -4223,10 +4426,23 @@ def _cover_panel_image(
     return base64.b64decode(result.image_data_base64), result.model
 
 
+def _base_data_url(raw: bytes) -> str:
+    """程式拼好的底圖 → 送模型用的 data URL。轉 JPEG（q=90）：1920×1080 的真照 PNG 動輒
+    3–4MB，base64 後超過 UserReferenceImage 的 2.8M 字元上限（實拍抓到）；JPEG 幾百 KB。"""
+    with Image.open(io.BytesIO(raw)) as opened:
+        buffer = io.BytesIO()
+        opened.convert("RGB").save(buffer, format="JPEG", quality=90)
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
 def _cover_ai(
-    req: TenCoverRequest, date_text: str, visuals: tuple[str, str]
+    req: TenCoverRequest, date_text: str, visuals: tuple[str, str], base: bytes | None = None,
 ) -> tuple[bytes, str, bytes, str]:
     """純 prompt 版：整張封面由生圖模型畫，之後只補貼正版 Logo＋節目標籤＋AI示意圖。
+
+    base（2026-09-13 使用者裁決）＝程式已拼好的無字底圖（原圖放置裁滿版／N 張切格／
+    雙切兩格各自 AI改圖 後拼起來）。有 base 時它是**唯一**附圖，模型只在上面畫字；
+    其他附圖與肖像參考照都不送——畫面已經定了，再送只會讓模型重新構圖。
 
     回 (成品 PNG, 生圖模型名, 後貼前的模型原圖, 那張圖的 MIME)。第三、四項給追加修改用：
     把貼過 Logo 的成品餵回生圖模型改圖，模型會把 Logo 一起重畫（那是播出事故），
@@ -4243,6 +4459,8 @@ def _cover_ai(
     def _post_paste(raw: bytes) -> bytes:
         # 日期與 ON AIR 紅標從 2026-09-10 起也由程式貼（原本寫在 prompt 給模型畫，
         # 而補帶會把模型畫的那兩樣切成上下兩截，見 compose.paste_cover_header_right）。
+        # 先放大裁滿定版 1920×1080（原生 GPT 16:9 出 1280×720），後面貼的東西才照定版比例算
+        raw = compose.fit_cover_canvas(raw)
         cover = compose.paste_cover_logo(raw, date_text=date_text, badge=req.badge)
         # 「AI示意圖」小標改由程式壓（2026-09-07）：模板要模型自己畫時，只要使用者附了
         # 實景參考圖，apply_user_references_to_image_request 的「Do NOT render any 示意圖
@@ -4354,6 +4572,7 @@ def _cover_ai(
             title_design_brief=design_brief,
             title_colour_rule=colour_rule,
         )
+    prompt = editor_formats.with_base_image_note(prompt, base is not None)
     # 整張一起生：兩格的具名真人合成一份名單（去重、保持順序）
     subjects, english = [], []
     for side in (0, 1) if req.layout != "full" else (0,):
@@ -4375,14 +4594,22 @@ def _cover_ai(
         # 2026-09-13：附圖位裡的 AI改圖／實景／肖像／地圖也要收——整張 AI 版是十點的
         # 預設模式，漏掉這裡等於使用者在那一格選了 AI改圖 卻完全沒送進模型。
         # 整張 AI 只有一個畫面，兩格的參考都歸這一張。
-        reference_images=[
-            ref for ref in req.reference_images if ref.purpose != "asis"
-        ] + slot_generation_refs(req.slot_refs(0)) + slot_generation_refs(req.slot_refs(1)),
-        portrait_subjects=subjects,
-        portrait_subjects_en=english,
-        editor_instruction=req.instruction,
+        reference_images=(
+            [UserReferenceImage(data_url=_base_data_url(base), purpose="aiedit")]
+            if base is not None else
+            [ref for ref in req.reference_images if ref.purpose != "asis"]
+            + slot_generation_refs(req.slot_refs(0)) + slot_generation_refs(req.slot_refs(1))
+        ),
+        portrait_subjects=[] if base is not None else subjects,
+        portrait_subjects_en=[] if base is not None else english,
+        # 有 base 時指令欄不再帶：第一段每格已經吃過了，第二段再帶會對著拼好的底圖再改一次畫面
+        editor_instruction="" if base is not None else req.instruction,
     )
-    image_req = _cover_apply_portraits(image_req, "ai", excluded=ai_excluded)
+    if base is None:
+        image_req = _cover_apply_portraits(image_req, "ai", excluded=ai_excluded)
+    else:
+        print("[cover:ai-over-base] 程式底圖當唯一附圖，模型只畫標題", flush=True)
+        image_req = apply_user_references_to_image_request(image_req)
     result = generate_image_raw(image_req)
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
     raw = base64.b64decode(result.image_data_base64)
@@ -4437,15 +4664,19 @@ def _cover_full_composite(
             slot,
             req.background_mime_type or "image/png",
         )
-    slot, _ = ten_cover_slot_images(req)
+    asis_raws = ten_cover_full_asis_images(req)
     slot_mime = ""
-    if slot is not None:
+    if len(asis_raws) == 1:
+        slot = asis_raws[0]
         # 附圖的 MIME 照實回報（上傳的可能是 JPEG），不要一律寫死 PNG
         placement = req.slot_placements()[0]
         slot_mime, _, _ = _split_data_url(placement) if placement else ("", "", "")
+    elif asis_raws:
+        # 2026-09-13 使用者裁決：滿版放幾張原圖就自動切幾格（以前只放第 1 張）
+        print(f"[cover] 滿版原圖放置 {len(asis_raws)} 張 → 自動切 {min(len(asis_raws), compose.YT_SPLIT_MAX_PANELS)} 格", flush=True)
+        slot = _cover_full_base(asis_raws)
     else:
-        legacy = ten_cover_asis_images(req)
-        slot = legacy[0] if legacy else None
+        slot = None
     is_ai = slot is None
     image_model = "ten-cover-full:asis"
     if is_ai:
@@ -4468,13 +4699,13 @@ def _cover_full_composite(
     return cover, is_ai, image_model, slot, slot_mime or "image/png"
 
 
-def _cover_composite(
-    req: TenCoverRequest, date_text: str, visuals: tuple[str, str]
-) -> tuple[bytes, tuple[bool, bool], str]:
-    """合成版：AI 只出無文字底圖（或直接用原圖放置的附圖），文字全部由 Pillow 畫。
+def _cover_panels(
+    req: TenCoverRequest, visuals: tuple[str, str]
+) -> tuple[list[bytes | None], list[int], list[str]]:
+    """雙切兩格的底圖：附圖直接用、沒附圖的格生 1:1。回 (panels, 生過的格, 模型名)。
 
-    回 (PNG, (左格是否 AI, 右格是否 AI), 生圖模型名)。兩格都是附圖時一次 API 都不打，
-    模型名記 `ten-cover:asis`；兩格都生時兩個模型名相同就只記一次。
+    合成版（程式壓字）與「AI 標題疊底圖」（2026-09-13）共用；後者拿 panels 拼成
+    無字底圖再送模型畫字。舊路徑單張原圖＝全版那條在這裡回 [raw, None] 且不生。
     """
     references = [ref for ref in req.reference_images if ref.purpose != "asis"]
     # 每一格自己的參考圖（2026-09-13）：共用清單兩格都吃，附圖位裡的只進那一格。
@@ -4486,13 +4717,8 @@ def _cover_composite(
     else:
         asis = ten_cover_asis_images(req)
         if len(asis) == 1:
-            # 舊路徑（不分左右的附圖）：單張原圖＝全版，兩個標題壓在同一張圖的左下與右下
-            cover = compose.compose_ten_cover(
-                asis[0], None,
-                title_left=req.title_left.strip(), title_right=req.title_right.strip(),
-                date_text=date_text, badge=req.badge, left_is_ai=False, right_is_ai=False,
-            )
-            return cover, (False, False), "ten-cover:asis"
+            # 舊路徑（不分左右的附圖）：單張原圖＝全版，由呼叫端處理（panels[1] 留 None 不生）
+            return [asis[0], None], [], ["ten-cover:asis"]
         panels = [asis[0] if len(asis) >= 1 else None, asis[1] if len(asis) >= 2 else None]
     todo = [i for i, panel in enumerate(panels) if panel is None]
     models: list[str] = []
@@ -4511,6 +4737,26 @@ def _cover_composite(
                 panels[i], model = future.result()
                 if model not in models:
                     models.append(model)
+    return panels, todo, models
+
+
+def _cover_composite(
+    req: TenCoverRequest, date_text: str, visuals: tuple[str, str]
+) -> tuple[bytes, tuple[bool, bool], str]:
+    """合成版：AI 只出無文字底圖（或直接用原圖放置的附圖），文字全部由 Pillow 畫。
+
+    回 (PNG, (左格是否 AI, 右格是否 AI), 生圖模型名)。兩格都是附圖時一次 API 都不打，
+    模型名記 `ten-cover:asis`；兩格都生時兩個模型名相同就只記一次。
+    """
+    panels, todo, models = _cover_panels(req, visuals)
+    if panels[1] is None and not todo:
+        # 舊路徑（不分左右的附圖）：單張原圖＝全版，兩個標題壓在同一張圖的左下與右下
+        cover = compose.compose_ten_cover(
+            panels[0], None,
+            title_left=req.title_left.strip(), title_right=req.title_right.strip(),
+            date_text=date_text, badge=req.badge, left_is_ai=False, right_is_ai=False,
+        )
+        return cover, (False, False), "ten-cover:asis"
     left_is_ai, right_is_ai = 0 in todo, 1 in todo
     cover = compose.compose_ten_cover(
         panels[0],
@@ -4523,6 +4769,47 @@ def _cover_composite(
         right_is_ai=right_is_ai,
     )
     return cover, (left_is_ai, right_is_ai), "、".join(models) or "ten-cover:asis"
+
+
+def _cover_split_base(req: TenCoverRequest, visuals: tuple[str, str]) -> tuple[bytes, list[str]]:
+    """雙切「AI 標題疊底圖」的第一段（2026-09-13 使用者裁決）：兩格各自取得（原圖直接用、
+    AI改圖／沒圖的格各自生 1:1）後拼成一張無字無元素的 16:9 底圖。回 (PNG, 生圖模型名)。
+
+    這張底圖不能有標頭帶／Logo／日期／AI示意圖——那些是模板要模型畫或 _post_paste 後貼的，
+    先畫上去會被模型重畫成兩層。所以走 compose.split_canvas（純拼圖），不走 compose_ten_cover。
+    """
+    panels, todo, models = _cover_panels(req, visuals)
+    raws = [panel for panel in panels if panel is not None]
+    canvas = compose.split_canvas(raws, compose.COVER_CANVAS)
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG")
+    return buffer.getvalue(), models
+
+
+def ten_cover_full_asis_images(req: TenCoverRequest) -> list[bytes]:
+    """滿版那一格所有原圖放置的 bytes（附圖位優先，沒有才看舊的共用清單）。"""
+    refs = [ref for ref in req.slot_refs(0) if ref.purpose == "asis"]
+    if not refs:
+        return ten_cover_asis_images(req)
+    out = []
+    for ref in refs:
+        out.append(decode_attached_image(ref.data_url))
+    return out
+
+
+def _cover_full_base(raws: list[bytes]) -> bytes:
+    """滿版底圖：1 張裁滿版、N 張自動切 N 格（2026-09-13 使用者裁決，斜切白線同 YT 多圖分切）。
+    上限 compose.YT_SPLIT_MAX_PANELS，超過只取前幾張。回無字 PNG。"""
+    if not raws:
+        raise compose.ComposeError("滿版底圖至少要一張原圖")
+    raws = raws[: compose.YT_SPLIT_MAX_PANELS]
+    if len(raws) == 1:
+        canvas = compose._cover_panel(raws[0], compose.COVER_CANVAS)
+    else:
+        canvas = compose.split_canvas(raws, compose.COVER_CANVAS)
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 class CoverTitleDigestRequest(BaseModel):
@@ -4636,11 +4923,7 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
         base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_YT
         schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT
     system_prompt = base_prompt + CONTENT_FIDELITY_RULES
-    model = (
-        os.getenv("DIGEST_MODEL")
-        or os.getenv("OPENAI_DIGEST_MODEL")
-        or DEFAULT_DIGEST_MODEL
-    )
+    model = resolve_digest_model()
     ten_family = ten or req.target == "ten_cover_full"
     data = None
     # 十點的三段字數（每段 4–7、全篇 12–18）模型常不守（2026-09-08 晚使用者：字太少撐不出三段、
@@ -4729,12 +5012,14 @@ def cover_portrait_log_fields(visuals) -> dict:
 
 def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse:
     """十點不一樣（滿版）：一張圖、一個標題。附圖有就放、沒有就生一張。"""
+    # 舊共用清單（LINE 等呼叫端）也套「混了 AI改圖 就整版 AI改圖」；附圖位那份在 slot_refs 裡套
+    req = req.model_copy(update={"reference_images": merge_mixed_slot_to_aiedit(req.reference_images, "cover")})
     has_asis = bool(req.slot_placements()[0]) or any(
         ref.purpose == "asis" for ref in req.reference_images
     )
-    if has_asis and req.mode == editor_formats.COVER_MODE_AI:
-        print("[cover] 滿版附圖 → 改合成版（程式壓字）", flush=True)
-        req = req.model_copy(update={"mode": editor_formats.COVER_MODE_COMPOSITE})
+    # 2026-09-13 使用者裁決：原圖放置＋AI 標題不再強制程式壓字——原圖裁滿版（N 張切格）
+    # 後當唯一附圖送進模型，由模型在上面畫標題（見 _cover_ai 的 base）。
+    ai_over_base = has_asis and req.mode == editor_formats.COVER_MODE_AI and not req.background_image_base64
     ai_overlay = req.mode == editor_formats.COVER_MODE_AI and bool(req.background_image_base64)
     # 「只改文字」（2026-09-08）：合成版帶回壓字前底圖＝底圖不重生，跟 ai_overlay 一樣零 API
     recomposite = req.mode == editor_formats.COVER_MODE_COMPOSITE and bool(req.background_image_base64)
@@ -4759,7 +5044,13 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
     portrait_fields = cover_portrait_log_fields(visual)
     try:
         if req.mode == editor_formats.COVER_MODE_AI:
-            cover, image_model, source_raw, source_mime = _cover_ai(req, date_text, visual if isinstance(visual, CoverVisuals) else CoverVisuals(visual, visual))
+            base = _cover_full_base(ten_cover_full_asis_images(req)) if ai_over_base else None
+            visual_arg = visual if isinstance(visual, CoverVisuals) else CoverVisuals(visual, visual)
+            # 沒 base 就照舊呼叫（既有測試的假 _cover_ai 不收 base）
+            cover, image_model, source_raw, source_mime = (
+                _cover_ai(req, date_text, visual_arg, base=base) if base is not None
+                else _cover_ai(req, date_text, visual_arg)
+            )
         else:
             cover, is_ai, image_model, background_raw, background_mime = _cover_full_composite(req, date_text, visual)
     except compose.ComposeError as exc:
@@ -4839,6 +5130,20 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     req = req.model_copy(
         update={"layout": editor_formats.resolve_cover_layout(req.layout, req.title_right)}
     )
+    # 創意 0 → 程式壓字（2026-09-14 使用者裁決，理由見 editor_formats.title_mode_for_creativity）。
+    # 放在所有 ai_over_base／只改文字 判斷之前，下游一律看改寫後的 mode；回應也回改寫後的值，
+    # 前端靠 data.mode 決定「只改文字」要不要露出。
+    forced_mode = editor_formats.title_mode_for_creativity(
+        req.creativity_level(), req.mode, bool(req.background_image_base64)
+    )
+    if forced_mode != req.mode:
+        print("[cover] 創意 0 → 標題改程式壓字（零錯字、原圖零漂移）", flush=True)
+        req = req.model_copy(update={"mode": forced_mode})
+    if req.layout == "full":
+        # 滿版原圖放置最多 4 張（2026-09-14），擋在下面的斷句模型之前
+        reject_excess_asis(req.slot_refs(0) or req.reference_images, where="滿版")
+    # 斷句交給消化模型（2026-09-14）：入口登記詞組邊界，下游所有斷行都只在邊界上切
+    apply_title_break_hints(req.title_left, req.title_right)
     if req.layout == "full":
         return _editor_cover_full(req, date_text)
     if not req.title_right.strip():
@@ -4853,11 +5158,15 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     else:
         asis_count = sum(1 for ref in req.reference_images if ref.purpose == "asis")
         asis_label = f"-asis{min(asis_count, 2)}" if asis_count else ""
-    if asis_count and req.mode == editor_formats.COVER_MODE_AI:
-        # 原圖放置＝真實新聞照直接上版，不交給生圖模型重畫；整張 AI 版做不到「原圖」，
-        # 所以有 asis 一律走合成版（與 YT 直播封面多圖分切同一原則）。
-        print(f"[cover] 原圖放置附圖 {asis_count} 張 → 改合成版（程式壓字）", flush=True)
-        req = req.model_copy(update={"mode": editor_formats.COVER_MODE_COMPOSITE})
+    # 2026-09-13 使用者裁決：雙切有附圖（原圖放置或附圖位裡的 AI改圖）＋AI 標題 → 兩段生圖：
+    # 第一段每格各自取得（原圖直接用、AI改圖 各自重繪）拼成無字底圖，第二段整張送模型畫字。
+    # 以前有原圖就強制程式壓字；AI改圖 則被整張 AI 版把兩格的參考混進同一張圖（雙切各自
+    # AI改圖 失效的真因）。追加修改回來（帶 background）不算：底圖已經有了。
+    ai_over_base = (
+        req.mode == editor_formats.COVER_MODE_AI
+        and not req.background_image_base64
+        and (asis_count > 0 or ten_cover_uses_slots(req))
+    )
 
     if req.mode == editor_formats.COVER_MODE_COMPOSITE and req.background_image_base64:
         # 「只改文字」只做滿版（2026-09-08 使用者已知雙切不互通）：雙切合成版的成品是左右
@@ -4889,7 +5198,13 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     portrait_fields = cover_portrait_log_fields(visuals)
     try:
         if req.mode == editor_formats.COVER_MODE_AI:
-            cover, image_model, source_raw, source_mime = _cover_ai(req, date_text, visuals)
+            base, base_models = (_cover_split_base(req, visuals) if ai_over_base else (None, []))
+            cover, image_model, source_raw, source_mime = (
+                _cover_ai(req, date_text, visuals, base=base) if base is not None
+                else _cover_ai(req, date_text, visuals)
+            )
+            if base_models:
+                image_model = "、".join([*base_models, image_model])
         else:
             cover, panel_is_ai, image_model = _cover_composite(req, date_text, visuals)
     except compose.ComposeError as exc:
@@ -5091,11 +5406,7 @@ def derive_yt_cover_plan(
             "\n\nExtra instruction from the editor about how the photograph should look "
             "(guidance for the scene, never text to render): " + instruction.strip()
         )
-    model = (
-        os.getenv("DIGEST_MODEL")
-        or os.getenv("OPENAI_DIGEST_MODEL")
-        or DEFAULT_DIGEST_MODEL
-    )
+    model = resolve_digest_model()
     try:
         response = digest_completion(
             model=model,
@@ -5195,10 +5506,7 @@ def _yt_cover_background(
     if asis:
         raws = []
         for ref in asis[: compose.YT_SPLIT_MAX_PANELS]:
-            _, _, encoded = _split_data_url(ref.data_url)
-            if not encoded:
-                raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
-            raws.append(base64.b64decode(encoded))
+            raws.append(decode_attached_image(ref.data_url))
         if len(asis) > compose.YT_SPLIT_MAX_PANELS:
             print(f"[yt-cover] 原圖放置附圖 {len(asis)} 張，只取前 {compose.YT_SPLIT_MAX_PANELS} 張分切", flush=True)
         if len(raws) == 1:
@@ -5255,12 +5563,16 @@ def _yt_cover_full_image(
     visual: str,
     subjects: list[str],
     english: list[str],
-    *, excluded: list[str] | None = None,
+    *, excluded: list[str] | None = None, base: bytes | None = None,
 ) -> tuple[bytes, str, str]:
     """AI 標題模式：整張封面（含兩行標題與底帶）交給生圖模型，回 (bytes, mime, model)。
 
     附圖全數當參考（asis 也照主流程規則原圖放置）；肖像走主流程查參考照。
     不壓 TEXT_FREE override——這條線就是要模型畫字。
+
+    base（2026-09-13 使用者裁決）＝程式已拼好的無字底圖（原圖放置裁滿版／多圖分切／
+    雙則兩格各自取得後拼起來）。有 base 時它是**唯一**附圖、不查肖像，模型只在上面畫字
+    ——比照十點 _cover_ai 的 base。
     """
     template = {
         editor_formats.YT_COVER_LAYOUT_HOURLY: editor_formats.YT_COVER_FULL_PROMPT_HOURLY,
@@ -5349,18 +5661,26 @@ def _yt_cover_full_image(
         aspect_ratio="16:9",
         image_size=req.image_size,
         safe_frame=False,
-        reference_images=list(req.reference_images),
-        portrait_subjects=subjects,
-        portrait_subjects_en=english,
-        editor_instruction=req.instruction,
+        reference_images=(
+            [UserReferenceImage(data_url=_base_data_url(base), purpose="aiedit")]
+            if base is not None else list(req.reference_images)
+        ),
+        portrait_subjects=[] if base is not None else subjects,
+        portrait_subjects_en=[] if base is not None else english,
+        editor_instruction="" if base is not None else req.instruction,
     )
-    image_req = apply_portrait_to_image_request(image_req)
-    block = excluded_people_block(list(excluded or []))
-    if block:
-        image_req = image_req.model_copy(update={"prompt": f"{image_req.prompt.rstrip()}{block}"})
+    image_req = image_req.model_copy(
+        update={"prompt": editor_formats.with_base_image_note(image_req.prompt, base is not None)}
+    )
+    if base is None:
+        image_req = apply_portrait_to_image_request(image_req)
+        block = excluded_people_block(list(excluded or []))
+        if block:
+            image_req = image_req.model_copy(update={"prompt": f"{image_req.prompt.rstrip()}{block}"})
     attached = len(image_req.portrait_reference_data_urls) + (1 if image_req.reference_image_data_url else 0)
     print(
-        f"[yt-cover:ai-title] portrait_subjects={subjects} en={english} 參考照={attached} 張 附圖={len(req.reference_images)}",
+        f"[yt-cover:ai-title] portrait_subjects={subjects} en={english} 參考照={attached} 張 "
+        f"附圖={len(image_req.reference_images)}{' 底圖=程式拼好' if base is not None else ''}",
         flush=True,
     )
     image_req = apply_user_references_to_image_request(image_req)
@@ -5398,7 +5718,11 @@ def yt_dual_panel_requests(req: "YtCoverRequest") -> tuple["YtCoverRequest", "Yt
         # 只填右邊那格也不會被誤送到左格——這正是舊寫法會出的錯。
         # 2026-09-13：一格改收一份清單，所以整份清單直接歸那一格——版位圖與那一格
         # 專屬的 AI改圖／實景／肖像一起過去，不再只搬一張 asis。
-        asis_left, asis_right = req.slot_refs(0), req.slot_refs(1)
+        # 雙則的格子是半版：>1 張時原圖放置轉 AI改圖（2026-09-13 使用者裁決）
+        asis_left, asis_right = (
+            lock_half_slot_asis(req.slot_refs(0), "yt-cover:dual"),
+            lock_half_slot_asis(req.slot_refs(1), "yt-cover:dual"),
+        )
     else:
         asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
         if len(asis) > 2:
@@ -5468,10 +5792,7 @@ def yt_dual_background(
         if not asis:
             todo.append(i)
             continue
-        _, _, encoded = _split_data_url(asis[0].data_url)
-        if not encoded:
-            raise HTTPException(status_code=400, detail="附圖格式不對（不是 data URL）")
-        panels[i] = base64.b64decode(encoded)
+        panels[i] = decode_attached_image(asis[0].data_url)
         if "yt-cover:asis" not in models:
             models.append("yt-cover:asis")
     # 疊圖：兩張都是 16:9——大的鋪滿整個畫面，小的是右側那塊白框斜照片，兩者都不是
@@ -5511,14 +5832,15 @@ def yt_dual_background(
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     live24 = req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
-    if live24 and req.creativity < 1:
-        # 0 級＝規矩：標題由程式壓，位置／字級／斜度／顏色都是從實際播出範本量到的，
-        # 像素級精準且零錯字。1 級起交給模型（2026-09-13 使用者裁決：「標題完全沒有
-        # 被創意階梯影響 這是錯的」）——這個版型原本被我裁成純合成版，是沒人要求過的
-        # 限縮，而且跟十點／整點／熱搜不一致，那三個的階梯都是靠標題生效的。
-        req = req.model_copy(update={
-            "title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE,
-        })
+    # 創意 0 → 程式壓字（2026-09-14 使用者裁決，理由見 editor_formats.title_mode_for_creativity）。
+    # 四個版型一體適用；live24 原本自己那條 creativity<1 與整點極短標題那條都被這裡涵蓋。
+    # 1 級起交給模型（2026-09-13 使用者裁決：「標題完全沒有被創意階梯影響 這是錯的」）。
+    forced_mode = editor_formats.title_mode_for_creativity(
+        req.creativity, req.title_mode, bool(req.background_image_base64)
+    )
+    if forced_mode != req.title_mode:
+        print("[yt-cover] 創意 0 → 標題改程式壓字（零錯字、原圖零漂移）", flush=True)
+        req = req.model_copy(update={"title_mode": forced_mode})
     # live24 只有一個標題，hourly 那條「有第二標題＝雙則」的規則用不上。
     # 2026-09-13 使用者裁決：**兩個附圖位都有東西**才雙切，只放一格或都沒放＝滿版。
     dual = (
@@ -5526,40 +5848,46 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         and bool(req.slot_refs(0)) and bool(req.slot_refs(1)) if live24
         else editor_formats.yt_cover_is_dual(req.layout, req.title_second)
     )
+    if not dual:
+        # 單則整版原圖放置最多 4 張（2026-09-14），擋在下面的斷句模型之前
+        reject_excess_asis(req.slot_refs(0) + req.slot_refs(1) + req.reference_images, where="單則")
+    # 斷句交給消化模型（2026-09-14）：live24 單行不拆，不必打
+    if not live24:
+        apply_title_break_hints(req.title, req.title_second)
     if not dual and req.uses_asis_slots():
         # 單則只有一格，附圖位裡的東西就是整版那一格的：整份清單併進共用清單，
         # 下游 1 張＝整版鋪滿那條路完全不用改。雙則不走這裡——它要保留左右格身分，
         # 由 yt_dual_panel_requests 各歸各格。
         # 2026-09-13：清單化後那一格可能只有 AI改圖、沒有版位圖，所以先取版位圖再
         # 補上其餘用途；原本 `next(s for s in ... if s)` 在那種情況會直接 StopIteration。
-        placement = slot_placement_url(req.slot_refs(0) or req.slot_refs(1), "yt-cover")
-        extras = slot_generation_refs(req.slot_refs(0) + req.slot_refs(1))
+        # 2026-09-13 實拍抓到：這裡原本只搬**一張**版位圖（slot_placement_url），單則放
+        # 2–4 張原圖永遠只出第 1 張、切格從來沒觸發。整份原圖清單一起搬，下游
+        # 1 張整版／2 張雙切／3 張三切／4 張四切那條路本來就在。
+        slot_all = req.slot_refs(0) + req.slot_refs(1)
+        placements = [ref for ref in slot_all if ref.purpose == "asis"]
+        extras = slot_generation_refs(slot_all)
         req = req.model_copy(update={
             "reference_images": [
                 ref for ref in req.reference_images if ref.purpose != "asis"
-            ] + extras + (
-                [UserReferenceImage(data_url=placement, purpose="asis")] if placement else []
-            ),
+            ] + extras + placements,
             "asis_left": "", "asis_right": "",
             "slot_left": [], "slot_right": [],
         })
-    if yt_cover_asis_count(req) >= 1 and req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI:
-        # 有原圖放置一律程式壓字（2026-09-07 使用者裁決，與十點封面同一原則）：
-        # 原圖放置＝真實新聞照直接上版，交給模型重畫會走樣；原本只在 ≥2 張時強制，
-        # 單張仍走整張 AI 生成、把照片當參考圖，和前端提示「直接當底圖不生圖」不符。
-        print(f"[yt-cover] 原圖放置附圖 {yt_cover_asis_count(req)} 張 → 直接當底圖，標題改程式壓字", flush=True)
-        req = req.model_copy(update={"title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE})
-    if not req.background_image_base64 and editor_formats.yt_hourly_short_title_needs_composite(
-        req.layout, req.creativity, req.title_mode, req.title, req.title_second
-    ):
-        # 極短標題的整點 0 級一律程式壓字（2026-09-13 使用者裁決，理由與實拍數據見
-        # editor_formats.yt_hourly_short_title_needs_composite）：字少時模型把標題畫得
-        # 太大，會爬上去撞程式壓的日期紅條，prompt 端的字高上限擋不住。
-        # 判定只看第一行（空格前那一段）≤5 格：第二行字級跟著第一行走。
-        # 帶了 background_image_base64 就不能改：那是追加修改回來的圖，標題已經畫在
-        # 上面了，這裡只貼固定元素；改成 composite 會把標題再壓一次、疊成兩層。
-        print(f"[yt-cover] 整點極短標題「{req.title}」→ 改程式壓字，避免撞日期紅條", flush=True)
-        req = req.model_copy(update={"title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE})
+    if not dual:
+        # 單則＝一格：混了 AI改圖 就整版 AI改圖（2026-09-13 使用者裁決），與十點滿版同一條
+        req = req.model_copy(update={"reference_images": merge_mixed_slot_to_aiedit(req.reference_images, "yt-cover")})
+    # 2026-09-13 使用者裁決：原圖放置＋AI 標題不再強制程式壓字（2026-09-07 的舊裁決作廢）。
+    # 底圖照舊由程式取得（單則：裁滿版／多圖分切；雙則：兩格各自原圖或 AI改圖 後拼起來），
+    # 再當唯一附圖送進模型畫標題（見 _yt_cover_full_image 的 base）。
+    # 雙則只要附圖位有東西就走這條——整張 AI 版沒有「格」的概念，以前雙則各自 AI改圖
+    # 的附圖在這裡被整個丟掉（附圖=0）。追加修改回來（帶 background）不算。
+    ai_over_base = (
+        req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI
+        and not req.background_image_base64
+        and (yt_cover_asis_count(req) >= 1 or (dual and req.uses_asis_slots()))
+    )
+    if ai_over_base:
+        print("[yt-cover] 附圖＋AI 標題 → 程式先拼底圖，再交給模型畫字（兩段）", flush=True)
     hourly = req.layout == editor_formats.YT_COVER_LAYOUT_HOURLY
     hot = req.layout == editor_formats.YT_COVER_LAYOUT_HOT
     if dual and req.title_mode == editor_formats.YT_COVER_TITLE_MODE_COMPOSITE:
@@ -5624,10 +5952,28 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             background = base64.b64decode(req.background_image_base64)
             bg_mime, is_ai, image_model = req.background_mime_type or "image/png", req.background_is_ai, "yt-cover:overlay"
         elif ai_title:
+            base = None
+            base_models: list[str] = []
+            if ai_over_base:
+                # 第一段：底圖由程式取得（與 composite 同一條路），不打第二次文字模型
+                if dual:
+                    base, _, base_model = yt_dual_background(
+                        panel_reqs, plans,
+                        mode=req.live24_bg if live24 else editor_formats.LIVE24_BG_BLEND,
+                    )
+                else:
+                    base, _, _, base_model = _yt_cover_background(
+                        req, visual, subjects, english, excluded=excluded
+                    )
+                base_models = [base_model] if base_model else []
             # 雙則的 AI 整張版照走同一條：兩行標題原樣進模板，模型自己畫底圖與字
-            background, bg_mime, image_model = _yt_cover_full_image(
-                req, lines, visual, subjects, english, excluded=excluded
+            background, bg_mime, image_model = (
+                _yt_cover_full_image(req, lines, visual, subjects, english, excluded=excluded, base=base)
+                if base is not None else
+                _yt_cover_full_image(req, lines, visual, subjects, english, excluded=excluded)
             )
+            if base_models:
+                image_model = "、".join([*base_models, image_model])
             is_ai = True
         elif dual and not req.background_image_base64:
             background, is_ai, image_model = yt_dual_background(
@@ -5690,7 +6036,8 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     except compose.ComposeError as exc:
         print(f"[compose] YT 直播封面失敗：{exc}", flush=True)
         _log_failure(exc)
-        raise HTTPException(status_code=500, detail=f"封面生成失敗：{exc}") from exc
+        # 2026-09-14 抓 bug 輪：標題太長是使用者改得掉的輸入問題，比照十點回 400，不是 500
+        raise HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}") from exc
 
     request_log.log_generation(
         request_id=request_id,

@@ -273,12 +273,15 @@ class ComposeTests(unittest.TestCase):
 
 
 class EndpointTests(unittest.TestCase):
-    def _payload(self, asis: int, mode="ai"):
+    # 2026-09-13 起 mode=ai＋原圖放置不再強制壓字（改成 AI 標題疊在程式底圖上，見
+    # test_ai_title_over_base_20260913），所以「一次 API 都不打」的原圖測試要明送 composite。
+    def _payload(self, asis: int, mode="composite"):
         refs = [{"data_url": _data_url(_png_bytes(colour=c)), "purpose": "asis"} for c in [(200, 30, 30), (30, 30, 200)][:asis]]
         return {
             "title_left": "尼泊爾災區 無人機空拍 滅村慘況",
             "title_right": "台南易淹水 成氣候衝擊區",
             "mode": mode,
+            "title_creativity": 1,   # 2026-09-14 起創意 0 一律程式壓字；mode=ai 的案子要 1 才真的走 AI
             "reference_images": refs,
         }
 
@@ -328,7 +331,7 @@ class EndpointTests(unittest.TestCase):
 
         with patch.object(main, "generate_image_raw", side_effect=fake_generate), \
              patch.object(main, "resolve_cover_visuals", return_value=("左", "右")):
-            res = client.post("/api/editor/cover", json=self._payload(0), headers=_headers())
+            res = client.post("/api/editor/cover", json=self._payload(0, mode="ai"), headers=_headers())
         self.assertEqual(res.status_code, 200, res.text)
         self.assertEqual(res.json()["mode"], "ai")
         self.assertTrue(res.json()["left_is_ai"])
@@ -344,7 +347,7 @@ class EndpointTests(unittest.TestCase):
                 mime_type="image/png", model="fake",
             )
 
-        payload = self._payload(0)
+        payload = self._payload(0, mode="ai")
         payload["reference_images"] = [{"data_url": _data_url(_png_bytes()), "purpose": "scene"}]
         with patch.object(main, "generate_image_raw", side_effect=fake_generate),              patch.object(main, "resolve_cover_visuals", return_value=("左", "右")):
             res = client.post("/api/editor/cover", json=payload, headers=_headers())

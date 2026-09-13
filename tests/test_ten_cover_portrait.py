@@ -106,7 +106,7 @@ class PortraitWiringTests(unittest.TestCase):
 
     def test_ai_mode_merges_both_panels_subjects(self):
         both = dict(MERZ, portrait_subjects_right=["梅爾茨", "蕭茲"], portrait_subjects_right_en=["Friedrich Merz", "Olaf Scholz"])
-        _, seen = self._run({"title_left": "梅爾茨 深感震驚", "title_right": "蕭茲 冷眼旁觀", "layout": "split", "mode": "ai"}, derive=both)
+        _, seen = self._run({"title_left": "梅爾茨 深感震驚", "title_right": "蕭茲 冷眼旁觀", "layout": "split", "mode": "ai", "title_creativity": 1}, derive=both)
         self.assertEqual(len(seen), 1)
         self.assertEqual(seen[0].portrait_subjects, ["梅爾茨", "蕭茲"])
         self.assertEqual(seen[0].portrait_subjects_en, ["Friedrich Merz", "Olaf Scholz"])

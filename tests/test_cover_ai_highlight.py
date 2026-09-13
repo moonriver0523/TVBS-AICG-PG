@@ -62,20 +62,20 @@ class AiEndpointTests(unittest.TestCase):
         return Image.open(io.BytesIO(base64.b64decode(res.json()["image_data_base64"])))
 
     def test_ai_full_highlight_gets_stamp_on_air_does_not(self):
-        base = {"title_left": "測試 標題", "layout": "full", "mode": "ai"}
+        base = {"title_left": "測試 標題", "layout": "full", "mode": "ai", "title_creativity": 1}
         on_air = self._post(dict(base, badge="on_air"))
         highlight = self._post(dict(base, badge="highlight"))
         self.assertGreater(_stamp_zone_ink(highlight), _stamp_zone_ink(on_air) + 5000)
 
     def test_ai_split_highlight_gets_stamp(self):
-        base = {"title_left": "測試 標題", "title_right": "右邊 標題", "layout": "split", "mode": "ai"}
+        base = {"title_left": "測試 標題", "title_right": "右邊 標題", "layout": "split", "mode": "ai", "title_creativity": 1}
         on_air = self._post(dict(base, badge="on_air"))
         highlight = self._post(dict(base, badge="highlight"))
         self.assertGreater(_stamp_zone_ink(highlight), _stamp_zone_ink(on_air) + 5000)
 
     def test_overlay_path_after_refine_keeps_stamp(self):
         raw = base64.b64encode(_png_bytes(size=(1536, 864), colour=GREY)).decode("ascii")
-        body = {"title_left": "測試 標題", "layout": "full", "mode": "ai", "badge": "highlight",
+        body = {"title_left": "測試 標題", "layout": "full", "mode": "ai", "title_creativity": 1, "badge": "highlight",
                 "background_image_base64": raw, "background_mime_type": "image/png"}
         with patch.object(main, "generate_image_raw", side_effect=AssertionError("overlay 不該生圖")):
             res = client.post("/api/editor/cover", json=body, headers=_headers())
