@@ -60,6 +60,12 @@ TEN_HIGHLIGHT_STAMP = BRAND_DIR / "ten-highlight-stamp.png"  # 舊版精華圓�
 # 悄悄改用預設點陣字會畫出一整排豆腐，比直接失敗糟得多。
 FONT_DIR = pathlib.Path(__file__).resolve().parent / "static" / "fonts"
 FONT_CANDIDATES_BUNDLED = (FONT_DIR / "TaipeiSansTCBeta-Bold.ttf",)
+# 整點時間帶（XX:XX）專用字型（2026-09-13 使用者裁決：Times New Roman）。
+# 直接包 Windows 的 timesbd.ttf 進 repo——Cloud Run 是 Linux，系統沒有這個字型，
+# 不包進來正式站永遠看不到效果。Monotype 再散布的授權疑慮已告知使用者，由其裁決。
+# 不走 discover_font() 那條 CJK 退路鏈：那條是「找得到什麼中文粗體就用什麼」，
+# 時間帶只有數字與冒號，要的是釘死這一支。
+TIME_FONT_PATH = FONT_DIR / "timesbd.ttf"
 FONT_CANDIDATES_WINDOWS = (
     pathlib.Path("C:/Windows/Fonts/msjhbd.ttc"),
     pathlib.Path("C:/Windows/Fonts/NotoSansTC-VF.ttf"),
@@ -178,21 +184,31 @@ def _bold_stroke(font: ImageFont.FreeTypeFont, ratio: float = BOLD_STROKE_RATIO)
     return max(1, round(font.size * ratio))
 
 
+def _time_font(size: int) -> ImageFont.FreeTypeFont:
+    """整點時間帶的 Times New Roman Bold（見 TIME_FONT_PATH）。找不到就報錯，不退回黑體——
+    退回會靜靜畫成另一個字型，使用者驗收時看不出是字型檔沒進 image。"""
+    if not TIME_FONT_PATH.exists():
+        raise ComposeError(f"找不到時間帶字型：{TIME_FONT_PATH}")
+    return ImageFont.truetype(str(TIME_FONT_PATH), size)
+
+
 def _fit_font_bold(
     text: str, max_width: int, start_size: int, min_size: int,
-    *, ratio: float = BOLD_STROKE_RATIO,
+    *, ratio: float = BOLD_STROKE_RATIO, loader=None,
 ) -> ImageFont.FreeTypeFont:
     """同 _fit_font，但把假粗體描邊撐出來的寬度一起算進去。
 
     ratio 必須跟等一下實際畫的時候一致，否則量的是 A 字重、畫的是 B 字重，白算。
+    loader＝哪一支字型載入器（預設 _font 的中文粗體；時間帶傳 _time_font）。
     """
+    load = loader or _font
     size = start_size
     while size > min_size:
-        font = _font(size)
+        font = load(size)
         if font.getbbox(text)[2] + 2 * _bold_stroke(font, ratio) <= max_width:
             return font
         size -= 2
-    return _font(min_size)
+    return load(min_size)
 
 
 def _ink_centre_shift(font: ImageFont.FreeTypeFont, text: str) -> int:
@@ -1734,9 +1750,10 @@ def compose_yt_hourly_cover(
         ImageDraw.Draw(layer).rounded_rectangle(band, radius=12, fill=YT_HOURLY_TIME_BAND_FILL)
         canvas.alpha_composite(layer)
         draw = ImageDraw.Draw(canvas)
+        # 時間用 Times New Roman Bold（2026-09-13 使用者裁決），不跟標題共用台北黑體
         time_font = _fit_font_bold(
             time_text, band[2] - band[0] - 24, round(band_h * 0.8), round(band_h * 0.4),
-            ratio=YT_BOLD_STROKE_RATIO,
+            ratio=YT_BOLD_STROKE_RATIO, loader=_time_font,
         )
         _draw_bold_text(
             draw, ((band[0] + band[2]) // 2, (band[1] + band[3]) // 2 + 2),
