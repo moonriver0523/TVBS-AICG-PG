@@ -97,6 +97,57 @@ class SegmentationCallTests(unittest.TestCase):
             main.apply_title_break_hints("台積電法說會 Q3營收上看9000億", "")
         self.assertEqual(compose._split_line_near_middle("Q3營收上看9000億"), ("Q3營收", "上看9000億"))
 
+    def test_material_is_plain_lines_without_numbering(self):
+        payload = '{"segments": []}'
+        with patch.object(main, "digest_completion", return_value=_response(payload)) as call:
+            main.segment_titles_for_breaks(["Q3營收上看9000億", "歐洲熱浪台灣豪雨"])
+        self.assertEqual(call.call_args.kwargs["news_text"], "Q3營收上看9000億\n歐洲熱浪台灣豪雨")
+
+    def test_list_numbering_echoed_by_small_models_is_stripped(self):
+        """2026-09-14 實測：gpt-5.4-mini 回 "1. 台積電…"＋詞組 "1."，nano 回 "1. "；照抄的話整段被丟。"""
+        mini = (
+            '{"segments": [{"text": "1. 台積電法說會Q3營收上看9000億",'
+            ' "phrases": ["1.", "台積電", "法說會", "Q3", "營收", "上看9000億"]}]}'
+        )
+        nano = (
+            '{"segments": [{"text": "1. 台積電法說會Q3營收上看9000億",'
+            ' "phrases": ["1. ", "台積電", "法說會", "Q3", "營收上看9000億"]}]}'
+        )
+        glued = (
+            '{"segments": [{"text": "2. 歐洲熱浪台灣豪雨",'
+            ' "phrases": ["2. 歐洲熱浪", "台灣豪雨"]}]}'
+        )
+        with patch.object(main, "digest_completion", return_value=_response(mini)):
+            self.assertEqual(
+                main.segment_titles_for_breaks(["台積電法說會Q3營收上看9000億"]),
+                {"台積電法說會Q3營收上看9000億": ["台積電", "法說會", "Q3", "營收", "上看9000億"]},
+            )
+        with patch.object(main, "digest_completion", return_value=_response(nano)):
+            self.assertEqual(
+                main.segment_titles_for_breaks(["台積電法說會Q3營收上看9000億"]),
+                {"台積電法說會Q3營收上看9000億": ["台積電", "法說會", "Q3", "營收上看9000億"]},
+            )
+        with patch.object(main, "digest_completion", return_value=_response(glued)):
+            self.assertEqual(
+                main.segment_titles_for_breaks(["歐洲熱浪台灣豪雨"]),
+                {"歐洲熱浪台灣豪雨": ["歐洲熱浪", "台灣豪雨"]},
+            )
+
+    def test_break_model_is_the_small_one_and_env_overrides(self):
+        with patch.dict(os.environ, {"TITLE_BREAK_MODEL": ""}):
+            self.assertEqual(main.resolve_title_break_model(), main.DEFAULT_TITLE_BREAK_MODEL)
+        with patch.dict(os.environ, {"TITLE_BREAK_MODEL": "gpt-5.4-nano"}):
+            self.assertEqual(main.resolve_title_break_model(), "gpt-5.4-nano")
+        # 主消化的覆寫不能滲進來（可能是 OpenRouter slug）
+        with patch.dict(os.environ, {"TITLE_BREAK_MODEL": "", "DIGEST_MODEL": "anthropic/claude-sonnet-5"}):
+            self.assertEqual(main.resolve_title_break_model(), main.DEFAULT_TITLE_BREAK_MODEL)
+        payload = '{"segments": []}'
+        with patch.dict(os.environ, {"TITLE_BREAK_MODEL": "gpt-5.4-nano"}), \
+                patch.object(main, "digest_completion", return_value=_response(payload)) as call:
+            main.segment_titles_for_breaks(["Q3營收上看9000億"])
+        self.assertEqual(call.call_args.kwargs["model"], "gpt-5.4-nano")
+        self.assertEqual(main.TITLE_BREAK_TIMEOUT_SECONDS, 8.0)
+
     def test_apply_skips_the_model_when_nothing_could_be_split(self):
         with patch.object(main, "digest_completion") as call:
             main.apply_title_break_hints("葉門青年運動 奪下紅海咽喉", "")

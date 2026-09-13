@@ -85,6 +85,7 @@ if DIGEST_BACKEND == "gemini":
         api_key=_gemini_key,
     )
     DEFAULT_DIGEST_MODEL = os.getenv("GEMINI_DIGEST_MODEL", "gemini-3.6-flash")
+    DEFAULT_TITLE_BREAK_MODEL = DEFAULT_DIGEST_MODEL   # flash 本來就快
 # 2026-09-03：這裡原本寫 `elif _openrouter_key:`，等於只要環境裡有一把
 # OPENROUTER_API_KEY 就一定走 OpenRouter，DIGEST_BACKEND=native 完全沒有效果——
 # 上面那段註解講的「設回 openrouter 即可切回」暗示這個變數是說了算的，實際上
@@ -95,12 +96,29 @@ elif DIGEST_BACKEND == "openrouter" and _openrouter_key:
         base_url="https://openrouter.ai/api/v1", api_key=_openrouter_key
     )
     DEFAULT_DIGEST_MODEL = "anthropic/claude-sonnet-5"
+    # OpenRouter 上的小模型 slug 沒實測過，不猜：斷句跟主消化同模型，要換用 TITLE_BREAK_MODEL
+    DEFAULT_TITLE_BREAK_MODEL = DEFAULT_DIGEST_MODEL
 else:
     openai_client = OpenAI()
     # 2026-09-13：原生預設從 gpt-5.6-terra 換成 gpt-5.5。terra 在使用者 key 上
     # 其實存在，但 2026-09-05 已實測會頻道洩漏（.env 註解與 test_digest_quality）；
     # 5.5 是 /v1/models 列得到且 chat.completions 打得通的，內容乾淨與否待實拍。
     DEFAULT_DIGEST_MODEL = "gpt-5.5"
+    # 標題斷句（2026-09-14 使用者裁決）：分詞不需要推理模型。實測同一組標題
+    # gpt-5.5 8.6 秒（reasoning_tokens=512）、gpt-5.4-mini 4.6 秒、gpt-5.4-nano 2.0 秒
+    # （皆 reasoning_tokens=0），mini 與 5.5 切出來的詞組一樣，取 mini。
+    DEFAULT_TITLE_BREAK_MODEL = "gpt-5.4-mini"
+
+
+def resolve_title_break_model() -> str:
+    """標題斷句用的模型：TITLE_BREAK_MODEL → 後端預設的小模型。
+
+    刻意**不**繼承 DIGEST_MODEL／OPENAI_DIGEST_MODEL：那兩個是主消化的覆寫，
+    可能是 OpenRouter slug（見 resolve_digest_model 的 2026-09-13 真因），而且
+    使用者要的就是斷句走比主消化更快的模型。
+    """
+    override = (os.getenv("TITLE_BREAK_MODEL") or "").strip()
+    return override or DEFAULT_TITLE_BREAK_MODEL
 
 
 def resolve_digest_model() -> str:
@@ -4189,7 +4207,24 @@ def keep_subjects_with_photos(
 # 生圖模型畫出來的字沒辦法逐字驗，行數一變版面全連動，所以斷點要在能檢查的階段決定：
 # 請消化模型把標題切成詞組，程式只做硬檢查（接回去等於原段），compose 只在詞組邊界上切。
 # 失敗（逾時、格式壞、改了字）一律退回原本的規則，封面不會因此失敗。
-TITLE_BREAK_TIMEOUT_SECONDS = 20.0
+# 2026-09-14 改小模型後 20 → 8 秒：mini 實測 4.6 秒，8 秒是它的近兩倍；超過就退回規則，
+# 封面不會因此失敗，只是斷句差一點。
+TITLE_BREAK_TIMEOUT_SECONDS = 8.0
+# 小模型（gpt-5.4-mini／nano）會把送去的「1. 」清單編號原樣抄回 text 與第一個詞組，
+# 接回去就不等於原段、整段被丟掉——等於模型切了白切。送的時候不編號，回來的再剝一次。
+_LIST_NUMBER_RE = re.compile(r"^\s*\d+\s*[.、)]\s*")
+
+
+def _strip_list_number(text: str) -> str:
+    return _LIST_NUMBER_RE.sub("", text, count=1)
+
+
+def _normalise_break_phrases(phrases: list[str]) -> list[str]:
+    """丟掉純編號的詞組（"1."／"1. "），第一個詞組前面黏的編號也剝掉。"""
+    out = [p for p in phrases if not re.fullmatch(r"\s*\d+\s*[.、)]?\s*", p)]
+    if out:
+        out[0] = _strip_list_number(out[0])
+    return [p for p in out if p]
 # 一段 ≤ 7 字（COVER_TITLE_FILL_MIN_CHARS）永遠不會被拆，這種標題不必打模型。
 TITLE_BREAK_MIN_CHARS = compose.COVER_TITLE_FILL_MIN_CHARS + 1
 
@@ -4210,10 +4245,11 @@ def segment_titles_for_breaks(segments: list[str]) -> dict[str, list[str]]:
     segments = [s for s in segments if s]
     if not segments:
         return {}
-    material = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(segments))
+    material = "\n".join(segments)
+    started = time.monotonic()
     try:
         response = digest_completion(
-            model=resolve_digest_model(),
+            model=resolve_title_break_model(),
             system_prompt=editor_formats.TITLE_BREAK_SYSTEM,
             news_text=material,
             max_output_tokens=1200,
@@ -4224,14 +4260,18 @@ def segment_titles_for_breaks(segments: list[str]) -> dict[str, list[str]]:
         )
         data = parse_digest_json(response.choices[0].message.content or "")
     except Exception as exc:  # noqa: BLE001 — 斷句失敗退回規則，封面照出
-        print(f"[title-break] 模型斷句失敗，退回規則：{type(exc).__name__}: {exc}", flush=True)
+        print(
+            f"[title-break] 模型斷句失敗，退回規則（{time.monotonic() - started:.1f}s）："
+            f"{type(exc).__name__}: {exc}", flush=True,
+        )
         return {}
+    print(f"[title-break] {resolve_title_break_model()} {time.monotonic() - started:.1f}s", flush=True)
     out: dict[str, list[str]] = {}
     for row in data.get("segments") or []:
         if not isinstance(row, dict):
             continue
-        text = str(row.get("text") or "")
-        phrases = [str(x) for x in (row.get("phrases") or []) if str(x)]
+        text = _strip_list_number(str(row.get("text") or ""))
+        phrases = _normalise_break_phrases([str(x) for x in (row.get("phrases") or []) if str(x)])
         if text in segments and len(phrases) >= 2 and "".join(phrases) == text:
             out[text] = phrases
         elif text:
