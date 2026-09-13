@@ -68,7 +68,7 @@ class CoverRefineSourceTests(unittest.TestCase):
                 self.assertEqual(source.getpixel((source.size[0] // 2, source.size[1] // 2)), RAW_COLOUR)
                 # 成品則已經貼過（同一個位置的畫面已被 Logo／標頭元素改寫或至少不同於源圖）
                 cover = Image.open(io.BytesIO(base64.b64decode(data["image_data_base64"]))).convert("RGB")
-                self.assertEqual(cover.size, source.size)
+                self.assertEqual(cover.size, compose.COVER_CANVAS)  # 2026-09-14：AI 路徑一律放大到定版
 
     def test_composite_mode_has_no_refine_source(self):
         for layout in (SPLIT, FULL):
@@ -99,7 +99,7 @@ class CoverRecompositeTests(unittest.TestCase):
                 # 源圖原樣回傳，下一輪修改接得上
                 self.assertEqual(base64.b64decode(data["source_image_base64"]), raw)
                 cover = Image.open(io.BytesIO(base64.b64decode(data["image_data_base64"]))).convert("RGB")
-                self.assertEqual(cover.size, Image.open(io.BytesIO(raw)).size)
+                self.assertEqual(cover.size, compose.COVER_CANVAS)  # 2026-09-14：AI 路徑一律放大到定版
                 # 後貼確實跑了：「AI示意圖」小標壓在左上
                 w, h = cover.size
                 y = round(h * compose.COVER_AI_HEADER_RATIO) + round(h * 0.025) + 8

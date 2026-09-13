@@ -668,6 +668,22 @@ def paste_cover_header_right(
         )
 
 
+def fit_cover_canvas(image_bytes: bytes) -> bytes:
+    """把模型出的圖等比例放大裁滿十點定版尺寸；已經是定版尺寸就原樣回。
+
+    2026-09-14 抓 bug 輪：原生 GPT 的 16:9 生成尺寸是 1280×720，十點 AI 模式以前照模型
+    原尺寸出去（合成版與 YT 的 AI 標題都是 1920×1080）。只給十點 AI 路徑在貼 Logo 之前
+    呼叫——paste_cover_logo 本身是多處共用的原始函式，量像素的測試都拿小圖打它。
+    """
+    with Image.open(io.BytesIO(image_bytes)) as opened:
+        if opened.size == COVER_CANVAS:
+            return image_bytes
+    canvas = _cover_panel(image_bytes, COVER_CANVAS)
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def paste_cover_logo(
     image_bytes: bytes, date_text: str = "", badge: str = COVER_DEFAULT_BADGE
 ) -> bytes:
