@@ -340,6 +340,20 @@ ATTACHED IMAGE — REDRAW THIS SAME PICTURE (CRITICAL)
 - Do not copy readable text or brand marks visible inside the attached image, except a brand the source material names — that one may be reproduced on its own objects; the BRANDS rule above still applies in full.
 - People in the attached image stay who they are: reproduce every face in it as it appears, recognisable, in the redrawn style. The NAMED REAL PERSON rules below govern only people who are NOT in the attached image — they do not restrict, blur, hide or replace a face that the editor supplied here."""
 
+# 同一格放 2 張以上 AI改圖（2026-09-14 使用者：「使用者就是希望單槽多圖 AI 融合啊」）。
+# 上面單張版開頭是「One of the attached images is the picture…」——多張一起送時這句
+# 等於授權模型挑一張畫，實拍（測試 session 第四輪 A2）4 張參考只剩 1 張。融合版
+# 把張數寫死、要求每一張都認得出來，其餘（重畫、商標、人臉）與單張版同一套。
+# 只在 aiedit 張數 ≥2 時取代單張版注入（apply_user_references_to_image_request）。
+USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE = """==================================================
+ATTACHED IMAGES — FUSE ALL {count} OF THEM INTO ONE PICTURE (CRITICAL)
+==================================================
+- {count} attached images together ARE the picture this graphic's main visual is to BE. Compose them into ONE coherent scene redrawn in the graphic's own visual style. Every one of the {count} images must be recognisably present in the output — its subject, its key objects and its people — none may be dropped, merged away or reduced to a vague background hint. Someone who saw all {count} images must be able to point to each of them inside your output.
+- Give each image its own clear share of the frame — side by side, foreground and background, or a natural blend — keeping each image's subject, framing and camera angle recognisable. Do not pick one image and discard the rest; a picture that shows only some of the {count} images is wrong.
+- Do redraw them: repaint, restyle and colour-grade them into this graphic's illustration style, and extend or crop the edges as the layout needs. Apart from whatever an editor's instruction below asks you to change, the treatment changes and the content does not.
+- Do not copy readable text or brand marks visible inside the attached images, except a brand the source material names — that one may be reproduced on its own objects; the BRANDS rule above still applies in full.
+- People in the attached images stay who they are: reproduce every face in every attached image as it appears, recognisable, in the redrawn style. The NAMED REAL PERSON rules below govern only people who are NOT in the attached images — they do not restrict, blur, hide or replace a face that the editor supplied here."""
+
 # 使用者在指令欄寫的需求（2026-09-13 使用者裁決：「AI改圖 如果使用者在給 AI 指令欄
 # 寫需求 會吃到嗎? 應該要吃到」，權限＝**可以改內容**）。
 #
@@ -356,7 +370,7 @@ ATTACHED IMAGE — REDRAW THIS SAME PICTURE (CRITICAL)
 USER_REFERENCE_AIEDIT_INSTRUCTION_TEMPLATE = """
 
 THE EDITOR'S INSTRUCTION FOR THIS REDRAW (OUTRANKS "the content does not change"):
-The editor has asked for the following change to the attached picture. It is a direction about what to change in the picture, never words to render — do not write any of it, or any translation of it, anywhere in the image. Carry it out, and leave everything it does not mention exactly as it is in the attached image. It does not relax the brand-mark, human-face or NAMED REAL PERSON rules above; satisfy the rest of the instruction within those.
+The editor has asked for the following change to the attached picture(s). It is a direction about what to change in the picture, never words to render — do not write any of it, or any translation of it, anywhere in the image. Carry it out, and leave everything it does not mention exactly as it is in the attached image. It does not relax the brand-mark, human-face or NAMED REAL PERSON rules above; satisfy the rest of the instruction within those.
 {instruction}"""
 
 USER_REFERENCE_MODES = {

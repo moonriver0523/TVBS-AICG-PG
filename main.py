@@ -50,6 +50,7 @@ from news_prompt import (
     PORTRAIT_MODES,
     PROMPT_VERSION,
     USER_REFERENCE_ASIS_DIGEST_RULES,
+    USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE,
     USER_REFERENCE_AIEDIT_INSTRUCTION_TEMPLATE,
     USER_REFERENCE_MODES,
     USER_REFERENCE_NO_DISCLAIMER_RULES,
@@ -3576,8 +3577,13 @@ def apply_user_references_to_image_request(
         )
     prompt = req.prompt
     purposes = dict.fromkeys(ref.purpose for ref in req.reference_images)
+    aiedit_count = sum(1 for ref in req.reference_images if ref.purpose == "aiedit")
     for purpose in purposes:
         block = USER_REFERENCE_MODES.get(purpose, "")
+        if purpose == "aiedit" and aiedit_count >= 2:
+            # 2026-09-14：多張 AI改圖 走融合版——單張版的「One of the attached images」
+            # 會讓模型只挑一張畫（第四輪 A2：4 張參考只剩 1 張）
+            block = USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE.format(count=aiedit_count)
         if block and block not in prompt:
             prompt = f"{prompt.rstrip()}\n\n{block}"
     # AI改圖 專屬：使用者指令欄要真的送到生圖模型手上（2026-09-13 使用者裁決）。
