@@ -97,7 +97,33 @@ elif DIGEST_BACKEND == "openrouter" and _openrouter_key:
     DEFAULT_DIGEST_MODEL = "anthropic/claude-sonnet-5"
 else:
     openai_client = OpenAI()
-    DEFAULT_DIGEST_MODEL = "gpt-5.6-terra"
+    # 2026-09-13：原生預設從 gpt-5.6-terra 換成 gpt-5.5。terra 在使用者 key 上
+    # 其實存在，但 2026-09-05 已實測會頻道洩漏（.env 註解與 test_digest_quality）；
+    # 5.5 是 /v1/models 列得到且 chat.completions 打得通的，內容乾淨與否待實拍。
+    DEFAULT_DIGEST_MODEL = "gpt-5.5"
+
+
+def resolve_digest_model() -> str:
+    """回傳這次消化要用的模型：DIGEST_MODEL → OPENAI_DIGEST_MODEL → 後端預設。
+
+    2026-09-13 真因：.env 的 `DIGEST_MODEL=anthropic/claude-sonnet-5` 是 OpenRouter
+    slug，`load_dotenv()` 後五處 `os.getenv("DIGEST_MODEL")` 不分後端照單全收，
+    本機 `DIGEST_BACKEND=native` 時就把這串送進 api.openai.com → 400
+    「invalid model ID」，畫面描述整段走退路、指令欄被丟掉。之前快照誤判成
+    「gpt-5.6-terra 不存在」。
+
+    規則：帶 `/` 的 OpenRouter 式 slug 只在 client 真的指向 openrouter 時才採用；
+    否則當作沒設，退回該後端的預設。判斷看 `openai_client.base_url` 而不是
+    `DIGEST_BACKEND` 字串——`DIGEST_BACKEND=openrouter` 但沒 key 也會落到原生
+    client，那時字串仍寫 openrouter。讀模組全域而非重讀 env，測試才 patch 得到。
+    """
+    override = (os.getenv("DIGEST_MODEL") or os.getenv("OPENAI_DIGEST_MODEL") or "").strip()
+    if not override:
+        return DEFAULT_DIGEST_MODEL
+    on_openrouter = "openrouter" in str(getattr(openai_client, "base_url", ""))
+    if "/" in override and not on_openrouter:
+        return DEFAULT_DIGEST_MODEL
+    return override
 
 # Gemini 的 OpenAI 相容端點有大量『看不見』的內部思考 token——實測一個一句話的
 # 玩具範例，可見的 completion_tokens 只有 51，但 total_tokens 高達 613
@@ -1951,11 +1977,7 @@ def apply_photo_availability(
 )
 def generate(req: GenerateRequest):
     # DIGEST_MODEL 可覆寫；沿用舊環境變數 OPENAI_DIGEST_MODEL 作為次要相容
-    model = (
-        os.getenv("DIGEST_MODEL")
-        or os.getenv("OPENAI_DIGEST_MODEL")
-        or DEFAULT_DIGEST_MODEL
-    )
+    model = resolve_digest_model()
     # 兩段式（條件注入）：分類成功就整段當成使用者指定了該類型——組 prompt、
     # 選 schema、給預算、chart_type 退路四處一致；分類失敗則 type_label 原樣，
     # 下面每一行都與舊路徑逐字元相同。
@@ -2234,11 +2256,7 @@ Rules:
     dependencies=[Depends(verify_internal_api_key)],
 )
 def hybrid_digest(req: HybridDigestRequest):
-    model = (
-        os.getenv("DIGEST_MODEL")
-        or os.getenv("OPENAI_DIGEST_MODEL")
-        or DEFAULT_DIGEST_MODEL
-    )
+    model = resolve_digest_model()
     # 一鍵成圖是無人值守流程：上游偶發失敗（provider 輪替錯誤、輸出截斷、
     # 不合 schema 的回傳）都必須在後端自動吸收重試，不能丟回給外勤記者
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
@@ -4113,11 +4131,7 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
             "(applies to both sides; it is guidance for the scene, never text to render): "
             + instruction
         )
-    model = (
-        os.getenv("DIGEST_MODEL")
-        or os.getenv("OPENAI_DIGEST_MODEL")
-        or DEFAULT_DIGEST_MODEL
-    )
+    model = resolve_digest_model()
     try:
         response = digest_completion(
             model=model,
@@ -4636,11 +4650,7 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
         base_prompt = editor_formats.COVER_TITLE_DIGEST_SYSTEM_YT
         schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT
     system_prompt = base_prompt + CONTENT_FIDELITY_RULES
-    model = (
-        os.getenv("DIGEST_MODEL")
-        or os.getenv("OPENAI_DIGEST_MODEL")
-        or DEFAULT_DIGEST_MODEL
-    )
+    model = resolve_digest_model()
     ten_family = ten or req.target == "ten_cover_full"
     data = None
     # 十點的三段字數（每段 4–7、全篇 12–18）模型常不守（2026-09-08 晚使用者：字太少撐不出三段、
@@ -5091,11 +5101,7 @@ def derive_yt_cover_plan(
             "\n\nExtra instruction from the editor about how the photograph should look "
             "(guidance for the scene, never text to render): " + instruction.strip()
         )
-    model = (
-        os.getenv("DIGEST_MODEL")
-        or os.getenv("OPENAI_DIGEST_MODEL")
-        or DEFAULT_DIGEST_MODEL
-    )
+    model = resolve_digest_model()
     try:
         response = digest_completion(
             model=model,
