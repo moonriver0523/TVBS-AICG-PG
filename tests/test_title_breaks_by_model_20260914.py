@@ -133,6 +133,14 @@ class SegmentationCallTests(unittest.TestCase):
                 {"歐洲熱浪台灣豪雨": ["歐洲熱浪", "台灣豪雨"]},
             )
 
+    def test_a_segment_starting_with_a_decimal_is_not_mistaken_for_numbering(self):
+        payload = '{"segments": [{"text": "1.2兆資本支出上看新高", "phrases": ["1.2兆", "資本支出", "上看新高"]}]}'
+        with patch.object(main, "digest_completion", return_value=_response(payload)):
+            self.assertEqual(
+                main.segment_titles_for_breaks(["1.2兆資本支出上看新高"]),
+                {"1.2兆資本支出上看新高": ["1.2兆", "資本支出", "上看新高"]},
+            )
+
     def test_break_model_is_the_small_one_and_env_overrides(self):
         with patch.dict(os.environ, {"TITLE_BREAK_MODEL": ""}):
             self.assertEqual(main.resolve_title_break_model(), main.DEFAULT_TITLE_BREAK_MODEL)

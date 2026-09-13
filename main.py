@@ -97,8 +97,9 @@ elif DIGEST_BACKEND == "openrouter" and _openrouter_key:
         base_url="https://openrouter.ai/api/v1", api_key=_openrouter_key
     )
     DEFAULT_DIGEST_MODEL = "anthropic/claude-sonnet-5"
-    # OpenRouter 上的小模型 slug 沒實測過，不猜：斷句跟主消化同模型，要換用 TITLE_BREAK_MODEL
-    DEFAULT_TITLE_BREAK_MODEL = DEFAULT_DIGEST_MODEL
+    # 斷句走小模型（2026-09-14 使用者裁決）。.env 與線上都是 OpenRouter 後端，只改原生分支
+    # 等於沒改。slug 已查 GET /api/v1/models（2026-09-14）確有 openai/gpt-5.4-mini。
+    DEFAULT_TITLE_BREAK_MODEL = "openai/gpt-5.4-mini"
 else:
     openai_client = OpenAI()
     # 2026-09-13：原生預設從 gpt-5.6-terra 換成 gpt-5.5。terra 在使用者 key 上
@@ -4276,8 +4277,12 @@ def segment_titles_for_breaks(segments: list[str]) -> dict[str, list[str]]:
     for row in data.get("segments") or []:
         if not isinstance(row, dict):
             continue
-        text = _strip_list_number(str(row.get("text") or ""))
-        phrases = _normalise_break_phrases([str(x) for x in (row.get("phrases") or []) if str(x)])
+        # 編號只在對不上原段時才剝：無條件剝會把「1.2兆資本支出」吃成「2兆資本支出」
+        raw_text = str(row.get("text") or "")
+        text = raw_text if raw_text in segments else _strip_list_number(raw_text)
+        phrases = [str(x) for x in (row.get("phrases") or []) if str(x)]
+        if "".join(phrases) != text:
+            phrases = _normalise_break_phrases(phrases)
         if text in segments and len(phrases) >= 2 and "".join(phrases) == text:
             out[text] = phrases
         elif text:
