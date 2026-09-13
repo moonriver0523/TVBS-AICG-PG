@@ -897,6 +897,61 @@ def _number_inner_indices(text: str) -> set[int]:
     return inner
 
 
+# 括號（2026-09-13 使用者回報「川普發布「擴張版」美國地圖」被切成「擴／張版」）：
+# 引號裡的是一個詞，裡面一律不准切；引號兩側反而是最好的斷點。
+_BRACKET_PAIRS = {"「": "」", "『": "』", "《": "》", "〈": "〉", "（": "）", "(": ")", "【": "】", "“": "”"}
+_BRACKET_CLOSERS = set(_BRACKET_PAIRS.values())
+
+# 常見專有名詞小詞典：沒有斷詞器（本機與 Cloud Run 都沒裝），只能用一份短名單擋最常見的
+# 腰斬——「格陵蘭」被切成「格／陵蘭」（2026-09-13 同一則回報）。只收 3 字以上、新聞高頻的
+# 國名／地名／機構名；2 字詞交給虛詞規則（切到 2 字詞中間的機率本來就低）。
+_SPLIT_KEEP_TOGETHER = (
+    "格陵蘭", "加拿大", "墨西哥", "冰島", "巴拿馬", "委內瑞拉", "阿根廷", "哥倫比亞", "巴西", "古巴",
+    "烏克蘭", "俄羅斯", "白俄羅斯", "波蘭", "立陶宛", "愛沙尼亞", "拉脫維亞", "羅馬尼亞", "保加利亞",
+    "塞爾維亞", "克羅埃西亞", "斯洛伐克", "斯洛維尼亞", "匈牙利", "捷克", "奧地利", "瑞士", "比利時",
+    "荷蘭", "丹麥", "挪威", "瑞典", "芬蘭", "葡萄牙", "西班牙", "義大利", "希臘", "土耳其", "以色列",
+    "巴勒斯坦", "加薩", "黎巴嫩", "敘利亞", "伊拉克", "伊朗", "沙烏地", "阿拉伯", "卡達", "阿聯",
+    "葉門", "埃及", "利比亞", "蘇丹", "衣索比亞", "索馬利亞", "肯亞", "奈及利亞", "南非",
+    "巴基斯坦", "阿富汗", "孟加拉", "斯里蘭卡", "尼泊爾", "印尼", "馬來西亞", "新加坡", "菲律賓",
+    "越南", "柬埔寨", "泰國", "緬甸", "澳洲", "紐西蘭", "北韓", "南韓", "日本", "印度",
+    "加州", "德州", "佛州", "紐約", "華府", "華盛頓", "白宮", "五角大廈", "國會山莊",
+    "北約", "歐盟", "聯合國", "世衛", "國際刑警", "國際法院", "海牙",
+    "格陵蘭島", "巴拿馬運河", "墨西哥灣", "阿拉斯加", "夏威夷", "波多黎各",
+    "無人機", "太空船", "核電廠", "半導體", "台積電", "航空母艦", "潛艦", "飛彈",
+)
+
+
+def _protected_inner_indices(text: str) -> set[int]:
+    """所有**不准當斷點**的索引：數字中間、括號內、專有名詞中間。"""
+    inner = _number_inner_indices(text)
+    stack: list[str] = []
+    for i, ch in enumerate(text):
+        if ch in _BRACKET_PAIRS:
+            stack.append(_BRACKET_PAIRS[ch])
+        elif stack and ch == stack[-1]:
+            stack.pop()
+        elif stack:
+            inner.add(i)          # 括號內：切在這個字**之前**＝把引號裡的詞腰斬
+    for word in _SPLIT_KEEP_TOGETHER:
+        start = text.find(word)
+        while start != -1:
+            inner.update(range(start + 1, start + len(word)))
+            start = text.find(word, start + 1)
+    return inner
+
+
+def _bracket_edge_split(text: str, inner: set[int]) -> tuple[str, str] | None:
+    """最靠近中點的括號邊緣（開括號之前、閉括號之後）當斷點；沒有括號回 None。"""
+    n = len(text)
+    mid = n // 2
+    edges = [i for i in range(2, n - 1) if (text[i] in _BRACKET_PAIRS or text[i - 1] in _BRACKET_CLOSERS)]
+    edges = [i for i in edges if i not in inner]
+    if not edges:
+        return None
+    i = min(edges, key=lambda e: (abs(e - mid), e))
+    return text[:i], text[i:]
+
+
 def _split_line_near_middle(text: str) -> tuple[str, str]:
     """把一行從中間附近切成兩行。
 
@@ -906,10 +961,14 @@ def _split_line_near_middle(text: str) -> tuple[str, str]:
     """
     n = len(text)
     mid = n // 2
-    inner = _number_inner_indices(text)
+    inner = _protected_inner_indices(text)
+    # 括號邊緣最優先（2026-09-13）：「川普發布「擴張版」美國地圖」→「川普發布／「擴張版」美國地圖」
+    at_edge = _bracket_edge_split(text, inner)
+    if at_edge is not None:
+        return at_edge
     for offset in range(0, 4):
         for i in (mid - offset, mid + offset):
-            if 2 <= i <= n - 2 and text[i - 1] in _SPLIT_AFTER_CHARS and not text[i].isdigit():
+            if 2 <= i <= n - 2 and i not in inner and text[i - 1] in _SPLIT_AFTER_CHARS and not text[i].isdigit():
                 return text[:i], text[i:]
     # 虛詞邊界（2026-09-10）：純粹取中點會把詞腰斬——使用者回報「容易被忽略的前兆」
     # 被切成「容易被忽／略的前兆」。沒有斷詞器可用（本機與 Cloud Run 都沒裝），
@@ -918,7 +977,7 @@ def _split_line_near_middle(text: str) -> tuple[str, str]:
     reach = n // 4 + 1
     for offset in range(0, reach + 1):
         for i in (mid - offset, mid + offset):
-            if 2 <= i <= n - 2 and text[i - 1] in _SPLIT_AFTER_PARTICLES and not text[i].isdigit():
+            if 2 <= i <= n - 2 and i not in inner and text[i - 1] in _SPLIT_AFTER_PARTICLES and not text[i].isdigit():
                 return text[:i], text[i:]
     for offset in range(0, reach + 1):
         for i in (mid - offset, mid + offset):
@@ -2764,7 +2823,7 @@ def compose_yt_overlay(
 
 # 多圖分切底圖（2026-09-06 使用者裁決：「原圖放置」附圖 2 張＝左右雙切、3 張＝三切，
 # 分隔線用斜切＋白色細線，比照頻道「閃兵案第四波」與十點不一樣的畫法）。
-YT_SPLIT_MAX_PANELS = 3
+YT_SPLIT_MAX_PANELS = 4   # 2026-09-13 使用者：4 格放寬（原 3）
 YT_SPLIT_SLANT_RATIO = 0.05          # 斜切：分隔線頂端比底端偏右多少（佔畫面寬）
 YT_SPLIT_LINE_RATIO = 0.0055         # 白色分隔線寬（6/1080）
 YT_SPLIT_LINE_FILL = (255, 255, 255)

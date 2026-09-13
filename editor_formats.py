@@ -1116,9 +1116,14 @@ def split_cover_title(title: str) -> list[str]:
     if len(parts) > COVER_TITLE_MAX_LINES:
         parts = parts[: COVER_TITLE_MAX_LINES - 1] + ["".join(parts[COVER_TITLE_MAX_LINES - 1 :])]
     if len(parts) == 1 and len(parts[0]) > COVER_TITLE_AUTO_SPLIT_LEN:
-        whole = parts[0]
-        mid = (len(whole) + 1) // 2
-        parts = [whole[:mid], whole[mid:]]
+        # 2026-09-13 使用者回報「勞保撥補上看1300億元大關」被切成「…看1／300億…」、
+        # 「擴張版」被腰斬：這裡原本是純粹對切。改走 compose 那套（數字／括號／專有名詞
+        # 不切、虛詞邊界優先），跟超寬防呆同一支函式，斷句只有一種規則。
+        # compose 在函式內才 import 本模組，這裡也延後 import 避免循環。
+        from compose import _split_line_near_middle
+
+        head, tail = _split_line_near_middle(parts[0])
+        parts = [head, tail] if head.strip() and tail.strip() else parts
     return parts
 
 

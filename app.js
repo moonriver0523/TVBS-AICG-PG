@@ -1055,8 +1055,8 @@ function applyEditorFormatInputs() {
         const refHint = document.getElementById('refUploadHint');
         if (refHint) {
             refHint.textContent = ['news', 'hot'].includes(editorFormat().ytLayout || '')
-                ? '原圖放置／AI改圖／實景參考／肖像照片／地圖底稿，單張 ≤1.5MB。原圖放置依張數決定版面：1 張整版、2 張左右雙切、3 張三切，順序就是由左到右'
-                : '原圖放置／AI改圖／實景參考／肖像照片／地圖底稿，單張 ≤1.5MB，最多 3 張';
+                ? '原圖放置／AI改圖／實景參考／肖像照片／地圖底稿，單張 ≤1.5MB。原圖放置依張數決定版面：1 張整版、2 張左右雙切、3 張三切、4 張四切，順序就是由左到右'
+                : '原圖放置／AI改圖／實景參考／肖像照片／地圖底稿，單張 ≤1.5MB，最多 4 張';
         }
         const host = wantsVstrip ? vstrip : (wantsYt ? yt : (wantsCover ? cover : news));
         if (host && refBox.previousElementSibling !== host) host.insertAdjacentElement('afterend', refBox);
@@ -2271,7 +2271,9 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
                 : composite
                     ? '生成左右底圖中，兩張平行跑，約 60–120 秒…'
                     : (deriving ? 'AI 補畫面描述後開始設計封面，約 40–140 秒…' : '設計封面中，約 30–120 秒…'));
-            beginGenerationProgress('image', asisCount >= 2 ? 0.3 : slotCount === 1 ? 1.0 : asisCount === 1 ? 0.3 : (composite ? 1.6 : 1.3));
+            // 兩段生圖（附圖＋AI 標題）＝一輪平行的格底圖＋一張整張，預算約 180 秒（2026-09-13）
+            const twoStage = !composite && (asisCount > 0 || anySlotImage);
+            beginGenerationProgress('image', twoStage ? 2.4 : asisCount >= 2 ? 0.3 : slotCount === 1 ? 1.0 : asisCount === 1 ? 0.3 : (composite ? 1.6 : 1.3));
             const res = await fetch(COVER_BACKEND_URL, {
                 method: 'POST',
                 headers: _apiHeaders(),
@@ -2524,9 +2526,13 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
         } else {
             const asis = state.userRefImages.some(ref => ref.purpose === 'asis');
             const aiTitle = fields.title_mode === 'ai';
-            showToast(aiTitle ? 'AI 整張生成（含標題），約 30–120 秒…'
+            // 附圖（共用區的原圖放置、或附圖位裡任何圖）＋AI 標題＝兩段生圖（2026-09-13）
+            const slotImages = (fields.slot_left || []).length + (fields.slot_right || []).length;
+            const twoStage = aiTitle && (asis || slotImages > 0);
+            showToast(twoStage ? '附圖先處理成底圖，再交給 AI 畫標題（兩段），約 60–180 秒…'
+                : aiTitle ? 'AI 整張生成（含標題），約 30–120 秒…'
                 : asis ? '用附圖當底圖，合成中…' : 'AI 生底圖後合成，約 30–120 秒…');
-            beginGenerationProgress('image', (asis && !aiTitle) ? 0.3 : 1.3);
+            beginGenerationProgress('image', twoStage ? 2.4 : (asis && !aiTitle) ? 0.3 : 1.3);
             const res = await fetch(YT_COVER_BACKEND_URL, {
                 method: 'POST',
                 headers: _apiHeaders(),
@@ -3002,7 +3008,7 @@ function updateInstructionOverrideHint() {
    ② 使用者上傳參考圖（地圖底稿／實景參考）
    肖像照仍由後端 resolve_portrait 自動查，這裡刻意不開人臉上傳。
    ============================================================ */
-const REF_MAX_FILES = 3;
+const REF_MAX_FILES = 4;   // 2026-09-13 使用者：4 格放寬（原 3）
 // 後端 data_url 上限約 2MB base64；1.5MB 原檔編碼後約 2MB，貼著上限
 const REF_MAX_BYTES = 1.5 * 1024 * 1024;
 // portrait＝肖像照：使用者親自上傳時，「兩位以上具名真人不畫臉」鐵律解除

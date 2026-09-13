@@ -338,7 +338,7 @@ ATTACHED IMAGE — REDRAW THIS SAME PICTURE (CRITICAL)
 - This is NOT a loose style reference. Someone who saw the attached image must recognise your output as the same moment redrawn, not as a different picture of a similar topic. Except where an editor's instruction below asks for a change, do not substitute another scene, another angle, another action or another setting for it.
 - Do redraw it: repaint, restyle and colour-grade it into this graphic's illustration style, and extend or crop the edges as the layout needs. Apart from whatever an editor's instruction below asks you to change, the treatment changes and the content does not.
 - Do not copy readable text or brand marks visible inside the attached image, except a brand the source material names — that one may be reproduced on its own objects; the BRANDS rule above still applies in full.
-- Do not copy any recognisable human face from the attached image; how to depict named real people is governed solely by the NAMED REAL PERSON rules."""
+- People in the attached image stay who they are: reproduce every face in it as it appears, recognisable, in the redrawn style. The NAMED REAL PERSON rules below govern only people who are NOT in the attached image — they do not restrict, blur, hide or replace a face that the editor supplied here."""
 
 # 使用者在指令欄寫的需求（2026-09-13 使用者裁決：「AI改圖 如果使用者在給 AI 指令欄
 # 寫需求 會吃到嗎? 應該要吃到」，權限＝**可以改內容**）。

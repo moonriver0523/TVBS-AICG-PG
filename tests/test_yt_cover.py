@@ -353,10 +353,17 @@ class SplitBackgroundTests(unittest.TestCase):
         out = compose.split_backgrounds([_png_bytes((900, 900), (10, 20, 30))])
         self.assertEqual(out, compose.crop_background_16x9(_png_bytes((900, 900), (10, 20, 30))))
 
-    def test_more_than_three_only_takes_the_first_three(self):
+    def test_four_images_make_four_panels(self):
+        # 2026-09-13 使用者：4 格放寬（原上限 3）
         img = self._split([(200, 30, 30), (30, 200, 30), (30, 30, 200), (250, 250, 30)])
         w, h = img.size
-        self.assertEqual(img.getpixel((5 * w // 6, h // 2)), (30, 30, 200))
+        self.assertEqual(img.getpixel((7 * w // 8, h // 2)), (250, 250, 30))
+        self.assertEqual(img.getpixel((w // 8, h // 2)), (200, 30, 30))
+
+    def test_more_than_four_only_takes_the_first_four(self):
+        img = self._split([(200, 30, 30), (30, 200, 30), (30, 30, 200), (250, 250, 30), (30, 250, 250)])
+        w, h = img.size
+        self.assertEqual(img.getpixel((7 * w // 8, h // 2)), (250, 250, 30))
 
     def test_two_asis_references_split_without_generating(self):
         req = main.YtCoverRequest(
