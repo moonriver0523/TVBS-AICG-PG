@@ -94,7 +94,7 @@ class TenCoverOverBase(_Harness):
 
     def test_full_single_asis_ai_title_one_call_with_only_the_photo(self):
         data, calls = self._run("/api/editor/cover", {
-            **self.BASE, "title_right": "", "layout": "full", "mode": "ai",
+            **self.BASE, "title_right": "", "layout": "full", "mode": "ai", "title_creativity": 1,
             "slot_left": [_ref(RED, "asis")],
         })
         self.assertEqual(data["mode"], "ai")
@@ -112,7 +112,7 @@ class TenCoverOverBase(_Harness):
 
     def test_full_two_asis_ai_title_base_is_a_two_panel_grid(self):
         data, calls = self._run("/api/editor/cover", {
-            **self.BASE, "title_right": "", "layout": "full", "mode": "ai",
+            **self.BASE, "title_right": "", "layout": "full", "mode": "ai", "title_creativity": 1,
             "slot_left": [_ref(RED, "asis"), _ref(BLUE, "asis")],
         })
         self.assertEqual(len(calls), 1)
@@ -123,7 +123,7 @@ class TenCoverOverBase(_Harness):
 
     def test_split_asis_left_aiedit_right_two_stage(self):
         data, calls = self._run("/api/editor/cover", {
-            **self.BASE, "title_right": "涵蓋加墨格陵蘭冰島等", "layout": "split", "mode": "ai",
+            **self.BASE, "title_right": "涵蓋加墨格陵蘭冰島等", "layout": "split", "mode": "ai", "title_creativity": 1,
             "slot_left": [_ref(RED, "asis")], "slot_right": [_ref(BLUE, "aiedit")],
         })
         self.assertEqual(data["mode"], "ai")
@@ -139,7 +139,7 @@ class TenCoverOverBase(_Harness):
     def test_split_each_side_aiedit_gets_its_own_reference(self):
         left, right = _ref(RED, "aiedit"), _ref(BLUE, "aiedit")
         data, calls = self._run("/api/editor/cover", {
-            **self.BASE, "title_right": "涵蓋加墨格陵蘭冰島等", "layout": "split", "mode": "ai",
+            **self.BASE, "title_right": "涵蓋加墨格陵蘭冰島等", "layout": "split", "mode": "ai", "title_creativity": 1,
             "slot_left": [left], "slot_right": [right],
         })
         self.assertEqual(len(calls), 3)
@@ -149,7 +149,7 @@ class TenCoverOverBase(_Harness):
 
     def test_split_no_attachments_stays_single_call(self):
         data, calls = self._run("/api/editor/cover", {
-            **self.BASE, "title_right": "涵蓋加墨格陵蘭冰島等", "layout": "split", "mode": "ai",
+            **self.BASE, "title_right": "涵蓋加墨格陵蘭冰島等", "layout": "split", "mode": "ai", "title_creativity": 1,
         })
         self.assertEqual(len(calls), 1)
         self.assertNotIn("FINISHED PICTURE", calls[0].prompt)
@@ -157,7 +157,7 @@ class TenCoverOverBase(_Harness):
     def test_full_mixed_asis_and_aiedit_becomes_all_aiedit_single_call(self):
         """任一張選 AI改圖 → 整版鎖 AI改圖、合成一張：原圖那張不再搶先裁滿版把 AI改圖 丟掉。"""
         data, calls = self._run("/api/editor/cover", {
-            **self.BASE, "title_right": "", "layout": "full", "mode": "ai",
+            **self.BASE, "title_right": "", "layout": "full", "mode": "ai", "title_creativity": 1,
             "slot_left": [_ref(RED, "asis"), _ref(BLUE, "aiedit")],
         })
         self.assertEqual(len(calls), 1)
@@ -176,7 +176,7 @@ class TenCoverOverBase(_Harness):
 
     def test_stage_two_does_not_carry_the_instruction_again(self):
         data, calls = self._run("/api/editor/cover", {
-            **self.BASE, "title_right": "涵蓋加墨格陵蘭冰島等", "layout": "split", "mode": "ai",
+            **self.BASE, "title_right": "涵蓋加墨格陵蘭冰島等", "layout": "split", "mode": "ai", "title_creativity": 1,
             "instruction": "改成夜景",
             "slot_left": [_ref(RED, "asis")], "slot_right": [_ref(BLUE, "aiedit")],
         })
@@ -202,7 +202,7 @@ class YtCoverOverBase(_Harness):
         left, right = _ref(RED, "aiedit"), _ref(BLUE, "asis")
         data, calls = self._run("/api/editor/yt-cover", {
             # 標題要夠長：整點極短標題（首段 ≤5 格）本來就強制程式壓字，別讓那條規則混進來
-            "title": "川普發布擴張版美國地圖", "title_second": "涵蓋加墨格陵蘭冰島等地", "layout": "hourly", "title_mode": "ai",
+            "title": "川普發布擴張版美國地圖", "title_second": "涵蓋加墨格陵蘭冰島等地", "layout": "hourly", "title_mode": "ai", "creativity": 1,
             "date_text": "2026/09/13", "slot_left": [left], "slot_right": [right],
         })
         self.assertEqual(data["title_mode"], "ai")
@@ -213,7 +213,7 @@ class YtCoverOverBase(_Harness):
 
     def test_single_two_asis_ai_title_base_is_split_grid(self):
         data, calls = self._run("/api/editor/yt-cover", {
-            "title": "前段 後段", "layout": "news", "title_mode": "ai", "date_text": "2026/09/13",
+            "title": "前段 後段", "layout": "news", "title_mode": "ai", "creativity": 1, "date_text": "2026/09/13",
             "reference_images": [_ref(RED, "asis"), _ref(BLUE, "asis")],
         })
         self.assertEqual(len(calls), 1)
@@ -238,7 +238,7 @@ class YtCoverOverBase(_Harness):
 
     def test_single_three_asis_in_slot_ai_title_base_is_three_grid(self):
         data, calls = self._run("/api/editor/yt-cover", {
-            "title": "歐洲熱浪破紀錄 馬德里飆42度", "layout": "hourly", "title_mode": "ai",
+            "title": "歐洲熱浪破紀錄 馬德里飆42度", "layout": "hourly", "title_mode": "ai", "creativity": 1,
             "date_text": "2026/09/13", "slot_left": [_ref(RED, "asis"), _ref(GREEN, "asis"), _ref(BLUE, "asis")],
         })
         self.assertEqual(len(calls), 1)
@@ -250,7 +250,7 @@ class YtCoverOverBase(_Harness):
 
     def test_single_mixed_slot_becomes_all_aiedit(self):
         data, calls = self._run("/api/editor/yt-cover", {
-            "title": "川普發布擴張版美國地圖 涵蓋加墨格陵蘭冰島", "layout": "hourly", "title_mode": "ai",
+            "title": "川普發布擴張版美國地圖 涵蓋加墨格陵蘭冰島", "layout": "hourly", "title_mode": "ai", "creativity": 1,
             "date_text": "2026/09/13",
             "slot_left": [_ref(RED, "asis"), _ref(BLUE, "aiedit")],
         })
@@ -261,7 +261,7 @@ class YtCoverOverBase(_Harness):
     def test_refine_return_trip_does_not_rebuild_the_base(self):
         # 追加修改帶 background 回來：只重貼固定元素，不該再打模型
         data, calls = self._run("/api/editor/yt-cover", {
-            "title": "前段 後段", "layout": "news", "title_mode": "ai", "date_text": "2026/09/13",
+            "title": "前段 後段", "layout": "news", "title_mode": "ai", "creativity": 1, "date_text": "2026/09/13",
             "reference_images": [_ref(RED, "asis")],
             "background_image_base64": base64.b64encode(_png_bytes(size=(1280, 720))).decode(),
             "background_is_ai": True,

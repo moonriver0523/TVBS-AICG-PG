@@ -77,13 +77,13 @@ class AiCoverNoteTests(unittest.TestCase):
     def test_split_ai_cover_gets_a_label_on_both_outer_corners(self):
         img = self._cover({
             "title_left": "尼泊爾災區 滅村慘況", "title_right": "台南易淹水 成氣候衝擊區",
-            "layout": "split", "mode": "ai",
+            "layout": "split", "mode": "ai", "title_creativity": 1,   # 2026-09-14 起 0 級＝程式壓字
         })
         self.assertTrue(_note_region_is_plate(img, align_right=False))
         self.assertTrue(_note_region_is_plate(img, align_right=True))
 
     def test_full_ai_cover_gets_one_label_top_left_only(self):
-        img = self._cover({"title_left": "尼泊爾災區 滅村慘況", "layout": "full", "mode": "ai"})
+        img = self._cover({"title_left": "尼泊爾災區 滅村慘況", "layout": "full", "mode": "ai", "title_creativity": 1})
         self.assertTrue(_note_region_is_plate(img, align_right=False))
         self.assertFalse(_note_region_is_plate(img, align_right=True))
 

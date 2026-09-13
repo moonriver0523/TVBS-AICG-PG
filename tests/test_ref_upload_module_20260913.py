@@ -286,7 +286,7 @@ class TenCoverSlotEndpointTests(unittest.TestCase):
             res = client.post("/api/editor/cover", json={
                 "title_left": "勞保撥補 上看1300億",
                 "title_right": "病理醫師 月薪65萬仍缺工",
-                "date_text": "2026/09/14", "mode": "ai",
+                "date_text": "2026/09/14", "mode": "ai", "title_creativity": 1,
                 "slot_left": [_ref("aiedit")],
             }, headers=headers())
         self.assertEqual(res.status_code, 200, res.text)
@@ -317,7 +317,8 @@ class YtCoverSlotEndpointTests(unittest.TestCase):
             image_data_base64=base64.b64encode(_png()).decode("ascii"),
             mime_type="image/png", model="fake-model",
         )
-        base = {"layout": "hourly", "date_text": "2026/09/14", "title_mode": "ai"}
+        # 2026-09-14 起創意 0 一律程式壓字，這組要驗 AI 標題路徑所以帶 1
+        base = {"layout": "hourly", "date_text": "2026/09/14", "title_mode": "ai", "creativity": 1}
         base.update(payload)
         with patch.object(main, "generate_image_raw", return_value=fake) as raw, \
              patch.object(main, "derive_yt_cover_plan",
@@ -462,7 +463,7 @@ class AiEditInstructionWiringTests(unittest.TestCase):
         """十點的預設模式。"""
         reqs = self._capture("/api/editor/cover", {
             "title_left": "勞保撥補 上看1300億",
-            "date_text": "2026/09/14", "mode": "ai",
+            "date_text": "2026/09/14", "mode": "ai", "title_creativity": 1,
             "instruction": self.INSTRUCTION,
             "slot_left": [_ref("aiedit")],
         })

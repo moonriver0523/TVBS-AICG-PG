@@ -62,6 +62,7 @@ def _payload(**extra):
         "title_second": SECOND,
         "layout": "hourly",
         "title_mode": "composite",
+        "creativity": 1,   # 2026-09-14 起創意 0 一律程式壓字；title_mode=ai 的案子要 1 才真的走 AI
         "date_text": "2026/09/08",
         "time_text": "20:00",
     }

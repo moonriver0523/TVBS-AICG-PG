@@ -1473,51 +1473,19 @@ YT_COVER_TITLE_MODE_COMPOSITE = "composite"
 YT_COVER_TITLE_MODES = (YT_COVER_TITLE_MODE_AI, YT_COVER_TITLE_MODE_COMPOSITE)
 
 
-# ---- 極短標題的整點封面強制走程式壓字（2026-09-13 使用者裁決）----
-#
-# 使用者回報：整點 0 級「標題字少時字級太大，會被日期紅條蓋到」，附實拍。
-#
-# 先在 prompt 端加了絕對字高上限（見 YT_HOURLY_TITLE_CAP_RATIO）。實拍四張的結論
-# 是**擋不住**：4＋4 字的成品塊高仍是 36.4%（上限推出來應該 ~32%），字頂落在 61.6%，
-# 而紅條下緣就在 61.5%——餘裕 1 個像素。而且修正前那張也剛好沒撞，所以那批連
-# 「有沒有變好」都證明不出來。模型不吃百分比／不肯縮，本專案已經踩過三次。
-#
-# 所以改成程式端保證：極短標題直接切成 composite（模型只生無文字底圖、標題程式壓），
-# 程式壓字版的塊高是 29.2%、字頂 66%，離紅條有 4.5% 的真實距離，物理上不可能撞。
-# 代價是極短標題就沒有 AI 標題的設計感——使用者知道並選了這條。
-#
-# **只看第一行**（2026-09-13 使用者第二輪裁決）：第二行的字級是跟著第一行走的，
-# 所以決定塊高的是第一行有幾個字。門檻 **5 格（含）**——使用者實拍為證：
-# 「東北季風好冷」（6 字）不會蓋到，「東北季風冷」（5 字）會。
-#
-# 「第一行」的定義也是使用者給的：**空格前那一段**；整句沒有空格就是整句本身
-# （「第一句 空格前5是5字(含)以內，或第一句全部只有5字(含)以內」）。
-# 所以沒打空格的長標題不算極短——那種情況分行是後面才決定的，不在這裡猜。
-#
-# 只管 0 級。1 級起日期牌是模型自己畫、而且明令貼著標題走，沒有這個碰撞；
-# 在那邊強制 composite 等於把整條創意階梯關掉。
-YT_HOURLY_SHORT_LINE1_MAX = 5.0   # 第一行這個格數（含）以下算極短
-
-
-def yt_hourly_first_line(title: str) -> str:
-    """使用者打的這串標題，第一行是哪幾個字：空格前那一段，沒空格就是整句。"""
-    return re.split(r"[\s　]+", (title or "").strip(), maxsplit=1)[0]
-
-
-def yt_hourly_short_title_needs_composite(
-    layout: str, creativity: int, title_mode: str, title: str, title_second: str = ""
-) -> bool:
-    """這張整點封面的第一行是不是短到會撞日期紅條，必須改走程式壓字。
-
-    雙則的第一行就是 title 本身（title_second 是第二則、另一行），而 title 這一欄
-    同樣是「空格前那一段」的規則——所以兩種模式共用同一支判斷，不用分岔。
-    """
-    if layout != YT_COVER_LAYOUT_HOURLY or creativity >= 1:
-        return False
-    if title_mode != YT_COVER_TITLE_MODE_AI:
-        return False
-    line1 = yt_hourly_first_line(title)
-    return bool(line1) and compose.title_display_width(line1) <= YT_HOURLY_SHORT_LINE1_MAX
+# 創意 0 → 一律程式壓字（2026-09-14 使用者裁決，十點／整點／新聞直播／熱搜／live24 全套）。
+# 0 級的 AI 標題只是「規矩排版」，模型畫出來理論上跟程式壓字一樣，卻多了三種已實拍過的
+# 風險：錯字、原圖放置那格被整張重畫而漂移（第三輪案 04、創意階梯輪 C08）、字太大撞
+# 整點日期紅條（2026-09-13 極短標題那條局部修補，現已被本規則涵蓋而移除）。
+# 1 級起標題造型（底板、材質字面、立體字）只有模型畫得出來，才送生圖；原圖放置的格子
+# 跟著整張重畫、接受漂移——使用者主動開創意就是選了風格優先。
+# 追加修改帶回底圖（has_background）不動：標題已經畫在上面了，改成 composite 會再壓一層。
+# 十點的 mode 與 YT 的 title_mode 用同一組字串（ai／composite），所以共用這一支。
+def title_mode_for_creativity(creativity: int, title_mode: str, has_background: bool) -> str:
+    """回傳這張封面實際該走的標題模式：創意 0 且沒帶現成底圖 → 程式壓字，其餘照呼叫端。"""
+    if has_background or creativity >= 1:
+        return title_mode
+    return YT_COVER_TITLE_MODE_COMPOSITE
 
 # 底部壓色框開關（2026-09-08 使用者裁決；同日晚改預設 ON）。合成版由 compose 的 bottom_band
 # 決定畫不畫，AI 版只能靠 prompt——所以 LAYOUT 的第一條與 IMAGERY 的結尾都要換句話說，

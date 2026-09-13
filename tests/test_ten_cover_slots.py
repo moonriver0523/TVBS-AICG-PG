@@ -31,6 +31,7 @@ def _payload(left=None, right=None, **extra):
         "title_right": "台南易淹水 成氣候衝擊區",
         # 2026-09-13 起 ai＋附圖位＝兩段生圖（會打模型），這裡的版位測試一律走合成版
         "mode": "composite",
+        "title_creativity": 1,   # 2026-09-14 起創意 0 一律程式壓字；mode=ai 的案子要 1 才真的走 AI
         "asis_left": _data_url(_png_bytes(colour=left)) if left else "",
         "asis_right": _data_url(_png_bytes(colour=right)) if right else "",
     }

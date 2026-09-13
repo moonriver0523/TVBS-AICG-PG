@@ -61,7 +61,7 @@ class CoverAspectGuardTests(unittest.TestCase):
     def test_ai_cover_degrade_is_an_error(self):
         res = self._post("/api/editor/cover", {
             "title_left": "尼泊爾災區 滅村慘況", "title_right": "台南易淹水 成氣候衝擊區",
-            "layout": "split", "mode": "ai",
+            "layout": "split", "mode": "ai", "title_creativity": 1,   # 2026-09-14 起 0 級＝程式壓字
         })
         self.assertEqual(res.status_code, 502, res.text)
 
@@ -70,7 +70,7 @@ class CoverAspectGuardTests(unittest.TestCase):
         self.assertEqual(res.status_code, 502, res.text)
 
     def test_yt_cover_ai_title_degrade_is_an_error(self):
-        res = self._post("/api/editor/yt-cover", {"title": "前段 後段", "title_mode": "ai"})
+        res = self._post("/api/editor/yt-cover", {"title": "前段 後段", "title_mode": "ai", "creativity": 1})
         self.assertEqual(res.status_code, 502, res.text)
 
 

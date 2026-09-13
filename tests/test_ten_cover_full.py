@@ -129,7 +129,7 @@ class FullEndpointTests(unittest.TestCase):
 
         with patch.object(main, "generate_image_raw", side_effect=fake_raw), \
              patch.object(main, "resolve_cover_visuals", return_value=("冰川崩落", "冰川崩落")):
-            res = client.post("/api/editor/cover", json={"title_left": "全球3100條 躍動冰川", "layout": "full", "mode": "ai"}, headers=_headers())
+            res = client.post("/api/editor/cover", json={"title_left": "全球3100條 躍動冰川", "layout": "full", "mode": "ai", "title_creativity": 1}, headers=_headers())
         self.assertEqual(res.status_code, 200, res.text)
         self.assertEqual(res.json()["model"], "ten-cover-full:ai")
         self.assertIn("ONE single photograph", seen["prompt"])

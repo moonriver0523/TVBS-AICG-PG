@@ -440,7 +440,7 @@ class EndpointTests(unittest.TestCase):
 
         payload = {
             "title": "北北基宜大雨特報 台北12處道路封閉",
-            "title_mode": "ai",
+            "title_mode": "ai", "creativity": 1,
             "date_text": "2026/09/07",
             "reference_images": [{"data_url": _data_url(_png_bytes((1200, 700))), "purpose": "asis"}],
         }
@@ -476,7 +476,7 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(res.json()["line1"], "遭撞趴引擎蓋一路載走200公尺")
 
     def test_ai_title_mode_generates_whole_cover_with_text(self):
-        payload = {"title": "前段 後段", "title_mode": "ai", "original_audio": True, "date_text": "2026/09/06"}
+        payload = {"title": "前段 後段", "title_mode": "ai", "creativity": 1, "original_audio": True, "date_text": "2026/09/06"}
         fake = main.ImageGenerateResponse(
             image_data_base64=base64.b64encode(_png_bytes((1536, 864), colour=(30, 30, 30))).decode("ascii"),
             mime_type="image/png", model="fake-model",
@@ -499,7 +499,7 @@ class EndpointTests(unittest.TestCase):
 
     def test_ai_title_mode_with_background_only_overlays(self):
         payload = {
-            "title": "前段 後段", "title_mode": "ai", "layout": "hourly", "time_text": "20:00",
+            "title": "前段 後段", "title_mode": "ai", "creativity": 1, "layout": "hourly", "time_text": "20:00",
             "background_image_base64": base64.b64encode(_png_bytes((1536, 864))).decode("ascii"),
             "background_is_ai": True,
         }
@@ -563,7 +563,11 @@ class FrontendParityTests(unittest.TestCase):
         self.assertIn("state.ytCoverTitleMode !== 'ai'", js)
         with open(self.INDEX, encoding="utf-8") as fh:
             html = fh.read()
-        self.assertRegex(html, r'id="ytCoverAiTitle"[^>]*checked', "預設標題由 AI 生成（使用者裁決）")
+        # 2026-09-14 使用者裁決：創意 0 一律程式壓字，勾選框降成唯讀鏡像（預設創意 0＝不勾）
+        box = re.search(r'<input id="ytCoverAiTitle"[^>]*>', html).group(0)
+        self.assertIn("disabled", box)
+        self.assertNotIn("checked", box)
+        self.assertIn("title_mode: state.ytCreativity >= 1 ? 'ai' : 'composite'", js)
 
     def test_hot_format_registered_on_both_sides(self):
         # 2026-09-06 型錄 H 類「今日熱搜」
@@ -598,7 +602,9 @@ class FrontendParityTests(unittest.TestCase):
         """
         with open(self.APP_JS, encoding="utf-8") as fh:
             js = fh.read()
-        self.assertIn("editorFormat().inputs !== 'yt_cover' || !aiMode", js)
+        # 2026-09-14 起勾選框只是拉桿的鏡像，拉桿永遠露出，只剩版型檢查
+        self.assertIn("editorFormat().inputs !== 'yt_cover';", js)
+        self.assertIn("aiBox.checked = state.ytCreativity >= 1", js)
 
     def test_flag_labels_match_backend(self):
         with open(self.INDEX, encoding="utf-8") as fh:
@@ -689,7 +695,7 @@ class HotCoverTests(unittest.TestCase):
 
         with patch.object(main, "generate_image_raw", side_effect=fake_generate), \
              patch.object(main, "derive_yt_cover_plan", return_value={"visual": "夜間廣場人潮", "portrait_subjects": [], "portrait_subjects_en": []}):
-            res = client.post("/api/editor/yt-cover", json={"title": "大象來了 10萬人塞爆士林", "layout": "hot", "title_mode": "ai"}, headers=HEADERS)
+            res = client.post("/api/editor/yt-cover", json={"title": "大象來了 10萬人塞爆士林", "layout": "hot", "title_mode": "ai", "creativity": 1}, headers=HEADERS)
         self.assertEqual(res.status_code, 200, res.text)
         self.assertIn("trending", seen["prompt"])
         self.assertIn("no LIVE word", seen["prompt"])

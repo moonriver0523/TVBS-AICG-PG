@@ -281,6 +281,7 @@ class EndpointTests(unittest.TestCase):
             "title_left": "尼泊爾災區 無人機空拍 滅村慘況",
             "title_right": "台南易淹水 成氣候衝擊區",
             "mode": mode,
+            "title_creativity": 1,   # 2026-09-14 起創意 0 一律程式壓字；mode=ai 的案子要 1 才真的走 AI
             "reference_images": refs,
         }
 

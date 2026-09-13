@@ -75,8 +75,8 @@ class CoverTextFreeOverrideTests(unittest.TestCase):
 
     def test_ai_mode_is_never_told_to_stay_text_free(self):
         for body in (
-            {"title_left": "尼泊爾災區 滅村慘況", "title_right": "台南易淹水 成氣候衝擊區", "layout": "split", "mode": "ai"},
-            {"title_left": "尼泊爾災區 滅村慘況", "layout": "full", "mode": "ai"},
+            {"title_left": "尼泊爾災區 滅村慘況", "title_right": "台南易淹水 成氣候衝擊區", "layout": "split", "mode": "ai", "title_creativity": 1},
+            {"title_left": "尼泊爾災區 滅村慘況", "layout": "full", "mode": "ai", "title_creativity": 1},
         ):
             with self.subTest(layout=body["layout"]):
                 seen = self._run(body)

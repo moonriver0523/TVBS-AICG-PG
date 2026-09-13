@@ -60,7 +60,7 @@ class CoverRefineSourceTests(unittest.TestCase):
     def test_ai_mode_returns_the_pre_paste_model_image(self):
         for layout in (SPLIT, FULL):
             with self.subTest(layout=layout["layout"]):
-                data = self._post({**layout, "mode": "ai"})
+                data = self._post({**layout, "mode": "ai", "title_creativity": 1})
                 self.assertTrue(data["source_image_base64"])
                 self.assertEqual(data["source_mime_type"], "image/png")
                 source = Image.open(io.BytesIO(base64.b64decode(data["source_image_base64"]))).convert("RGB")
@@ -82,7 +82,7 @@ class CoverRecompositeTests(unittest.TestCase):
     def _recomposite(self, body):
         raw = _png_for("16:9")
         payload = {
-            **body, "mode": "ai",
+            **body, "mode": "ai", "title_creativity": 1,
             "background_image_base64": base64.b64encode(raw).decode("ascii"),
             "background_mime_type": "image/png",
         }

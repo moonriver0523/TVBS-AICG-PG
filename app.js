@@ -1494,9 +1494,13 @@ const COVER_TITLE_CREATIVITY = [
 function updateCoverTitleStyleButton() {
     const bar = document.getElementById('coverTitleStyleBar');
     if (!bar) return;
-    const aiMode = document.getElementById('coverAiTitle')?.checked !== false;
-    const hidden = editorFormat().inputs !== 'cover' || !aiMode;
+    // 2026-09-14 使用者裁決：創意 0 一律程式壓字、1 級起才由 AI 畫標題。拉桿變成唯一的
+    // 開關，「標題由 AI 生成」勾選框降成唯讀鏡像（disabled，勾不勾跟著拉桿走），
+    // 所以拉桿永遠露出，不再被勾選框藏起來。後端同一條規則兜底（title_mode_for_creativity）。
+    const hidden = editorFormat().inputs !== 'cover';
     bar.className = (hidden ? 'hidden ' : '') + 'flex items-center gap-2';
+    const aiBox = document.getElementById('coverAiTitle');
+    if (aiBox) aiBox.checked = state.coverTitleCreativity >= 1;
     const range = document.getElementById('coverTitleStyleRange');
     if (range) range.value = String(state.coverTitleCreativity);
     const label = document.getElementById('coverTitleStyleLabel');
@@ -1543,10 +1547,13 @@ function updateYtCreativityBar() {
     // - composite 模式標題由程式壓字，creativity 這條線只影響 _yt_cover_full_image
     //   （AI 整張），對程式壓字沒有作用——跟十點的 coverTitleStyleBar 同一個理由
     //   （見 updateCoverTitleStyleButton）。
-    const aiMode = document.getElementById('ytCoverAiTitle')?.checked !== false;
-    const hidden = editorFormat().inputs !== 'yt_cover' || !aiMode;
+    // 2026-09-14 使用者裁決：創意 0 一律程式壓字、1 級起才由 AI 畫標題——拉桿是唯一開關，
+    // 勾選框只是唯讀鏡像（與十點的 updateCoverTitleStyleButton 同一套）。
+    const hidden = editorFormat().inputs !== 'yt_cover';
     const bar = document.getElementById('ytCreativityBar');
     if (bar) bar.classList.toggle('hidden', hidden);
+    const aiBox = document.getElementById('ytCoverAiTitle');
+    if (aiBox) aiBox.checked = state.ytCreativity >= 1;
     const range = document.getElementById('ytCreativityRange');
     if (range) range.value = String(state.ytCreativity);
     const label = document.getElementById('ytCreativityLabel');
@@ -2254,9 +2261,9 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
             if (fullLayout) slots.right = false;   // 滿版只有一個附圖位
             const slotCount = (slots.left ? 1 : 0) + (slots.right ? 1 : 0);
             const asisCount = slotCount || uploadedAsisCount();
-            // 2026-09-13 使用者裁決：原圖放置＋AI 標題不再強制程式壓字——後端把原圖（或雙切
-            // 每格各自處理後拼好的底圖）當唯一附圖送模型畫字（兩段生圖）。模式只看勾選框。
-            const composite = document.getElementById('coverAiTitle')?.checked === false;
+            // 2026-09-14 使用者裁決：模式由創意拉桿決定——0＝程式壓字，1 級起才交 AI 畫標題
+            //（原圖放置那格跟著整張重畫、接受漂移）。勾選框只是鏡像，不再讀它。
+            const composite = state.coverTitleCreativity === 0;
             const anySlotImage = state.coverAsis.left.length > 0 || (!fullLayout && state.coverAsis.right.length > 0);
             const deriving = true;   // 畫面描述欄移除後一律由 AI 推導（2026-09-08 WP1）
             showToast(!composite && (asisCount > 0 || anySlotImage)
@@ -2429,7 +2436,8 @@ function ytCoverFields() {
         // 整點直播＋這一欄有值＝雙則（後端 editor_formats.yt_cover_is_dual）
         title_second: layout === 'hourly' ? val('ytCoverTitleSecond') : '',
         layout,
-        title_mode: document.getElementById('ytCoverAiTitle')?.checked === false ? 'composite' : 'ai',
+        // 2026-09-14：模式由創意拉桿決定（0＝程式壓字），勾選框只是鏡像
+        title_mode: state.ytCreativity >= 1 ? 'ai' : 'composite',
         original_audio: layout === 'news' && !!document.getElementById('ytCoverOriginalAudio')?.checked,
         ai_translation: layout === 'news' && !!document.getElementById('ytCoverAiTranslation')?.checked,
         date_text: val('ytCoverDate'),

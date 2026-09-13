@@ -360,9 +360,11 @@ class CoverPromptTests(unittest.TestCase):
         index_html = (pathlib.Path(__file__).resolve().parent.parent / "index.html").read_text(encoding="utf-8")
         m = re.search(r'<input id="coverAiTitle" type="checkbox"[^>]*>', index_html)
         self.assertIsNotNone(m, "index.html 缺十點封面的「標題由 AI 生成」勾選框")
-        self.assertIn("checked", m.group(0), "預設要開（AI 生成）")
+        # 2026-09-14 使用者裁決：創意 0 一律程式壓字、1 級起才交 AI——勾選框降成拉桿的唯讀鏡像
+        self.assertIn("disabled", m.group(0), "勾選框要是唯讀鏡像")
+        self.assertNotIn("checked", m.group(0), "預設創意 0＝程式壓字，不該預設勾起")
         app_js = APP_JS.read_text(encoding="utf-8")
-        self.assertIn("document.getElementById('coverAiTitle')?.checked === false", app_js)
+        self.assertIn("const composite = state.coverTitleCreativity === 0", app_js)
         self.assertIn("mode: composite ? 'composite' : 'ai'", app_js)
 
 

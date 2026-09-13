@@ -387,7 +387,10 @@ class RequestTests(unittest.TestCase):
                 self.assertIn(f"level {level} of 4", self._prompt(title_creativity=level))
 
     def test_default_is_level_zero(self):
-        self.assertNotIn("DESIGNED TITLE", self._prompt())
+        # 2026-09-14 起 0 級一律程式壓字：送模型的只剩無字底圖 prompt
+        prompt = self._prompt()
+        self.assertNotIn("DESIGNED TITLE", prompt)
+        self.assertNotIn("TEXT TO RENDER", prompt)
 
     def test_out_of_range_is_rejected(self):
         for bad in (-1, 5):

@@ -5130,6 +5130,15 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     req = req.model_copy(
         update={"layout": editor_formats.resolve_cover_layout(req.layout, req.title_right)}
     )
+    # 創意 0 → 程式壓字（2026-09-14 使用者裁決，理由見 editor_formats.title_mode_for_creativity）。
+    # 放在所有 ai_over_base／只改文字 判斷之前，下游一律看改寫後的 mode；回應也回改寫後的值，
+    # 前端靠 data.mode 決定「只改文字」要不要露出。
+    forced_mode = editor_formats.title_mode_for_creativity(
+        req.creativity_level(), req.mode, bool(req.background_image_base64)
+    )
+    if forced_mode != req.mode:
+        print("[cover] 創意 0 → 標題改程式壓字（零錯字、原圖零漂移）", flush=True)
+        req = req.model_copy(update={"mode": forced_mode})
     if req.layout == "full":
         # 滿版原圖放置最多 4 張（2026-09-14），擋在下面的斷句模型之前
         reject_excess_asis(req.slot_refs(0) or req.reference_images, where="滿版")
@@ -5823,14 +5832,15 @@ def yt_dual_background(
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     live24 = req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
-    if live24 and req.creativity < 1:
-        # 0 級＝規矩：標題由程式壓，位置／字級／斜度／顏色都是從實際播出範本量到的，
-        # 像素級精準且零錯字。1 級起交給模型（2026-09-13 使用者裁決：「標題完全沒有
-        # 被創意階梯影響 這是錯的」）——這個版型原本被我裁成純合成版，是沒人要求過的
-        # 限縮，而且跟十點／整點／熱搜不一致，那三個的階梯都是靠標題生效的。
-        req = req.model_copy(update={
-            "title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE,
-        })
+    # 創意 0 → 程式壓字（2026-09-14 使用者裁決，理由見 editor_formats.title_mode_for_creativity）。
+    # 四個版型一體適用；live24 原本自己那條 creativity<1 與整點極短標題那條都被這裡涵蓋。
+    # 1 級起交給模型（2026-09-13 使用者裁決：「標題完全沒有被創意階梯影響 這是錯的」）。
+    forced_mode = editor_formats.title_mode_for_creativity(
+        req.creativity, req.title_mode, bool(req.background_image_base64)
+    )
+    if forced_mode != req.title_mode:
+        print("[yt-cover] 創意 0 → 標題改程式壓字（零錯字、原圖零漂移）", flush=True)
+        req = req.model_copy(update={"title_mode": forced_mode})
     # live24 只有一個標題，hourly 那條「有第二標題＝雙則」的規則用不上。
     # 2026-09-13 使用者裁決：**兩個附圖位都有東西**才雙切，只放一格或都沒放＝滿版。
     dual = (
@@ -5878,17 +5888,6 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     )
     if ai_over_base:
         print("[yt-cover] 附圖＋AI 標題 → 程式先拼底圖，再交給模型畫字（兩段）", flush=True)
-    if not req.background_image_base64 and editor_formats.yt_hourly_short_title_needs_composite(
-        req.layout, req.creativity, req.title_mode, req.title, req.title_second
-    ):
-        # 極短標題的整點 0 級一律程式壓字（2026-09-13 使用者裁決，理由與實拍數據見
-        # editor_formats.yt_hourly_short_title_needs_composite）：字少時模型把標題畫得
-        # 太大，會爬上去撞程式壓的日期紅條，prompt 端的字高上限擋不住。
-        # 判定只看第一行（空格前那一段）≤5 格：第二行字級跟著第一行走。
-        # 帶了 background_image_base64 就不能改：那是追加修改回來的圖，標題已經畫在
-        # 上面了，這裡只貼固定元素；改成 composite 會把標題再壓一次、疊成兩層。
-        print(f"[yt-cover] 整點極短標題「{req.title}」→ 改程式壓字，避免撞日期紅條", flush=True)
-        req = req.model_copy(update={"title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE})
     hourly = req.layout == editor_formats.YT_COVER_LAYOUT_HOURLY
     hot = req.layout == editor_formats.YT_COVER_LAYOUT_HOT
     if dual and req.title_mode == editor_formats.YT_COVER_TITLE_MODE_COMPOSITE:
