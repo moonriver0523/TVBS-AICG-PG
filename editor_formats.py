@@ -989,7 +989,13 @@ YT_COVER_AI_TRANSLATION_LABEL = "AI即時翻譯"
 YT_COVER_LAYOUT_NEWS = "news"
 YT_COVER_LAYOUT_HOURLY = "hourly"
 YT_COVER_LAYOUT_HOT = "hot"          # 今日熱搜（2026-09-06 型錄 H 類）：紅色系、無日期無 LIVE
-YT_COVER_LAYOUTS = (YT_COVER_LAYOUT_NEWS, YT_COVER_LAYOUT_HOURLY, YT_COVER_LAYOUT_HOT)
+# 24H LIVE（2026-09-13）：hourly 的鏡像——Logo 換兩層版移右上、章換成左上的 24H LIVE
+# 角標素材、標題從兩行白黃改成一行深紅斜體。**純合成版**，沒有 AI 標題路徑。
+YT_COVER_LAYOUT_LIVE24 = "live24"
+YT_COVER_LAYOUTS = (
+    YT_COVER_LAYOUT_NEWS, YT_COVER_LAYOUT_HOURLY, YT_COVER_LAYOUT_HOT,
+    YT_COVER_LAYOUT_LIVE24,
+)
 
 # 標題分段：使用者用**恰好一個**半形空格分兩段就直接切；零個或兩個以上空格
 # 交給文字模型判斷（範例 C 肝那張第二行本身就含空格「11人確診 疾管署說明」，
@@ -2119,6 +2125,15 @@ EDITOR_FORMATS = {
         "label": "YT整點直播",
         "pipeline": PIPELINE_YT_COVER,
         "yt_layout": YT_COVER_LAYOUT_HOURLY,
+        "digest_rules": "",
+        "hole_side": None,
+    },
+    # YT 24H LIVE：同一條底圖流程，版面換成 compose.compose_yt_live24_cover。
+    # 單行標題、程式壓字；兩個附圖位都有東西才走雙切漸層（2026-09-13 使用者裁決）。
+    "yt_live24_cover": {
+        "label": "YT24H LIVE",
+        "pipeline": PIPELINE_YT_COVER,
+        "yt_layout": YT_COVER_LAYOUT_LIVE24,
         "digest_rules": "",
         "hole_side": None,
     },

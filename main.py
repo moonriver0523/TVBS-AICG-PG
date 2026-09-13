@@ -4970,7 +4970,7 @@ class YtCoverRequest(BaseModel):
     # 沒有雙則版面，帶了也忽略。判定在 editor_formats.yt_cover_is_dual。
     title_second: str = Field(default="", max_length=60)
     # news＝國內外新聞直播；hourly＝整點直播；hot＝今日熱搜（見 editor_formats.YT_COVER_LAYOUTS）
-    layout: Literal["news", "hourly", "hot"] = "news"
+    layout: Literal["news", "hourly", "hot", "live24"] = "news"
     # ai＝整張連標題字交給生圖模型畫，程式只後貼固定元素（2026-09-06 使用者裁決預設）；
     # composite＝模型只生無文字底圖，標題由程式壓字（零錯字）。
     title_mode: Literal["ai", "composite"] = "ai"
@@ -5458,7 +5458,19 @@ def yt_dual_background(
     dependencies=[Depends(verify_internal_api_key)],
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
-    dual = editor_formats.yt_cover_is_dual(req.layout, req.title_second)
+    live24 = req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
+    if live24:
+        # live24 是純合成版：標題／角標／日期／Logo 全程式壓，創意階梯只作用在底圖。
+        # 標題規格（單行、指定紅、淺描邊、3.5° 斜度）精確到模型打不中，不開 AI 標題路徑。
+        req = req.model_copy(update={
+            "title_mode": editor_formats.YT_COVER_TITLE_MODE_COMPOSITE,
+        })
+    # live24 只有一個標題，hourly 那條「有第二標題＝雙則」的規則用不上。
+    # 2026-09-13 使用者裁決：**兩個附圖位都有東西**才雙切，只放一格或都沒放＝滿版。
+    dual = (
+        bool(req.slot_refs(0)) and bool(req.slot_refs(1)) if live24
+        else editor_formats.yt_cover_is_dual(req.layout, req.title_second)
+    )
     if not dual and req.uses_asis_slots():
         # 單則只有一格，附圖位裡的東西就是整版那一格的：整份清單併進共用清單，
         # 下游 1 張＝整版鋪滿那條路完全不用改。雙則不走這裡——它要保留左右格身分，
@@ -5505,12 +5517,15 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                     detail=f"{label}超過 {compose.YT_HOURLY_LINE_MAX_CHARS} 字：「{text.strip()}」（請縮短這一行）",
                 )
     # 整點直播與今日熱搜沒有原音呈現／AI即時翻譯（2026-09-06 使用者裁決），後端直接忽略
-    original_audio = bool(req.original_audio) and not (hourly or hot)
-    ai_translation = bool(req.ai_translation) and not (hourly or hot)
+    original_audio = bool(req.original_audio) and not (hourly or hot or live24)
+    ai_translation = bool(req.ai_translation) and not (hourly or hot or live24)
     # 整點直播的版面本來就沒有底帶（compose_yt_hourly_cover 不畫、AI 模板也明文 no band），
     # 這個開關對它沒有意義，直接忽略——比照原音呈現／AI即時翻譯。
-    bottom_band = bool(req.bottom_band) and not hourly
-    date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
+    bottom_band = bool(req.bottom_band) and not (hourly or live24)
+    # live24 的日期是 YYYY.MM.DD（點），不是 hourly 的斜線——實際播出用的是點。
+    date_text = req.date_text.strip() or datetime.date.today().strftime(
+        compose.LIVE24_DATE_FORMAT if live24 else "%Y/%m/%d"
+    )
 
     if dual:
         # 雙則：兩行各是一則新聞的完整標題，**不拆段**——所以不走 split_live_title，
@@ -5570,7 +5585,12 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         _log_failure(exc)
         raise
     try:
-        if hot:
+        if live24:
+            # 單行標題：這個版型不拆段，req.title 整句就是那一行。
+            cover = compose.compose_yt_live24_cover(
+                background, title=req.title.strip(), date_text=date_text, ai_note=is_ai,
+            )
+        elif hot:
             cover = compose.compose_yt_hot_cover(
                 background,
                 line1=lines[0],

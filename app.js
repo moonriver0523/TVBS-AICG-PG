@@ -492,6 +492,18 @@ const EDITOR_FORMATS = {
         hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
         hole: null,
     },
+    // YT 24H LIVE（2026-09-13）：整點的鏡像——Logo 兩層版在右上、24H LIVE 角標在左上、
+    // 標題一行深紅斜體。角標是定版的生成素材，程式只在它的玻璃板上壓日期。
+    yt_live24_cover: {
+        label: 'YT24H LIVE',
+        hint: '24H LIVE 封面：標題只有一行（不拆段），深紅斜體、全形上限約 17 字。日期格式 YYYY.MM.DD。標題與日期一律程式壓字（零錯字），創意階梯只影響底圖。附圖位兩格：只放一格＝滿版，兩格都放＝左右雙切羽化拼接。',
+        inputs: 'yt_cover',
+        ytLayout: 'live24',
+        locks: {},
+        // 同整點：一標一附圖，共用「附參考圖」那一區整個收起來，免得有兩個入口
+        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
+        hole: null,
+    },
     // YT 今日熱搜（2026-09-06 型錄 H 類）：紅色系「今日熱搜」標籤＋紅色 Logo 斜標，
     // 議題型版面，沒有日期、沒有 LIVE。底圖與標題規則同國內外新聞直播。
     yt_hot_cover: {

@@ -184,3 +184,106 @@ class CoverTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EndpointTests(unittest.TestCase):
+    """/api/editor/yt-cover 的 live24 分支。"""
+
+    @classmethod
+    def setUpClass(cls):
+        import os
+        os.environ.setdefault("OPENAI_API_KEY", "test-key")
+        os.environ.setdefault("NEWS_IMAGE_API_KEY", "test-key")
+
+    def _post(self, payload):
+        import base64
+        import os
+        from unittest.mock import patch
+
+        from fastapi.testclient import TestClient
+
+        import main
+
+        base = {
+            "title": "東北季風剩1天 假日回溫",
+            "layout": "live24",
+            "date_text": "2026.09.13",
+        }
+        base.update(payload)
+
+        def fake(req):
+            size = (1080, 1080) if req.aspect_ratio == "1:1" else (1920, 1080)
+            buffer = io.BytesIO()
+            Image.new("RGB", size, (70, 80, 100)).save(buffer, format="PNG")
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(buffer.getvalue()).decode("ascii"),
+                mime_type="image/png", model="fake-model",
+            )
+
+        with patch.object(main, "generate_image_raw", side_effect=fake) as raw, \
+             patch.object(main, "supports_multiple_reference_images", return_value=True), \
+             patch.object(main, "derive_yt_cover_plan", return_value={}), \
+             patch.object(main, "_archive_generation", lambda **k: None):
+            res = TestClient(main.app).post(
+                "/api/editor/yt-cover", json=base,
+                headers={"X-API-Key": os.environ["NEWS_IMAGE_API_KEY"]},
+            )
+        return res, raw
+
+    def _ref(self, colour=(30, 30, 30)):
+        import base64
+        buffer = io.BytesIO()
+        Image.new("RGB", (640, 640), colour).save(buffer, format="PNG")
+        return {
+            "data_url": "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii"),
+            "purpose": "asis",
+        }
+
+    def test_the_layout_is_registered(self):
+        import editor_formats
+        self.assertIn("live24", editor_formats.YT_COVER_LAYOUTS)
+        self.assertEqual(
+            editor_formats.EDITOR_FORMATS["yt_live24_cover"]["yt_layout"], "live24"
+        )
+
+    def test_a_plain_request_renders_a_cover(self):
+        res, _ = self._post({})
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertTrue(res.json()["image_data_base64"])
+
+    def test_it_is_always_composite_even_when_ai_titles_are_asked_for(self):
+        """純合成版：標題規格精確到模型打不中，不開 AI 標題路徑。"""
+        res, raw = self._post({"title_mode": "ai"})
+        self.assertEqual(res.status_code, 200, res.text)
+        # 合成版走的是**無文字底圖**那條 prompt；整張 AI 版不會有這段覆寫。
+        # （標題本身仍會以「畫什麼場景」的身分出現在 Subject 裡，那不算模型要畫的字。）
+        for call in raw.call_args_list:
+            self.assertIn("TEXT-FREE BACKGROUND", call.args[0].prompt)
+
+    def test_one_slot_only_stays_full_bleed(self):
+        """2026-09-13 使用者裁決：只放一格＝滿版，不切。"""
+        res, raw = self._post({"slot_left": [self._ref()]})
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertTrue(res.json()["image_data_base64"])
+
+    def test_both_slots_filled_goes_dual(self):
+        res, _ = self._post({
+            "slot_left": [self._ref((180, 40, 40))],
+            "slot_right": [self._ref((40, 60, 180))],
+        })
+        self.assertEqual(res.status_code, 200, res.text)
+
+    def test_a_second_title_does_not_make_it_dual(self):
+        """hourly 靠第二標題判雙則，live24 只有一行——帶了也不該改變版面。"""
+        alone, _ = self._post({})
+        withsecond, _ = self._post({"title_second": "假日回溫"})
+        self.assertEqual(alone.status_code, 200)
+        self.assertEqual(withsecond.status_code, 200)
+        self.assertEqual(
+            alone.json()["image_data_base64"], withsecond.json()["image_data_base64"]
+        )
+
+    def test_a_title_too_long_is_reported_not_silently_cropped(self):
+        res, _ = self._post({"title": "東" * 30})
+        self.assertEqual(res.status_code, 500)
+        self.assertIn("單行版型", res.json()["detail"])
