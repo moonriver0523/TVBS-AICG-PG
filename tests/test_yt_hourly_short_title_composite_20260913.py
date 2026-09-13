@@ -4,8 +4,9 @@ prompt 端的字高上限實拍擋不住：4＋4 字的成品字頂落在 61.6%�
 ——餘裕 1 個像素，而且修正前那張也剛好沒撞，那批連「有沒有變好」都證明不出來。
 所以改由程式保證：極短標題直接切成 composite，程式壓字版字頂固定 66%，物理上不會撞。
 
-判定只看字夠不夠少，不看使用者怎麼輸入（使用者補充：只填第一行、靠空格自動斷句成
-兩行的「東北季風 今起增強」同樣是字太少），所以單則看整句總寬。
+判定只看第一行（第二行的字級跟著第一行走），門檻 5 格含 5——使用者實拍「東北季風
+好冷」6 字不會蓋到、「東北季風冷」5 字會。也不看使用者怎麼輸入：只填第一行、靠
+空格自動斷句成兩行的，量的是切出來的第一行。
 """
 import base64
 import io
@@ -39,20 +40,36 @@ def _png(size=(1536, 864), colour=(30, 30, 30)) -> bytes:
 
 
 class PredicateTests(unittest.TestCase):
-    def test_a_single_title_that_auto_splits_into_two_short_lines(self):
-        """使用者只填第一行、用空格斷句——分隔用的空白不算字，8 個字就是 8。"""
-        self.assertTrue(NEEDS("hourly", 0, "ai", "東北季風 今起增強"))
-        self.assertTrue(NEEDS("hourly", 0, "ai", "東北季風今起增強"))
+    def test_the_cut_off_is_five_characters_inclusive(self):
+        """使用者實拍：「東北季風好冷」（6 字）不會蓋到，「東北季風冷」（5 字）會。"""
+        self.assertTrue(NEEDS("hourly", 0, "ai", "東北季風冷 今起增強"))
+        self.assertFalse(NEEDS("hourly", 0, "ai", "東北季風好冷 今起增強"))
+
+    def test_only_the_first_line_is_measured(self):
+        """第二行的字級跟著第一行走，決定塊高的是第一行——這兩組只差在第二行。"""
+        self.assertTrue(NEEDS("hourly", 0, "ai", "東北季風 今起增強非常明顯"))
+        self.assertFalse(NEEDS("hourly", 0, "ai", "東北季風好冷 今"))
+
+    def test_the_first_line_is_whatever_comes_before_the_space(self):
+        """使用者給的定義：空格前那一段；整句沒有空格就是整句本身。"""
+        self.assertEqual(editor_formats.yt_hourly_first_line("東北季風 今起增強"), "東北季風")
+        self.assertEqual(editor_formats.yt_hourly_first_line("東北季風　今起增強"), "東北季風")
+        self.assertEqual(
+            editor_formats.yt_hourly_first_line("東北季風今起增強"), "東北季風今起增強")
         self.assertTrue(NEEDS("hourly", 0, "ai", "東北季風　今起增強"))  # 全形空白
+        # 沒打空格的長標題不算極短——分行是後面才決定的，不在這裡猜
+        self.assertFalse(NEEDS("hourly", 0, "ai", "東北季風今起增強"))
+
+    def test_a_title_with_no_second_line_at_all(self):
+        self.assertTrue(NEEDS("hourly", 0, "ai", "東北季風"))
 
     def test_a_normal_length_title_is_left_alone(self):
-        self.assertFalse(NEEDS("hourly", 0, "ai", "東北季風 今起增強大"))
         self.assertFalse(NEEDS("hourly", 0, "ai", "挪威國王哈拉德辭世 開放公眾瞻仰遺容"))
 
-    def test_dual_looks_at_each_line_on_its_own(self):
-        """雙則的兩行是兩則不同新聞，不會互相補長度，所以各自量。"""
-        self.assertTrue(NEEDS("hourly", 0, "ai", "東北季風", "今起增強"))
-        self.assertFalse(NEEDS("hourly", 0, "ai", "東北季風", "今起增強大"))
+    def test_dual_measures_the_first_news_item_only(self):
+        """雙則的第一行就是 title 本身，title_second 是另一行、不看。"""
+        self.assertTrue(NEEDS("hourly", 0, "ai", "東北季風冷", "今起增強"))
+        self.assertFalse(NEEDS("hourly", 0, "ai", "東北季風好冷", "今"))
 
     def test_it_only_applies_to_level_zero_hourly_ai(self):
         """1 級起日期牌是模型自己畫、明令貼著標題走，沒有這個碰撞；

@@ -5347,6 +5347,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         # 極短標題的整點 0 級一律程式壓字（2026-09-13 使用者裁決，理由與實拍數據見
         # editor_formats.yt_hourly_short_title_needs_composite）：字少時模型把標題畫得
         # 太大，會爬上去撞程式壓的日期紅條，prompt 端的字高上限擋不住。
+        # 判定只看第一行（空格前那一段）≤5 格：第二行字級跟著第一行走。
         # 帶了 background_image_base64 就不能改：那是追加修改回來的圖，標題已經畫在
         # 上面了，這裡只貼固定元素；改成 composite 會把標題再壓一次、疊成兩層。
         print(f"[yt-cover] 整點極短標題「{req.title}」→ 改程式壓字，避免撞日期紅條", flush=True)

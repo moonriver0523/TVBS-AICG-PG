@@ -1312,35 +1312,38 @@ YT_COVER_TITLE_MODES = (YT_COVER_TITLE_MODE_AI, YT_COVER_TITLE_MODE_COMPOSITE)
 # 程式壓字版的塊高是 29.2%、字頂 66%，離紅條有 4.5% 的真實距離，物理上不可能撞。
 # 代價是極短標題就沒有 AI 標題的設計感——使用者知道並選了這條。
 #
-# 判定只看「字夠不夠少」，不看使用者是怎麼輸入的（2026-09-13 使用者補充：
-# 「不只兩行，如果使用者只輸入第一行『東北季風 今起增強』但因為空格自動斷句成兩行，
-# 也是字太少」）。所以單則看**整句總寬**（8 全形字寬＝拆完兩行各 4 字），
-# 雙則看兩行各自的寬——那兩行是兩則不同新聞，不會互相補長度。
+# **只看第一行**（2026-09-13 使用者第二輪裁決）：第二行的字級是跟著第一行走的，
+# 所以決定塊高的是第一行有幾個字。門檻 **5 格（含）**——使用者實拍為證：
+# 「東北季風好冷」（6 字）不會蓋到，「東北季風冷」（5 字）會。
+#
+# 「第一行」的定義也是使用者給的：**空格前那一段**；整句沒有空格就是整句本身
+# （「第一句 空格前5是5字(含)以內，或第一句全部只有5字(含)以內」）。
+# 所以沒打空格的長標題不算極短——那種情況分行是後面才決定的，不在這裡猜。
 #
 # 只管 0 級。1 級起日期牌是模型自己畫、而且明令貼著標題走，沒有這個碰撞；
 # 在那邊強制 composite 等於把整條創意階梯關掉。
-YT_HOURLY_SHORT_TITLE_TOTAL = 8.0    # 單則：整句總寬，這個數以下算極短
-YT_HOURLY_SHORT_TITLE_PER_LINE = 4.0  # 雙則：每行各自的寬
+YT_HOURLY_SHORT_LINE1_MAX = 5.0   # 第一行這個格數（含）以下算極短
+
+
+def yt_hourly_first_line(title: str) -> str:
+    """使用者打的這串標題，第一行是哪幾個字：空格前那一段，沒空格就是整句。"""
+    return re.split(r"[\s　]+", (title or "").strip(), maxsplit=1)[0]
 
 
 def yt_hourly_short_title_needs_composite(
     layout: str, creativity: int, title_mode: str, title: str, title_second: str = ""
 ) -> bool:
-    """這張整點封面的標題是不是短到會撞日期紅條，必須改走程式壓字。"""
+    """這張整點封面的第一行是不是短到會撞日期紅條，必須改走程式壓字。
+
+    雙則的第一行就是 title 本身（title_second 是第二則、另一行），而 title 這一欄
+    同樣是「空格前那一段」的規則——所以兩種模式共用同一支判斷，不用分岔。
+    """
     if layout != YT_COVER_LAYOUT_HOURLY or creativity >= 1:
         return False
     if title_mode != YT_COVER_TITLE_MODE_AI:
         return False
-    # 分隔用的空白不算字：使用者打的「東北季風 今起增強」是 8 個字，不是 8.5
-    def width(text: str) -> float:
-        return compose.title_display_width(re.sub(r"\s+", "", text or ""))
-
-    if yt_cover_is_dual(layout, title_second):
-        return all(
-            width(text) <= YT_HOURLY_SHORT_TITLE_PER_LINE
-            for text in (title, title_second)
-        )
-    return width(title) <= YT_HOURLY_SHORT_TITLE_TOTAL
+    line1 = yt_hourly_first_line(title)
+    return bool(line1) and compose.title_display_width(line1) <= YT_HOURLY_SHORT_LINE1_MAX
 
 # 底部壓色框開關（2026-09-08 使用者裁決；同日晚改預設 ON）。合成版由 compose 的 bottom_band
 # 決定畫不畫，AI 版只能靠 prompt——所以 LAYOUT 的第一條與 IMAGERY 的結尾都要換句話說，
