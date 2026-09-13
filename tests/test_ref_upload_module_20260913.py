@@ -364,5 +364,123 @@ class YtCoverSlotEndpointTests(unittest.TestCase):
             self.assertFalse(panel.uses_asis_slots())
 
 
+class AiEditInstructionTests(unittest.TestCase):
+    """裁決 4（2026-09-13）：「AI改圖 如果使用者在給 AI 指令欄寫需求 會吃到嗎? 應該要吃到」。
+
+    權限＝可以改內容。在此之前指令欄只送給推導畫面描述的文字模型，實拍證明那條路
+    在 AI改圖 下會被 REDRAW 區塊整個蓋掉（推導寫「工人正在架設遮陽棚」，成品是照片
+    原本那群站在已搭好棚下的遊客），所以改成直接送進生圖 prompt。
+    """
+
+    INSTRUCTION = "把天空改成入夜後的深藍色"
+
+    def _apply(self, purposes, instruction):
+        req = main.ImageGenerateRequest(
+            prompt="BASE",
+            reference_images=[
+                main.UserReferenceImage(data_url=_data_url(), purpose=p) for p in purposes
+            ],
+            editor_instruction=instruction,
+        )
+        with patch.object(main, "supports_multiple_reference_images", return_value=True):
+            return main.apply_user_references_to_image_request(req)
+
+    def test_the_instruction_reaches_the_image_model(self):
+        out = self._apply(["aiedit"], self.INSTRUCTION)
+        self.assertIn(self.INSTRUCTION, out.prompt)
+
+    def test_it_sits_after_the_redraw_block_so_the_model_knows_what_it_governs(self):
+        out = self._apply(["aiedit"], self.INSTRUCTION)
+        self.assertLess(
+            out.prompt.index(news_prompt.USER_REFERENCE_AIEDIT_RULES),
+            out.prompt.index(self.INSTRUCTION),
+        )
+
+    def test_an_empty_instruction_injects_nothing(self):
+        out = self._apply(["aiedit"], "   ")
+        self.assertNotIn("THE EDITOR'S INSTRUCTION FOR THIS REDRAW", out.prompt)
+
+    def test_other_purposes_do_not_get_it(self):
+        """scene／portrait／map 的指令欄早就由文字模型消化進畫面描述了，再下一次是重複下令。"""
+        for purpose in ("scene", "portrait", "map", "asis"):
+            with self.subTest(purpose=purpose):
+                out = self._apply([purpose], self.INSTRUCTION)
+                self.assertNotIn("THE EDITOR'S INSTRUCTION FOR THIS REDRAW", out.prompt)
+
+    def test_the_same_content_clause_no_longer_contradicts_it(self):
+        """repo 慣例：矛盾條款要移除，不是在後面疊一段 override。"""
+        rules = news_prompt.USER_REFERENCE_AIEDIT_RULES
+        self.assertNotIn("It is the treatment that changes, never the content.", rules)
+        self.assertIn("Apart from whatever an editor's instruction below asks you to change", rules)
+
+    def test_the_instruction_is_framed_as_a_change_not_as_words_to_draw(self):
+        """不講清楚的話，「改成夜晚」會被模型當字幕畫上去。"""
+        block = news_prompt.USER_REFERENCE_AIEDIT_INSTRUCTION_TEMPLATE
+        self.assertIn("never words to render", block)
+        self.assertIn("leave everything it does not mention", block)
+
+    def test_it_does_not_relax_the_face_and_brand_rules(self):
+        self.assertIn(
+            "does not relax the brand-mark, human-face or NAMED REAL PERSON rules",
+            news_prompt.USER_REFERENCE_AIEDIT_INSTRUCTION_TEMPLATE,
+        )
+
+
+class AiEditInstructionWiringTests(unittest.TestCase):
+    """每一條會跑到 AI改圖 的生圖路徑都要把指令欄接上，漏一條就等於那個版型沒這功能。"""
+
+    INSTRUCTION = "把背景換成暴雨"
+
+    def _capture(self, url, payload):
+        def fake(req):
+            # 合成版的兩格底圖是 1:1，滿版／整張 AI 是 16:9——回錯比例會被
+            # verify_output_aspect_ratio 擋成 502，就測不到指令欄那件事了
+            size = (1080, 1080) if req.aspect_ratio == "1:1" else (1920, 1080)
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(_png(size)).decode("ascii"),
+                mime_type="image/png", model="fake-model",
+            )
+
+        with patch.object(main, "generate_image_raw", side_effect=fake) as raw,              patch.object(main, "supports_multiple_reference_images", return_value=True),              patch.object(main, "resolve_cover_visuals", return_value=("左邊畫面", "右邊畫面")),              patch.object(main, "derive_yt_cover_plan", return_value={}):
+            res = client.post(url, json=payload, headers=headers())
+        self.assertEqual(res.status_code, 200, res.text)
+        return [call.args[0] for call in raw.call_args_list]
+
+    def test_ten_cover_all_ai_mode(self):
+        """十點的預設模式。"""
+        reqs = self._capture("/api/editor/cover", {
+            "title_left": "勞保撥補 上看1300億",
+            "date_text": "2026/09/14", "mode": "ai",
+            "instruction": self.INSTRUCTION,
+            "slot_left": [_ref("aiedit")],
+        })
+        self.assertTrue(any(self.INSTRUCTION in r.prompt for r in reqs))
+
+    def test_ten_cover_composite_full(self):
+        reqs = self._capture("/api/editor/cover", {
+            "title_left": "勞保撥補 上看1300億",
+            "date_text": "2026/09/14", "mode": "composite",
+            "instruction": self.INSTRUCTION,
+            "slot_left": [_ref("aiedit")],
+        })
+        self.assertTrue(any(self.INSTRUCTION in r.prompt for r in reqs))
+
+    def test_ten_cover_composite_split_only_the_slot_that_has_it(self):
+        """左格放 AI改圖、右格沒有：右格那張 prompt 不該出現這條指令。"""
+        reqs = self._capture("/api/editor/cover", {
+            "title_left": "勞保撥補 上看1300億",
+            "title_right": "病理醫師 月薪65萬仍缺工",
+            "date_text": "2026/09/14", "mode": "composite",
+            "instruction": self.INSTRUCTION,
+            "slot_left": [_ref("aiedit")],
+        })
+        hit = [self.INSTRUCTION in r.prompt for r in reqs]
+        self.assertEqual(hit.count(True), 1, "只有放了 AI改圖 的那一格該吃到")
+
+    def test_the_cg_page_sends_it_too(self):
+        """全站統一後 CG 的共用上傳區也有 AI改圖，前端要一起送。"""
+        self.assertIn("editor_instruction: currentUserInstruction()", APP_JS)
+
+
 if __name__ == "__main__":
     unittest.main()

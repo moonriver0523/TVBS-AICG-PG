@@ -50,6 +50,7 @@ from news_prompt import (
     PORTRAIT_MODES,
     PROMPT_VERSION,
     USER_REFERENCE_ASIS_DIGEST_RULES,
+    USER_REFERENCE_AIEDIT_INSTRUCTION_TEMPLATE,
     USER_REFERENCE_MODES,
     USER_REFERENCE_NO_DISCLAIMER_RULES,
     build_prompt,
@@ -619,6 +620,10 @@ class ImageGenerateRequest(BaseModel):
     portrait_subjects: list[str] = Field(default_factory=list)
     # 同順序的英文原名，查圖備援（見 GenerateResponse.portrait_subjects_en）
     portrait_subjects_en: list[str] = Field(default_factory=list)
+    # 使用者在指令欄寫的需求原文（2026-09-13）。只有**附了 AI改圖 用途的圖**時才會
+    # 用到：apply_user_references_to_image_request 會把它接在 aiedit 區塊後面，當成
+    # 「這張附圖要改哪裡」。其他用途的指令欄照舊由文字模型消化進畫面描述，不走這裡。
+    editor_instruction: str = Field(default="", max_length=2_000)
 
 
 class ImageGenerateResponse(BaseModel):
@@ -3457,10 +3462,20 @@ def apply_user_references_to_image_request(
             "請移除上傳的參考圖，或改回 OpenRouter 生圖設定",
         )
     prompt = req.prompt
-    for purpose in dict.fromkeys(ref.purpose for ref in req.reference_images):
+    purposes = dict.fromkeys(ref.purpose for ref in req.reference_images)
+    for purpose in purposes:
         block = USER_REFERENCE_MODES.get(purpose, "")
         if block and block not in prompt:
             prompt = f"{prompt.rstrip()}\n\n{block}"
+    # AI改圖 專屬：使用者指令欄要真的送到生圖模型手上（2026-09-13 使用者裁決）。
+    # 只在有 aiedit 附圖時注入——scene／portrait／map 那幾條路的指令欄本來就
+    # 只管「畫面長什麼樣」，由文字模型消化過了，再塞一次是重複下令。
+    # 緊接在上面的 aiedit 區塊之後，模型才讀得出「這條指令管的是那張附圖」。
+    instruction = (req.editor_instruction or "").strip()
+    if "aiedit" in purposes and instruction:
+        block = USER_REFERENCE_AIEDIT_INSTRUCTION_TEMPLATE.format(instruction=instruction)
+        if block not in prompt:
+            prompt = f"{prompt.rstrip()}{block}"
     # 有上傳就不標「示意圖」（2026-08-17 使用者裁決）；固定放最後才能 OVERRIDE
     # REAL_WORLD_RENDERING_RULES 的「標籤不得移除」條款。
     # 例外：這張圖裡混了後端自動查來的肖像照時仍要標（2026-08-18）——那個 override
@@ -4185,7 +4200,7 @@ def _cover_apply_portraits(
 def _cover_panel_image(
     visual: str, provider: str, references: list[UserReferenceImage] | None = None,
     subjects: list[str] | None = None, english: list[str] | None = None,
-    excluded: list[str] | None = None,
+    excluded: list[str] | None = None, instruction: str = "",
 ) -> bytes:
     """生一張 1:1 的無文字底圖。references＝非 asis 的附圖，依用途規則當生圖參考；
     subjects／english＝這格的具名真人（查得到參考照才畫臉）。回 (PNG bytes, 生圖模型名)。"""
@@ -4198,6 +4213,7 @@ def _cover_panel_image(
         reference_images=[ref for ref in (references or []) if ref.purpose != "asis"],
         portrait_subjects=list(subjects or []),
         portrait_subjects_en=list(english or []),
+        editor_instruction=instruction,
     )
     image_req = _cover_apply_portraits(image_req, "panel", text_free=True, excluded=excluded)
     result = generate_image_raw(image_req)
@@ -4364,6 +4380,7 @@ def _cover_ai(
         ] + slot_generation_refs(req.slot_refs(0)) + slot_generation_refs(req.slot_refs(1)),
         portrait_subjects=subjects,
         portrait_subjects_en=english,
+        editor_instruction=req.instruction,
     )
     image_req = _cover_apply_portraits(image_req, "ai", excluded=ai_excluded)
     result = generate_image_raw(image_req)
@@ -4375,7 +4392,7 @@ def _cover_ai(
 def _cover_full_image(
     visual: str, provider: str, references: list[UserReferenceImage] | None = None,
     subjects: list[str] | None = None, english: list[str] | None = None,
-    excluded: list[str] | None = None,
+    excluded: list[str] | None = None, instruction: str = "",
 ) -> bytes:
     """滿版：生一張 16:9 的無文字底圖。回 (PNG bytes, 生圖模型名)。"""
     image_req = ImageGenerateRequest(
@@ -4387,6 +4404,7 @@ def _cover_full_image(
         reference_images=[ref for ref in (references or []) if ref.purpose != "asis"],
         portrait_subjects=list(subjects or []),
         portrait_subjects_en=list(english or []),
+        editor_instruction=instruction,
     )
     image_req = _cover_apply_portraits(image_req, "full", text_free=True, excluded=excluded)
     result = generate_image_raw(image_req)
@@ -4439,7 +4457,7 @@ def _cover_full_composite(
         subjects, english = cover_portraits(visual, 0)
         slot, image_model = _cover_full_image(
             visual[0] if isinstance(visual, CoverVisuals) else visual, req.provider, references, subjects, english,
-            excluded=cover_excluded(visual, 0),
+            excluded=cover_excluded(visual, 0), instruction=req.instruction,
         )
         slot_mime = "image/png"
     cover = compose.compose_ten_cover(
@@ -4485,6 +4503,7 @@ def _cover_composite(
                 i: pool.submit(
                     _cover_panel_image, visuals[i], req.provider, panel_references[i],
                     *cover_portraits(visuals, i), excluded=cover_excluded(visuals, i),
+                    instruction=req.instruction,
                 )
                 for i in todo
             }
@@ -5191,6 +5210,7 @@ def _yt_cover_background(
         reference_images=[ref for ref in req.reference_images if ref.purpose != "asis"],
         portrait_subjects=subjects,
         portrait_subjects_en=english,
+        editor_instruction=req.instruction,
     )
     # 順序：肖像規則 → 附圖用途規則 → 最後壓上「無文字」override（前兩段都提到
     # 示意圖標籤要保持可見，不壓掉模型會自己畫一個「示意圖」字樣）。
@@ -5297,6 +5317,7 @@ def _yt_cover_full_image(
         reference_images=list(req.reference_images),
         portrait_subjects=subjects,
         portrait_subjects_en=english,
+        editor_instruction=req.instruction,
     )
     image_req = apply_portrait_to_image_request(image_req)
     block = excluded_people_block(list(excluded or []))
