@@ -695,6 +695,24 @@ class VariationAxisTests(unittest.TestCase):
                     seen.add(palette)
         self.assertGreater(len(seen), 2, seen)
 
+    def test_no_green_in_any_palette_or_prompt(self):
+        """2026-09-14 使用者鐵則：成品疊綠屏，任何綠色系文字都會被去背吃掉。"""
+        import creativity
+        for palette in creativity.COVER_PALETTES:
+            for colour in palette:
+                for banned in creativity.COVER_BANNED_COLOUR_WORDS:
+                    self.assertNotIn(banned, colour, palette)
+        for level in range(0, 5):
+            self.assertIn("NO GREEN ANYWHERE ON TEXT", editor_formats.cover_title_colour_rule(level))
+            if level >= 1:
+                # 十點 brief 有字數上限，禁令靠 cover_title_colour_rule；YT 沒有那一條，brief 自己帶
+                for layout in ("hourly", "live24"):
+                    self.assertIn(
+                        "NO GREEN ON ANY TEXT",
+                        editor_formats.yt_design_brief(level, lines=("台北豪雨", "特報"), seed=0, layout=layout),
+                    )
+        self.assertIn("(never green)", _brief(4))
+
     def test_house_style_is_not_in_the_pool(self):
         """描邊＋硬投影＋平塗是台裡的招牌長相，不是每次可以換的東西。"""
         clause = editor_formats.COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE

@@ -118,13 +118,18 @@ COVER_TYPEFACES: tuple[str, ...] = (
 # 配色。四個位置＝主色／次色／重點色／備用色，全部是播出安全的高彩度色。
 # 「哪個字拿重點色」仍然由呼叫端自己的 COLOUR FOLLOWS MEANING 那句決定——
 # 池子決定用哪幾色，意義決定落在誰身上。這樣才不會回到白→黃→紅的行序配色。
+# 2026-09-14 使用者鐵則：**任何綠色系都不准進池**（lime／teal／mint／olive 都算）。
+# 成品要疊在攝影棚綠屏前，綠色系文字會被去背吃掉、當場穿幫。配色條文另有硬禁令
+# （editor_formats.COVER_NO_GREEN_RULE），這裡是第一道：池子本身就沒有綠。
+COVER_BANNED_COLOUR_WORDS: tuple[str, ...] = ("green", "teal", "lime", "mint", "olive", "chartreuse", "emerald")
+
 COVER_PALETTES: tuple[tuple[str, str, str, str], ...] = (
     ("white", "deep navy", "vivid red", "bright golden yellow"),
     ("white", "black", "bright golden yellow", "vivid red"),
     ("bright golden yellow", "white", "vivid red", "deep navy"),
-    ("icy white-blue", "deep teal", "hot orange", "white"),
+    ("icy white-blue", "deep indigo", "hot orange", "white"),
     ("white", "electric cyan", "magenta", "black"),
-    ("black", "white", "lime green", "electric cyan"),
+    ("black", "white", "hot orange", "electric cyan"),
     ("white", "royal purple", "bright golden yellow", "hot orange"),
     ("pale gold", "deep crimson", "white", "black"),
     ("white", "hot orange", "electric cyan", "deep navy"),

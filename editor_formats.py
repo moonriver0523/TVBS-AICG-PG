@@ -729,7 +729,7 @@ COVER_TITLE_BRIEF_SPECS = {
     3: dict(height="30%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True, anchor=True,
             colours="THREE colours plus ONE accent: {0} dominant, {1} second, {2} on the word that carries the news, {3} as the accent"),
     4: dict(height="36%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True, anchor=True,
-            colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open"),
+            colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open (never green)"),
 }
 
 
@@ -837,6 +837,7 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
         f" red is BANNED. Use {spec['colours'].format(*palette)}."
         " A colour switch may happen part-way through a row."
     )
+    # 禁綠條文不放這裡：十點 prompt 另帶 cover_title_colour_rule（整段禁令），brief 有字數上限。
     picked = cover_accessories(level, titles=titles, full_width=full_width, rng=rng,
                                visuals=visuals)
     if picked:
@@ -851,6 +852,27 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
     return "\n".join(rows) + "\n\n"
 
 
+# 2026-09-14 使用者鐵則：創意階梯產出的**任何文字都不可以是綠色**——成品疊在攝影棚
+# 綠屏前，綠色系會被去背吃掉、當場穿幫。適用所有版型、所有等級，含描邊、陰影、
+# 反色底字的色塊、小籤、日期牌。放在配色規則本體（每一級都會帶到），不放 OVERRIDE
+# 段——2026-09-11 已證明離得遠的條文壓不過釘在行上的指示。
+COVER_NO_GREEN_RULE = (
+    "- NO GREEN ANYWHERE ON TEXT — THIS OUTRANKS EVERY PALETTE INSTRUCTION. The finished"
+    " image is keyed over a studio green screen, so any green-family colour (green, lime,"
+    " teal, mint, olive, chartreuse, emerald, yellow-green, blue-green) on a character, an"
+    " outline, a shadow, a filled block behind characters, a tag, a chip or a plate will be"
+    " keyed out on air. If a palette, a brief or the story suggests green, substitute a"
+    " non-green colour. This applies at every creativity level.\n"
+)
+
+# brief 版（CANVAS 後面那塊有 3000 字上限，塞不下整段）：一行就夠，完整條文在配色規則。
+COVER_NO_GREEN_ROW = (
+    "- NO GREEN ON ANY TEXT — no green-family colour (green, lime, teal, mint, olive) on a"
+    " character, outline, shadow, filled block, tag or plate: the image is keyed over a studio"
+    " green screen. This outranks the palette."
+)
+
+
 def cover_title_colour_rule(level: int) -> str:
     """逐行配色那一條。0 級照舊；1 級起把矛盾**拆掉**，不是靠後面 OVERRIDE 壓。"""
     if level < 1:
@@ -859,7 +881,7 @@ def cover_title_colour_rule(level: int) -> str:
             " (yellow) = bright golden yellow, (red) = vivid red with a white outline. Follow the"
             " labels literally — never recolour a line, and never give a whole headline one flat"
             " colour.\n"
-        )
+        ) + COVER_NO_GREEN_RULE
     # 2026-09-11 使用者：「名詞應該整個套色 不是單一字套色 不合邏輯」。實拍把
     # 「哈拉德」切成「哈拉」＋變色的「德」——那是國王的名字，拆開讀起來像兩件事。
     # 根因跟「葉門青年運動」被腰斬同一個：中文沒有空格，只說「換一個 word」模型
@@ -874,7 +896,7 @@ def cover_title_colour_rule(level: int) -> str:
         " its unit — each is ONE unbroken unit, and every character of it takes the SAME colour."
         " Colouring 「哈拉德」as 「哈拉」plus a differently coloured 「德」is wrong: it is one"
         " king's name, and splitting it reads as two separate things.\n"
-    )
+    ) + COVER_NO_GREEN_RULE
 
 
 # 每一級的條文（TYPOGRAPHY 段尾）。2026-09-11 第二輪起這裡**只留質感與做法**，
@@ -1619,7 +1641,7 @@ YT_BRIEF_SPECS = {
     3: dict(height="40%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True,
             colours="THREE colours plus ONE accent: {0} dominant, {1} second, {2} on the word that carries the news, {3} as the accent"),
     4: dict(height="44%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True,
-            colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open"),
+            colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open (never green)"),
 }
 # 兩行標題的字底。程式壓字版實測落在 97.9%，取整。
 YT_HOURLY_TITLE_BOTTOM_RATIO = 0.98
@@ -1959,6 +1981,7 @@ def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
             " A colour switch may happen part-way through a row."
         )
     )
+    rows.append(COVER_NO_GREEN_ROW)
     # 配色池會遞四個顏色過去，日期牌是頻道識別的一部分，不跟著抽（house style）。
     if has_date_tab:
         rows.append(
