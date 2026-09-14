@@ -1101,7 +1101,18 @@ function applyEditorFormatInputs() {
 }
 
 function setEditorFormat(key) {
-    state.editorFormat = EDITOR_FORMATS[key] ? key : EDITOR_FORMAT_DEFAULT;
+    const next = EDITOR_FORMATS[key] ? key : EDITOR_FORMAT_DEFAULT;
+    const changed = next !== state.editorFormat;
+    state.editorFormat = next;
+    // 換版型就清空十點與 YT 的附圖位（2026-09-14 使用者裁決，第八輪 U8：以前附圖位 DOM 四個
+    // YT 版型共用，切到別的版型再切回來兩張圖與「AI改圖」鎖定原樣殘留）。標題欄不清。
+    // 只在真的換了版型時清——重按同一個版型不能把剛上傳的圖洗掉。
+    if (changed) {
+        clearCoverAsis('left');
+        clearCoverAsis('right');
+        clearYtAsis('left');
+        clearYtAsis('right');
+    }
     // 換版型就把挖空方向重置回左：還記著上一個版型選的右切，只會讓人選錯邊
     state.holeSide = 'left';
     // 換版型就丟掉上一版的壓字前底圖：滿版的底圖送進雙切會被後端擋（400），留著只會誤導。
