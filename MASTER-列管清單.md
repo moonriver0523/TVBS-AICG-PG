@@ -420,6 +420,27 @@ YT 雙則的兩次畫面描述（`5958-5962`）、逐人查照（`3308-3321`）�
 | R4 | 附圖未測組合 | 版型功能對齊盤點 | ⏸ | scene／portrait／map 參考、創意 2–4 配附圖、live24 三種底圖配附圖，皆未測過 |
 | R5 | 創意階梯改動後的長相重複度基準 | 創意階梯三條線對齊清點 | ⬜ | **改 A1 之前**先跑一輪同篇新聞最高級 N 次當基準，否則「有沒有變亮」又是感覺題 |
 
+### 監督驗收：Stage 2-4～2-9（2026-09-15，`fda34c6`）
+
+實作由子代理 stage2 完成，驗收由監督另跑，**沒有沿用實作者的自述**：
+
+- **全套 1755 綠**（監督自己重跑，114.9 秒），與實作者回報一致。
+- **凍結快照零接觸**：`git log --name-only 707bf12..HEAD` 顯示 7 個 commit 一份 fixture 都沒動，最後一次動它們仍是已授權的 `707bf12`。**沒有第二次重凍**（CP1 只批准一次，那一次已用掉）。
+- **六個 density block 全乾淨**：對 `STANDARD`／`SIMPLIFIED`／`MINIMAL`／`MAXIMUM`／`VERBATIM`／新增的 `NO_TEXT` 逐一跑 `(one|two|three|single) lines?` 反向斷言，零命中。Stage 2 初版的行數洩漏（density block 是角色共用，寫進去就同時流給記者）沒有復發。
+- **A2 確實只剩一張表**：`creativity.py:234` 單一來源，`editor_formats` 與 `main.py:1256`（CG）都指向它，另有測試釘住「CG 不得另立件數表」。封面／YT 的 RNG pin 與 fixture 全數未動。
+- **seed 沒進 prompt**：對 0–4 級 × 三組 seed 實跑 `cg_creativity_rules()`，seed 數字一次都沒出現在輸出字串裡。seed 只走 API response／`request_log`／`audit_archive`，符合 D1 補充裁決。
+- **無字檔位接線完整**：`build_prompt` 的唯一 Python 呼叫點與 `app.js` 的兩個呼叫點都傳了 `no_text`，沒有漏接的路徑。
+
+**三件超出計畫範圍、實作者主動申報、監督同意的改動**：
+
+1. `news_prompt.NO_TEXT_IMAGE_OVERRIDE` ＋ `app.js` 同名常數（不在計畫檔案表內）。**同意**：不改就是半套——空 variable 會被 `compose_variable` 換成 `[No Variables Defined]`，模型有機會把那串字面畫上去。沿用既有的 `YT_COVER_TEXT_FREE_OVERRIDE` 模式、前後端逐字同步並加了 parity 測試，沒有發明新機制。
+2. `digest_quality_problem` 放行「無字的 variable 為空」（不在計畫行號內）。**同意**：不改是硬阻斷——無字會連撞 5 次重試後回 502，使用者只看到「AI 回傳內容異常」。放行範圍夠窄，型別／異常字元／頻道洩漏／簡體字四項照舊全開。
+3. 招式池只改 `iconrow` 一條的措辭（那條寫死「深藍底條上方」，CG 沒有底帶）。**同意**，且**同意它沒有動** `arrow`／`magnifier`／`cutout` 的 "photograph" 字樣——那是措辭貼不貼切、不是事實錯誤，留給實拍那輪判斷，已進 TODO。
+
+**2-8 的 no-op 監督接受**，因為它給了要求的證據而不是一句「no-op」帶過：現行四個上限就是 D16 已裁的 10／13／18／22、點數天花板在 0-2 已校準、maximum 可拆分是 2-7 剛加的；唯一還能動的兩塊逐位元存在於凍結快照裡。這屬於「已經夠開，結案」，不是「該動但不能動」。
+
+**仍未驗的**：一切視覺實拍。D16 的數字是在 `gpt-5.5` 上量的、正式站是 `claude-sonnet-5`，併輪實拍不合格時**回頭重裁數字**，不由實作端自行微調。
+
 ---
 
 ## 已完成歸檔
