@@ -10,7 +10,8 @@
    見 tests/test_cover_refine.py 的紅線 1）。
 2. 帶 background 回來：一次生圖、一次文字模型都不打，model 記 ten-cover-full:recomposite，
    底圖原樣沿用、標題換成新的。
-3. 雙切合成版不支援（左右兩格拼完分不回去），帶 background 回 400。
+3. （2026-09-14 起改）雙切合成版也支援：見 tests/test_cover_split_recompose_20260914。這裡只留
+   AI 版後貼路徑不受影響的那一案。
 """
 import base64
 import io
@@ -181,20 +182,8 @@ class FullCompositeRecompositeTests(unittest.TestCase):
         self.assertEqual(img.getpixel((img.size[0] // 2, round(img.size[1] * 0.30))), RED)
 
 
-class SplitRejectsBackgroundTests(unittest.TestCase):
-    """紅線 3：雙切合成版帶 background 回 400，不要默默忽略後重生兩張底圖。"""
-
-    def test_split_composite_with_background_is_rejected(self):
-        raw = base64.b64encode(_png_bytes(size=(1600, 900), colour=RED)).decode("ascii")
-        with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")), \
-             patch.object(main, "resolve_cover_visuals", side_effect=AssertionError("不該補描述")):
-            res = client.post("/api/editor/cover", json={
-                "title_left": "尼泊爾災區 滅村慘況", "title_right": "台南易淹水 成氣候衝擊區",
-                "layout": "split", "mode": "composite",
-                "background_image_base64": raw, "background_mime_type": "image/png",
-            }, headers=_headers())
-        self.assertEqual(res.status_code, 400, res.text)
-        self.assertIn("只改文字", res.json()["detail"])
+class SplitAiOverlayTests(unittest.TestCase):
+    """AI 版的後貼路徑（ten-cover:overlay）跟合成版的「只改文字」走同一個欄位，互不干擾。"""
 
     def test_split_ai_overlay_still_works(self):
         # AI 版的後貼路徑（ten-cover:overlay）不受影響，只有合成版被擋

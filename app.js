@@ -442,9 +442,10 @@ const EDITOR_FORMATS = {
     // （coverLayout: 'auto'，實際值一律問 coverLayoutNow()）。
     ten_cover: {
         label: '十點不一樣',
-        hint: '只填第一標題＝滿版一張圖；再填第二標題＝左右雙切、兩格各一個標題與附圖位。每格可放多張、每張自選用途：「原圖放置」直接上版，「AI改圖」交給 AI 照這張圖重畫一次，其餘當生圖參考；那格沒有原圖放置就由 AI 生底圖。預設整張由生圖模型設計；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。標頭帶整條由程式貼：Logo、節目標籤、日期與 ON AIR／精華都是正版檔，AI 只負責底圖與標題。',
+        hint: '只填第一標題＝滿版一張圖；再填第二標題＝左右雙切、兩格各一個標題與附圖位。每格可放多張、每張自選用途：「原圖放置」直接上版，「AI改圖」交給 AI 照這張圖重畫一次，其餘當生圖參考；那格沒有原圖放置就由 AI 生底圖。標題創意 0（預設）所有文字由程式壓字、零錯字、原圖不動，生成後可按「只改文字」換標題不重生底圖（滿版、雙切都可）；拉到 1 以上才整張交給生圖模型設計。標頭帶整條由程式貼：Logo、節目標籤、日期與 ON AIR／精華都是正版檔，AI 只負責底圖與標題。',
         coverLayout: 'auto',
         inputs: 'cover',
+        slots: true,   // 一標一附圖位（與 editor_formats.FORMAT_CAPABILITIES.slots 對齊，parity 測試釘住）
         coverMode: 'ai',
         // 封面沒有消化這道程序：/api/editor/cover 不收 density／stamp／safe_frame／tone，
         // 留著只會是四顆按了沒反應的按鈕，所以收起來而不是鎖起來
@@ -460,11 +461,12 @@ const EDITOR_FORMATS = {
     // 沿用主流程的附圖上傳區（用途：原圖放置＝直接當底圖；其他＝生圖參考）。
     yt_live_cover: {
         label: 'YT國內外新聞直播',
-        hint: '標題用半形空格分兩段（分不出來時由 AI 判斷）。有「原圖放置」附圖就直接當底圖，否則 AI 生底圖並標示 AI示意圖。原音呈現／AI即時翻譯可勾可並存。文字與 Logo 全由程式疊，零錯字。',
+        hint: '標題用半形空格分兩段（分不出來時由 AI 判斷）。附圖位在標題底下，一格可放多張、每張自選用途：「原圖放置」1 張整版／2 張左右雙切／3 張三切，「AI改圖」由 AI 照這張圖重畫、其餘當參考；沒有原圖放置就 AI 生底圖並標示 AI示意圖。原音呈現／AI即時翻譯可勾可並存。創意 0（預設）文字與 Logo 全由程式疊、零錯字；1 以上才交 AI 畫標題。',
         inputs: 'yt_cover',
         ytLayout: 'news',
+        slots: true,   // 2026-09-14 對齊整點：一標一附圖位，共用「附參考圖」區收起來
         locks: {},
-        hides: { digestControls: true, safeFrame: true, stamp: true },
+        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
         hole: null,
     },
     // YT 直播直標（2026-09-08 WP3）：不是封面，是疊在直播訊號上的透明底 PNG。
@@ -486,10 +488,11 @@ const EDITOR_FORMATS = {
         hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。第二標題填了就是「雙則」：上白＝第一則、下黃＝第二則，每行一整句不拆、最多 18 字，底圖左右兩張羽化拼成一張。附圖跟十點一樣一標一格：每個標題底下各有自己的附圖位，一格可放多張、每張自選用途（原圖放置直接上版、AI改圖由 AI 照這張圖重畫、其餘當參考）；那格沒有原圖放置就由 AI 生底圖。',
         inputs: 'yt_cover',
         ytLayout: 'hourly',
+        slots: true,   // 一標一附圖位（與後端能力矩陣對齊）
         locks: {},
         // 2026-09-10：整點改成一標一附圖（對齊十點），共用「附參考圖」那一區整個收起來。
-        // 國內外新聞直播與今日熱搜**不收**——那兩個支援 1 張整版／2 張左右雙切／3 張三切，
-        // 改成一標一圖會把雙切與三切砍掉。
+        // 2026-09-14：國內外新聞直播與今日熱搜也跟上——當初怕一標一圖砍掉 2 張雙切／3 張三切，
+        // 但 2026-09-13 起單則附圖位的整份清單會併進共用清單，切格那條路照走，顧慮不成立。
         hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
         hole: null,
     },
@@ -497,9 +500,10 @@ const EDITOR_FORMATS = {
     // 標題一行深紅斜體。角標是定版的生成素材，程式只在它的玻璃板上壓日期。
     yt_live24_cover: {
         label: 'YT24H LIVE',
-        hint: '24H LIVE 封面：標題只有一行（不拆段），深紅斜體、全形上限約 17 字。日期格式 YYYY.MM.DD。標題與日期一律程式壓字（零錯字），創意階梯只影響底圖。附圖位兩格：只放一格＝滿版，兩格都放＝左右雙切羽化拼接。',
+        hint: '24H LIVE 封面：標題只有一行（不拆段），深紅斜體、全形上限約 17 字。日期格式 YYYY.MM.DD。創意 0 標題與日期由程式壓字（零錯字），1 以上交 AI 畫。附圖位兩格：只放一格＝滿版，兩格都放＝左右雙切羽化拼接。',
         inputs: 'yt_cover',
         ytLayout: 'live24',
+        slots: true,   // 一標一附圖位（與後端能力矩陣對齊）
         locks: {},
         // 同整點：一標一附圖，共用「附參考圖」那一區整個收起來，免得有兩個入口
         hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
@@ -509,11 +513,12 @@ const EDITOR_FORMATS = {
     // 議題型版面，沒有日期、沒有 LIVE。底圖與標題規則同國內外新聞直播。
     yt_hot_cover: {
         label: 'YT今日熱搜',
-        hint: '今日熱搜封面：標題半形空格分兩段，沒有日期與 LIVE。附圖與底圖規則同國內外新聞直播。',
+        hint: '今日熱搜封面：標題半形空格分兩段，沒有日期與 LIVE。附圖位與底圖規則同國內外新聞直播（一格可放多張：原圖放置 1 整版／2 雙切／3 三切，AI改圖 重畫，其餘當參考）。',
         inputs: 'yt_cover',
         ytLayout: 'hot',
+        slots: true,   // 2026-09-14 對齊整點：一標一附圖位
         locks: {},
-        hides: { digestControls: true, safeFrame: true, stamp: true },
+        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
         hole: null,
     },
 };
@@ -1096,7 +1101,18 @@ function applyEditorFormatInputs() {
 }
 
 function setEditorFormat(key) {
-    state.editorFormat = EDITOR_FORMATS[key] ? key : EDITOR_FORMAT_DEFAULT;
+    const next = EDITOR_FORMATS[key] ? key : EDITOR_FORMAT_DEFAULT;
+    const changed = next !== state.editorFormat;
+    state.editorFormat = next;
+    // 換版型就清空十點與 YT 的附圖位（2026-09-14 使用者裁決，第八輪 U8：以前附圖位 DOM 四個
+    // YT 版型共用，切到別的版型再切回來兩張圖與「AI改圖」鎖定原樣殘留）。標題欄不清。
+    // 只在真的換了版型時清——重按同一個版型不能把剛上傳的圖洗掉。
+    if (changed) {
+        clearCoverAsis('left');
+        clearCoverAsis('right');
+        clearYtAsis('left');
+        clearYtAsis('right');
+    }
     // 換版型就把挖空方向重置回左：還記著上一個版型選的右切，只會讓人選錯邊
     state.holeSide = 'left';
     // 換版型就丟掉上一版的壓字前底圖：滿版的底圖送進雙切會被後端擋（400），留著只會誤導。
@@ -1473,11 +1489,16 @@ function applyCoverLayoutFields() {
     document.querySelectorAll('.cover-split-only').forEach(el => el.classList.toggle('hidden', fullLayout));
     const leftBtn = document.getElementById('coverAsisLeftBtn');
     if (leftBtn) leftBtn.textContent = fullLayout ? '📁 ＋ 附圖（選填）' : '📁 ＋ 第一附圖（選填）';
-    // 「只改文字」只有滿版合成版有：雙切的成品是左右兩張底圖拼的，拼完分不回去。
+    // 「只改文字」滿版、雙切都有（雙切 2026-09-14 補上：後端把拼好的兩格底圖帶回來）。
+    // 底圖是哪個版面生的就只能用在那個版面——打了第二標題版面就換了，鈕跟著灰掉。
     const recompose = document.getElementById('coverRecomposeBtn');
     if (recompose) {
-        recompose.classList.toggle('hidden', !fullLayout);
-        recompose.disabled = !(fullLayout && state.tenCoverBackground);
+        recompose.classList.remove('hidden');
+        const bg = state.tenCoverBackground;
+        recompose.disabled = !(bg && bg.layout === coverLayoutNow());
+        recompose.title = bg && bg.layout !== coverLayoutNow()
+            ? '版面變了（滿版↔雙切），上一次的底圖對不上，請重新生成'
+            : '程式壓字版專用（滿版、雙切都可）：底圖不重生，只用新的標題／日期／標籤重壓文字';
     }
 }
 
@@ -2201,23 +2222,25 @@ async function recomposeTenCover(refined) {
     return data;
 }
 
-// 只改文字（2026-09-08，滿版合成版）：底圖不重生，用目前欄位重壓一次標題，零 API。
+// 只改文字（2026-09-08 滿版；2026-09-14 雙切也有）：底圖不重生，用目前欄位重壓一次標題，零 API。
 // 底圖走 state.tenCoverBackground，不是 refineSource——見該欄位的註解。
+// 記下它是哪個版面生的：滿版底圖是整圖、雙切底圖是拼好的兩格，混用會壓錯版，後端也會 400。
 function setTenCoverBackground(data) {
-    const usable = coverLayoutNow() === 'full'
-        && data.mode === 'composite' && !!data.background_image_base64;
+    const usable = data.mode === 'composite' && !!data.background_image_base64;
     state.tenCoverBackground = usable ? {
         base64: data.background_image_base64,
         mimeType: data.background_mime_type || 'image/png',
         isAi: !!data.background_is_ai,
+        rightIsAi: !!data.right_is_ai,
+        layout: coverLayoutNow(),
     } : null;
-    const btn = document.getElementById('coverRecomposeBtn');
-    if (btn) btn.disabled = !usable;
+    applyCoverLayoutFields();
 }
 
 async function recomposeTenCoverText() {
     const background = state.tenCoverBackground;
     if (!background) throw new Error('還沒有底圖，請先生成一次');
+    if (background.layout !== coverLayoutNow()) throw new Error('版面變了（滿版↔雙切），請重新生成');
     const res = await fetch(COVER_BACKEND_URL, {
         method: 'POST',
         headers: _apiHeaders(),
@@ -2227,6 +2250,8 @@ async function recomposeTenCoverText() {
             background_image_base64: background.base64,
             background_mime_type: background.mimeType,
             background_is_ai: background.isAi,
+            background_right_is_ai: background.rightIsAi,
+            background_layout: background.layout,
         }),
     });
     const data = await res.json().catch(() => ({}));
@@ -2236,15 +2261,18 @@ async function recomposeTenCoverText() {
 
 // 十點不一樣封面：使用者直接給兩個標題，中間沒有消化這一段，所以走自己的端點。
 // 下拉、產出區、下載都還在同一頁同一個位置，編輯不用切分頁。
-// recomposeOnly=true：滿版合成版的「只改文字」，底圖不重生（比照 handleYtCoverGenerate）。
+// recomposeOnly=true：合成版（滿版／雙切）的「只改文字」，底圖不重生（比照 handleYtCoverGenerate）。
 async function handleTenCoverGenerate(recomposeOnly = false) {
     const val = id => (document.getElementById(id)?.value || '').trim();
     const titleLeft = val('coverTitleLeft');
     const titleRight = val('coverTitleRight');
     const fullLayout = coverLayoutNow() === 'full';
     if (!titleLeft) return showToast('第一標題要填');
-    // 只改文字只做滿版合成版：AI 版的字是模型畫的、雙切拼完分不回去（後端也會回 400）
+    // 只改文字只有合成版有（AI 版的字是模型畫的）；底圖要跟現在的版面同一種
     if (recomposeOnly && !state.tenCoverBackground) return showToast('還沒有底圖，請先生成一次');
+    if (recomposeOnly && state.tenCoverBackground.layout !== coverLayoutNow()) {
+        return showToast('版面變了（滿版↔雙切），請重新生成');
+    }
 
     const btn = document.getElementById('aiBtn');
     const loading = document.getElementById('aiLoading');
@@ -3282,7 +3310,10 @@ function renderYtAsis() {
    1 張整版／2 張左右雙切／3 張三切——改成一標一圖會把雙切與三切砍掉。
    第二個附圖位再多一層條件：判定成雙則（第二標題有填）時才出現，比照十點的滿版／雙切。 */
 function ytUsesAsisSlots() {
-    return ['hourly', 'live24'].includes(editorFormat().ytLayout || '');
+    // 哪些版型有一標一附圖位看版型表的 slots（後端 FORMAT_CAPABILITIES 同一份，parity 測試釘住），
+    // 不再在這裡寫死版型名單——對齊新版型時只要在表上翻旗子
+    const format = editorFormat();
+    return format.inputs === 'yt_cover' && !!format.slots;
 }
 
 function updateYtAsisSlots() {

@@ -656,18 +656,21 @@ def lock_half_slot_asis(refs: list[UserReferenceImage], tag: str = "slot") -> li
     return [ref.model_copy(update={"purpose": "aiedit"}) if ref.purpose == "asis" else ref for ref in refs]
 
 
-def reject_excess_asis(refs: list[UserReferenceImage], *, where: str) -> None:
+def reject_excess_asis(
+    refs: list[UserReferenceImage], *, where: str, limit: int = compose.YT_SPLIT_MAX_PANELS
+) -> None:
     """滿版一格的原圖放置超過自動切格上限就 400（2026-09-14 使用者裁決：「限制滿版最多 4 張」）。
 
     以前 _cover_full_base／_yt_cover_background 默默只取前 4 張，使用者以為 5 張都上了。
     在端點入口就擋，擋在斷句／消化任何模型呼叫之前，白燒不到一通。只管會自動切格的
     滿版格（十點滿版、整點單則）；雙切的半格 ≥2 張本來就鎖成 AI改圖，不歸這裡。
     """
+    # 上限來自版型能力矩陣（editor_formats.FORMAT_CAPABILITIES.asis_max），呼叫端傳進來
     n = sum(1 for ref in refs if ref.purpose == "asis")
-    if n > compose.YT_SPLIT_MAX_PANELS:
+    if limit and n > limit:
         raise HTTPException(
             status_code=400,
-            detail=f"{where}原圖放置最多 {compose.YT_SPLIT_MAX_PANELS} 張（收到 {n} 張），請移除多的再送",
+            detail=f"{where}原圖放置最多 {limit} 張（收到 {n} 張），請移除多的再送",
         )
 
 
@@ -4026,12 +4029,19 @@ class TenCoverRequest(BaseModel):
     # 貼之前的模型原圖，改完要再走一次後貼才是成品。base64，不是 data URL。
     # 2026-09-08 起滿版合成版（layout=full＋mode=composite）也吃這個欄位，語意換成
     # 「只改文字」：帶回上一次的壓字前底圖，零 API 重壓一次標題（比照 YT 的 yt-cover:recomposite）。
-    # 雙切合成版不支援（左右兩格各自一張底圖，成品拼完就分不回去），帶了回 400。
+    # 2026-09-14 起雙切合成版也吃：回應把「拼好但還沒壓字」的雙切底圖帶回來，這裡收到就
+    # 只重壓兩個標題（compose_ten_cover prebuilt_split=True），不重拼也不重生任何一格。
     background_image_base64: str = Field(default="", max_length=28_000_000)
     background_mime_type: str = "image/png"
     # 那張底圖是不是 AI 生的——決定要不要壓「AI示意圖」。前端原樣帶回上一次的回應值。
-    # 只有滿版合成版的「只改文字」讀它（AI 版的後貼路徑本來就一定是模型圖）。
+    # 合成版的「只改文字」讀它（AI 版的後貼路徑本來就一定是模型圖）；雙切時它是左格，
+    # 右格看 background_right_is_ai（回應的 right_is_ai 原樣帶回）。
     background_is_ai: bool = False
+    background_right_is_ai: bool = False
+    # 那張底圖是哪個版面生的（full／split）。滿版底圖是一張整圖、雙切底圖是拼好的兩格，
+    # 光看 bytes 分不出來；前端帶回來才能在版面變了（改了第二標題）時明講 400，而不是
+    # 默默把雙切標題壓在一張整圖上。空字串＝舊呼叫端沒帶，不檢查。
+    background_layout: str = ""
 
 
 # 版型名稱：跟前台下拉選單（app.js 的 EDITOR_FORMATS.label）用同一組字，
@@ -4055,7 +4065,7 @@ class TenCoverResponse(ImageGenerateResponse):
     left_is_ai: bool = True
     right_is_ai: bool = True
     mode: str = editor_formats.COVER_MODE_AI
-    # 「只改文字」用的壓字前底圖（只有滿版合成版會帶）。刻意**不塞進 source_image_base64**：
+    # 「只改文字」用的壓字前底圖（合成版會帶：滿版＝整圖、雙切＝拼好的兩格）。刻意**不塞進 source_image_base64**：
     # 那格的語意是「餵回 /api/images/refine 的原圖」，合成版一律留空（見 tests/test_cover_refine.py
     # 的紅線 1）。兩者混用會讓前端的「修改」鈕誤以為合成版可以 refine。
     background_image_base64: str = ""
@@ -4742,12 +4752,28 @@ def _cover_panels(
 
 def _cover_composite(
     req: TenCoverRequest, date_text: str, visuals: tuple[str, str]
-) -> tuple[bytes, tuple[bool, bool], str]:
+) -> tuple[bytes, tuple[bool, bool], str, bytes]:
     """合成版：AI 只出無文字底圖（或直接用原圖放置的附圖），文字全部由 Pillow 畫。
 
-    回 (PNG, (左格是否 AI, 右格是否 AI), 生圖模型名)。兩格都是附圖時一次 API 都不打，
-    模型名記 `ten-cover:asis`；兩格都生時兩個模型名相同就只記一次。
+    回 (PNG, (左格是否 AI, 右格是否 AI), 生圖模型名, 壓字前底圖)。兩格都是附圖時一次 API
+    都不打，模型名記 `ten-cover:asis`；兩格都生時兩個模型名相同就只記一次。
+
+    壓字前底圖＝兩格拼好（split_canvas）還沒畫任何文字／標頭的那張，回給前端存起來，
+    「只改文字」時原樣帶回來零 API 重壓（2026-09-14；比照滿版 _cover_full_composite）。
+    舊路徑（不分左右的單張原圖全版）不回底圖：前台早已到不了那條路。
     """
+    if req.background_image_base64:
+        # 「只改文字」（2026-09-14 雙切）：一定要在 _cover_panels 之前回頭——前端重送時附圖位
+        # 通常還在，若有一格沒放原圖，_cover_panels 會替那格生底圖，一個本該零 API 的請求就燒錢了。
+        background = base64.b64decode(req.background_image_base64)
+        cover = compose.compose_ten_cover(
+            background, None,
+            title_left=req.title_left.strip(), title_right=req.title_right.strip(),
+            date_text=date_text, badge=req.badge,
+            left_is_ai=req.background_is_ai, right_is_ai=req.background_right_is_ai,
+            prebuilt_split=True,
+        )
+        return cover, (req.background_is_ai, req.background_right_is_ai), "ten-cover:recomposite", background
     panels, todo, models = _cover_panels(req, visuals)
     if panels[1] is None and not todo:
         # 舊路徑（不分左右的附圖）：單張原圖＝全版，兩個標題壓在同一張圖的左下與右下
@@ -4756,7 +4782,7 @@ def _cover_composite(
             title_left=req.title_left.strip(), title_right=req.title_right.strip(),
             date_text=date_text, badge=req.badge, left_is_ai=False, right_is_ai=False,
         )
-        return cover, (False, False), "ten-cover:asis"
+        return cover, (False, False), "ten-cover:asis", b""
     left_is_ai, right_is_ai = 0 in todo, 1 in todo
     cover = compose.compose_ten_cover(
         panels[0],
@@ -4768,7 +4794,9 @@ def _cover_composite(
         left_is_ai=left_is_ai,
         right_is_ai=right_is_ai,
     )
-    return cover, (left_is_ai, right_is_ai), "、".join(models) or "ten-cover:asis"
+    buffer = io.BytesIO()
+    compose.split_canvas([panels[0], panels[1]], compose.COVER_CANVAS).save(buffer, format="PNG")
+    return cover, (left_is_ai, right_is_ai), "、".join(models) or "ten-cover:asis", buffer.getvalue()
 
 
 def _cover_split_base(req: TenCoverRequest, visuals: tuple[str, str]) -> tuple[bytes, list[str]]:
@@ -5130,18 +5158,24 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     req = req.model_copy(
         update={"layout": editor_formats.resolve_cover_layout(req.layout, req.title_right)}
     )
+    caps = editor_formats.capability_for("ten_cover")   # 版型能力矩陣（2026-09-14 模組化第 1 步）
     # 創意 0 → 程式壓字（2026-09-14 使用者裁決，理由見 editor_formats.title_mode_for_creativity）。
     # 放在所有 ai_over_base／只改文字 判斷之前，下游一律看改寫後的 mode；回應也回改寫後的值，
     # 前端靠 data.mode 決定「只改文字」要不要露出。
-    forced_mode = editor_formats.title_mode_for_creativity(
-        req.creativity_level(), req.mode, bool(req.background_image_base64)
-    )
-    if forced_mode != req.mode:
-        print("[cover] 創意 0 → 標題改程式壓字（零錯字、原圖零漂移）", flush=True)
-        req = req.model_copy(update={"mode": forced_mode})
+    if caps.zero_program_text:
+        forced_mode = editor_formats.title_mode_for_creativity(
+            req.creativity_level(), req.mode, bool(req.background_image_base64)
+        )
+        if forced_mode != req.mode:
+            print("[cover] 創意 0 → 標題改程式壓字（零錯字、原圖零漂移）", flush=True)
+            req = req.model_copy(update={"mode": forced_mode})
     if req.layout == "full":
-        # 滿版原圖放置最多 4 張（2026-09-14），擋在下面的斷句模型之前
-        reject_excess_asis(req.slot_refs(0) or req.reference_images, where="滿版")
+        # 滿版原圖放置最多 N 張（2026-09-14；N 看能力矩陣），擋在下面的斷句模型之前
+        reject_excess_asis(req.slot_refs(0) or req.reference_images, where="滿版", limit=caps.asis_max)
+    if req.background_image_base64 and req.background_layout and req.background_layout != req.layout:
+        # 滿版底圖是一張整圖、雙切底圖是拼好的兩格，bytes 分不出來；改了第二標題版面就換了，
+        # 明講回 400 比默默把雙切標題壓在整圖上（或反過來）好（2026-09-14）。
+        raise HTTPException(status_code=400, detail="版面變了（滿版↔雙切），上一次的底圖對不上，請重新生成")
     # 斷句交給消化模型（2026-09-14）：入口登記詞組邊界，下游所有斷行都只在邊界上切
     apply_title_break_hints(req.title_left, req.title_right)
     if req.layout == "full":
@@ -5168,15 +5202,10 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         and (asis_count > 0 or ten_cover_uses_slots(req))
     )
 
-    if req.mode == editor_formats.COVER_MODE_COMPOSITE and req.background_image_base64:
-        # 「只改文字」只做滿版（2026-09-08 使用者已知雙切不互通）：雙切合成版的成品是左右
-        # 兩張底圖拼的，拼完分不回去，沒有單一「壓字前底圖」可以帶回來。這裡明講回 400——
-        # 默默忽略會讓一個本來零 API 的請求重新生兩張底圖，白燒錢又慢。
-        raise HTTPException(status_code=400, detail="雙切合成版不支援「只改文字」，請重新生成")
-
-    if req.mode == editor_formats.COVER_MODE_AI and req.background_image_base64:
-        # 追加修改後回來只重貼固定元素，底圖不重生，所以一次文字模型都不打
-        # （比照 YT 封面 resolve_yt_cover_plan 的 need_visual）
+    recomposite = req.mode == editor_formats.COVER_MODE_COMPOSITE and bool(req.background_image_base64)
+    if req.background_image_base64:
+        # 帶底圖回來＝AI 版的追加修改後重貼固定元素，或合成版的「只改文字」（2026-09-14 雙切也有）：
+        # 底圖不重生，所以一次文字模型都不打（比照 YT 封面 resolve_yt_cover_plan 的 need_visual）
         visuals = (req.visual_left.strip() or req.title_left.strip(), req.visual_right.strip() or req.title_right.strip())
     elif all(slots):
         # 兩格都有圖：什麼都不生，一次文字模型都不打
@@ -5193,6 +5222,7 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         visuals = resolve_cover_visuals(req)
     panel_is_ai = (True, True)
     source_raw, source_mime = b"", ""
+    background_raw = b""
     request_id = request_log.new_request_id()
     log_prompt = f"L: {visuals[0]}\nR: {visuals[1]}"
     portrait_fields = cover_portrait_log_fields(visuals)
@@ -5206,7 +5236,7 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
             if base_models:
                 image_model = "、".join([*base_models, image_model])
         else:
-            cover, panel_is_ai, image_model = _cover_composite(req, date_text, visuals)
+            cover, panel_is_ai, image_model, background_raw = _cover_composite(req, date_text, visuals)
     except compose.ComposeError as exc:
         print(f"[compose] 封面失敗：{exc}", flush=True)
         request_log.log_failure(
@@ -5252,10 +5282,14 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     return TenCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
-        model=f"ten-cover:{req.mode}{asis_label}",
+        model="ten-cover:recomposite" if recomposite else f"ten-cover:{req.mode}{asis_label}",
         # 追加修改的源圖＝後貼前的模型原圖（只有 AI 版有；合成版是程式拼的，沒有源圖）
         source_image_base64=base64.b64encode(source_raw).decode("ascii") if source_raw else "",
         source_mime_type=source_mime,
+        # 「只改文字」用的壓字前底圖（合成版才有）：拼好的兩格，前端存起來、改標題原樣帶回來零 API 重壓
+        background_image_base64=base64.b64encode(background_raw).decode("ascii") if background_raw else "",
+        background_mime_type="image/png" if background_raw else "",
+        background_is_ai=panel_is_ai[0] if background_raw else False,
         visual_left=visuals[0],
         visual_right=visuals[1],
         left_is_ai=panel_is_ai[0],
@@ -5832,15 +5866,17 @@ def yt_dual_background(
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     live24 = req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
+    caps = editor_formats.capability_for(editor_formats.yt_format_key(req.layout))   # 版型能力矩陣
     # 創意 0 → 程式壓字（2026-09-14 使用者裁決，理由見 editor_formats.title_mode_for_creativity）。
     # 四個版型一體適用；live24 原本自己那條 creativity<1 與整點極短標題那條都被這裡涵蓋。
     # 1 級起交給模型（2026-09-13 使用者裁決：「標題完全沒有被創意階梯影響 這是錯的」）。
-    forced_mode = editor_formats.title_mode_for_creativity(
-        req.creativity, req.title_mode, bool(req.background_image_base64)
-    )
-    if forced_mode != req.title_mode:
-        print("[yt-cover] 創意 0 → 標題改程式壓字（零錯字、原圖零漂移）", flush=True)
-        req = req.model_copy(update={"title_mode": forced_mode})
+    if caps.zero_program_text:
+        forced_mode = editor_formats.title_mode_for_creativity(
+            req.creativity, req.title_mode, bool(req.background_image_base64)
+        )
+        if forced_mode != req.title_mode:
+            print("[yt-cover] 創意 0 → 標題改程式壓字（零錯字、原圖零漂移）", flush=True)
+            req = req.model_copy(update={"title_mode": forced_mode})
     # live24 只有一個標題，hourly 那條「有第二標題＝雙則」的規則用不上。
     # 2026-09-13 使用者裁決：**兩個附圖位都有東西**才雙切，只放一格或都沒放＝滿版。
     dual = (
@@ -5850,7 +5886,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     )
     if not dual:
         # 單則整版原圖放置最多 4 張（2026-09-14），擋在下面的斷句模型之前
-        reject_excess_asis(req.slot_refs(0) + req.slot_refs(1) + req.reference_images, where="單則")
+        reject_excess_asis(req.slot_refs(0) + req.slot_refs(1) + req.reference_images, where="單則", limit=caps.asis_max)
     # 斷句交給消化模型（2026-09-14）：live24 單行不拆，不必打
     if not live24:
         apply_title_break_hints(req.title, req.title_second)
@@ -6246,6 +6282,14 @@ def _frontend_file(name: str, media_type: str) -> FileResponse:
 @app.get("/")
 def serve_index():
     return _frontend_file("index.html", "text/html; charset=utf-8")
+
+
+@app.get("/api/editor/formats")
+def editor_formats_catalogue() -> list[dict]:
+    """版型能力矩陣（2026-09-14 模組化第 1 步）。免 key：內容跟 app.js 靜態表一樣是公開的
+    版型名稱與功能開關，沒有機密。前台目前仍用自己的靜態表（由 parity 測試釘住一致），
+    改成讀這支是模組化第 5 步。"""
+    return editor_formats.format_catalogue()
 
 
 @app.get("/auth-config.json")

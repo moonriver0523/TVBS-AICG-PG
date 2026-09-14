@@ -1275,6 +1275,7 @@ def compose_ten_cover(
     badge: str = COVER_DEFAULT_BADGE,
     left_is_ai: bool = True,
     right_is_ai: bool = True,
+    prebuilt_split: bool = False,
 ) -> bytes:
     """合成「十點不一樣」封面圖（2026-09-06 斜切全幅版）。
 
@@ -1284,18 +1285,29 @@ def compose_ten_cover(
 
     right_image 為 None＝單張全版（2026-09-06 使用者裁決：只上傳一張原圖就是整版鋪滿，
     不切左右格），兩個標題仍各自壓在左下與右下。
+
+    prebuilt_split=True（2026-09-14 雙切「只改文字」）：left_image 已經是拼好的 16:9 雙切
+    底圖（split_canvas 的輸出，壓字前），right_image 必須是 None；版面照雙切走——斜切安全
+    內框、兩格各自暗化、兩格同字級——只是不再重拼。
     """
     if badge not in COVER_BADGES:
         raise ComposeError(f"未知的標籤：{badge!r}（可用：{list(COVER_BADGES)}）")
     width, height = COVER_CANVAS
     mid = width // 2
-    if right_image is None:
+    if prebuilt_split and right_image is not None:
+        raise ComposeError("prebuilt_split 時 right_image 必須是 None（底圖已經拼好）")
+    if right_image is None and not prebuilt_split:
         canvas = _cover_panel(left_image, COVER_CANVAS).convert("RGBA")
         left_box = (0, 0, mid, height)
         right_box = (mid, 0, width, height)
         _shade_panel_bottom(canvas, (0, 0, width, height))
     else:
-        canvas = split_canvas([left_image, right_image], COVER_CANVAS).convert("RGBA")
+        # 拼好的底圖尺寸就是 COVER_CANVAS，_cover_panel 對它是原樣回傳（不縮放不裁），
+        # 所以「只改文字」重壓出來的成品跟第一次逐像素相同（tests/test_cover_split_recompose_20260914）。
+        canvas = (
+            _cover_panel(left_image, COVER_CANVAS) if prebuilt_split
+            else split_canvas([left_image, right_image], COVER_CANVAS)
+        ).convert("RGBA")
         slant = round(width * YT_SPLIT_SLANT_RATIO)
         # 兩格的「安全內框」：避開斜線最寬處
         left_box = (0, 0, mid - slant // 2, height)
@@ -1313,7 +1325,7 @@ def compose_ten_cover(
         _draw_cover_ai_note(canvas, width - COVER_MARGIN, note_y, align_right=True)
 
     _draw_cover_bottom_line(canvas)
-    if right_image is None and not title_right.strip():
+    if right_image is None and not prebuilt_split and not title_right.strip():
         # 滿版單一標題：橫跨整寬、置中、逐行各自撐滿（2026-09-07）
         _draw_cover_title(canvas, cover_title_line_pairs(title_left, full_width=True), 0, width,
                           align_right=False, full_width=True)
