@@ -442,9 +442,10 @@ const EDITOR_FORMATS = {
     // （coverLayout: 'auto'，實際值一律問 coverLayoutNow()）。
     ten_cover: {
         label: '十點不一樣',
-        hint: '只填第一標題＝滿版一張圖；再填第二標題＝左右雙切、兩格各一個標題與附圖位。每格可放多張、每張自選用途：「原圖放置」直接上版，「AI改圖」交給 AI 照這張圖重畫一次，其餘當生圖參考；那格沒有原圖放置就由 AI 生底圖。預設整張由生圖模型設計；關閉「標題由 AI 生成」則所有文字由程式壓字，零錯字。標頭帶整條由程式貼：Logo、節目標籤、日期與 ON AIR／精華都是正版檔，AI 只負責底圖與標題。',
+        hint: '只填第一標題＝滿版一張圖；再填第二標題＝左右雙切、兩格各一個標題與附圖位。每格可放多張、每張自選用途：「原圖放置」直接上版，「AI改圖」交給 AI 照這張圖重畫一次，其餘當生圖參考；那格沒有原圖放置就由 AI 生底圖。標題創意 0（預設）所有文字由程式壓字、零錯字、原圖不動；拉到 1 以上才整張交給生圖模型設計。標頭帶整條由程式貼：Logo、節目標籤、日期與 ON AIR／精華都是正版檔，AI 只負責底圖與標題。',
         coverLayout: 'auto',
         inputs: 'cover',
+        slots: true,   // 一標一附圖位（與 editor_formats.FORMAT_CAPABILITIES.slots 對齊，parity 測試釘住）
         coverMode: 'ai',
         // 封面沒有消化這道程序：/api/editor/cover 不收 density／stamp／safe_frame／tone，
         // 留著只會是四顆按了沒反應的按鈕，所以收起來而不是鎖起來
@@ -460,7 +461,7 @@ const EDITOR_FORMATS = {
     // 沿用主流程的附圖上傳區（用途：原圖放置＝直接當底圖；其他＝生圖參考）。
     yt_live_cover: {
         label: 'YT國內外新聞直播',
-        hint: '標題用半形空格分兩段（分不出來時由 AI 判斷）。有「原圖放置」附圖就直接當底圖，否則 AI 生底圖並標示 AI示意圖。原音呈現／AI即時翻譯可勾可並存。文字與 Logo 全由程式疊，零錯字。',
+        hint: '標題用半形空格分兩段（分不出來時由 AI 判斷）。有「原圖放置」附圖就直接當底圖，否則 AI 生底圖並標示 AI示意圖。原音呈現／AI即時翻譯可勾可並存。創意 0（預設）文字與 Logo 全由程式疊、零錯字；1 以上才交 AI 畫標題。',
         inputs: 'yt_cover',
         ytLayout: 'news',
         locks: {},
@@ -486,6 +487,7 @@ const EDITOR_FORMATS = {
         hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。第二標題填了就是「雙則」：上白＝第一則、下黃＝第二則，每行一整句不拆、最多 18 字，底圖左右兩張羽化拼成一張。附圖跟十點一樣一標一格：每個標題底下各有自己的附圖位，一格可放多張、每張自選用途（原圖放置直接上版、AI改圖由 AI 照這張圖重畫、其餘當參考）；那格沒有原圖放置就由 AI 生底圖。',
         inputs: 'yt_cover',
         ytLayout: 'hourly',
+        slots: true,   // 一標一附圖位（與後端能力矩陣對齊）
         locks: {},
         // 2026-09-10：整點改成一標一附圖（對齊十點），共用「附參考圖」那一區整個收起來。
         // 國內外新聞直播與今日熱搜**不收**——那兩個支援 1 張整版／2 張左右雙切／3 張三切，
@@ -497,9 +499,10 @@ const EDITOR_FORMATS = {
     // 標題一行深紅斜體。角標是定版的生成素材，程式只在它的玻璃板上壓日期。
     yt_live24_cover: {
         label: 'YT24H LIVE',
-        hint: '24H LIVE 封面：標題只有一行（不拆段），深紅斜體、全形上限約 17 字。日期格式 YYYY.MM.DD。標題與日期一律程式壓字（零錯字），創意階梯只影響底圖。附圖位兩格：只放一格＝滿版，兩格都放＝左右雙切羽化拼接。',
+        hint: '24H LIVE 封面：標題只有一行（不拆段），深紅斜體、全形上限約 17 字。日期格式 YYYY.MM.DD。創意 0 標題與日期由程式壓字（零錯字），1 以上交 AI 畫。附圖位兩格：只放一格＝滿版，兩格都放＝左右雙切羽化拼接。',
         inputs: 'yt_cover',
         ytLayout: 'live24',
+        slots: true,   // 一標一附圖位（與後端能力矩陣對齊）
         locks: {},
         // 同整點：一標一附圖，共用「附參考圖」那一區整個收起來，免得有兩個入口
         hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
@@ -3282,7 +3285,10 @@ function renderYtAsis() {
    1 張整版／2 張左右雙切／3 張三切——改成一標一圖會把雙切與三切砍掉。
    第二個附圖位再多一層條件：判定成雙則（第二標題有填）時才出現，比照十點的滿版／雙切。 */
 function ytUsesAsisSlots() {
-    return ['hourly', 'live24'].includes(editorFormat().ytLayout || '');
+    // 哪些版型有一標一附圖位看版型表的 slots（後端 FORMAT_CAPABILITIES 同一份，parity 測試釘住），
+    // 不再在這裡寫死版型名單——對齊新版型時只要在表上翻旗子
+    const format = editorFormat();
+    return format.inputs === 'yt_cover' && !!format.slots;
 }
 
 function updateYtAsisSlots() {

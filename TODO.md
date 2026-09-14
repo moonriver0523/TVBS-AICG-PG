@@ -1493,7 +1493,7 @@ process-local）。2026-08-17 上線的三項功能（PLAN.md）全部只做在�
 現況數字：`main.py` 6320 行／158 個 def、`editor_formats.py` 2455 行、`compose.py` 2996 行、`app.js` 3485 行。已經模組化的：`creativity.py`（等級名稱、變化池、配件池、固定條文）、前端上傳模組（2026-09-13）、斷句（2026-09-14）。還沒的：附圖規則散在 `main.py` 五個函式＋`news_prompt.py` 六段模板；「哪個版型有什麼功能」散在四個端點的 if 與 `app.js` 的 `hides`。
 
 建議切法（每步一個 PR、行為零變更、測試不改即綠）：
-1. **能力矩陣資料化（先做，風險最低，直接服務上面的對齊題）**：`editor_formats` 每個版型一筆 capability（附圖位／原圖放置／融合／上限／創意管什麼／壓字規則／只改文字／追加修改／指令欄），後端端點與前端 `hides` 都改讀它，不再各自手寫。對齊缺口變成「把表填齊」而不是「找 if」。
+1. ~~**能力矩陣資料化**~~ **已做（2026-09-14，VERSION 260914-02）**：`editor_formats.FORMAT_CAPABILITIES`＋`capability_for`／`yt_format_key`／`hides_for`／`format_catalogue`，端點讀 `asis_max`／`zero_program_text`，`GET /api/editor/formats` 免 key 吐出，app.js 靜態表由 `tests/test_format_capabilities_20260914` 釘住一致（前台改成讀端點是第 5 步）。上面盤點表的缺口現在就是表裡的 False 旗子。原文：**能力矩陣資料化（先做，風險最低，直接服務上面的對齊題）**：`editor_formats` 每個版型一筆 capability（附圖位／原圖放置／融合／上限／創意管什麼／壓字規則／只改文字／追加修改／指令欄），後端端點與前端 `hides` 都改讀它，不再各自手寫。對齊缺口變成「把表填齊」而不是「找 if」。
 2. **附圖規則模組 `refs.py`**：`UserReferenceImage`、`merge_mixed_slot_to_aiedit`、`lock_half_slot_asis`、`reject_excess_asis`、`apply_user_references_to_image_request`、`USER_REFERENCE_*` 模板搬成一處，「用途→措辭→鎖定→上限」一目了然。
 3. **標題政策模組 `title_policy.py`**：`title_mode_for_creativity`、`creativity_level`、日期牌歸屬、只改文字可用性。
 4. **端點拆 router**：`routes_cover.py`／`routes_yt_cover.py`／`routes_generate.py`（FastAPI `APIRouter`），`main.py` 只剩 app 組裝與共用工具。

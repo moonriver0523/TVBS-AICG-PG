@@ -656,18 +656,21 @@ def lock_half_slot_asis(refs: list[UserReferenceImage], tag: str = "slot") -> li
     return [ref.model_copy(update={"purpose": "aiedit"}) if ref.purpose == "asis" else ref for ref in refs]
 
 
-def reject_excess_asis(refs: list[UserReferenceImage], *, where: str) -> None:
+def reject_excess_asis(
+    refs: list[UserReferenceImage], *, where: str, limit: int = compose.YT_SPLIT_MAX_PANELS
+) -> None:
     """滿版一格的原圖放置超過自動切格上限就 400（2026-09-14 使用者裁決：「限制滿版最多 4 張」）。
 
     以前 _cover_full_base／_yt_cover_background 默默只取前 4 張，使用者以為 5 張都上了。
     在端點入口就擋，擋在斷句／消化任何模型呼叫之前，白燒不到一通。只管會自動切格的
     滿版格（十點滿版、整點單則）；雙切的半格 ≥2 張本來就鎖成 AI改圖，不歸這裡。
     """
+    # 上限來自版型能力矩陣（editor_formats.FORMAT_CAPABILITIES.asis_max），呼叫端傳進來
     n = sum(1 for ref in refs if ref.purpose == "asis")
-    if n > compose.YT_SPLIT_MAX_PANELS:
+    if limit and n > limit:
         raise HTTPException(
             status_code=400,
-            detail=f"{where}原圖放置最多 {compose.YT_SPLIT_MAX_PANELS} 張（收到 {n} 張），請移除多的再送",
+            detail=f"{where}原圖放置最多 {limit} 張（收到 {n} 張），請移除多的再送",
         )
 
 
@@ -5130,18 +5133,20 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     req = req.model_copy(
         update={"layout": editor_formats.resolve_cover_layout(req.layout, req.title_right)}
     )
+    caps = editor_formats.capability_for("ten_cover")   # 版型能力矩陣（2026-09-14 模組化第 1 步）
     # 創意 0 → 程式壓字（2026-09-14 使用者裁決，理由見 editor_formats.title_mode_for_creativity）。
     # 放在所有 ai_over_base／只改文字 判斷之前，下游一律看改寫後的 mode；回應也回改寫後的值，
     # 前端靠 data.mode 決定「只改文字」要不要露出。
-    forced_mode = editor_formats.title_mode_for_creativity(
-        req.creativity_level(), req.mode, bool(req.background_image_base64)
-    )
-    if forced_mode != req.mode:
-        print("[cover] 創意 0 → 標題改程式壓字（零錯字、原圖零漂移）", flush=True)
-        req = req.model_copy(update={"mode": forced_mode})
+    if caps.zero_program_text:
+        forced_mode = editor_formats.title_mode_for_creativity(
+            req.creativity_level(), req.mode, bool(req.background_image_base64)
+        )
+        if forced_mode != req.mode:
+            print("[cover] 創意 0 → 標題改程式壓字（零錯字、原圖零漂移）", flush=True)
+            req = req.model_copy(update={"mode": forced_mode})
     if req.layout == "full":
-        # 滿版原圖放置最多 4 張（2026-09-14），擋在下面的斷句模型之前
-        reject_excess_asis(req.slot_refs(0) or req.reference_images, where="滿版")
+        # 滿版原圖放置最多 N 張（2026-09-14；N 看能力矩陣），擋在下面的斷句模型之前
+        reject_excess_asis(req.slot_refs(0) or req.reference_images, where="滿版", limit=caps.asis_max)
     # 斷句交給消化模型（2026-09-14）：入口登記詞組邊界，下游所有斷行都只在邊界上切
     apply_title_break_hints(req.title_left, req.title_right)
     if req.layout == "full":
@@ -5832,15 +5837,17 @@ def yt_dual_background(
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     live24 = req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
+    caps = editor_formats.capability_for(editor_formats.yt_format_key(req.layout))   # 版型能力矩陣
     # 創意 0 → 程式壓字（2026-09-14 使用者裁決，理由見 editor_formats.title_mode_for_creativity）。
     # 四個版型一體適用；live24 原本自己那條 creativity<1 與整點極短標題那條都被這裡涵蓋。
     # 1 級起交給模型（2026-09-13 使用者裁決：「標題完全沒有被創意階梯影響 這是錯的」）。
-    forced_mode = editor_formats.title_mode_for_creativity(
-        req.creativity, req.title_mode, bool(req.background_image_base64)
-    )
-    if forced_mode != req.title_mode:
-        print("[yt-cover] 創意 0 → 標題改程式壓字（零錯字、原圖零漂移）", flush=True)
-        req = req.model_copy(update={"title_mode": forced_mode})
+    if caps.zero_program_text:
+        forced_mode = editor_formats.title_mode_for_creativity(
+            req.creativity, req.title_mode, bool(req.background_image_base64)
+        )
+        if forced_mode != req.title_mode:
+            print("[yt-cover] 創意 0 → 標題改程式壓字（零錯字、原圖零漂移）", flush=True)
+            req = req.model_copy(update={"title_mode": forced_mode})
     # live24 只有一個標題，hourly 那條「有第二標題＝雙則」的規則用不上。
     # 2026-09-13 使用者裁決：**兩個附圖位都有東西**才雙切，只放一格或都沒放＝滿版。
     dual = (
@@ -5850,7 +5857,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     )
     if not dual:
         # 單則整版原圖放置最多 4 張（2026-09-14），擋在下面的斷句模型之前
-        reject_excess_asis(req.slot_refs(0) + req.slot_refs(1) + req.reference_images, where="單則")
+        reject_excess_asis(req.slot_refs(0) + req.slot_refs(1) + req.reference_images, where="單則", limit=caps.asis_max)
     # 斷句交給消化模型（2026-09-14）：live24 單行不拆，不必打
     if not live24:
         apply_title_break_hints(req.title, req.title_second)
@@ -6246,6 +6253,14 @@ def _frontend_file(name: str, media_type: str) -> FileResponse:
 @app.get("/")
 def serve_index():
     return _frontend_file("index.html", "text/html; charset=utf-8")
+
+
+@app.get("/api/editor/formats")
+def editor_formats_catalogue() -> list[dict]:
+    """版型能力矩陣（2026-09-14 模組化第 1 步）。免 key：內容跟 app.js 靜態表一樣是公開的
+    版型名稱與功能開關，沒有機密。前台目前仍用自己的靜態表（由 parity 測試釘住一致），
+    改成讀這支是模組化第 5 步。"""
+    return editor_formats.format_catalogue()
 
 
 @app.get("/auth-config.json")

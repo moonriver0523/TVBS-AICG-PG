@@ -19,6 +19,7 @@
 
 import random
 import re
+from dataclasses import asdict, dataclass
 
 # 底色框的百分比要跟合成版同一個數字（見 _BAND_CLAUSE_TEMPLATE）。compose 只在函式
 # 內部反向 import editor_formats，模組層級不成環。
@@ -2376,6 +2377,141 @@ EDITOR_FORMAT_ALIASES = {
 }
 
 EDITOR_FORMAT_ALIAS_KEYS = tuple(EDITOR_FORMAT_ALIASES)
+
+
+# ============================================================
+# 版型能力矩陣（2026-09-14 模組化第 1 步）
+#
+# 「哪個版型有什麼功能」以前散在四個端點的 if 與 app.js 每個版型的 hides 裡，
+# 對齊缺口要靠翻程式才找得到（2026-09-14 TODO.md 的盤點表就是這樣翻出來的）。
+# 這張表是唯一真相：後端端點讀它，GET /api/editor/formats 吐給前端，app.js 的
+# 靜態表由 tests/test_format_capabilities_20260914 釘住必須一致。
+# 對齊缺口從此是「把 False 翻成 True 並接線」，不是「找 if」。
+#
+# 欄位語意：
+#   slots            一標一附圖位（每格自己的清單＋用途）；False＝走共用附圖區
+#   shared_refs      前台顯示共用「附參考圖」區（slots 版型收起來免得兩個入口）
+#   asis_max         單格原圖放置自動切格的上限（超過回 400）；0＝這條規則不適用
+#   fusion           多張 AI改圖 走融合版措辭
+#   creativity_scope 創意階梯管什麼：layout（CG 版面槓桿）／title／title_date（整點連日期牌）／None
+#   zero_program_text 創意 0 一律程式壓字（title_mode_for_creativity）
+#   text_only_recompose 哪些版面支援「只改文字」（底圖不重生）；空＝不支援
+#   refine / instruction / engine 追加修改／指令欄／引擎選擇 有沒有
+#   digest_controls / safe_frame / stamp 消化控制列／安全框／蓋章 有沒有
+# ============================================================
+CREATIVITY_SCOPE_LAYOUT = "layout"
+CREATIVITY_SCOPE_TITLE = "title"
+CREATIVITY_SCOPE_TITLE_DATE = "title_date"
+
+
+@dataclass(frozen=True)
+class Capability:
+    slots: bool
+    shared_refs: bool
+    asis_max: int
+    fusion: bool
+    creativity_scope: str | None
+    zero_program_text: bool
+    text_only_recompose: tuple[str, ...]
+    refine: bool
+    instruction: bool
+    engine: bool
+    digest_controls: bool
+    safe_frame: bool
+    stamp: bool
+
+
+_CG_CAPABILITY = Capability(
+    slots=False, shared_refs=True, asis_max=0, fusion=True,
+    creativity_scope=CREATIVITY_SCOPE_LAYOUT, zero_program_text=False, text_only_recompose=(),
+    refine=True, instruction=True, engine=True, digest_controls=True, safe_frame=True, stamp=True,
+)
+_YT_SHARED_CAPABILITY = Capability(
+    slots=False, shared_refs=True, asis_max=4, fusion=True,
+    creativity_scope=CREATIVITY_SCOPE_TITLE, zero_program_text=True, text_only_recompose=(),
+    refine=True, instruction=True, engine=True, digest_controls=False, safe_frame=False, stamp=False,
+)
+_YT_SLOT_CAPABILITY = Capability(
+    slots=True, shared_refs=False, asis_max=4, fusion=True,
+    creativity_scope=CREATIVITY_SCOPE_TITLE, zero_program_text=True, text_only_recompose=(),
+    refine=True, instruction=True, engine=True, digest_controls=False, safe_frame=False, stamp=False,
+)
+
+FORMAT_CAPABILITIES: dict[str, Capability] = {
+    DEFAULT_FORMAT: _CG_CAPABILITY,
+    "broadcast": _CG_CAPABILITY,
+    "ten_cover": Capability(
+        slots=True, shared_refs=False, asis_max=4, fusion=True,
+        creativity_scope=CREATIVITY_SCOPE_TITLE, zero_program_text=True,
+        text_only_recompose=(COVER_LAYOUT_FULL,),
+        refine=True, instruction=True, engine=True, digest_controls=False, safe_frame=False, stamp=False,
+    ),
+    "yt_live_cover": _YT_SHARED_CAPABILITY,
+    "yt_vstrip": Capability(
+        slots=False, shared_refs=False, asis_max=0, fusion=False,
+        creativity_scope=None, zero_program_text=False, text_only_recompose=(),
+        refine=False, instruction=False, engine=False, digest_controls=False, safe_frame=False, stamp=False,
+    ),
+    "yt_hourly_cover": Capability(**{**asdict(_YT_SLOT_CAPABILITY), "creativity_scope": CREATIVITY_SCOPE_TITLE_DATE}),
+    "yt_live24_cover": _YT_SLOT_CAPABILITY,
+    "yt_hot_cover": _YT_SHARED_CAPABILITY,
+}
+assert set(FORMAT_CAPABILITIES) == set(EDITOR_FORMATS), "每個版型都要有能力矩陣"
+
+# 別名（broadcast_left／right、ten_cover_full）沿用本尊那筆
+_CAPABILITY_ALIASES = {"broadcast_left": "broadcast", "broadcast_right": "broadcast", "ten_cover_full": "ten_cover"}
+assert set(_CAPABILITY_ALIASES) == set(EDITOR_FORMAT_ALIASES)
+
+# YT 端點收的是 layout 不是版型 key
+_YT_LAYOUT_FORMAT_KEYS = {
+    YT_COVER_LAYOUT_NEWS: "yt_live_cover",
+    YT_COVER_LAYOUT_HOURLY: "yt_hourly_cover",
+    YT_COVER_LAYOUT_LIVE24: "yt_live24_cover",
+    YT_COVER_LAYOUT_HOT: "yt_hot_cover",
+}
+assert set(_YT_LAYOUT_FORMAT_KEYS) == set(YT_COVER_LAYOUTS)
+
+
+def capability_for(key: str | None) -> Capability:
+    """版型 key（含別名）→ 能力；不認得的 key 回預設 CG 那筆（跟 get() 同一種寬容）。"""
+    key = _CAPABILITY_ALIASES.get(key or "", key or "")
+    return FORMAT_CAPABILITIES.get(key, FORMAT_CAPABILITIES[DEFAULT_FORMAT])
+
+
+def yt_format_key(layout: str) -> str:
+    return _YT_LAYOUT_FORMAT_KEYS[layout]
+
+
+def hides_for(key: str | None) -> dict[str, bool]:
+    """app.js 每個版型的 hides 物件，由能力推導（只列要收起來的，跟前台手寫的形狀一樣）。"""
+    cap = capability_for(key)
+    hides = {
+        "digestControls": not cap.digest_controls,
+        "safeFrame": not cap.safe_frame,
+        "stamp": not cap.stamp,
+        "engine": not cap.engine,
+        "instruction": not cap.instruction,
+        "refUpload": not cap.shared_refs,
+        "refine": not cap.refine,
+    }
+    return {name: True for name, hidden in hides.items() if hidden}
+
+
+def format_catalogue() -> list[dict]:
+    """GET /api/editor/formats 的內容：版型 key、名稱、提示、輸入區、版面、能力、hides。"""
+    rows = []
+    for key, spec in EDITOR_FORMATS.items():
+        rows.append({
+            "key": key,
+            "label": spec["label"],
+            "pipeline": spec["pipeline"],
+            "yt_layout": spec.get("yt_layout"),
+            "cover_layout": spec.get("cover_layout"),
+            "capabilities": {**asdict(FORMAT_CAPABILITIES[key]),
+                             "text_only_recompose": list(FORMAT_CAPABILITIES[key].text_only_recompose)},
+            "hides": hides_for(key),
+        })
+    return rows
 
 
 def get(key: str | None) -> dict:
