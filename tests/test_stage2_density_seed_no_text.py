@@ -221,5 +221,47 @@ class F0SeedTests(SourceAssertions, unittest.TestCase):
         self.assertSourceContains(app_js, "function bumpSeed(")
 
 
+class A1AccessoryOwnershipTests(SourceAssertions, unittest.TestCase):
+    """2-5：招式件數與選取邏輯搬進 creativity.py，editor_formats 只留十點 adapter。
+
+    這一步**不准改任何既有行為**：封面件數表原封不動、既有 52 筆 RNG pin 逐字元
+    不變。重構偷改視覺是這個 repo 記過的病灶，所以件數表本身也釘在這裡。
+    """
+
+    def test_the_shared_module_owns_the_counts_and_the_picker(self):
+        self.assertTrue(hasattr(creativity, "COVER_ACCESSORY_COUNTS"))
+        self.assertTrue(callable(getattr(creativity, "accessories", None)))
+        # 別名，不是副本——兩份會各自漂移，這正是搬家要解決的事
+        self.assertIs(editor_formats.COVER_ACCESSORY_COUNTS, creativity.COVER_ACCESSORY_COUNTS)
+
+    def test_the_refactor_does_not_change_the_cover_counts(self):
+        self.assertEqual(creativity.COVER_ACCESSORY_COUNTS, {0: 0, 1: 0, 2: 1, 3: 2, 4: 3})
+
+    def test_the_shared_picker_takes_no_ten_cover_layout_information(self):
+        """titles／full_width 是十點版型的事，跨拉桿共用的那支不該知道。"""
+        import inspect
+
+        params = inspect.signature(creativity.accessories).parameters
+        for banned in ("titles", "full_width"):
+            with self.subTest(banned=banned):
+                self.assertNotIn(banned, params)
+
+    def test_editor_formats_keeps_an_adapter_not_a_second_copy(self):
+        source = (Path(__file__).resolve().parent.parent / "editor_formats.py").read_text(
+            encoding="utf-8"
+        )
+        # 件數表的字面值與洗牌迴圈都該只剩 creativity.py 一份
+        self.assertNotSourceContains(source, "{0: 0, 1: 0, 2: 1, 3: 2, 4: 3}")
+        self.assertNotSourceContains(source, "rng.shuffle(entries)")
+        self.assertSourceContains(source, "creativity.accessories(")
+
+    def test_the_ten_cover_adapter_still_supplies_its_own_geometry(self):
+        """幾何提示是十點的版型資訊，留在 adapter：雙切才有切線那句。"""
+        split = editor_formats.cover_accessories(4, seed=1, full_width=False)
+        full = editor_formats.cover_accessories(4, seed=1, full_width=True)
+        self.assertTrue(all("never across the centre seam" in t for t in split))
+        self.assertFalse(any("never across the centre seam" in t for t in full))
+
+
 if __name__ == "__main__":
     unittest.main()
