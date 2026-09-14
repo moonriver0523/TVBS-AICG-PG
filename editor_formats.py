@@ -2503,7 +2503,7 @@ def hides_for(key: str | None) -> dict[str, bool]:
 
 
 def format_catalogue() -> list[dict]:
-    """GET /api/editor/formats 的內容：版型 key、名稱、提示、輸入區、版面、能力、hides。"""
+    """GET /api/editor/formats 的內容：版型 key、名稱、pipeline、版面、能力、hides（hint 只在 app.js）。"""
     rows = []
     for key, spec in EDITOR_FORMATS.items():
         rows.append({

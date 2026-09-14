@@ -137,6 +137,52 @@ class SlotsOnNewsAndHot(_Harness):
                 self.assertTrue(_is(img.getpixel((w // 2, h // 3)), RED))
 
 
+class DualTextOnlyRecompose(_Harness):
+    """能力矩陣寫 hourly／live24 的 text_only_recompose 含 dual——旗子要有測試撐著，不是抄前台註解。"""
+
+    def test_hourly_dual_with_two_slots_recomposes_over_the_returned_background(self):
+        first, calls = self._post({
+            "layout": "hourly", "title_second": "第二 標題", "time_text": "20:00",
+            "slot_left": [_ref(RED)], "slot_right": [_ref(BLUE)],
+        })
+        self.assertEqual(calls, [])
+        self.assertTrue(first["dual"])
+        data, calls = self._post({
+            "layout": "hourly", "title": "換了 第一則", "title_second": "換了 第二則", "time_text": "20:00",
+            "title_mode": "composite",
+            "slot_left": [_ref(RED)], "slot_right": [_ref(BLUE)],   # 前台重送時附圖位還在
+            "background_image_base64": first["source_image_base64"],
+            "background_mime_type": first["source_mime_type"],
+        })
+        self.assertEqual(calls, [])
+        self.assertTrue(data["dual"])
+        self.assertEqual(data["line1"], "換了 第一則")
+        img = _decode(data)
+        w, h = img.size
+        self.assertTrue(_is(img.getpixel((w // 8, h // 3)), RED))
+        self.assertTrue(_is(img.getpixel((w * 7 // 8, h // 3)), BLUE))
+
+    def test_live24_blend_with_two_slots_recomposes_over_the_returned_background(self):
+        first, calls = self._post({
+            "layout": "live24", "title": "二十四小時直播", "live24_bg": "blend",
+            "slot_left": [_ref(RED)], "slot_right": [_ref(BLUE)],
+        })
+        self.assertEqual(calls, [])
+        self.assertTrue(first["dual"])
+        data, calls = self._post({
+            "layout": "live24", "title": "換了標題", "live24_bg": "blend", "title_mode": "composite",
+            "slot_left": [_ref(RED)], "slot_right": [_ref(BLUE)],
+            "background_image_base64": first["source_image_base64"],
+            "background_mime_type": first["source_mime_type"],
+        })
+        self.assertEqual(calls, [])
+        self.assertTrue(data["dual"])
+        img = _decode(data)
+        w, h = img.size
+        self.assertTrue(_is(img.getpixel((w // 8, h // 2)), RED))
+        self.assertTrue(_is(img.getpixel((w * 7 // 8, h // 2)), BLUE))
+
+
 class Frontend(unittest.TestCase):
     APP_JS = (ROOT / "app.js").read_text(encoding="utf-8")
 
