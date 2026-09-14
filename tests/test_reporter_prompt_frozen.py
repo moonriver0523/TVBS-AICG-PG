@@ -1,22 +1,18 @@
-"""記者的 prompt 一個字都不准變。
+"""記者與編輯的 digest prompt 逐字元快照。
 
-2026-08-17 為了編輯的安全框問題連續改了好幾輪 prompt，使用者明確要求
-「記者的絕對不可以動到」。編輯與記者共用不少常數，改一邊很容易誤傷另一邊，
-而且誤傷不會有任何執行期錯誤——只會讓記者悄悄出不一樣的圖。
-
-所以把改動前的記者 prompt 原文存成快照逐字比對。這條紅了就是誤傷，
-不要改快照，去改程式。真的要動記者 prompt 時，才連同快照一起更新。
+2026-08-17 使用者要求記者 prompt 不得被編輯端修改誤傷。兩個角色共用不少常數，
+這類漂移不會出現執行期錯誤，卻會讓成品悄悄改變；因此以 role × density × 安全框
+的快照逐字比對。未經明確放行不得更新 fixture。
 
 快照更新記錄：
 - 2026-09-09：使用者要求「字多」在**記者與編輯共通**放寬（資訊卡數量／密度／字數），
   density="standard" 因此開始注入 STANDARD_DENSITY_RULES，記者的 standard 兩份快照
-  隨之更新。這是上面那句「真的要動記者 prompt 時」的情形，不是誤傷。
-  simplified 兩份快照逐字元不變，可以拿來對照確認沒有波及其他檔位。
-- 2026-09-10：非地圖類型改成一律注入 MAP_SCOPE_GUARD_RULES（原本只有兩段式分類成
-  非地圖才注入，而那支旗標預設關，等於明確指定非地圖類型時一條地理約束都沒有）。
-  四份快照因此都多了那一段。起因是 type_label=資訊卡 的高溫新聞畫出縣市界全錯的
-  臺灣地圖，歸因見 docs/error-cases/2026-09-10-台灣行政區界-錯誤-分析.md。
-  這同樣是「真的要動記者 prompt」的情形，不是誤傷。
+  隨之更新。這是明確行為變更，不是誤傷。
+- 2026-09-10：非地圖類型改成一律注入 MAP_SCOPE_GUARD_RULES；四份記者快照因此更新。
+  起因是 type_label=資訊卡 的高溫新聞畫出縣市界全錯的臺灣地圖。
+- 2026-09-14：CP1 經使用者放行，D16 以 10／13／18／22 接上標題可見字元上限，D2
+  收窄為只禁螢光綠／chroma-key green。這是有意改動記者 prompt，不是誤傷；同次補齊
+  編輯的 standard／simplified × fullbleed／safearea 四份 digest 快照。
 """
 
 import os
@@ -38,17 +34,18 @@ def frozen(name: str) -> str:
 
 class ReporterDigestFrozenTests(unittest.TestCase):
     def test_digest_instructions_unchanged(self):
-        for density in ("standard", "simplified"):
-            for full_bleed in (True, False):
-                tag = "fullbleed" if full_bleed else "safearea"
-                with self.subTest(density=density, mode=tag):
-                    self.assertEqual(
-                        build_digest_instructions(
-                            "記者", density, "資料圖表", full_bleed=full_bleed
-                        ),
-                        frozen(f"reporter-digest-{density}-{tag}.txt"),
-                        "記者的消化指令被改到了",
-                    )
+        for role, fixture_role in (("記者", "reporter"), ("編輯", "editor")):
+            for density in ("standard", "simplified"):
+                for full_bleed in (True, False):
+                    tag = "fullbleed" if full_bleed else "safearea"
+                    with self.subTest(role=role, density=density, mode=tag):
+                        self.assertEqual(
+                            build_digest_instructions(
+                                role, density, "資料圖表", full_bleed=full_bleed
+                            ),
+                            frozen(f"{fixture_role}-digest-{density}-{tag}.txt"),
+                            f"{role}的消化指令被改到了",
+                        )
 
 
 class ReporterImagePromptFrozenTests(unittest.TestCase):

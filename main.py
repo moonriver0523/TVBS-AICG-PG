@@ -964,7 +964,7 @@ Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style
    - 台灣繁體中文。總字數嚴禁超過 150-180 個字。寫作難度預設為高中程度，專業但不艱澀。
    - 嚴禁出現「，」與「。」，短句停頓統一使用全形空格替代。
    - 格式依序為（使用真實換行 \\n，缺一不可）：
-     [標題] 大標題強制拆分為兩行、不含標點
+     [標題] 大標題預設拆分為兩行、不含標點；只有字極少 MODE 可依可讀性使用單行，但不強制單行
      [內文小標]＋條列重點，每行不超過 15 字
      最後一行必須是 <蓋章> 開頭，標示整張 CG 最核心的結論或金句（精簡有力）
    - 需要變色或加框的關鍵詞（數據、人名）用 <文字> 標示。
@@ -997,6 +997,7 @@ STANDARD_DENSITY_RULES = """
 6. A LATER BLOCK MAY FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT. When a format-specific block below states an exact number of [內文小標] lines, that number wins over the "up to six" in rule two: the card stack of that layout physically has that many rows. Rules three, four and five still apply inside those rows.
 7. THIS LICENSES NOTHING NEW. Every added line must come from the source material. Do not invent a figure, do not restate a point you already made in different words, and do not pad with generic background to reach a length. If the material genuinely supports only two points, write two — a padded graphic is worse than a short one.
 8. Design "structure" for that quantity: enough rows or cards for the points you wrote, sized so the longer lines stay legible on air rather than shrinking to fit.
+9. HEADLINE LIMIT: [標題] may contain no more than 18 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 """
 
 # 第 3、4 條要指名蓋掉的上限——但那兩個上限只寫在編輯版樣板裡。對記者版指名一個
@@ -1025,6 +1026,7 @@ SIMPLIFIED MODE OVERRIDE — THESE RULES OVERRIDE ANY EARLIER STANDARD-MODE LENG
    C. one large thematic image/map/scene with text confined to one compact area.
 5. Do not add multiple secondary card groups, unnecessary decorative icons, competing focal points, or invented filler text.
 6. For editor role, ignore the earlier 150-180 character target. <蓋章> is optional, must appear only when the source supports a clear conclusion or quote, and counts as one of the maximum three points.
+7. HEADLINE LIMIT: [標題] may contain no more than 13 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 """
 
 
@@ -1038,6 +1040,7 @@ MINIMAL_DENSITY_RULES = """
 3. The graphic is a single dominant statement: one huge number, name or conclusion, with at most ONE short supporting label beside or beneath it. No card stack, no bullet列, no secondary group, no callout cluster.
 4. The headline and that one point must not say the same thing twice in different words. If they would, rewrite the point to carry what the headline does not.
 5. Design "structure" for that: one focal element occupying the middle of the content area at a size readable across a room, everything else empty.
+6. HEADLINE LIMIT: [標題] may contain no more than 10 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 """
 
 # 「字超多」檔（2026-09-10 五段拉桿的右一）。STANDARD 之後才注入。
@@ -1051,6 +1054,7 @@ MAXIMUM_DENSITY_RULES = """
 3. THIS STILL LICENSES NOTHING NEW. Every added line comes from the source material. Do not invent a figure, a date, a name or a cause to reach the count; do not restate an earlier point in different words; do not pad with generic background. If the material supports only three points, write three — this setting raises the ceiling, it does not set a quota.
 4. Group the points: when you write more than five, say in "structure" that they are arranged in labelled groups or two columns rather than one long list, so the viewer can find the one that matters.
 5. A LATER BLOCK MAY STILL FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT, and that number wins over the "up to eight" here: those card stacks physically have that many rows.
+6. HEADLINE LIMIT: [標題] may contain no more than 22 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 """
 
 
@@ -1322,6 +1326,15 @@ DIRECTIONAL COLOUR CONVENTION (Taiwan convention — the Western one is wrong he
 """
 
 
+CHROMA_KEY_GREEN_SAFETY_RULES = """
+
+CHROMA-KEY GREEN SAFETY (applies at every density and creativity level):
+1. Never use chroma-key green or neon/lime key green for text fills, outlines, shadows, plates behind text, tags, chips, or purely decorative shapes; these colours are keyed out on air.
+2. This is a narrow studio-key restriction, not a ban on ordinary green. Deep green, dark green and olive green remain available when appropriate.
+3. The Taiwan directional convention above still wins for market data: non-chroma data green remains allowed for falls, losses and negative values.
+"""
+
+
 # 地圖準確性。對「禁數字」與「內容忠實度」各開一個範圍受限的豁免：
 #
 # 2026-09-04 正式站實測（基隆廟口／西定路／大武崙淹水）：本區塊原本的開頭句是
@@ -1525,6 +1538,7 @@ def build_digest_instructions(
     instructions += REAL_WORLD_FIDELITY_RULES
     instructions += CHILD_DEPICTION_STYLE_RULES
     instructions += DIRECTIONAL_COLOR_RULES
+    instructions += CHROMA_KEY_GREEN_SAFETY_RULES
     # 自動判斷模式組 prompt 時還不知道 AI 會選哪一類，也要注入；
     # 區塊開頭自我限縮「非地圖類整段忽略」。
     #

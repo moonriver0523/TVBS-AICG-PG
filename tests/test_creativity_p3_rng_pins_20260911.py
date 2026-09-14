@@ -34,6 +34,20 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 FIXTURE_PATH = REPO_ROOT / "tests" / "fixtures" / "cover_design_brief_rng_pins_20260911.json"
 
 
+def _without_d2_policy(brief: str) -> str:
+    """D2 改的是全域安全文案，不屬於 seed 抽籤序列。"""
+    return (
+        brief.replace(
+            "then add whatever else the design needs — the palette is fully open (never green)",
+            "D2-L4-COLOUR-POLICY",
+        )
+        .replace(
+            "then add what else you need — palette is fully open; no chroma-key green",
+            "D2-L4-COLOUR-POLICY",
+        )
+    )
+
+
 class CoverDesignBriefRngPinTests(unittest.TestCase):
     """搬家前後，同一顆 seed 抽到的完整 brief 文字要逐字元一致。"""
 
@@ -59,7 +73,7 @@ class CoverDesignBriefRngPinTests(unittest.TestCase):
                     seed=row["seed"],
                     full_width=row["full_width"],
                 )
-                self.assertEqual(brief, row["brief"])
+                self.assertEqual(_without_d2_policy(brief), _without_d2_policy(row["brief"]))
 
 
 class DrawFunctionTests(unittest.TestCase):

@@ -730,7 +730,7 @@ COVER_TITLE_BRIEF_SPECS = {
     3: dict(height="30%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True, anchor=True,
             colours="THREE colours plus ONE accent: {0} dominant, {1} second, {2} on the word that carries the news, {3} as the accent"),
     4: dict(height="36%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True, anchor=True,
-            colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open (never green)"),
+            colours="start from {0}, {1}, {2} and {3}, then add what else you need — palette is fully open; no chroma-key green"),
 }
 
 
@@ -858,19 +858,18 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
 # 反色底字的色塊、小籤、日期牌。放在配色規則本體（每一級都會帶到），不放 OVERRIDE
 # 段——2026-09-11 已證明離得遠的條文壓不過釘在行上的指示。
 COVER_NO_GREEN_RULE = (
-    "- NO GREEN ANYWHERE ON TEXT — THIS OUTRANKS EVERY PALETTE INSTRUCTION. The finished"
-    " image is keyed over a studio green screen, so any green-family colour (green, lime,"
-    " teal, mint, olive, chartreuse, emerald, yellow-green, blue-green) on a character, an"
-    " outline, a shadow, a filled block behind characters, a tag, a chip or a plate will be"
-    " keyed out on air. If a palette, a brief or the story suggests green, substitute a"
-    " non-green colour. This applies at every creativity level.\n"
+    "- NO chroma-key green ON TEXT — THIS OUTRANKS EVERY PALETTE INSTRUCTION. The finished"
+    " image is keyed over a studio green screen, so chroma-key green or neon/lime key green on"
+    " a character, an outline, a shadow, a filled block behind characters, a tag, a chip or a"
+    " plate will be keyed out on air. Deep green, dark green and olive green remain allowed;"
+    " only the studio-key colours are forbidden. This applies at every creativity level.\n"
 )
 
 # brief 版（CANVAS 後面那塊有 3000 字上限，塞不下整段）：一行就夠，完整條文在配色規則。
 COVER_NO_GREEN_ROW = (
-    "- NO GREEN ON ANY TEXT — no green-family colour (green, lime, teal, mint, olive) on a"
-    " character, outline, shadow, filled block, tag or plate: the image is keyed over a studio"
-    " green screen. This outranks the palette."
+    "- NO chroma-key green ON TEXT — no chroma-key green or neon/lime key green on a character,"
+    " outline, shadow, filled block, tag or plate: the image is keyed over a studio green screen."
+    " Deep green, dark green and olive green remain allowed. This outranks the palette."
 )
 
 
@@ -1650,7 +1649,7 @@ YT_BRIEF_SPECS = {
     3: dict(height="40%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True,
             colours="THREE colours plus ONE accent: {0} dominant, {1} second, {2} on the word that carries the news, {3} as the accent"),
     4: dict(height="44%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True,
-            colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open (never green)"),
+            colours="start from {0}, {1}, {2} and {3}, then add what else you need — palette is fully open; no chroma-key green"),
 }
 # 兩行標題的字底。程式壓字版實測落在 97.9%，取整。
 YT_HOURLY_TITLE_BOTTOM_RATIO = 0.98
