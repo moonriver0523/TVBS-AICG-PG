@@ -1080,9 +1080,11 @@ MAXIMUM_DENSITY_RULES = """
 1. POINT COUNT: carry every distinct point the material supports, up to EIGHT [內文小標] lines. The rule above stopped at six; this setting does not.
 2. LINE LENGTH AND TOTAL: each [內文小標] line may run to about thirty characters, and the whole graphic may reach roughly three hundred and sixty to four hundred and eighty characters. Every line still has to be readable on air — long is not the same as cramped.
 3. THIS STILL LICENSES NOTHING NEW. Every added line comes from the source material. Do not invent a figure, a date, a name or a cause to reach the count; do not restate an earlier point in different words; do not pad with generic background. If the material supports only three points, write three — this setting raises the ceiling, it does not set a quota.
-4. Group the points: when you write more than five, say in "structure" that they are arranged in labelled groups or two columns rather than one long list, so the viewer can find the one that matters.
-5. A LATER BLOCK MAY STILL FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT, and that number wins over the "up to eight" here: those card stacks physically have that many rows.
-6. HEADLINE LIMIT: [標題] may contain no more than 22 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
+4. YOU MAY SPLIT WHAT IS ALREADY THERE. Where the source states a compound fact in one breath — one sentence carrying two distinct figures, two places, two measures or two consequences — you may write it out as two separate points instead of one crowded entry. This is the one thing this setting unlocks that the 字多 block did not.
+5. THAT IS A LICENCE TO SPLIT, NEVER A LICENCE TO SUPPLY. The split halves must both already be present in the source, in the source's own terms. Do not add a cause, a person, a time, a figure, a place, a consequence or any background the source did not state; do not manufacture a second point by saying the same thing again in other words; and where the second half would have to be invented to make the split work, leave the fact whole as one point. After splitting, the set of facts on the graphic must be identical to the set of facts in the source — only their arrangement changed.
+6. Group the points: when you write more than five, say in "structure" that they are arranged in labelled groups or two columns rather than one long list, so the viewer can find the one that matters.
+7. A LATER BLOCK MAY STILL FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT, and that number wins over the "up to eight" here: those card stacks physically have that many rows.
+8. HEADLINE LIMIT: [標題] may contain no more than 22 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 """
 
 

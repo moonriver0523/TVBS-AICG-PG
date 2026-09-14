@@ -356,5 +356,40 @@ class A1A5A2CgVariationTests(SourceAssertions, unittest.TestCase):
         self.assertGreaterEqual(len(others), 2)
 
 
+class D3SplitAuthorisationTests(unittest.TestCase):
+    """2-7：只有「字超多」拿得到「拆原有內容」的授權（D3，2026-09-14 已裁）。
+
+    裁決原文：鬆綁，但**只允許拆原有內容**——不得新增原文沒有的事實。這是 B21
+    那批忠實度問題的高風險區，所以「拆」與「補」的界線要寫到模型分得出來。
+    """
+
+    def test_maximum_authorises_splitting_what_is_already_there(self):
+        block = main.MAXIMUM_DENSITY_RULES
+        self.assertIn("SPLIT", block)
+        self.assertIn("already", block)
+
+    def test_maximum_states_the_boundary_between_splitting_and_supplying(self):
+        """只寫「可以拆」等於拿掉防線。不能做的事要在同一條裡逐項列出。"""
+        block = main.MAXIMUM_DENSITY_RULES
+        for banned in ("cause", "person", "time", "figure", "place", "consequence"):
+            with self.subTest(banned=banned):
+                self.assertIn(banned, block)
+
+    def test_no_other_density_gets_the_split_licence(self):
+        """字多也給的話，字多與字超多會再次塌成同一檔——F1 要拉開的就是這個。"""
+        for name, block in (
+            ("standard", main.STANDARD_DENSITY_RULES),
+            ("simplified", main.SIMPLIFIED_DENSITY_RULES),
+            ("minimal", main.MINIMAL_DENSITY_RULES),
+            ("verbatim", main.VERBATIM_DENSITY_RULES),
+        ):
+            with self.subTest(density=name):
+                self.assertNotIn("SPLIT", block)
+
+    def test_the_creativity_fixed_block_still_forbids_new_text(self):
+        """D3 是內容切分，不是創意拉桿的例外。"""
+        self.assertIn("NO NEW TEXT OF ANY KIND", creativity.fixed_block(target="digest"))
+
+
 if __name__ == "__main__":
     unittest.main()
