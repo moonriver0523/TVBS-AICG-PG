@@ -695,9 +695,9 @@
                         <div id="cgCreativityBar" class="flex items-center gap-2 bg-black/40 px-2 py-1.5 rounded-lg"></div>
                         <!-- 消化程度（2026-09-09：三顆鈕改成三段拉桿，比照標題創意那條） -->
                         <div class="flex items-center gap-2 bg-black/40 px-2 py-1.5 rounded-lg"
-                             title="不改字＝貼上的內文一字不改，AI 只做版面設計；字極少＝只留一個重點；字少＝濃縮成 1–3 個重點；字多＝完整重點條列；字超多＝最多八點、每行更長">
-                            <span class="text-[9px] font-black text-slate-500">不改字</span>
-                            <input id="digestDensityRange" type="range" min="0" max="4" step="1" value="2"
+                             title="無字＝整張圖不出現任何文字；不改字＝貼上的內文一字不改，AI 只做版面設計；字極少＝只留一個重點；字少＝濃縮成 1–3 個重點；字多＝完整重點條列；字超多＝最多八點、每行更長">
+                            <span class="text-[9px] font-black text-slate-500">無字</span>
+                            <input id="digestDensityRange" type="range" min="0" max="5" step="1" value="3"
                                    class="flex-1 accent-red-500 cursor-pointer"
                                    oninput="setDigestDensityLevel(this.value)" />
                             <span class="text-[9px] font-black text-slate-500">字超多</span>

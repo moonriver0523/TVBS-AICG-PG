@@ -31,13 +31,15 @@ INDEX_HTML = (Path(__file__).resolve().parent.parent / "index.html").read_text(e
 
 
 class OrderTests(unittest.TestCase):
-    def test_five_steps_left_to_right(self):
+    def test_six_steps_left_to_right(self):
+        """2026-09-14 D14：最左端再加「無字」，五段變六段。"""
         self.assertEqual(main.DIGEST_DENSITY_ORDER,
-                         ("verbatim", "minimal", "simplified", "standard", "maximum"))
+                         ("no_text", "verbatim", "minimal", "simplified", "standard", "maximum"))
 
-    def test_the_default_is_still_the_middle_one(self):
-        """使用者：「預設還是一樣字少」。五段裡字少剛好是正中間。"""
-        self.assertEqual(main.DIGEST_DENSITY_ORDER.index("simplified"), 2)
+    def test_the_default_is_still_the_same_step(self):
+        """使用者：「預設還是一樣字少」。加了無字之後它不再是正中間，但仍然是字少
+        ——D14 只加一檔，沒有改預設。"""
+        self.assertEqual(main.DIGEST_DENSITY_ORDER.index("simplified"), 3)
         self.assertRegex(APP_JS, r"digestDensity:\s*'simplified'")
 
     def test_the_frontend_order_matches_the_backend(self):
@@ -47,16 +49,17 @@ class OrderTests(unittest.TestCase):
 
     def test_every_step_has_a_label(self):
         block = APP_JS.split("const DENSITY_LABELS = {")[1].split("};")[0]
-        for key, label in (("verbatim", "不改字"), ("minimal", "字極少"),
+        for key, label in (("no_text", "無字"),
+                           ("verbatim", "不改字"), ("minimal", "字極少"),
                            ("simplified", "字少"), ("standard", "字多"),
                            ("maximum", "字超多")):
             with self.subTest(key=key):
                 self.assertIn(f"{key}: '{label}'", block)
 
-    def test_the_slider_spans_all_five_and_starts_in_the_middle(self):
-        self.assertIn('id="digestDensityRange" type="range" min="0" max="4" step="1" value="2"',
+    def test_the_slider_spans_all_six_and_starts_on_the_default(self):
+        self.assertIn('id="digestDensityRange" type="range" min="0" max="5" step="1" value="3"',
                       INDEX_HTML)
-        self.assertIn(">不改字</span>", INDEX_HTML)
+        self.assertIn(">無字</span>", INDEX_HTML)
         self.assertIn(">字超多</span>", INDEX_HTML)
 
 

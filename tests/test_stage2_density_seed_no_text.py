@@ -33,6 +33,9 @@ class D16TitlePolicyTests(unittest.TestCase):
             main.MINIMAL_DENSITY_RULES,
             main.MAXIMUM_DENSITY_RULES,
             main.VERBATIM_DENSITY_RULES,
+            # 2026-09-14 D14 新增的第六檔也是兩角色共用的 *_DENSITY_RULES，
+            # 同一條鐵律照樣適用——守門名單漏一塊就等於那一塊沒被守。
+            main.NO_TEXT_DENSITY_RULES,
         )
         for block in density_blocks:
             with self.subTest(block=block[:20]):
@@ -299,17 +302,20 @@ class A1A5A2CgVariationTests(SourceAssertions, unittest.TestCase):
             with self.subTest(banned=banned):
                 self.assertNotIn(banned, rules)
 
-    def test_the_cg_accessory_counts_are_the_user_decision(self):
-        """CP4 使用者裁決：3 級 2 件、4 級 3 件，0–2 級都不加。"""
-        self.assertEqual(creativity.CG_ACCESSORY_COUNTS, {0: 0, 1: 0, 2: 0, 3: 2, 4: 3})
+    def test_all_three_lines_share_one_accessory_count_table(self):
+        """CP4 使用者裁決（2026-09-15 更正）：三條線共用封面現行那張表，CG 不另立。
 
-    def test_only_levels_three_and_four_list_program_picked_devices(self):
-        for level in (1, 2):
-            with self.subTest(level=level):
-                self.assertNotIn(
-                    main.CG_ACCESSORY_HEADING, main.cg_creativity_rules(level, seed=1)
-                )
-        for level, want in ((3, 2), (4, 3)):
+        另立一張 {2: 0} 的 CG 表會讓「共用一張表」這句話當場不成立；把封面改成
+        {2: 0} 則會動到 52 筆 cover RNG pin 與 YT fixture，屬未授權的視覺變更。
+        """
+        self.assertEqual(creativity.COVER_ACCESSORY_COUNTS, {0: 0, 1: 0, 2: 1, 3: 2, 4: 3})
+        self.assertFalse(
+            hasattr(creativity, "CG_ACCESSORY_COUNTS"), "CG 不得另立一張件數表"
+        )
+
+    def test_the_device_count_per_level_follows_that_shared_table(self):
+        self.assertNotIn(main.CG_ACCESSORY_HEADING, main.cg_creativity_rules(1, seed=1))
+        for level, want in ((2, 1), (3, 2), (4, 3)):
             with self.subTest(level=level):
                 rules = main.cg_creativity_rules(level, seed=1)
                 self.assertIn(main.CG_ACCESSORY_HEADING, rules)
@@ -423,6 +429,145 @@ class F1DensityLadderTests(unittest.TestCase):
         self.assertEqual(
             editor_formats._broadcast_point_count("maximum"),
             editor_formats._broadcast_point_count("standard"),
+        )
+
+
+class D14F20NoTextTests(SourceAssertions, unittest.TestCase):
+    """2-9：「完全不要文字」變成拉桿最左端的一檔（D14 已裁形式、F20 實作）。
+
+    D14 裁決：拉桿改六段，無字放最左端——兩個極端（無字／不改字）推到兩頭，避免選錯。
+
+    F20 的 MASTER 曾提「無字可跳過整個 digest 呼叫」當 token 效益，**本波不做**
+    （監督 2026-09-14 Q3）：生圖仍然需要 style／structure／圖表類型／地圖與肖像結果，
+    跳過是另一件大工程。這裡做的是最小可用解——照常消化，但產出的是無文字視覺。
+    """
+
+    def test_the_enum_and_order_put_no_text_at_the_far_left(self):
+        self.assertEqual(
+            main.DIGEST_DENSITY_ORDER,
+            ("no_text", "verbatim", "minimal", "simplified", "standard", "maximum"),
+        )
+
+    def test_both_request_models_accept_no_text_and_still_reject_nonsense(self):
+        import pydantic
+
+        self.assertEqual(
+            main.GenerateRequest(
+                news_text="測試", type_label="資料圖表", density="no_text"
+            ).density,
+            "no_text",
+        )
+        self.assertEqual(
+            main.NewsImageGenerateRequest(news_text="測試", density="no_text").density, "no_text"
+        )
+        with self.assertRaises(pydantic.ValidationError):
+            main.GenerateRequest(news_text="測試", type_label="資料圖表", density="nope")
+
+    def test_the_defaults_are_untouched(self):
+        """D14 只加一檔，不動預設：後端 request 仍是 standard、前台拉桿仍停在字少。"""
+        self.assertEqual(
+            main.GenerateRequest(news_text="測試", type_label="資料圖表").density, "standard"
+        )
+        app_js = (Path(__file__).resolve().parent.parent / "app.js").read_text(encoding="utf-8")
+        self.assertRegex(app_js, r"digestDensity:\s*'simplified'")
+
+    def test_the_no_text_prompt_shuts_off_every_text_product(self):
+        prompt = main.build_digest_instructions("編輯", "no_text", "資料圖表", stamp=True)
+        # 要點名它們才關得掉——留一條沒點名，模型就會挑最寬鬆的那句遵守
+        for marker in ("[標題]", "[內文小標]", "<蓋章>"):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, main.NO_TEXT_FINAL_REMINDER)
+        self.assertIn(main.NO_TEXT_FINAL_REMINDER, prompt)
+
+    def test_no_text_does_not_drag_in_verbatim_mode(self):
+        """兩個極端共用拉桿兩頭，但語意完全相反：無字不得帶進「逐字保留」那一套。
+
+        注意不能直接找 "VERBATIM MODE" 這個字面——USER_INSTRUCTION_RULES 第 5 條
+        本來就在講「使用者自己寫了逐字保留」那條通道，每一檔都會注入，跟拉桿無關。
+        要比對的是 density block 本體。
+        """
+        prompt = main.build_digest_instructions("編輯", "no_text", "資料圖表")
+        self.assertNotIn(main.VERBATIM_DENSITY_RULES, prompt)
+        self.assertNotIn(main.VERBATIM_FINAL_REMINDER, prompt)
+
+    def test_no_text_does_not_ship_a_stamp_rule_that_contradicts_it(self):
+        """「有蓋章」與「完全無字」兩條矛盾 prompt 不得同時送出。"""
+        prompt = main.build_digest_instructions("編輯", "no_text", "資料圖表", stamp=True)
+        self.assertNotIn("STAMP BANNER: ON", prompt)
+
+    def test_the_no_text_block_does_not_pollute_the_other_densities(self):
+        for density in ("verbatim", "minimal", "simplified", "standard", "maximum"):
+            with self.subTest(density=density):
+                prompt = main.build_digest_instructions("編輯", density, "資料圖表")
+                self.assertNotIn(main.NO_TEXT_DENSITY_RULES, prompt)
+
+    def test_the_quality_gate_lets_an_empty_variable_through_only_for_no_text(self):
+        """無字檔要求 variable 是空字串，但通用品質閘把「欄位為空」當成截斷等級的
+        故障——不處理的話無字會連撞 5 次重試然後 502，而且錯誤訊息還看不出原因。"""
+        empty_variable = {"style": "a wordless photograph", "structure": "one subject, centred", "variable": ""}
+        self.assertEqual(
+            main.digest_quality_problem(empty_variable, "stop", density="no_text"), ""
+        )
+        for density in ("simplified", "standard", "maximum", "minimal", "verbatim"):
+            with self.subTest(density=density):
+                self.assertIn(
+                    "variable",
+                    main.digest_quality_problem(empty_variable, "stop", density=density),
+                )
+
+    def test_the_image_prompt_also_gets_a_no_text_override(self):
+        """消化端產出空的 variable 還不夠：生圖 prompt 從頭到尾都在講「把 VARIABLE
+        FIELDS 的字畫上去」，而空欄位會被換成 [No Variables Defined]。留著不管，
+        模型有機會把那串字面畫進畫面，或自己補一個標題去滿足前面那些條款。"""
+        import news_prompt
+
+        kwargs = dict(
+            role="編輯", engine="gpt", type_label="資料圖表",
+            style="a wordless photograph", structure="one subject, centred",
+            variable=news_prompt.compose_variable(""),
+        )
+        self.assertNotIn(
+            "NO TEXT AT ALL", news_prompt.build_prompt(**kwargs, no_text=False)
+        )
+        self.assertIn("NO TEXT AT ALL", news_prompt.build_prompt(**kwargs, no_text=True))
+
+    def test_the_pipeline_endpoint_forwards_no_text(self):
+        """網頁版可用、LINE／整合端悄悄失效是這條線最典型的漏法。"""
+        import types
+        from unittest import mock
+
+        captured = {}
+
+        def fake_generate(request):
+            captured["density"] = request.density
+            raise RuntimeError("stop-after-capture")
+
+        with mock.patch.object(main, "generate", fake_generate), mock.patch.object(
+            main, "check_input", return_value=types.SimpleNamespace(accepted=True, user_message="")
+        ):
+            with self.assertRaises(RuntimeError):
+                main.generate_news_image(
+                    main.NewsImageGenerateRequest(news_text="測試新聞內容", density="no_text")
+                )
+        self.assertEqual(captured["density"], "no_text")
+
+    def test_the_frontend_slider_grew_to_six_steps(self):
+        app_js = (Path(__file__).resolve().parent.parent / "app.js").read_text(encoding="utf-8")
+        index_html = (Path(__file__).resolve().parent.parent / "index.html").read_text(
+            encoding="utf-8"
+        )
+        order = app_js.split("const DENSITY_ORDER = [")[1].split("]")[0]
+        self.assertEqual(
+            [s.strip().strip("'") for s in order.split(",")], list(main.DIGEST_DENSITY_ORDER)
+        )
+        labels = app_js.split("const DENSITY_LABELS = {")[1].split("};")[0]
+        self.assertSourceContains(labels, "no_text: '無字'")
+        self.assertSourceContains(index_html, ">無字</span>")
+        # 預設仍是字少，而字少在六段裡排第四格（index 3）
+        self.assertEqual(main.DIGEST_DENSITY_ORDER.index("simplified"), 3)
+        self.assertSourceContains(
+            index_html,
+            'id="digestDensityRange" type="range" min="0" max="5" step="1" value="3"',
         )
 
 

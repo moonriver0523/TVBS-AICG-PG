@@ -671,8 +671,9 @@ function downloadFileName(kind, title, ext) {
     return `${parts.filter(Boolean).join('_')}.${extension}`;
 }
 
-/* 消化程度三檔。key 與後端 DigestDensity 一致，改這裡要同步改 main.py */
+/* 消化程度六檔。key 與後端 DigestDensity 一致，改這裡要同步改 main.py */
 const DENSITY_LABELS = {
+    no_text: '無字',      // 2026-09-14 D14：六段拉桿最左端，整張圖一個字都不出現
     verbatim: '不改字',   // 2026-09-07 使用者裁決：UI 顯示改「不改字」，key 與後端 verbatim 不動
     minimal: '字極少',    // 2026-09-10 五段拉桿新增
     simplified: '字少',
@@ -1163,7 +1164,9 @@ function setEditorFormat(key) {
 
 // 拉桿的左→右順序。左端是「不改字」——它不是「字更少」，是逐字複製（輸出長度＝
 // 輸入長度，貼長稿反而比字多還長）。2026-09-09 使用者知情裁決：三檔仍放同一條拉桿。
-const DENSITY_ORDER = ['verbatim', 'minimal', 'simplified', 'standard', 'maximum'];
+// 2026-09-14 D14：最左端再加「無字」。兩個極端（無字／不改字）被推到拉桿兩頭，
+// 不會擠在同一側被選錯——這就是使用者裁決要解決的事。預設仍是字少。
+const DENSITY_ORDER = ['no_text', 'verbatim', 'minimal', 'simplified', 'standard', 'maximum'];
 
 function updateDigestDensityBar() {
     const range = document.getElementById('digestDensityRange');
@@ -1254,6 +1257,8 @@ function switchDigestDensity(density) {
     const label = DENSITY_LABELS[density] || density;
     showToast(density === 'verbatim'
         ? '已切換至「不改字」：貼上的內文一字不改，AI 只做版面'
+        : density === 'no_text'
+        ? '已切換至「無字」：整張圖不出現任何文字，標題與說明請自己加'
         : `AI 消化已切換至「${label}」`);
 }
 
@@ -1845,12 +1850,26 @@ function syncOutput() {
         structure: structureContent,
         variable: processedVariable,
         safeFrame: state.safeFrame,
-        aspectRatio: currentAspectRatio()
+        aspectRatio: currentAspectRatio(),
+        noText: state.digestDensity === 'no_text'
     });
     updatePromptCounter();
 }
 
-function buildPrompt({ role, engine, typeLabel, style, structure, variable, safeFrame = false, aspectRatio = '16:9' }) {
+// 無字檔（2026-09-14 D14／F20）的生圖端覆蓋。與 news_prompt.NO_TEXT_IMAGE_OVERRIDE
+// 逐字相同（test_prompt_parity 守著）：網頁版在前端組 prompt、LINE／整合端在後端組，
+// 只改一邊不會有任何執行期錯誤，只會讓兩條路徑悄悄出不一樣的圖。
+const NO_TEXT_IMAGE_OVERRIDE =
+`
+==================================================
+NO TEXT AT ALL (OVERRIDES EVERY EARLIER RULE ABOUT RENDERING WORDS)
+==================================================
+- The user asked for a picture with no writing on it. Render NO text of any kind: no headline, no label, no caption, no legend, no axis value, no date, no place name, no source line, no badge, no logo, no watermark, no signature — not a single letter or digit anywhere in the frame.
+- VARIABLE FIELDS is empty on purpose. Every earlier instruction about rendering the words, figures or markers supplied there does not apply, and any placeholder standing in for those fields is not something to draw.
+- Everything else still binds in full: the reserved margin, likeness and scene fidelity, the use of any attached references, and the ban on inventing content.
+- The empty area where a headline would have gone is the correct result. Do not fill it with words.`;
+
+function buildPrompt({ role, engine, typeLabel, style, structure, variable, safeFrame = false, aspectRatio = '16:9', noText = false }) {
     // 共用的正文區塊（style / structure / variable）
     const textRules = role === '編輯' ? EDITOR_TEXT_RULES : REPORTER_TEXT_RULES;
     // 分流的依據是「後端會不會水平拉伸」，不是安全框開關本身：
@@ -1914,11 +1933,17 @@ FINAL OUTPUT RULE
   -> NEVER add extra captions, bullet points, sub-headings, or explanatory sentences of your own.
   -> Empty space is correct and acceptable. If the layout looks sparse, enlarge or space out the supplied elements — do NOT fill the gap with invented content.`;
 
+    // 無字檔的覆蓋接在 body 後面，**刻意不寫進上面那段樣板字串裡**：
+    // tests/test_content_fidelity 的雙來源比對是用正規表示式從 app.js 原始碼抓
+    // 「FINAL OUTPUT RULE 到樣板結尾」那一段，跟 news_prompt 逐字比對。在樣板裡
+    // 插一個 ${...} 會讓抓到的字面多出那段程式碼、比對就永遠對不起來。
+    const fullBody = noText ? `${body}\n${NO_TEXT_IMAGE_OVERRIDE}` : body;
+
     // 依引擎切換開頭語法
     if (engine === 'gpt') {
         return `Generate an image: a professional international TV news infographic (${typeLabel}) for broadcast and digital editorial use. Follow the specification below exactly. Do not redesign or reinterpret the layout logic. Current Operating Context: ${role} Workflow.
 
-${body}`;
+${fullBody}`;
     }
     // gemini（預設）
     return `Create a professional international TV news infographic (${typeLabel}) designed for broadcast and digital editorial use.
@@ -1926,7 +1951,7 @@ The output must strictly follow the style, structure, and data logic defined bel
 Do not redesign, reinterpret, or alter the layout logic.
 Current Operating Context: ${role} Workflow.
 
-${body}`;
+${fullBody}`;
 }
 
 /* ---- 滿版模式常數（safe_frame=true）----
@@ -2897,6 +2922,7 @@ async function handleOneClickGenerate() {
             variable: variable ? `${SYSTEM_DISCLAIMER}\n${variable}` : "[No Variables Defined]",
             safeFrame: state.safeFrame,
             aspectRatio: currentAspectRatio(),
+            noText: state.digestDensity === 'no_text',
         });
         showToast("生圖中，約 30–120 秒…");
         // 2K 與 GPT 都明顯較慢，預估時間拉長免得進度早早貼上限乾等

@@ -148,10 +148,13 @@ class LadderTests(unittest.TestCase):
         for level in (1, 2):
             with self.subTest(level=level):
                 self.assertNotIn("SIZE HIERARCHY INSIDE THE TYPE", _rules(level))
-                self.assertNotIn(main.CG_ACCESSORY_HEADING, _rules(level))
         for level in (3, 4):
             with self.subTest(level=level):
                 self.assertIn("SIZE HIERARCHY INSIDE THE TYPE", _rules(level))
+        # 無字配件從 2 級起有（A2 的共用件數表 {2:1, 3:2, 4:3}），1 級一件都沒有
+        self.assertNotIn(main.CG_ACCESSORY_HEADING, _rules(1))
+        for level in (2, 3, 4):
+            with self.subTest(level=level):
                 self.assertIn(main.CG_ACCESSORY_HEADING, _rules(level))
         # 傾斜、多層描邊、爆裂：只有最高級
         for level in (1, 2, 3):

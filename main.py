@@ -486,8 +486,12 @@ async def site_password_gate(request, call_next):
 # 預設還是字少。」——兩端各補一級。新的兩級是**既有級的加碼**，不是新寫一套：
 # minimal = SIMPLIFIED 再收緊、maximum = STANDARD 再放寬，這樣自由度／資訊量一定單調。
 # 由少到多的順序寫在 DIGEST_DENSITY_ORDER，前台拉桿與測試都以它為準。
-DigestDensity = Literal["verbatim", "minimal", "simplified", "standard", "maximum"]
-DIGEST_DENSITY_ORDER = ("verbatim", "minimal", "simplified", "standard", "maximum")
+#
+# 2026-09-14 D14 使用者裁決：再加一檔「完全不要文字」，放在**最左端**。拉桿因此
+# 六段。兩個極端（無字／不改字）被推到拉桿兩頭，不會擠在同一側被選錯——這正是
+# 使用者在 D14 裡要解決的事。預設仍是字少，沒有改。
+DigestDensity = Literal["no_text", "verbatim", "minimal", "simplified", "standard", "maximum"]
+DIGEST_DENSITY_ORDER = ("no_text", "verbatim", "minimal", "simplified", "standard", "maximum")
 # 色調。None＝呼叫端沒表態（LINE、舊呼叫端），完全不注入。
 DigestTone = Literal["light", "dark"]
 
@@ -1242,13 +1246,14 @@ def cg_creativity_rules(level: int, *, seed=None) -> str:
         anchor=d.anchor,
         tilt_dir=d.tilt_dir,
     )
-    # 配件件數由 A2 的表決定（3 級 2 件、4 級 3 件）。rng 接 draw 那一顆往下抽，
+    # 配件件數由 A2 那張表決定，**三條線共用同一張**（CP4 裁決，2026-09-15 更正：
+    # 就是封面現行那張，CG 不另立）。rng 接 draw 那一顆往下抽，
     # 不另開 random.Random(seed)——那樣抽到的是另一串序列。
     # visuals 不傳：CG 的畫面描述是**這次消化的產物**，組 prompt 時還不存在，
     # 所以國旗那條確定性換入在 CG 線上本來就不會觸發（不是漏接）。
     devices = creativity.accessories(
         level,
-        counts=creativity.CG_ACCESSORY_COUNTS,
+        counts=creativity.COVER_ACCESSORY_COUNTS,
         rng=d.rng,
         placement_note=_CG_ACCESSORY_NOTE,
         overrides=_CG_ACCESSORY_OVERRIDES,
@@ -1304,6 +1309,26 @@ STAMP BANNER: ON (USER SETTING — OVERRIDES ANY EARLIER RULE THAT MAKES <蓋章
 """
 
 
+# 「無字」檔（2026-09-14 D14 使用者裁決，F20 實作）。拉桿最左端。
+#
+# 為什麼獨立一塊、不動既有四塊：那四塊全部在講「文字要多少」，這一檔是把文字產物
+# 整個關掉，語意上不是同一條梯子的延伸。混進去會讓既有檔位跟著長出「除非無字」的
+# 例外句，而條件句正是這個 repo 記過最多次的病灶。
+#
+# **仍然照常呼叫消化**（監督 2026-09-14 Q3）：生圖端還是需要 style／structure／
+# 圖表類型／地圖與肖像結果，跳過整個 digest 是另一件大工程，不在 D14 已裁的形式內。
+# 這一塊做的是最小可用解——照常消化，但產出的是無文字的視覺描述。
+NO_TEXT_DENSITY_RULES = """
+
+無字 MODE (THE USER ASKED FOR A PICTURE WITH NO WRITING ON IT) — THIS BLOCK OVERRIDES EVERY LENGTH, COUNT, MARKER AND FORMAT REQUIREMENT STATED ABOVE:
+1. THE GRAPHIC CARRIES NO WRITING AT ALL. Not a headline, not a label, not a caption, not a legend, not a figure, not a date, not a source line, not a watermark, not a logo, not a unit, not a single letter or digit anywhere in the frame.
+2. "variable" MUST BE COMPLETELY EMPTY — an empty string. Do not put markers in it, do not put the news wording in it, do not put a placeholder in it.
+3. "style" and "structure" describe a WORDLESS image only. They may still say what the picture shows, how it is lit, how it is composed and where the subject sits; they may NOT ask for any text element, any labelled callout, any chart axis label, any map place name, any tag, chip, badge or banner carrying words, and they may not describe a space "reserved for the headline".
+4. EVERYTHING ELSE STILL BINDS: the reserved broadcast margin, the ban on expressing positions and sizes as numbers, content fidelity to the source, the named-real-people rules, the child depiction rule, the map accuracy rules and the attached-reference rules are all unchanged. A wordless picture may still be factually wrong, and that is still a defect.
+5. A DATA STORY WITHOUT LABELS IS A PICTURE, NOT A CHART. Where the material is numeric and there is nothing to draw but a labelled chart, ask for the scene or the object the story is about instead — never for an unlabelled chart whose bars mean nothing to a viewer.
+"""
+
+
 # 擺在所有規則的最後（含指令欄），因為本 repo 的慣例是「位置＋明文 OVERRIDE 同向」，
 # 而 VERBATIM_DENSITY_RULES 夾在中間，實測（2026-09-03 gpt-5.6-terra）壓不住樣板
 # 開頭的「Digest the raw news text」：83 字的原文被改寫成 59 字、標點全刪。
@@ -1318,6 +1343,28 @@ Read your draft "variable" against the news material one character at a time bef
 - Nothing has been added except the structural markers, and no marker name has been written out as text.
 If the draft fails any of these, throw it away and rebuild it from the user's exact wording.
 The only thing that may relax this is an explicit request from the user asking you to shorten or rewrite. The interface setting alone never does.
+"""
+
+
+# 無字檔的最終覆蓋，放在整份 prompt 的最尾巴（理由同 VERBATIM_FINAL_REMINDER：
+# 中段的 density block 壓不住樣板開頭與各版型區塊的命令句，位置在後才壓得住）。
+#
+# 為什麼要逐個點名 [標題]／[內文小標]／<蓋章>／底帶／卡片列數：這個 repo 記過三次
+# 「留矛盾句，模型會挑最寬鬆的那一句遵守」。播出鏡面那塊要求「exactly four cards，
+# 每張卡一個 [內文小標]」，蓋章 ON 要求「最後一行是 <蓋章>」——不點名關掉的話，
+# 模型會同時想遵守「完全無字」與「四張卡各一行字」，結果是照樣寫字。
+NO_TEXT_FINAL_REMINDER = """
+
+FINAL OVERRIDE — THIS GRAPHIC HAS NO WRITING ON IT AT ALL:
+Earlier blocks in this prompt asked you for text products. Every one of them is cancelled for this request, by name:
+- NO [標題] line. The instruction to write a headline, and any instruction to split it across rows, does not apply.
+- NO [內文小標] lines. Any block above that fixed an exact number of them — a card stack, a broadcast mirror layout, a column of points — is satisfied with zero of them, and "structure" must describe those card or panel areas as carrying picture or empty space, never writing.
+- NO <蓋章> and no conclusion banner, whatever the stamp setting said.
+- NO <底帶>, no lower third, no ticker, no strapline.
+- No digits, no dates, no place names, no legends, no axis labels, no tags, no chips, no badges, no source line, no watermark, no signature, no logo.
+- THE VISUAL CREATIVITY BLOCK, IF ONE APPEARS ABOVE, KEEPS EVERYTHING THAT IS NOT TYPE. Its arrangement, plate shapes, palette and wordless devices all still apply and still make the picture. Its instructions about the typeface, the display treatment of the headline, stacked outlines, knocked-out type and the size step between the headline and the supporting lines apply to nothing here — there is no type on this graphic to apply them to.
+"variable" is an empty string. If your draft has anything in it, delete it.
+This is the whole point of the setting the user chose: they want the picture, and they will add any words themselves afterwards.
 """
 
 
@@ -1668,9 +1715,17 @@ def build_digest_instructions(
             instructions += MINIMAL_DENSITY_RULES
     elif density == "verbatim":
         instructions += VERBATIM_DENSITY_RULES
+    elif density == "no_text":
+        instructions += NO_TEXT_DENSITY_RULES
     # 蓋章緊接在 density 之後：ON 的第 5 條要引用逐字模式，順序不能倒過來。
     # None＝呼叫端沒表態（LINE、舊呼叫端），完全不注入，維持既有行為。
-    if stamp is True:
+    #
+    # 無字檔一律不注入蓋章條文（2026-09-14 D14）：STAMP_ON 要求「最後一行是 <蓋章>」，
+    # 跟「完全無字」正面衝突，兩條一起送出模型會挑寬鬆的那句遵守。關掉這件事由
+    # NO_TEXT_FINAL_REMINDER 點名負責，那裡壓在整份 prompt 最後面。
+    if density == "no_text":
+        pass
+    elif stamp is True:
         instructions += STAMP_ON_RULES
     elif stamp is False:
         instructions += STAMP_OFF_RULES
@@ -1713,6 +1768,10 @@ def build_digest_instructions(
     # 中段的 VERBATIM_DENSITY_RULES 實測壓不住（見該區塊上方的註解）。
     if density == "verbatim":
         instructions += VERBATIM_FINAL_REMINDER
+    # 無字同理，而且要更後面：它要壓過的不只是樣板開頭，還有版型區塊釘死的卡片數
+    # 與蓋章行（見 NO_TEXT_FINAL_REMINDER 上方的說明）。
+    elif density == "no_text":
+        instructions += NO_TEXT_FINAL_REMINDER
     return instructions
 
 
@@ -2050,15 +2109,21 @@ def verbatim_fidelity_problem(variable: str, news_text: str) -> str:
     )
 
 
-def digest_quality_problem(data: dict, finish_reason: str) -> str:
+def digest_quality_problem(data: dict, finish_reason: str, density: str | None = None) -> str:
     """檢查消化結果是否可用，通過回傳空字串，否則回傳給 log 用的問題描述。
 
     語法合法不等於內容可用。截斷（finish_reason=length）與字元污染都會產生
     「能解析但不能用」的結果，必須跟解析失敗一樣走重試，不能直接送去生圖。
+
+    `density`（2026-09-14 D14）：無字檔**要求** variable 是空字串，所以「欄位為空」
+    對它是正確答案而不是故障。不分檔一律擋的話，無字會連撞 5 次重試然後回 502，
+    而且使用者看到的是「AI 回傳內容異常」——完全看不出是設定本身被擋掉。
+    其餘檢查（型別、異常字元、頻道洩漏、簡體字）對無字照舊全部生效。
     """
     if finish_reason == "length":
         return "輸出被截斷（finish_reason=length）"
 
+    variable_may_be_empty = density == "no_text"
     for field in ("style", "structure", "variable"):
         value = data.get(field) or ""
         # 模型偶爾無視 strict schema 把欄位回成巢狀物件／陣列（2026-08-17 實測：
@@ -2066,7 +2131,7 @@ def digest_quality_problem(data: dict, finish_reason: str) -> str:
         # 炸 500）。型別不對與截斷同級：能解析不代表能用，走重試。
         if not isinstance(value, str):
             return f"{field} 不是字串（{type(value).__name__}）"
-        if not value.strip():
+        if not value.strip() and not (field == "variable" and variable_may_be_empty):
             return f"{field} 為空"
         stray = DIGEST_ALLOWED_CHARS.sub("", value)
         if len(stray) >= DIGEST_MAX_STRAY_CHARS:
@@ -2296,7 +2361,7 @@ def generate(req: GenerateRequest):
                 continue
 
             # 能解析不代表能用：截斷與字元污染都要跟解析失敗一樣重試，不能送去生圖
-            problem = digest_quality_problem(data, finish_reason)
+            problem = digest_quality_problem(data, finish_reason, density=req.density)
             # 不消化的逐字比對排在通用檢查之後：兩者都過不了時，先報通用的那個。
             # 最後一次刻意不擋——擋了就是整條 502，而這時手上的結果通常只是頭尾多了
             # 雜訊，仍比沒有圖好；改成印警告讓回查時看得到。
@@ -3984,6 +4049,9 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             safe_frame=req.safe_frame,
             aspect_ratio=aspect_ratio,
             portrait_mode=portrait_mode,
+            # 無字檔（D14／F20）：消化端已經產出空的 variable，生圖端還要一段
+            # 明文覆蓋才壓得住前面那些「把 VARIABLE FIELDS 畫上去」的條款。
+            no_text=(req.density == "no_text"),
         )
         try:
             image = generate_image(

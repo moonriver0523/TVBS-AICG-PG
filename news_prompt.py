@@ -540,6 +540,23 @@ MAP ACCURACY RULES (CRITICAL)
 - Claimed or disputed zones must read as schematic and carry only the label supplied in VARIABLE FIELDS, never as a settled international border."""
 
 
+# 無字檔（2026-09-14 D14／F20）的生圖端覆蓋，釘在整份 prompt 最後面。
+#
+# 光靠消化端產出空的 variable 不夠：這份 prompt 從 TEXT RULES 一路到 FINAL OUTPUT
+# RULE 都在講「怎麼把 VARIABLE FIELDS 的字畫上去」，而空欄位會被 compose_variable
+# 換成 "[No Variables Defined]"——留著不管，模型有機會把那串字面畫進畫面，或者
+# 自己補一個標題來滿足前面那些條款。位置在後＋明文 OVERRIDE 才壓得住，這是本 repo
+# 的既有慣例（同 editor_formats.YT_COVER_TEXT_FREE_OVERRIDE 的做法）。
+NO_TEXT_IMAGE_OVERRIDE = """
+==================================================
+NO TEXT AT ALL (OVERRIDES EVERY EARLIER RULE ABOUT RENDERING WORDS)
+==================================================
+- The user asked for a picture with no writing on it. Render NO text of any kind: no headline, no label, no caption, no legend, no axis value, no date, no place name, no source line, no badge, no logo, no watermark, no signature — not a single letter or digit anywhere in the frame.
+- VARIABLE FIELDS is empty on purpose. Every earlier instruction about rendering the words, figures or markers supplied there does not apply, and any placeholder standing in for those fields is not something to draw.
+- Everything else still binds in full: the reserved margin, likeness and scene fidelity, the use of any attached references, and the ban on inventing content.
+- The empty area where a headline would have gone is the correct result. Do not fill it with words."""
+
+
 def build_prompt(
     *,
     role: str,
@@ -551,10 +568,12 @@ def build_prompt(
     safe_frame: bool = False,
     aspect_ratio: str = "16:9",
     portrait_mode: str = "none",
+    no_text: bool = False,
 ) -> str:
     """對應 app.js 的 buildPrompt()。role: 記者／編輯，engine: gemini／gpt。
 
     safe_frame=True 時輸出滿版指示（留白由後端 safe_frame.py 置框處理）。
+    no_text=True 時在最後追加 NO_TEXT_IMAGE_OVERRIDE（消化程度＝無字）。
     """
     text_rules = EDITOR_TEXT_RULES if role == "編輯" else REPORTER_TEXT_RULES
     # 分流的依據是「後端會不會水平拉伸」，不是安全框開關本身：
@@ -629,6 +648,9 @@ FINAL OUTPUT RULE
   -> NEVER add a data-source line, organisation name, agency, publisher, wire service, logo, watermark, URL, timestamp, or "updated on" note unless that exact text appears in VARIABLE FIELDS.
   -> NEVER add extra captions, bullet points, sub-headings, or explanatory sentences of your own.
   -> Empty space is correct and acceptable. If the layout looks sparse, enlarge or space out the supplied elements — do NOT fill the gap with invented content."""
+
+    if no_text:
+        body += "\n" + NO_TEXT_IMAGE_OVERRIDE
 
     if engine == "gpt":
         return (
