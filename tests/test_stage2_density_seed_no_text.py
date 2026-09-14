@@ -391,5 +391,40 @@ class D3SplitAuthorisationTests(unittest.TestCase):
         self.assertIn("NO NEW TEXT OF ANY KIND", creativity.fixed_block(target="digest"))
 
 
+class F1DensityLadderTests(unittest.TestCase):
+    """2-8：級距要拉得開，而且拉開的方式是單調的。
+
+    這一步刻意**不重開數字裁決**：點數（1／1-3／6／8）、行長與標題上限
+    （10／13／18／22）都是已裁定的值，這裡只釘住它們仍然單調、沒有人事後偷改。
+    """
+
+    def test_the_headline_caps_are_strictly_monotonic(self):
+        caps = []
+        for block in (
+            main.MINIMAL_DENSITY_RULES,
+            main.SIMPLIFIED_DENSITY_RULES,
+            main.STANDARD_DENSITY_RULES,
+            main.MAXIMUM_DENSITY_RULES,
+        ):
+            match = re.search(r"no more than (\d+) visible characters", block)
+            self.assertIsNotNone(match)
+            caps.append(int(match.group(1)))
+        self.assertEqual(caps, [10, 13, 18, 22])
+        self.assertEqual(caps, sorted(set(caps)))
+
+    def test_the_point_ceilings_are_monotonic_too(self):
+        self.assertIn("ONE point", main.MINIMAL_DENSITY_RULES)
+        self.assertIn("1 to 3 key points", main.SIMPLIFIED_DENSITY_RULES)
+        self.assertIn("up to six", main.STANDARD_DENSITY_RULES)
+        self.assertIn("up to EIGHT", main.MAXIMUM_DENSITY_RULES)
+
+    def test_the_broadcast_card_count_is_a_layout_limit_not_a_density_one(self):
+        """版面實體限制不隨拉桿長：F1 不動 _broadcast_point_count 的既定差異。"""
+        self.assertEqual(
+            editor_formats._broadcast_point_count("maximum"),
+            editor_formats._broadcast_point_count("standard"),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
