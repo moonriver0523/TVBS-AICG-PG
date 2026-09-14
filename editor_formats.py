@@ -2426,14 +2426,17 @@ _CG_CAPABILITY = Capability(
     creativity_scope=CREATIVITY_SCOPE_LAYOUT, zero_program_text=False, text_only_recompose=(),
     refine=True, instruction=True, engine=True, digest_controls=True, safe_frame=True, stamp=True,
 )
-_YT_SHARED_CAPABILITY = Capability(
-    slots=False, shared_refs=True, asis_max=4, fusion=True,
-    creativity_scope=CREATIVITY_SCOPE_TITLE, zero_program_text=True, text_only_recompose=(),
-    refine=True, instruction=True, engine=True, digest_controls=False, safe_frame=False, stamp=False,
-)
+# YT 四版型（2026-09-14 對齊）：全部一標一附圖位、共用附圖區收起來。國內外新聞直播與今日熱搜
+# 原本走共用區的上傳順序（哪張進哪格看不出來也指不了），整點 2026-09-10 改成附圖位時那兩個
+# 沒跟上——當時怕「一標一圖會把 2 張雙切／3 張三切砍掉」，但 2026-09-13 起單則的附圖位整份
+# 清單併進共用清單，1 整版／2 雙切／3 三切／4 四切那條路照走，這個顧慮已不成立。
+# 只改文字：YT 的合成版（創意 0）單則／雙則都本來就有（ytCoverRecomposeBtn＋帶 background 回來
+# 零 API 重疊文字），2026-09-14 盤點表把它寫成「只有十點滿版」是錯的，這裡照事實填。
+YT_TEXT_ONLY_SINGLE = ("single",)
+YT_TEXT_ONLY_BOTH = ("single", "dual")
 _YT_SLOT_CAPABILITY = Capability(
     slots=True, shared_refs=False, asis_max=4, fusion=True,
-    creativity_scope=CREATIVITY_SCOPE_TITLE, zero_program_text=True, text_only_recompose=(),
+    creativity_scope=CREATIVITY_SCOPE_TITLE, zero_program_text=True, text_only_recompose=YT_TEXT_ONLY_SINGLE,
     refine=True, instruction=True, engine=True, digest_controls=False, safe_frame=False, stamp=False,
 )
 
@@ -2446,15 +2449,17 @@ FORMAT_CAPABILITIES: dict[str, Capability] = {
         text_only_recompose=(COVER_LAYOUT_FULL,),
         refine=True, instruction=True, engine=True, digest_controls=False, safe_frame=False, stamp=False,
     ),
-    "yt_live_cover": _YT_SHARED_CAPABILITY,
+    "yt_live_cover": _YT_SLOT_CAPABILITY,
     "yt_vstrip": Capability(
         slots=False, shared_refs=False, asis_max=0, fusion=False,
         creativity_scope=None, zero_program_text=False, text_only_recompose=(),
         refine=False, instruction=False, engine=False, digest_controls=False, safe_frame=False, stamp=False,
     ),
-    "yt_hourly_cover": Capability(**{**asdict(_YT_SLOT_CAPABILITY), "creativity_scope": CREATIVITY_SCOPE_TITLE_DATE}),
-    "yt_live24_cover": _YT_SLOT_CAPABILITY,
-    "yt_hot_cover": _YT_SHARED_CAPABILITY,
+    "yt_hourly_cover": Capability(**{**asdict(_YT_SLOT_CAPABILITY),
+                                     "creativity_scope": CREATIVITY_SCOPE_TITLE_DATE,
+                                     "text_only_recompose": YT_TEXT_ONLY_BOTH}),
+    "yt_live24_cover": Capability(**{**asdict(_YT_SLOT_CAPABILITY), "text_only_recompose": YT_TEXT_ONLY_BOTH}),
+    "yt_hot_cover": _YT_SLOT_CAPABILITY,
 }
 assert set(FORMAT_CAPABILITIES) == set(EDITOR_FORMATS), "每個版型都要有能力矩陣"
 

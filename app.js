@@ -461,11 +461,12 @@ const EDITOR_FORMATS = {
     // 沿用主流程的附圖上傳區（用途：原圖放置＝直接當底圖；其他＝生圖參考）。
     yt_live_cover: {
         label: 'YT國內外新聞直播',
-        hint: '標題用半形空格分兩段（分不出來時由 AI 判斷）。有「原圖放置」附圖就直接當底圖，否則 AI 生底圖並標示 AI示意圖。原音呈現／AI即時翻譯可勾可並存。創意 0（預設）文字與 Logo 全由程式疊、零錯字；1 以上才交 AI 畫標題。',
+        hint: '標題用半形空格分兩段（分不出來時由 AI 判斷）。附圖位在標題底下，一格可放多張、每張自選用途：「原圖放置」1 張整版／2 張左右雙切／3 張三切，「AI改圖」由 AI 照這張圖重畫、其餘當參考；沒有原圖放置就 AI 生底圖並標示 AI示意圖。原音呈現／AI即時翻譯可勾可並存。創意 0（預設）文字與 Logo 全由程式疊、零錯字；1 以上才交 AI 畫標題。',
         inputs: 'yt_cover',
         ytLayout: 'news',
+        slots: true,   // 2026-09-14 對齊整點：一標一附圖位，共用「附參考圖」區收起來
         locks: {},
-        hides: { digestControls: true, safeFrame: true, stamp: true },
+        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
         hole: null,
     },
     // YT 直播直標（2026-09-08 WP3）：不是封面，是疊在直播訊號上的透明底 PNG。
@@ -490,8 +491,8 @@ const EDITOR_FORMATS = {
         slots: true,   // 一標一附圖位（與後端能力矩陣對齊）
         locks: {},
         // 2026-09-10：整點改成一標一附圖（對齊十點），共用「附參考圖」那一區整個收起來。
-        // 國內外新聞直播與今日熱搜**不收**——那兩個支援 1 張整版／2 張左右雙切／3 張三切，
-        // 改成一標一圖會把雙切與三切砍掉。
+        // 2026-09-14：國內外新聞直播與今日熱搜也跟上——當初怕一標一圖砍掉 2 張雙切／3 張三切，
+        // 但 2026-09-13 起單則附圖位的整份清單會併進共用清單，切格那條路照走，顧慮不成立。
         hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
         hole: null,
     },
@@ -512,11 +513,12 @@ const EDITOR_FORMATS = {
     // 議題型版面，沒有日期、沒有 LIVE。底圖與標題規則同國內外新聞直播。
     yt_hot_cover: {
         label: 'YT今日熱搜',
-        hint: '今日熱搜封面：標題半形空格分兩段，沒有日期與 LIVE。附圖與底圖規則同國內外新聞直播。',
+        hint: '今日熱搜封面：標題半形空格分兩段，沒有日期與 LIVE。附圖位與底圖規則同國內外新聞直播（一格可放多張：原圖放置 1 整版／2 雙切／3 三切，AI改圖 重畫，其餘當參考）。',
         inputs: 'yt_cover',
         ytLayout: 'hot',
+        slots: true,   // 2026-09-14 對齊整點：一標一附圖位
         locks: {},
-        hides: { digestControls: true, safeFrame: true, stamp: true },
+        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
         hole: null,
     },
 };

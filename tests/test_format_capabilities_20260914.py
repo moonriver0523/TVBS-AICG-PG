@@ -22,17 +22,19 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 APP_JS = (ROOT / "app.js").read_text(encoding="utf-8")
 
-# 接線當天（2026-09-14）app.js 每個版型手寫的 hides——資料化後推導出來的必須一模一樣
+# 接線當天（2026-09-14）app.js 每個版型手寫的 hides——資料化後推導出來的必須一模一樣。
+# 同日稍後對齊第 3 項：國內外新聞直播／今日熱搜改成一標一附圖位，refUpload 跟著收起來
+#（這是刻意的行為變更，見 test_yt_shared_layouts_get_slots_20260914）。
 HIDES_ON_2026_09_14 = {
     "default": {},
     "broadcast": {},
     "ten_cover": {"digestControls": True, "safeFrame": True, "stamp": True, "refUpload": True},
-    "yt_live_cover": {"digestControls": True, "safeFrame": True, "stamp": True},
+    "yt_live_cover": {"digestControls": True, "safeFrame": True, "stamp": True, "refUpload": True},
     "yt_vstrip": {"digestControls": True, "safeFrame": True, "stamp": True, "engine": True,
                   "instruction": True, "refUpload": True, "refine": True},
     "yt_hourly_cover": {"digestControls": True, "safeFrame": True, "stamp": True, "refUpload": True},
     "yt_live24_cover": {"digestControls": True, "safeFrame": True, "stamp": True, "refUpload": True},
-    "yt_hot_cover": {"digestControls": True, "safeFrame": True, "stamp": True},
+    "yt_hot_cover": {"digestControls": True, "safeFrame": True, "stamp": True, "refUpload": True},
 }
 
 
@@ -76,19 +78,22 @@ class TableShape(unittest.TestCase):
         for key in ("default", "broadcast", "yt_vstrip"):
             self.assertFalse(ef.capability_for(key).zero_program_text, key)
         self.assertEqual(ef.capability_for("ten_cover").text_only_recompose, ("full",))
-        self.assertEqual({k for k, c in ef.FORMAT_CAPABILITIES.items() if c.text_only_recompose}, {"ten_cover"})
+        # YT 合成版單則／雙則的只改文字本來就有（ytCoverRecomposeBtn）；整點與 live24 有雙則
+        self.assertEqual(ef.capability_for("yt_hourly_cover").text_only_recompose, ("single", "dual"))
+        self.assertEqual(ef.capability_for("yt_live24_cover").text_only_recompose, ("single", "dual"))
+        self.assertEqual(ef.capability_for("yt_live_cover").text_only_recompose, ("single",))
+        self.assertEqual(ef.capability_for("yt_hot_cover").text_only_recompose, ("single",))
         self.assertEqual(ef.capability_for("yt_hourly_cover").creativity_scope, ef.CREATIVITY_SCOPE_TITLE_DATE)
         self.assertEqual(ef.capability_for("default").creativity_scope, ef.CREATIVITY_SCOPE_LAYOUT)
         v = ef.capability_for("yt_vstrip")
         self.assertFalse(any([v.slots, v.shared_refs, v.fusion, v.refine, v.instruction, v.engine]))
         self.assertIsNone(v.creativity_scope)
 
-    def test_the_alignment_gaps_are_visible_as_flags(self):
-        """TODO.md 盤點表的缺口＝表裡的 False：YT 新聞直播／熱搜沒有附圖位。"""
-        self.assertFalse(ef.capability_for("yt_live_cover").slots)
-        self.assertFalse(ef.capability_for("yt_hot_cover").slots)
-        self.assertTrue(ef.capability_for("yt_hourly_cover").slots)
-        self.assertTrue(ef.capability_for("yt_live24_cover").slots)
+    def test_every_yt_layout_has_slots_after_the_alignment(self):
+        """2026-09-14 對齊第 3 項：YT 四版型全部一標一附圖位（新聞直播／熱搜補上）。"""
+        for key in ("yt_live_cover", "yt_hot_cover", "yt_hourly_cover", "yt_live24_cover"):
+            self.assertTrue(ef.capability_for(key).slots, key)
+            self.assertFalse(ef.capability_for(key).shared_refs, key)
 
 
 class FrontendParity(unittest.TestCase):
