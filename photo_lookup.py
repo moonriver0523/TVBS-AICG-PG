@@ -19,7 +19,9 @@
 - 不做人臉比對、不驗證照片裡的人是不是本人。Wikidata 只能確認「這個條目講的是一個人」，
   不能確認「照片裡的人是他」，也不保證是單人照（習近平的首圖與 P18 都是會面合照）。
   因此照片來源（條目網址、檔名）一律寫進 log 供人工回查，且肖像一律標示示意圖。
-- 不快取。新聞素材每則不同，查詢量小，快取的複雜度換不到東西。
+
+行程內 TTL 快取（B32，2026-09-15）：消化與生圖對同一人名會連查兩次。命中 15 分鐘、
+查無 60 秒、上限 256 筆淘汰最舊。timeout 不進 key。呼叫端無感。
 """
 
 from __future__ import annotations
@@ -27,6 +29,9 @@ from __future__ import annotations
 import base64
 import json
 import ssl
+import threading
+import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -48,6 +53,14 @@ MAX_PHOTO_BYTES = 5 * 1024 * 1024
 DEFAULT_LANGS = ("zh", "en")
 
 _TIMEOUT = 10
+
+HIT_TTL_SECONDS = 15 * 60
+MISS_TTL_SECONDS = 60
+CACHE_MAX_ENTRIES = 256
+
+_CACHE_MISS = object()
+_CACHE_LOCK = threading.Lock()
+_CACHE: OrderedDict[tuple, tuple[float, ReferencePhoto | None]] = OrderedDict()
 
 
 @dataclass(frozen=True)
@@ -195,6 +208,45 @@ def _guess_mime(url: str) -> str:
     return "image/jpeg"
 
 
+def clear_photo_lookup_cache() -> None:
+    """測試用：清掉行程內快取，避免題與題互相污染。"""
+    with _CACHE_LOCK:
+        _CACHE.clear()
+
+
+def _cache_key(
+    name: str,
+    alt_names: tuple[str, ...] | list[str],
+    langs: tuple[str, ...],
+) -> tuple:
+    primary = (name or "").strip()
+    alts = tuple((alt or "").strip() for alt in alt_names if (alt or "").strip())
+    return (primary, alts, tuple(langs))
+
+
+def _cache_get(key: tuple):
+    with _CACHE_LOCK:
+        item = _CACHE.get(key)
+        if item is None:
+            return _CACHE_MISS
+        expires_at, value = item
+        if time.monotonic() >= expires_at:
+            del _CACHE[key]
+            return _CACHE_MISS
+        return value
+
+
+def _cache_put(key: tuple, value: ReferencePhoto | None) -> None:
+    ttl = HIT_TTL_SECONDS if value is not None else MISS_TTL_SECONDS
+    expires_at = time.monotonic() + ttl
+    with _CACHE_LOCK:
+        if key in _CACHE:
+            del _CACHE[key]
+        _CACHE[key] = (expires_at, value)
+        while len(_CACHE) > CACHE_MAX_ENTRIES:
+            _CACHE.popitem(last=False)
+
+
 def find_reference_photo(
     name: str,
     *,
@@ -213,6 +265,11 @@ def find_reference_photo(
     （阿拉奇→阿布拉莫維奇、巴薩尼→威尼斯商人），抓錯人比查不到嚴重得多。
     英文原名是結構化的事實，由消化端從新聞原文或既有知識給出，不用猜。
     """
+    key = _cache_key(name, alt_names, langs)
+    cached = _cache_get(key)
+    if cached is not _CACHE_MISS:
+        return cached
+
     candidates = [
         candidate
         for candidate in [(name or "").strip(), *[(alt or "").strip() for alt in alt_names]]
@@ -227,5 +284,7 @@ def find_reference_photo(
         for lang in langs:
             photo = _lookup_lang(candidate, lang, timeout)
             if photo is not None:
+                _cache_put(key, photo)
                 return photo
+    _cache_put(key, None)
     return None

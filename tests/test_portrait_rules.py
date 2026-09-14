@@ -225,6 +225,9 @@ class EnglishNameLookupTests(unittest.TestCase):
     `Ahmad Vahidi` 查得到。
     """
 
+    def setUp(self):
+        photo_lookup.clear_photo_lookup_cache()
+
     def test_english_name_is_tried_when_the_chinese_name_misses(self):
         def by_name(name, *_args):
             return PHOTO if name == "Ahmad Vahidi" else None
@@ -434,6 +437,9 @@ class PhotoLookupTests(unittest.TestCase):
     3.（首圖缺才有）wbgetclaims P18
     4. 下載圖片
     """
+
+    def setUp(self):
+        photo_lookup.clear_photo_lookup_cache()
 
     @staticmethod
     def _page(*, qid="Q1", thumbnail=True, missing=False) -> bytes:
