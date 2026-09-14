@@ -376,9 +376,15 @@ let state = {
     // 2026-09-09 使用者：designed 升級成「完全解放」——配色、版位、字體、邊框、強調全給 AI。
     // 預設仍是 plain——解放後版面與配色都不可預期，要使用者自己開。
     coverTitleCreativity: 0,
+    // 「標題由 AI 生成」勾選框的真值（2026-09-14 晚使用者裁決：0 級由鎖住改成開放，預設關閉）。
+    // 1 級以上勾選框鎖成必勾（標題造型只有模型畫得出來），拉桿一動就重設成該級的預設值——
+    // 手動勾的選擇不跨拉桿記憶，規則單純可預期。
+    coverAiTitle: false,
     // YT 三版型創意拉桿（P5，2026-09-11）。後端 YtCoverRequest.creativity 同一個欄位，
     // 三個 layout（hourly／news／hot）共用這一顆值。
     ytCreativity: 0,
+    // 同十點的 coverAiTitle：YT 四版型「標題由 AI 生成」勾選框的真值，0 級可勾、預設不勾。
+    ytAiTitle: false,
     // YT 封面底部壓色框：2026-09-08 晚使用者裁決預設**開**（60% 半透明、第二行上緣起羽化，見 compose）。
     // 整點直播的版面沒有底帶，按鈕不顯示。
     ytBottomBand: false,   // 2026-09-11 使用者：預設改關閉
@@ -1515,13 +1521,18 @@ const COVER_TITLE_CREATIVITY = [
 function updateCoverTitleStyleButton() {
     const bar = document.getElementById('coverTitleStyleBar');
     if (!bar) return;
-    // 2026-09-14 使用者裁決：創意 0 一律程式壓字、1 級起才由 AI 畫標題。拉桿變成唯一的
-    // 開關，「標題由 AI 生成」勾選框降成唯讀鏡像（disabled，勾不勾跟著拉桿走），
-    // 所以拉桿永遠露出，不再被勾選框藏起來。後端同一條規則兜底（title_mode_for_creativity）。
+    // 2026-09-14 使用者裁決：創意 0 標題預設程式壓字、1 級起由 AI 畫。拉桿是主開關，所以它
+    // 永遠露出，不再被勾選框藏起來。同日晚放寬：0 級的勾選框**可以勾**（預設不勾），使用者
+    // 明點就交 AI 畫（錯字／原圖漂移的風險自己承擔）；1 級以上仍鎖成必勾。
+    // 注意這支每次切版型／重繪都會跑，所以勾選框只能從 state.coverAiTitle 畫回去——
+    // 寫死 `= creativity >= 1` 會把使用者剛勾的選擇洗掉。後端同一條規則（title_mode_for_creativity）。
     const hidden = editorFormat().inputs !== 'cover';
     bar.className = (hidden ? 'hidden ' : '') + 'flex items-center gap-2';
     const aiBox = document.getElementById('coverAiTitle');
-    if (aiBox) aiBox.checked = state.coverTitleCreativity >= 1;
+    if (aiBox) {
+        aiBox.disabled = state.coverTitleCreativity >= 1;
+        aiBox.checked = state.coverAiTitle;
+    }
     const range = document.getElementById('coverTitleStyleRange');
     if (range) range.value = String(state.coverTitleCreativity);
     const label = document.getElementById('coverTitleStyleLabel');
@@ -1538,9 +1549,19 @@ function updateCoverTitleStyleButton() {
 function setCoverTitleCreativity(value) {
     const level = Math.min(4, Math.max(0, parseInt(value, 10) || 0));
     state.coverTitleCreativity = level;
+    state.coverAiTitle = level >= 1;   // 拉桿一動就回該級的預設（0＝關、1 以上＝開）
     updateCoverTitleStyleButton();
     showToast('標題創意 ' + level + '　' + COVER_TITLE_CREATIVITY[level][0]
         + '：' + COVER_TITLE_CREATIVITY[level][1]);
+}
+
+function setCoverAiTitle(on) {
+    // 只有創意 0 叫得動（1 級以上勾選框是 disabled）。明點 AI＝使用者要 0 級的 AI 標題。
+    state.coverAiTitle = !!on;
+    updateCoverTitleStyleButton();
+    showToast(state.coverAiTitle
+        ? '標題交給 AI 畫（創意 0 的規矩排版，但可能出錯字、原圖那格會被重畫）'
+        : '標題由程式壓字（零錯字、原圖零漂移）');
 }
 
 // YT 三版型（整點／國內外新聞直播／今日熱搜）「創意」拉桿（P5，2026-09-11）。
@@ -1568,22 +1589,35 @@ function updateYtCreativityBar() {
     // - composite 模式標題由程式壓字，creativity 這條線只影響 _yt_cover_full_image
     //   （AI 整張），對程式壓字沒有作用——跟十點的 coverTitleStyleBar 同一個理由
     //   （見 updateCoverTitleStyleButton）。
-    // 2026-09-14 使用者裁決：創意 0 一律程式壓字、1 級起才由 AI 畫標題——拉桿是唯一開關，
-    // 勾選框只是唯讀鏡像（與十點的 updateCoverTitleStyleButton 同一套）。
+    // 2026-09-14 使用者裁決：創意 0 標題預設程式壓字、1 級起由 AI 畫；同日晚放寬成 0 級可勾、
+    // 預設不勾（與十點的 updateCoverTitleStyleButton 同一套，勾選框一律從 state 畫回去）。
     const hidden = editorFormat().inputs !== 'yt_cover';
     const bar = document.getElementById('ytCreativityBar');
     if (bar) bar.classList.toggle('hidden', hidden);
     const aiBox = document.getElementById('ytCoverAiTitle');
-    if (aiBox) aiBox.checked = state.ytCreativity >= 1;
+    if (aiBox) {
+        aiBox.disabled = state.ytCreativity >= 1;
+        aiBox.checked = state.ytAiTitle;
+    }
     const range = document.getElementById('ytCreativityRange');
     if (range) range.value = String(state.ytCreativity);
     const label = document.getElementById('ytCreativityLabel');
     if (label) label.innerText = YT_CREATIVITY[state.ytCreativity][0];
 }
 
+function setYtAiTitle(on) {
+    // 只有創意 0 叫得動（1 級以上 disabled）；語意與十點的 setCoverAiTitle 相同。
+    state.ytAiTitle = !!on;
+    updateYtCreativityBar();
+    showToast(state.ytAiTitle
+        ? '標題交給 AI 畫（創意 0 的規矩排版，但可能出錯字、原圖那格會被重畫）'
+        : '標題由程式壓字（零錯字、原圖零漂移）');
+}
+
 function setYtCreativity(value) {
     const level = Math.min(4, Math.max(0, parseInt(value, 10) || 0));
     state.ytCreativity = level;
+    state.ytAiTitle = level >= 1;   // 同十點：拉桿一動就回該級的預設
     updateYtCreativityBar();
     showToast('YT 創意 ' + level + '　' + YT_CREATIVITY[level][0] + '：' + YT_CREATIVITY[level][1]);
 }
@@ -2289,9 +2323,10 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
             if (fullLayout) slots.right = false;   // 滿版只有一個附圖位
             const slotCount = (slots.left ? 1 : 0) + (slots.right ? 1 : 0);
             const asisCount = slotCount || uploadedAsisCount();
-            // 2026-09-14 使用者裁決：模式由創意拉桿決定——0＝程式壓字，1 級起才交 AI 畫標題
-            //（原圖放置那格跟著整張重畫、接受漂移）。勾選框只是鏡像，不再讀它。
-            const composite = state.coverTitleCreativity === 0;
+            // 2026-09-14 使用者裁決：拉桿決定預設（0＝程式壓字，1 級起交 AI 畫標題，原圖放置那格
+            // 跟著整張重畫、接受漂移）；同日晚放寬後 0 級的勾選框可以自己打開，所以讀的是
+            // 勾選框的真值 state.coverAiTitle（拉桿一動它就回該級的預設，見 setCoverTitleCreativity）。
+            const composite = !state.coverAiTitle;
             const anySlotImage = state.coverAsis.left.length > 0 || (!fullLayout && state.coverAsis.right.length > 0);
             const deriving = true;   // 畫面描述欄移除後一律由 AI 推導（2026-09-08 WP1）
             showToast(!composite && (asisCount > 0 || anySlotImage)
@@ -2464,8 +2499,8 @@ function ytCoverFields() {
         // 整點直播＋這一欄有值＝雙則（後端 editor_formats.yt_cover_is_dual）
         title_second: layout === 'hourly' ? val('ytCoverTitleSecond') : '',
         layout,
-        // 2026-09-14：模式由創意拉桿決定（0＝程式壓字），勾選框只是鏡像
-        title_mode: state.ytCreativity >= 1 ? 'ai' : 'composite',
+        // 2026-09-14：拉桿決定預設（0＝程式壓字），0 級的勾選框可以自己打開，所以讀真值
+        title_mode: state.ytAiTitle ? 'ai' : 'composite',
         original_audio: layout === 'news' && !!document.getElementById('ytCoverOriginalAudio')?.checked,
         ai_translation: layout === 'news' && !!document.getElementById('ytCoverAiTranslation')?.checked,
         date_text: val('ytCoverDate'),

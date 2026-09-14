@@ -1465,6 +1465,24 @@ process-local）。2026-08-17 上線的三項功能（PLAN.md）全部只做在�
 - [ ] **再做附圖**：確認 GCS 狀態機制沒問題後，配對視窗與暫存才有地方放。
 
 
+## 已做：創意 0 的「標題由 AI 生成」由鎖住改成開放（2026-09-14 晚使用者裁決，VERSION 260914-05）
+
+使用者原話：「創意等級 0 預設關閉AI生標題 現在選項也是鎖住 可以開放 但預設關閉」。
+
+當日早上那條裁決（創意 0 **一律**程式壓字、勾選框降成 `disabled` 唯讀鏡像）保留精神、放寬手段：
+
+- **前台**：`coverAiTitle`／`ytCoverAiTitle` 的 `disabled` 從 HTML 拿掉，改由 JS 依等級切
+  （0 級可勾、1 級以上鎖成必勾）。新增 `state.coverAiTitle`／`state.ytAiTitle` 兩顆真值，
+  初值 `false`（＝預設關閉）；`setCoverTitleCreativity`／`setYtCreativity` 一動就把真值重設成
+  該級的預設（0→關、1 以上→開），手動勾的選擇不跨拉桿記憶。送出讀的是真值，不再是 `creativity >= 1`。
+  **坑**：`updateCoverTitleStyleButton`／`updateYtCreativityBar` 每次切版型都會跑，勾選框只能從
+  state 畫回去；沿用舊的 `aiBox.checked = creativity >= 1` 會把使用者剛勾的選擇洗掉。
+- **後端**：`TenCoverRequest.mode`／`YtCoverRequest.title_mode` 的硬預設 `"ai"` 改成 `None`（＝沒指定）；
+  `title_mode_for_creativity(creativity, title_mode, has_background, zero_program_text=True)` 改成
+  「明點就照辦、None 才套預設（0 級且沒帶底圖 → composite）」。端點那段從「強制改寫」變成「定案」，
+  **無條件執行**（下游全部假設已是字串），`zero_program_text=False` 的版型照樣拿到 `ai`。
+  硬預設不能留 `"ai"`：省略欄位的 API 呼叫端會在 0 級拿到 AI 標題，正是使用者要關掉的那個。
+
 ## 待評估：版型功能對齊盤點（2026-09-14 使用者：「要去對齊其他所有版型，尤其是有需要附圖的」）
 
 盤點依據：`editor_formats.EDITOR_FORMATS`、`app.js` 各 format 的 `hides`、四個生圖端點的實際判斷（HEAD `b73068b`）。

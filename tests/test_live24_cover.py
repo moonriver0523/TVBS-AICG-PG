@@ -251,9 +251,13 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200, res.text)
         self.assertTrue(res.json()["image_data_base64"])
 
-    def test_it_is_always_composite_even_when_ai_titles_are_asked_for(self):
-        """純合成版：標題規格精確到模型打不中，不開 AI 標題路徑。"""
-        res, raw = self._post({"title_mode": "ai"})
+    def test_it_defaults_to_composite_when_no_title_mode_is_sent(self):
+        """預設合成版：標題規格精確到模型打不中，0 級不走 AI 標題路徑。
+
+        2026-09-14 晚放寬後這條只管**預設**——明送 title_mode="ai" 會照辦（使用者自己勾的），
+        那條在 test_creativity_zero_composite_20260914.YtCover 驗。
+        """
+        res, raw = self._post({})
         self.assertEqual(res.status_code, 200, res.text)
         # 合成版走的是**無文字底圖**那條 prompt；整張 AI 版不會有這段覆寫。
         # （標題本身仍會以「畫什麼場景」的身分出現在 Subject 裡，那不算模型要畫的字。）

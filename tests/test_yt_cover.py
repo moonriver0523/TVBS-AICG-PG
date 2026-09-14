@@ -511,8 +511,14 @@ class EndpointTests(unittest.TestCase):
         self.assertFalse(hourly.call_args.kwargs["draw_titles"])
         self.assertEqual(hourly.call_args.kwargs["time_text"], "20:00")
 
-    def test_default_title_mode_is_ai(self):
-        self.assertEqual(main.YtCoverRequest(title="前段 後段").title_mode, editor_formats.YT_COVER_TITLE_MODE_AI)
+    def test_omitted_title_mode_resolves_to_ai_from_creativity_one_up(self):
+        """2026-09-14 晚：欄位本身不再有硬預設（None＝沒指定），實際模式由創意等級決定——
+        0 級 → 程式壓字（使用者要的預設關閉），1 級起 → ai。"""
+        self.assertIsNone(main.YtCoverRequest(title="前段 後段").title_mode)
+        self.assertEqual(
+            editor_formats.title_mode_for_creativity(1, None, False),
+            editor_formats.YT_COVER_TITLE_MODE_AI,
+        )
 
     def test_unknown_layout_is_rejected(self):
         res = client.post("/api/editor/yt-cover", json={"title": "前段 後段", "layout": "weekly"}, headers=HEADERS)
@@ -563,11 +569,12 @@ class FrontendParityTests(unittest.TestCase):
         self.assertIn("state.ytCoverTitleMode !== 'ai'", js)
         with open(self.INDEX, encoding="utf-8") as fh:
             html = fh.read()
-        # 2026-09-14 使用者裁決：創意 0 一律程式壓字，勾選框降成唯讀鏡像（預設創意 0＝不勾）
-        box = re.search(r'<input id="ytCoverAiTitle"[^>]*>', html).group(0)
-        self.assertIn("disabled", box)
-        self.assertNotIn("checked", box)
-        self.assertIn("title_mode: state.ytCreativity >= 1 ? 'ai' : 'composite'", js)
+        # 2026-09-14 使用者裁決：創意 0 標題預設程式壓字（預設不勾）；同日晚放寬成 0 級可勾，
+        # 鎖定改由 updateYtCreativityBar 依等級切，HTML 不再寫死 disabled。
+        box = re.search(r'<input id="ytCoverAiTitle"[^>]*/>', html, re.S).group(0)
+        self.assertIsNone(re.search(r'\s(checked|disabled)(\s|/|>|=)', box), box)
+        self.assertIn('onchange="setYtAiTitle(this.checked)"', box)
+        self.assertIn("title_mode: state.ytAiTitle ? 'ai' : 'composite'", js)
 
     def test_hot_format_registered_on_both_sides(self):
         # 2026-09-06 型錄 H 類「今日熱搜」
@@ -602,9 +609,10 @@ class FrontendParityTests(unittest.TestCase):
         """
         with open(self.APP_JS, encoding="utf-8") as fh:
             js = fh.read()
-        # 2026-09-14 起勾選框只是拉桿的鏡像，拉桿永遠露出，只剩版型檢查
+        # 2026-09-14 起拉桿永遠露出，只剩版型檢查；勾選框從 state 畫回去、鎖定看等級
         self.assertIn("editorFormat().inputs !== 'yt_cover';", js)
-        self.assertIn("aiBox.checked = state.ytCreativity >= 1", js)
+        self.assertIn("aiBox.checked = state.ytAiTitle", js)
+        self.assertIn("aiBox.disabled = state.ytCreativity >= 1", js)
 
     def test_flag_labels_match_backend(self):
         with open(self.INDEX, encoding="utf-8") as fh:

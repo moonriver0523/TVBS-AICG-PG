@@ -360,11 +360,13 @@ class CoverPromptTests(unittest.TestCase):
         index_html = (pathlib.Path(__file__).resolve().parent.parent / "index.html").read_text(encoding="utf-8")
         m = re.search(r'<input id="coverAiTitle" type="checkbox"[^>]*>', index_html)
         self.assertIsNotNone(m, "index.html 缺十點封面的「標題由 AI 生成」勾選框")
-        # 2026-09-14 使用者裁決：創意 0 一律程式壓字、1 級起才交 AI——勾選框降成拉桿的唯讀鏡像
-        self.assertIn("disabled", m.group(0), "勾選框要是唯讀鏡像")
-        self.assertNotIn("checked", m.group(0), "預設創意 0＝程式壓字，不該預設勾起")
+        # 2026-09-14 使用者裁決：創意 0 標題預設程式壓字、1 級起交 AI。同日晚放寬：0 級的勾選框
+        # 可以自己勾（預設不勾），鎖定改由 JS 依等級切，HTML 不再寫死 disabled。
+        # 找的是**屬性**形式（onchange 裡的 this.checked、class 裡的 disabled:opacity-40 不算）
+        self.assertIsNone(re.search(r'\s(checked|disabled)(\s|/|>|=)', m.group(0)),
+                          "0 級的勾選框要可勾、且不預設勾起")
         app_js = APP_JS.read_text(encoding="utf-8")
-        self.assertIn("const composite = state.coverTitleCreativity === 0", app_js)
+        self.assertIn("const composite = !state.coverAiTitle", app_js)
         self.assertIn("mode: composite ? 'composite' : 'ai'", app_js)
 
 

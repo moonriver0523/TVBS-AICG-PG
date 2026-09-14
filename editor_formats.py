@@ -1474,19 +1474,33 @@ YT_COVER_TITLE_MODE_COMPOSITE = "composite"
 YT_COVER_TITLE_MODES = (YT_COVER_TITLE_MODE_AI, YT_COVER_TITLE_MODE_COMPOSITE)
 
 
-# 創意 0 → 一律程式壓字（2026-09-14 使用者裁決，十點／整點／新聞直播／熱搜／live24 全套）。
-# 0 級的 AI 標題只是「規矩排版」，模型畫出來理論上跟程式壓字一樣，卻多了三種已實拍過的
-# 風險：錯字、原圖放置那格被整張重畫而漂移（第三輪案 04、創意階梯輪 C08）、字太大撞
-# 整點日期紅條（2026-09-13 極短標題那條局部修補，現已被本規則涵蓋而移除）。
-# 1 級起標題造型（底板、材質字面、立體字）只有模型畫得出來，才送生圖；原圖放置的格子
-# 跟著整張重畫、接受漂移——使用者主動開創意就是選了風格優先。
+# 創意 0 → 標題**預設**程式壓字（2026-09-14 使用者裁決，十點／整點／新聞直播／熱搜／live24 全套；
+# 同日晚由「一律」放寬成「預設」）。0 級的 AI 標題只是「規矩排版」，模型畫出來理論上跟程式壓字
+# 一樣，卻多了三種已實拍過的風險：錯字、原圖放置那格被整張重畫而漂移（第三輪案 04、創意階梯輪
+# C08）、字太大撞整點日期紅條（2026-09-13 極短標題那條局部修補，現已被本規則涵蓋而移除）。
+# 所以預設關閉——但**不再鎖死**：前台勾選框在 0 級是可勾的（預設不勾），使用者明點就照辦，
+# 上面那三種風險由他自己承擔。1 級起標題造型（底板、材質字面、立體字）只有模型畫得出來，勾選框
+# 反過來鎖成必勾；原圖放置的格子跟著整張重畫、接受漂移——主動開創意就是選了風格優先。
 # 追加修改帶回底圖（has_background）不動：標題已經畫在上面了，改成 composite 會再壓一層。
 # 十點的 mode 與 YT 的 title_mode 用同一組字串（ai／composite），所以共用這一支。
-def title_mode_for_creativity(creativity: int, title_mode: str, has_background: bool) -> str:
-    """回傳這張封面實際該走的標題模式：創意 0 且沒帶現成底圖 → 程式壓字，其餘照呼叫端。"""
-    if has_background or creativity >= 1:
+def title_mode_for_creativity(
+    creativity: int,
+    title_mode: str | None,
+    has_background: bool,
+    zero_program_text: bool = True,
+) -> str:
+    """回傳這張封面實際該走的標題模式。
+
+    明點了 ai／composite 就照辦（這是「開放」的那一半）；只有**沒指定**（None，API 呼叫端省略
+    欄位）才套預設：這個版型吃創意 0 程式壓字規則、等級 0、又沒帶現成底圖 → composite，其餘 ai。
+    前台一律明送，所以這條預設只服務直接打 API 的呼叫端——但它得跟前台的預設一致，
+    否則省略欄位的呼叫端會拿到 0 級的 AI 標題（就是使用者要關掉的那個）。
+    """
+    if title_mode is not None:
         return title_mode
-    return YT_COVER_TITLE_MODE_COMPOSITE
+    if zero_program_text and creativity < 1 and not has_background:
+        return YT_COVER_TITLE_MODE_COMPOSITE
+    return YT_COVER_TITLE_MODE_AI
 
 # 底部壓色框開關（2026-09-08 使用者裁決；同日晚改預設 ON）。合成版由 compose 的 bottom_band
 # 決定畫不畫，AI 版只能靠 prompt——所以 LAYOUT 的第一條與 IMAGERY 的結尾都要換句話說，
@@ -2394,7 +2408,7 @@ EDITOR_FORMAT_ALIAS_KEYS = tuple(EDITOR_FORMAT_ALIASES)
 #   asis_max         單格原圖放置自動切格的上限（超過回 400）；0＝這條規則不適用
 #   fusion           多張 AI改圖 走融合版措辭
 #   creativity_scope 創意階梯管什麼：layout（CG 版面槓桿）／title／title_date（整點連日期牌）／None
-#   zero_program_text 創意 0 一律程式壓字（title_mode_for_creativity）
+#   zero_program_text 創意 0 標題預設程式壓字（title_mode_for_creativity；可由使用者明點覆蓋）
 #   text_only_recompose 哪些版面支援「只改文字」（底圖不重生）；空＝不支援
 #   refine / instruction / engine 追加修改／指令欄／引擎選擇 有沒有
 #   digest_controls / safe_frame / stamp 消化控制列／安全框／蓋章 有沒有
