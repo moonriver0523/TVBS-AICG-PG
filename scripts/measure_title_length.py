@@ -309,6 +309,13 @@ def main_cli() -> None:
         metavar="sample/density/role",
         help="只跑指定格，可重複",
     )
+    parser.add_argument(
+        "--skip",
+        action="append",
+        default=[],
+        metavar="sample/density/role",
+        help="跳過已跑過的格，可重複",
+    )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
@@ -330,6 +337,9 @@ def main_cli() -> None:
         missing = wanted_set - {cell_key(r) for r in rows}
         if missing:
             raise SystemExit(f"找不到格子：{sorted(missing)}")
+    if args.skip:
+        skip_set = set(args.skip)
+        rows = [r for r in rows if cell_key(r) not in skip_set]
 
     if not args.go:
         print_dry_run(rows)
