@@ -1150,7 +1150,6 @@ In "structure", require all of the following, not as options:
 _CG_L3_EXTRA = """- BREAK THE GRID: the supporting points stop being a stack of equal rows. Arrange them asymmetrically — stepped down a diagonal, split into a short column beside the hero zone, or wrapped around the hero element on two sides — and say in "structure" which arrangement you chose. The number of points does not change; only how they sit.
 - THE SUBJECT IMAGE BECOMES AN OBJECT, NOT A BACKDROP: cut the main subject out and let it overlap the edge of a panel or the hero zone, instead of sitting flat behind everything as a full-frame photograph.
 - SIZE HIERARCHY INSIDE THE TYPE: the headline and the single most important figure are set far larger than the supporting lines — a clear step, not a nudge — while the supporting lines stay at one consistent size as each other.
-- One or two flat wordless pictograms, chosen from what the story is about, sit beside the headline or the leading card.
 - The background carries a themed texture or gradient related to the subject (circuitry, water, smoke, topography), kept dark and low-contrast behind the text so nothing competes with the words.
 """
 
@@ -1166,7 +1165,7 @@ _CG_L4_EXTRA = """- GO FURTHER — THIS IS THE LOUDEST SETTING. Everything above
 - ONE SIDE OF THE FRAME IS GIVEN TO A SINGLE DRAMATIC IMAGE running the full height of the content area, so the graphic reads as picture-and-panels rather than as text over a background.
 - Stack outlines on the headline and the hero figure (a thick dark one, then a bright one outside it) and give them a deep three-dimensional extrusion with a treatment drawn from the story — molten metal, neon, cracked stone, wet chrome.
 - THE HEADLINE BLOCK TILTS OR ARCS — this is required at this setting, not offered (a few degrees, never more than about eight) — and its characters step up and down instead of sitting on one baseline.
-- Add energy around the hero element: radiating lines, sparks, shards, a splashed or torn colour shape, a burst of glow. Up to three wordless pictograms.
+- Add energy around the hero element: radiating lines, sparks, shards, a splashed or torn colour shape, a burst of glow.
 - The background may darken further so all of this still reads.
 - LOUD IS NOT THE SAME AS BROKEN: nothing tilts far enough to touch or overrun the reserved empty margin, no decoration crosses a stroke, every point the material supports is still present and still legible at broadcast distance, and no card is dropped, merged or duplicated to make an angle work.
 """
@@ -1179,12 +1178,84 @@ _CG_CREATIVITY_BLOCKS = {
 }
 
 
-def cg_creativity_rules(level: int) -> str:
-    """0＝完全不注入（現行成品）；1–4 追加該級的美術條文＋不變的 FIXED 段。"""
+# ---- A1／A5／A2：CG 線接上既有變化池與程式決定的配件（2026-09-15）----
+#
+# 使用者回報「最高級還是不夠亮」的直接原因不是條文寫得不夠狠，是**每一級注入的
+# 都是同一段固定文字**：沒有抽籤，模型每次讀到一模一樣的指示，自然每次交同一個
+# 長相。十點封面 2026-09-11 已經把這件事驗過一輪，解法是同一批池子＋同一顆 seed，
+# 而且輸出一律是命令句——「你可以選」推不動模型，這個 repo 記過三次。
+#
+# 池子與抽籤順序沿用 creativity.draw()：plate → stagger → typeface → palette →
+# anchor → tilt_dir。**不另立一套 CG 專用池**，那正是 A5（十點創意階梯移植回通用版）
+# 要消掉的重複。配件接著同一顆 rng 往下抽（見 creativity.accessories 的 rng 參數）。
+_CG_DESIGN_DRAW_TEMPLATE = """
+THE DESIGN DRAW FOR THIS GRAPHIC — THESE SIX ARE ALREADY DECIDED FOR YOU. THEY ARE GIVENS, NOT A MENU, AND THEY DO NOT CHANGE WHAT THE TEXT SAYS:
+- PLATE SHAPE: every panel, card or plate sitting behind text is {plate}. One shape language across the whole graphic.
+- ARRANGEMENT: {stagger}.
+- TYPEFACE: set the headline and the key figures in {typeface}.
+- PALETTE: work in these four and no others — {c0} leads, {c1} is the ground, {c2} is the accent, {c3} is held in reserve. WHICH element carries the accent is decided by meaning, never by row order; the directional colour convention stated earlier still wins for any rise or fall in the data.
+- HEADLINE BLOCK: sit it {anchor}.
+- TILT DIRECTION: wherever a level above asks for a tilt or an angle, it runs {tilt_dir}.
+"""
+
+# 配件段的抬頭。測試與注入點都指名它，所以是模組層常數而不是內嵌字串。
+CG_ACCESSORY_HEADING = (
+    "WORDLESS DEVICES CHOSEN FOR THIS GRAPHIC — DRAW EVERY ONE OF THEM, THEY ARE NOT OPTIONS:"
+)
+
+# 釘在每一件配件後面的幾何。十點那句寫的是「中央切線」（雙切版面才有的東西），
+# CG 沒有那條線；CG 的硬邊界是播出安全留白。
+_CG_ACCESSORY_NOTE = (
+    "  ← INSIDE THE CONTENT AREA ONLY: never into the reserved empty margin, never"
+    " across a stroke, and it carries no writing of its own."
+)
+
+# 池子裡唯一帶著十點版面家具的條目：iconrow 寫的是「深藍底條的上方」，那是十點封面
+# 的底帶，CG 沒有。只換這一條的措辭，**不動池子長度也不動抽籤順序**——增刪條目會把
+# 所有既有 seed 的長相換掉（見 creativity.py 開頭的風險 2）。
+_CG_ACCESSORY_OVERRIDES = {
+    "iconrow": (
+        "A SHORT ROW OF SMALL {shape} WORDLESS ICON CHIPS along one edge of the content"
+        " area, evenly spaced and equal in size, each holding one flat pictogram from"
+        " the story."
+    ),
+}
+
+
+def cg_creativity_rules(level: int, *, seed=None) -> str:
+    """0＝完全不注入（現行成品）；1–4 追加該級的美術條文＋這一輪的抽籤＋不變的 FIXED 段。
+
+    `seed`：同一顆 seed 抽出同一種長相（F0／D1）。**seed 本身不會出現在回傳的字串裡**
+    ——它只決定抽到什麼，不是要模型畫出來的字（監督 2026-09-14 Q2）。
+    """
     block = _CG_CREATIVITY_BLOCKS.get(level)
     if not block:
         return ""
-    return block + _CG_CREATIVITY_FIXED
+    d = creativity.draw(seed, anchor=True)
+    draw_block = _CG_DESIGN_DRAW_TEMPLATE.format(
+        plate=d.plate,
+        stagger=d.stagger,
+        typeface=d.typeface,
+        c0=d.palette[0], c1=d.palette[1], c2=d.palette[2], c3=d.palette[3],
+        anchor=d.anchor,
+        tilt_dir=d.tilt_dir,
+    )
+    # 配件件數由 A2 的表決定（3 級 2 件、4 級 3 件）。rng 接 draw 那一顆往下抽，
+    # 不另開 random.Random(seed)——那樣抽到的是另一串序列。
+    # visuals 不傳：CG 的畫面描述是**這次消化的產物**，組 prompt 時還不存在，
+    # 所以國旗那條確定性換入在 CG 線上本來就不會觸發（不是漏接）。
+    devices = creativity.accessories(
+        level,
+        counts=creativity.CG_ACCESSORY_COUNTS,
+        rng=d.rng,
+        placement_note=_CG_ACCESSORY_NOTE,
+        overrides=_CG_ACCESSORY_OVERRIDES,
+    )
+    device_block = ""
+    if devices:
+        listed = "\n".join(f"- {text}" for text in devices)
+        device_block = f"\n{CG_ACCESSORY_HEADING}\n{listed}\n"
+    return block + draw_block + device_block + _CG_CREATIVITY_FIXED
 
 
 # 「不消化」檔（2026-09-03 使用者要求）。原本只有標準／簡化兩檔，兩檔都會改寫使用者
@@ -1617,7 +1688,7 @@ def build_digest_instructions(
     # 創意拉桿放在版型區塊之後：本 repo 的慣例是「位置在後＋明文 OVERRIDE」才壓得住
     # 前面那些命令句。但它自己第一句就限縮成「只覆蓋美術」，而 FIXED 段再把
     # 字句、點數、安全框、清單外文字四件事釘回去。
-    instructions += cg_creativity_rules(visual_creativity)
+    instructions += cg_creativity_rules(visual_creativity, seed=seed)
     # 沒有 asis 附圖時完全不注入，消化 prompt 逐字元不變。
     if asis_reference_count:
         instructions += USER_REFERENCE_ASIS_DIGEST_RULES

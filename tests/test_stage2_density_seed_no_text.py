@@ -1,5 +1,6 @@
 """Stage 2 跨功能契約：D16、D2、seed 與無字檔。"""
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -261,6 +262,98 @@ class A1AccessoryOwnershipTests(SourceAssertions, unittest.TestCase):
         full = editor_formats.cover_accessories(4, seed=1, full_width=True)
         self.assertTrue(all("never across the centre seam" in t for t in split))
         self.assertFalse(any("never across the centre seam" in t for t in full))
+
+
+class A1A5A2CgVariationTests(SourceAssertions, unittest.TestCase):
+    """2-6：CG 線接上既有變化池（A1／A5），配件件數改由程式決定（A2）。
+
+    使用者回報「最高級還是不夠亮」的直接原因：CG 每一級注入的是固定文字、沒有抽籤，
+    所以每次成品同一個長相。封面線 2026-09-11 已經證明過解法——同一批池子、同一顆
+    seed、命令句而不是許可句。
+    """
+
+    def test_level_zero_still_injects_nothing(self):
+        """0 級＝現行成品，這一批不准讓它多出半個字（凍結快照也靠這條）。"""
+        self.assertEqual(main.cg_creativity_rules(0, seed=1), "")
+        self.assertEqual(main.cg_creativity_rules(0, seed=999), "")
+
+    def test_the_same_seed_reproduces_the_same_rules(self):
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                self.assertEqual(
+                    main.cg_creativity_rules(level, seed=7),
+                    main.cg_creativity_rules(level, seed=7),
+                )
+
+    def test_different_seeds_actually_change_the_draw(self):
+        """池子接上了才會變。這一條就是「最高級還是不夠亮」的直接驗收。"""
+        for level in (1, 2, 3, 4):
+            with self.subTest(level=level):
+                variants = {main.cg_creativity_rules(level, seed=s) for s in range(12)}
+                self.assertGreaterEqual(len(variants), 2)
+
+    def test_the_draw_is_stated_as_a_decision_not_a_menu(self):
+        """許可句推不動模型——這個 repo 記過三次。池子的輸出一律是命令句。"""
+        rules = main.cg_creativity_rules(3, seed=3).lower()
+        for banned in ("you may choose", "if you like", "optionally"):
+            with self.subTest(banned=banned):
+                self.assertNotIn(banned, rules)
+
+    def test_the_cg_accessory_counts_are_the_user_decision(self):
+        """CP4 使用者裁決：3 級 2 件、4 級 3 件，0–2 級都不加。"""
+        self.assertEqual(creativity.CG_ACCESSORY_COUNTS, {0: 0, 1: 0, 2: 0, 3: 2, 4: 3})
+
+    def test_only_levels_three_and_four_list_program_picked_devices(self):
+        for level in (1, 2):
+            with self.subTest(level=level):
+                self.assertNotIn(
+                    main.CG_ACCESSORY_HEADING, main.cg_creativity_rules(level, seed=1)
+                )
+        for level, want in ((3, 2), (4, 3)):
+            with self.subTest(level=level):
+                rules = main.cg_creativity_rules(level, seed=1)
+                self.assertIn(main.CG_ACCESSORY_HEADING, rules)
+                block = rules.split(main.CG_ACCESSORY_HEADING, 1)[1]
+                listed = [ln for ln in block.splitlines() if ln.startswith("- ")]
+                self.assertEqual(len(listed), want)
+
+    def test_the_old_permission_phrasing_is_gone(self):
+        """「一兩個」「至多三個」正是 A2 要換掉的許可句：件數由程式列，不是模型挑。"""
+        source = (Path(__file__).resolve().parent.parent / "main.py").read_text(encoding="utf-8")
+        self.assertNotSourceContains(source, "One or two flat wordless pictograms")
+        self.assertNotSourceContains(source, "Up to three wordless pictograms")
+
+    def test_the_cg_devices_carry_no_ten_cover_layout_wording(self):
+        """CG 不是封面：雙切切線、十點的深藍底條這類版型幾何不該跟著搬過來。"""
+        rules = main.cg_creativity_rules(4, seed=2)
+        for banned in ("centre seam", "navy bottom strip"):
+            with self.subTest(banned=banned):
+                self.assertNotIn(banned, rules)
+
+    def test_the_fixed_paragraph_is_still_last(self):
+        """FIXED 段要壓在創意條文後面，順序倒了就變成創意蓋掉 FIXED。"""
+        rules = main.cg_creativity_rules(4, seed=2)
+        self.assertLess(
+            rules.index("LEVEL 4 OF 4"),
+            rules.index("WHAT THE CREATIVITY SETTING NEVER CHANGES"),
+        )
+
+    def test_the_seed_reaches_the_rules_through_the_real_data_flow(self):
+        """只在 unit test 直接呼叫函式會漏掉真正的資料流：端點 → build_digest_instructions。"""
+        a = main.build_digest_instructions(
+            "編輯", "standard", "資料圖表", visual_creativity=4, seed=1
+        )
+        b = main.build_digest_instructions(
+            "編輯", "standard", "資料圖表", visual_creativity=4, seed=1
+        )
+        self.assertEqual(a, b)
+        others = {
+            main.build_digest_instructions(
+                "編輯", "standard", "資料圖表", visual_creativity=4, seed=s
+            )
+            for s in range(12)
+        }
+        self.assertGreaterEqual(len(others), 2)
 
 
 if __name__ == "__main__":

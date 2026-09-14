@@ -226,6 +226,11 @@ COVER_FLAG_ACCESSORY: tuple[str, str] = (
 
 # 封面線的件數表。就是梯子的骨架：一眼可見、可數、由程式決定。
 COVER_ACCESSORY_COUNTS = {0: 0, 1: 0, 2: 1, 3: 2, 4: 3}
+# CG 線的件數表（A2，CP4 使用者 2026-09-14 裁決：「創意 3／4 加掛配件」，件數 2／3）。
+# 與封面線同一梯度，但 2 級是 0 件——CG 是一整張資訊圖，2 級（「有設計」）的版面
+# 本來就滿，這一級不加掛。封面表維持 {2: 1} 不動：2-5 明文「不藉重構偷改封面行為」，
+# 而且 2 級掉成 0 件會讓既有 52 筆 cover RNG pin 與 YT fixture 全部變動。
+CG_ACCESSORY_COUNTS = {0: 0, 1: 0, 2: 0, 3: 2, 4: 3}
 
 
 # 國旗招式只在抽得到 2 件以上時才換得進去——1 件那級換掉唯一那件，等於把整級
@@ -262,6 +267,7 @@ def accessories(
     seed=None,
     visuals=(),
     placement_note: str = "",
+    overrides=None,
 ) -> list[str]:
     """該級要畫的招式（無字），形狀已填好、每一件後面接著呼叫端給的幾何提示。
 
@@ -273,6 +279,10 @@ def accessories(
     `visuals`：畫面描述。偵測到旗子、且這一級抽得到 FLAG_ACCESSORY_MIN_COUNT 件
     以上時，把抽到的**最後一件**確定性換成國旗招式（不進隨機池，理由見
     COVER_FLAG_ACCESSORY 上方）。換掉之後仍然接同一句 placement_note。
+    `overrides`：{key: 替代條目文字}。池子裡有少數條目帶著十點封面的版面家具
+    （iconrow 寫的是「深藍底條上方」，CG 根本沒有那條底帶），那種條目要換掉措辭
+    才用得到別條線上。**只換文字、不動池子長度也不動抽籤順序**——增刪條目會把所有
+    既有 seed 的長相換掉，這正是本檔案開頭「風險 2」要擋的事。
     """
     counts = COVER_ACCESSORY_COUNTS if counts is None else counts
     want = counts.get(level, 0)
@@ -286,6 +296,8 @@ def accessories(
     picked: list[str] = []
     icon_guidance_used = False
     for key, text in entries[:want]:
+        if overrides and key in overrides:
+            text = overrides[key]
         if "{shape}" in text:
             text = text.replace("{shape}", rng.choice(COVER_ACCESSORY_SHAPES))
         if key in _ICON_LIKE_KEYS and not icon_guidance_used:
