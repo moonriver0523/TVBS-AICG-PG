@@ -21,7 +21,7 @@
   因此照片來源（條目網址、檔名）一律寫進 log 供人工回查，且肖像一律標示示意圖。
 
 行程內 TTL 快取（B32，2026-09-15）：消化與生圖對同一人名會連查兩次。命中 15 分鐘、
-查無 60 秒、上限 256 筆淘汰最舊。timeout 不進 key。呼叫端無感。
+查無 60 秒、上限 256 筆或 64 MB（以先到為準）從最舊淘汰。timeout 不進 key。呼叫端無感。
 """
 
 from __future__ import annotations
@@ -57,6 +57,7 @@ _TIMEOUT = 10
 HIT_TTL_SECONDS = 15 * 60
 MISS_TTL_SECONDS = 60
 CACHE_MAX_ENTRIES = 256
+CACHE_MAX_BYTES = 64 * 1024 * 1024
 
 _CACHE_MISS = object()
 _CACHE_LOCK = threading.Lock()
@@ -236,6 +237,14 @@ def _cache_get(key: tuple):
         return value
 
 
+def _entry_bytes(value: ReferencePhoto | None) -> int:
+    return 0 if value is None else len(value.image_base64)
+
+
+def _cache_nbytes() -> int:
+    return sum(_entry_bytes(photo) for _expires, photo in _CACHE.values())
+
+
 def _cache_put(key: tuple, value: ReferencePhoto | None) -> None:
     ttl = HIT_TTL_SECONDS if value is not None else MISS_TTL_SECONDS
     expires_at = time.monotonic() + ttl
@@ -243,7 +252,9 @@ def _cache_put(key: tuple, value: ReferencePhoto | None) -> None:
         if key in _CACHE:
             del _CACHE[key]
         _CACHE[key] = (expires_at, value)
-        while len(_CACHE) > CACHE_MAX_ENTRIES:
+        while _CACHE and (
+            len(_CACHE) > CACHE_MAX_ENTRIES or _cache_nbytes() > CACHE_MAX_BYTES
+        ):
             _CACHE.popitem(last=False)
 
 

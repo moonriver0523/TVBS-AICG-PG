@@ -131,6 +131,42 @@ class PhotoLookupCacheTests(unittest.TestCase):
             photo_lookup.find_reference_photo("柯文哲", langs=("zh",), timeout=3)
         self.assertEqual(get.call_count, 3)
 
+    def test_oversized_photo_evicts_old_entries_until_byte_budget_fits(self):
+        original = photo_lookup.CACHE_MAX_BYTES
+        photo_lookup.CACHE_MAX_BYTES = 20
+        try:
+            small = photo_lookup.ReferencePhoto(
+                image_base64="a" * 10,
+                mime_type="image/jpeg",
+                image_url="u",
+                source_page="p",
+                lang="zh",
+            )
+            huge = photo_lookup.ReferencePhoto(
+                image_base64="b" * 15,
+                mime_type="image/jpeg",
+                image_url="u",
+                source_page="p",
+                lang="zh",
+            )
+            photo_lookup._cache_put(("old", (), ("zh",)), small)
+            photo_lookup._cache_put(("new", (), ("zh",)), huge)
+            self.assertIs(
+                photo_lookup._cache_get(("old", (), ("zh",))),
+                photo_lookup._CACHE_MISS,
+            )
+            kept = photo_lookup._cache_get(("new", (), ("zh",)))
+            self.assertEqual(kept.image_base64, huge.image_base64)
+            total = sum(
+                len(photo.image_base64)
+                for _expires, photo in photo_lookup._CACHE.values()
+                if photo is not None
+            )
+            self.assertLessEqual(total, 20)
+            self.assertEqual(total, 15)
+        finally:
+            photo_lookup.CACHE_MAX_BYTES = original
+
     def test_clear_photo_lookup_cache_forces_a_refetch(self):
         with patch.object(photo_lookup, "_get", side_effect=_human_hit_side_effect() * 2) as get:
             photo_lookup.find_reference_photo("金正恩", langs=("zh",))
