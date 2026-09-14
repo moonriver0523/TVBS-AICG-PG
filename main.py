@@ -9,6 +9,7 @@ import json
 import os
 import pathlib
 import re
+import secrets
 import ssl
 import threading
 import time
@@ -498,6 +499,29 @@ DigestTone = Literal["light", "dark"]
 MAX_PORTRAIT_FACES = 3
 
 
+# ============================================================
+# F0：三條線共用的 seed（D1，2026-09-14 使用者裁決）
+#
+# 使用者要的兩件事同時成立：**重生會變**（不然「再生一張」等於白按）與
+# **好的那張撈得回來**（回報「這組好」時要能重現）。作法是請求帶一顆明確的
+# 整數 seed，前端按「重新生成」才遞增；沒帶時後端現抽一顆並在回應裡回報。
+#
+# **seed 絕對不進 prompt**（監督 2026-09-14 Q2 升級為硬規則）。理由不只是模型
+# 會把數字寫錯：seed 一旦拼進 prompt 就改變了生圖輸入，同一顆 seed 再也複現不出
+# 原圖——F0 這個功能本身就自我否定了。它只走「請求欄位 → 程式抽籤 → 回應／
+# request_log／audit_archive」這條資料路徑。
+#
+# 上限取 2**31：JSON 與 JavaScript 的整數在這個範圍內都不會失真，前端遞增後送
+# 回來也還是同一個值。用 secrets 而不是 random：後者的預設種子在同一個行程裡
+# 是共享狀態，別處呼叫 random.seed() 就會讓「不可預測」悄悄失效。
+SEED_MAX = 2 ** 31
+
+
+def next_generation_seed() -> int:
+    """抽一顆新的生成 seed。呼叫端沒帶 seed 時用，每個請求只抽一次。"""
+    return secrets.randbelow(SEED_MAX)
+
+
 class GenerateRequest(BaseModel):
     news_text: str
     type_label: str
@@ -536,6 +560,8 @@ class GenerateRequest(BaseModel):
     # 消化階段就要知道方向——內容要趕到影片那半邊的對面，方向講錯等於重點被蓋掉。
     # 只有 editor_format="broadcast" 吃得到；舊別名一律用自己釘死的那一側。
     hole_side: Literal["left", "right"] = "left"
+    # 變化池的 seed（F0／D1）。None＝後端現抽一顆並在回應裡回報。
+    seed: int | None = Field(default=None, ge=0, lt=SEED_MAX)
 
 
 class MapPoint(BaseModel):
@@ -576,6 +602,8 @@ class GenerateResponse(BaseModel):
     # 地圖類：消化端列了但實查不到座標（或被查點白名單擋掉）的地名。前端據此提示使用者，
     # 否則「只查到 1 點不做底圖」對使用者是完全安靜的失敗（2026-09-08）。
     map_missing: list[str] = Field(default_factory=list)
+    # 這次實際採用的 seed（F0）：前端要拿它當「重新生成」的遞增起點，稽核要拿它回查。
+    seed: int = 0
 
 
 # input_references 的上限。模型端 GPT Image 2／2.5 收 0–16、Gemini 0–14（PLAN.md 查證），
@@ -1519,7 +1547,10 @@ def build_digest_instructions(
     map_scope_guard: bool = False,
     hole_side: str | None = None,
     visual_creativity: int = 0,
+    seed: int | None = None,
 ) -> str:
+    # seed（F0）：這一步只把資料流打通到這裡，實際拿去抽變化池是 2-6 的事。
+    # 它**永遠不會被拼進回傳的字串**——見 next_generation_seed 上方的說明。
     is_editor = role == "編輯"
     template = EDITOR_SYSTEM_PROMPT_TEMPLATE if is_editor else SYSTEM_PROMPT_TEMPLATE
     if full_bleed:
@@ -2071,6 +2102,12 @@ def apply_photo_availability(
     dependencies=[Depends(verify_internal_api_key)],
 )
 def generate(req: GenerateRequest):
+    # seed（F0）在最前面就定下來，並寫回 req：apply_photo_availability 會拿這份 req
+    # 再呼叫一次 generate()，沒寫回的話第二次會再抽一顆，同一個請求的兩段消化就用了
+    # 兩種長相，回應報的 seed 也重現不出成品。
+    if req.seed is None:
+        req = req.model_copy(update={"seed": next_generation_seed()})
+    seed = req.seed
     # DIGEST_MODEL 可覆寫；沿用舊環境變數 OPENAI_DIGEST_MODEL 作為次要相容
     model = resolve_digest_model()
     # 兩段式（條件注入）：分類成功就整段當成使用者指定了該類型——組 prompt、
@@ -2097,6 +2134,7 @@ def generate(req: GenerateRequest):
         editor_format=req.editor_format,
         hole_side=req.hole_side,
         visual_creativity=req.visual_creativity,
+        seed=seed,
     )
 
     # 上游（OpenRouter 多 provider 輪替）偶發 502、輸出截斷或不合 schema 的回傳是常態，
@@ -2240,6 +2278,7 @@ def generate(req: GenerateRequest):
                     data.get("portrait_subjects_en"),
                     data.get("portrait_subjects"),
                 ),
+                seed=seed,
             )
             # 網頁版走這個端點後自己在前端組生圖 prompt，後端看不到最終 prompt，
             # 因此這裡只記到消化為止——有輸入與消化結果，事後仍可重跑重現。
@@ -2258,6 +2297,7 @@ def generate(req: GenerateRequest):
                     type_label=req.type_label,
                     role=req.role,
                     density=req.density,
+                    seed=seed,
                 )
                 # 存給稍後的生圖請求取用：那支端點只收到 prompt，拿不到新聞原文，
                 # 稽核歸檔要靠這裡記住的內容才補得齊（見 _archive_generation）。
@@ -3225,6 +3265,8 @@ class NewsImageGenerateRequest(BaseModel):
     # 挖空側（2026-09-08 WP1），語意同 GenerateRequest.hole_side：只有合併後的
     # editor_format="broadcast" 吃得到，舊別名 broadcast_left／right 一律用自己那側。
     hole_side: Literal["left", "right"] = "left"
+    # 變化池的 seed（F0／D1），語意同 GenerateRequest.seed。LINE 端不傳。
+    seed: int | None = Field(default=None, ge=0, lt=SEED_MAX)
 
 
 class NewsImageGenerateResponse(BaseModel):
@@ -3239,6 +3281,8 @@ class NewsImageGenerateResponse(BaseModel):
     # ImageGenerateResponse.source_image_base64（成品拿去顯示，這格拿去改圖）
     source_image_base64: str = ""
     source_mime_type: str = ""
+    # 這次實際採用的 seed（F0），語意同 GenerateResponse.seed。
+    seed: int = 0
 
 
 def _extract_title(variable: str) -> str:
@@ -3848,6 +3892,9 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 editor_format=req.editor_format,
                 hole_side=req.hole_side,
                 visual_creativity=req.visual_creativity,
+                # F0：這支端點自己重組一份 GenerateRequest，漏掉哪個欄位都不會報錯，
+                # 只會安靜地讓網頁版有、LINE／整合端沒有。
+                seed=req.seed,
             )
         )
         digest, portrait_photos = resolve_digest_portraits(digest, req, provider)
@@ -3935,6 +3982,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             portrait_photo_source="、".join(
                 photo.source_page for photo in reference_photos
             ),
+            seed=digest.seed,
         )
         # LINE 版圖檔已由 line_bot.py 存進 static/generated/，這裡只補網頁版的缺口
         if req.source != "line":
@@ -3956,6 +4004,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 provider=provider,
                 image_model=image.model,
                 portrait_subject="、".join(digest.portrait_subjects),
+                seed=digest.seed,
             )
         return NewsImageGenerateResponse(
             image_data_base64=image.image_data_base64,
@@ -3965,6 +4014,8 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             request_id=request_id,
             source_image_base64=image.source_image_base64,
             source_mime_type=image.source_mime_type,
+            # 回報實際用的那顆（沒帶 seed 時是消化階段現抽的）
+            seed=digest.seed,
         )
     finally:
         _inside_pipeline.reset(token)
@@ -4096,6 +4147,9 @@ class TenCoverRequest(BaseModel):
     # 光看 bytes 分不出來；前端帶回來才能在版面變了（改了第二標題）時明講 400，而不是
     # 默默把雙切標題壓在一張整圖上。空字串＝舊呼叫端沒帶，不檢查。
     background_layout: str = ""
+    # 變化池的 seed（F0／D1）。None＝後端現抽一顆並在回應裡回報；帶了就照那顆抽，
+    # 同一顆 seed ＝同一種長相。取代原本 seed=None 每次隨機、重現不出來的行為。
+    seed: int | None = Field(default=None, ge=0, lt=SEED_MAX)
 
 
 # 版型名稱：跟前台下拉選單（app.js 的 EDITOR_FORMATS.label）用同一組字，
@@ -4125,6 +4179,8 @@ class TenCoverResponse(ImageGenerateResponse):
     background_image_base64: str = ""
     background_mime_type: str = ""
     background_is_ai: bool = False
+    # 這次實際採用的 seed（F0）。前端拿它當「重新生成」的遞增起點。
+    seed: int = 0
 
 
 def ten_cover_asis_images(req: "TenCoverRequest") -> list[bytes]:
@@ -4589,6 +4645,10 @@ def _cover_ai(
     # 4 級 3 件），抽哪幾件由程式隨機抽，所以同一則新聞重生會換一組。標題傳進去是為了
     # 「N種／N大」時第一件固定用數量呼應的無字圖示列。
     level = req.creativity_level()
+    # F0：整張圖的變化全部掛在同一顆 seed 上。以前這兩支都拿 seed=None，各自
+    # 開一顆 random.Random(None)，所以「這一張好」永遠撈不回來。
+    # （style_clause 那段沒有抽籤，招式已搬進 design_brief，所以不必帶 seed。）
+    seed = req.seed
     style_clause = editor_formats.cover_ai_title_style_clause(level)
     # 2026-09-11 第二輪：數字全部搬到 CANVAS 正後方那塊 DESIGN BRIEF。第一輪把整份條文
     # 放在 TYPOGRAPHY 段尾，實拍四級長得一模一樣——L4 的 prompt 14K 字元，條文坐在
@@ -4597,7 +4657,7 @@ def _cover_ai(
     # visuals=（2026-09-11 第十批）：畫面描述傳進去只為了讓招式段判斷有沒有旗子可用
     # （見 editor_formats.cover_accessories）——不影響其餘措辭。
     design_brief = editor_formats.cover_design_brief(
-        level, titles=titles, full_width=(req.layout == "full"), visuals=visuals
+        level, titles=titles, seed=seed, full_width=(req.layout == "full"), visuals=visuals
     )
     colour_rule = editor_formats.cover_title_colour_rule(level)
     # 3 級起才把反色底字釘在行清單上（條文本身也是 3 級起才要求）。
@@ -5166,6 +5226,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         image_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
         source="editor-cover-full",
+        seed=req.seed,
         type_label=f"{COVER_TYPE_LABEL_TEN}（滿版）",
         news_text=req.title_left,
         variable=req.title_left,
@@ -5192,6 +5253,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         left_is_ai=is_ai,
         right_is_ai=False,
         mode=req.mode,
+        seed=req.seed,
     )
 
 
@@ -5207,6 +5269,10 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
             detail=f"未知的標籤：{req.badge}（可用：{list(compose.COVER_BADGES)}）",
         )
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
+    # F0：seed 在入口定一次，滿版／雙切／只改文字每條路徑共用同一顆，回應才報得出
+    # 實際採用的值。沒帶就現抽——舊呼叫端（LINE 等）因此也拿得到可回查的 seed。
+    if req.seed is None:
+        req = req.model_copy(update={"seed": next_generation_seed()})
     # 版面在入口就正規化成 split／full 一次（2026-09-08 WP1）：下游那一票
     # `req.layout == "full"` 的判斷因此完全不用動，也不會有人再看到 None。
     req = req.model_copy(
@@ -5325,6 +5391,7 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         image_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
         source="editor-cover",
+        seed=req.seed,
         type_label=f"{COVER_TYPE_LABEL_TEN}（雙切）",
         news_text=f"{req.title_left} ｜ {req.title_right}",
         variable=f"{req.title_left}\n{req.title_right}",
@@ -5350,6 +5417,7 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         left_is_ai=panel_is_ai[0],
         right_is_ai=panel_is_ai[1],
         mode=req.mode,
+        seed=req.seed,
     )
 
 
@@ -5434,6 +5502,10 @@ class YtCoverRequest(BaseModel):
     background_mime_type: str = "image/png"
     # 那張底圖是不是 AI 生的——決定要不要疊「AI示意圖」。前端原樣帶回上一次的回應值。
     background_is_ai: bool = False
+    # 變化池的 seed（F0／D1）。None＝後端現抽一顆並在回應裡回報。取代原本
+    # seed=f"{title}|{date}" 的寫法——那種 seed 只要標題與日期沒變就永遠同一種長相，
+    # 使用者按幾次「重新生成」都拿到同一張。
+    seed: int | None = Field(default=None, ge=0, lt=SEED_MAX)
 
     def slot_refs(self, side: int) -> list[UserReferenceImage]:
         """第 side 格（0＝第一則／單則、1＝第二則）的附圖清單。"""
@@ -5473,6 +5545,8 @@ class YtCoverResponse(ImageGenerateResponse):
     title_mode: str = "ai"
     # 整點雙則（2026-09-08 WP2）：前端據此顯示版面與對應的下載短名
     dual: bool = False
+    # 這次實際採用的 seed（F0）。前端拿它當「重新生成」的遞增起點。
+    seed: int = 0
 
 
 def derive_yt_cover_plan(
@@ -5772,7 +5846,7 @@ def _yt_cover_full_image(
             # 同一段 FIXED。差別只有靠左／置中，以及日期牌——只有整點把牌交給模型，
             # news 的日期由程式貼在左上角，hot 根本沒有日期。
             design_brief=editor_formats.yt_design_brief(
-                req.creativity, lines=lines, seed=f"{req.title}|{date_text}",
+                req.creativity, lines=lines, seed=req.seed,
                 layout=req.layout,
                 # 底帶開著時，整幅底帶與「每行各自一塊底板」是兩個打架的指示——
                 # brief 要知道，才能明講兩者關係而不是讓模型自己挑一個遵守。
@@ -5972,6 +6046,10 @@ def yt_dual_background(
     dependencies=[Depends(verify_internal_api_key)],
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
+    # F0：seed 在入口定一次。取代舊的 seed=f"{title}|{date}"——那種 seed 綁在內容上，
+    # 標題與日期沒改就永遠同一種長相，使用者按「重新生成」拿到的是同一張。
+    if req.seed is None:
+        req = req.model_copy(update={"seed": next_generation_seed()})
     live24 = req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
     caps = editor_formats.capability_for(editor_formats.yt_format_key(req.layout))   # 版型能力矩陣
     # 標題模式定案（2026-09-14，理由見 editor_formats.title_mode_for_creativity）：明送照辦、省略才取預設
@@ -6207,6 +6285,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         image_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
         source=log_source,
+        seed=req.seed,
         type_label=COVER_TYPE_LABEL_YT.get(req.layout, "YT封面")
                    + ("（雙則）" if dual else ""),
         news_text=log_title,
@@ -6229,6 +6308,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         background_is_ai=is_ai,
         title_mode=req.title_mode,
         dual=dual,
+        seed=req.seed,
     )
 
 

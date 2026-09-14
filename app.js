@@ -398,8 +398,30 @@ let state = {
         sourceCorner: 'tl',       // 來源句角落（2026-09-09 起四角可選，取代 sourceFollowLogo）
         live: true,               // LIVE 章可取消
     },
+    // ---- 變化池 seed（F0／D1，2026-09-14 使用者裁決）----
+    // 三條線各存一顆：CG（第一頁一鍵生成）、十點不一樣、YT 封面。null＝還沒生過，
+    // 後端會現抽一顆並在回應裡回報，前端存下來。
+    //
+    // 「重新生成」才遞增（bumpSeed）：普通重貼、只改文字、追加修改後重貼固定元素
+    // 一律**原樣送回目前這顆**——那幾條路徑要的是同一種長相，換 seed 等於偷偷換版。
+    // 使用者回報「這一組好」時，後台紀錄裡的 seed 就是撈回它的鑰匙。
+    cgSeed: null,
+    coverSeed: null,
+    ytSeed: null,
     refineStack: []
 };
+
+/* 重新生成：把這條線的 seed 往前推一格。沒有前一顆就回 null，讓後端現抽。
+   刻意不在前端亂數：後端抽、回應回報、前端只負責遞增與回送，這樣「同一顆 seed
+   抽出同一種長相」只有一份實作，前後端不會各抽各的。 */
+function bumpSeed(current) {
+    return (typeof current === 'number') ? (current + 1) % 2147483648 : null;
+}
+
+/* 後端回報實際採用的 seed，存回對應那條線（line＝'cgSeed'／'coverSeed'／'ytSeed'）。 */
+function rememberSeed(line, data) {
+    if (data && typeof data.seed === 'number') state[line] = data.seed;
+}
 
 function curType() { return CHART_TYPES[state.chartType]; }
 
@@ -2130,6 +2152,9 @@ function _apiHeaders() {
 const DIGEST_FETCH_TIMEOUT_MS = 290_000;
 
 async function digestNewsText(input) {
+    // CG 線沒有獨立的「重新生成」鈕——再按一次一鍵生成就是重生，所以遞增放這裡。
+    // 第一次是 null，遞增後仍是 null，由後端現抽並在回應裡回報（見 rememberSeed）。
+    state.cgSeed = bumpSeed(state.cgSeed);
     const abort = new AbortController();
     const fuse = setTimeout(() => abort.abort(), DIGEST_FETCH_TIMEOUT_MS);
     let response;
@@ -2157,6 +2182,7 @@ async function _digestFetch(input, signal) {
             role: state.currentRole,
             density: state.digestDensity,
             visual_creativity: state.cgCreativity,
+            seed: state.cgSeed,
             stamp: state.stamp,
             tone: state.tone,
             editor_format: state.editorFormat,
@@ -2186,6 +2212,7 @@ function noteChartTypeOverride(data) {
 }
 
 function applyDigestToForm(data) {
+    rememberSeed('cgSeed', data);
     state.mapPoints = Array.isArray(data.map_points) ? data.map_points : [];
     // 地圖類：查不到座標的地名要講出來（2026-09-08）。不足 2 點時後端不做真實底圖，
     // 以前畫面完全沒提示，使用者重打六次都拿到一樣的結果。
@@ -2235,6 +2262,8 @@ function tenCoverFields() {
         side_labels: val('coverSideLabels'),
         info_chips: val('coverInfoChips'),
         provider: effectiveImageProvider(),
+        // 重貼固定元素／只改文字：原樣送回目前這顆，長相不准變（遞增只在重生那條路徑）
+        seed: state.coverSeed,
     };
 }
 
@@ -2319,6 +2348,8 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
             showToast('用現有底圖重壓文字…');
             data = await recomposeTenCoverText();
         } else {
+            // 真正重生這一條路徑才遞增 seed（只改文字／重貼固定元素走上面那半邊，不動）
+            state.coverSeed = bumpSeed(state.coverSeed);
             const slots = coverAsisSlots();
             if (fullLayout) slots.right = false;   // 滿版只有一個附圖位
             const slotCount = (slots.left ? 1 : 0) + (slots.right ? 1 : 0);
@@ -2355,6 +2386,7 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
                     date_text: val('coverDate'),
                     badge: document.getElementById('coverBadge')?.value || 'on_air',
                     title_creativity: state.coverTitleCreativity,
+                    seed: state.coverSeed,
                     mode: composite ? 'composite' : 'ai',
                     provider: effectiveImageProvider(),
                     // 十點把通用附圖區整個收起來（hides.refUpload），照片一律走上面那兩顆
@@ -2368,6 +2400,7 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
             if (!res.ok) throw new Error(_apiError(data, res.status));
         }
 
+        rememberSeed('coverSeed', data);
         const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
         document.getElementById('oneClickImage').src = imageUrl;
         const download = document.getElementById('oneClickDownload');
@@ -2516,6 +2549,8 @@ function ytCoverFields() {
         slot_right: ytUsesAsisSlots() && ytLayoutNow() === 'dual' ? slotPayload(state.ytAsis.right) : [],
         // 指令欄（2026-09-08 WP1）：餵給底圖推導當畫面提示
         instruction: coverInstructionForApi(),
+        // 只改文字／重貼固定元素也走這支，所以這裡一律送目前這顆；遞增只在重生那條路徑
+        seed: state.ytSeed,
     };
 }
 
@@ -2609,6 +2644,8 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
                 headers: _apiHeaders(),
                 body: JSON.stringify({
                     ...fields,
+                    // fields 帶的是目前這顆；真正重生要遞增，所以在這裡覆蓋掉
+                    seed: (state.ytSeed = bumpSeed(state.ytSeed)),
                     provider: effectiveImageProvider(),
                     image_size: state.imageSize,
                     // 整點把共用附圖區收起來（hides.refUpload），那裡殘留的圖不能偷偷送出去
@@ -2618,6 +2655,7 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
             data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(_apiError(data, res.status));
         }
+        rememberSeed('ytSeed', data);
         showYtCoverResult(data, fields);
         completed = true;
     } catch (err) {
