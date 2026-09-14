@@ -1081,17 +1081,6 @@ LIVE24_BG_LABELS = {
     LIVE24_BG_BLEND: "雙切漸層",
     LIVE24_BG_INSET: "雙切疊圖",
 }
-# live24 的底圖模式（2026-09-13 使用者裁決：「前台加一題底圖模式」）。
-# 為什麼要多一個欄位：漸層與疊圖都要「兩格都有圖」，共用同一個觸發訊號分不開。
-LIVE24_BG_FULL = "full"        # 滿版：一張鋪滿
-LIVE24_BG_BLEND = "blend"      # 雙切漸層：兩張羽化拼接（預設，維持接線當天的行為）
-LIVE24_BG_INSET = "inset"      # 雙切疊圖：大底圖＋右側白框斜照片
-LIVE24_BG_MODES = (LIVE24_BG_FULL, LIVE24_BG_BLEND, LIVE24_BG_INSET)
-LIVE24_BG_LABELS = {
-    LIVE24_BG_FULL: "滿版",
-    LIVE24_BG_BLEND: "雙切漸層",
-    LIVE24_BG_INSET: "雙切疊圖",
-}
 YT_COVER_LAYOUTS = (
     YT_COVER_LAYOUT_NEWS, YT_COVER_LAYOUT_HOURLY, YT_COVER_LAYOUT_HOT,
     YT_COVER_LAYOUT_LIVE24,

@@ -273,6 +273,11 @@ hourly 另收 `time_text`。前端 `EDITOR_FORMATS[*].ytLayout` 帶到 `ytCoverF
 - 底圖拼完就是一張普通 16:9 底圖，所以**追加修改與「只改文字」跟單則走同一條路**，
   回應不需要任何額外欄位（只多一個 `dual` 讓前端顯示版面與下載短名）。
 
+### 24H LIVE 滿版（`live24_bg=full`，2026-09-14 D7 訂正）
+
+選了滿版時前端把右格藏起來、內容併進左格；後端把攤平後的多張原圖自動切格（2／3／4）。
+不是「選了 full 就強制單張鋪滿」。雙切（`blend`／`inset`）仍要兩格都有圖才走左右拼接。
+
 ### 消化（`/api/editor/cover-titles` target `yt_hourly`）
 
 與十點同款「先判 topics 1／2」。1 個主題→`title` 兩段（半形空格，現行規則）、`title_second`

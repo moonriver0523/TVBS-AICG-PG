@@ -323,7 +323,8 @@ ATTACHED IMAGE — PLACE AS-IS, DO NOT REDRAW (CRITICAL)
 - One of the attached images must be placed into the graphic exactly as supplied: unchanged pixels, colours, proportions and content. Do NOT re-draw, re-style, repaint, colour-grade, stylise or reinterpret it in the graphic's own illustration style.
 - Do not crop, stretch, rotate, mirror or otherwise distort the attached image; if it must be resized to fit the layout, scale it uniformly (preserve aspect ratio) only.
 - This attached image is exempt from the "re-draw in the graphic's own visual style" instruction that applies to other attached reference images; place it as its own distinct element in the composition (e.g. an inset panel or designated area), not blended or repainted into the surrounding artwork.
-- Any brand marks, logos, readable text or real human faces already present in this attached image may remain exactly as supplied — the BRANDS rule and the face-rendering rules above govern what you generate elsewhere in the graphic, not this attached image's own untouched content."""
+- Any brand marks, logos, readable text or real human faces already present in this attached image may remain exactly as supplied — the BRANDS rule and the face-rendering rules above govern what you generate elsewhere in the graphic, not this attached image's own untouched content.
+- If an attached image already contains on-air chrome (a date stamp, LIVE or 24H LIVE badge, channel logo, or a 示意圖 / AI示意圖 label), do not draw another copy of those marks."""
 
 # AI改圖（2026-09-13 使用者裁決）：介於 asis 與 scene 之間的第三種用途。
 # * asis  ＝原圖原封不動貼進去，完全不經過生圖模型
@@ -338,7 +339,8 @@ ATTACHED IMAGE — REDRAW THIS SAME PICTURE (CRITICAL)
 - This is NOT a loose style reference. Someone who saw the attached image must recognise your output as the same moment redrawn, not as a different picture of a similar topic. Except where an editor's instruction below asks for a change, do not substitute another scene, another angle, another action or another setting for it.
 - Do redraw it: repaint, restyle and colour-grade it into this graphic's illustration style, and extend or crop the edges as the layout needs. Apart from whatever an editor's instruction below asks you to change, the treatment changes and the content does not.
 - Do not copy readable text or brand marks visible inside the attached image, except a brand the source material names — that one may be reproduced on its own objects; the BRANDS rule above still applies in full.
-- People in the attached image stay who they are: reproduce every face in it as it appears, recognisable, in the redrawn style. The NAMED REAL PERSON rules below govern only people who are NOT in the attached image — they do not restrict, blur, hide or replace a face that the editor supplied here."""
+- People in the attached image stay who they are: reproduce every face in it as it appears, recognisable, in the redrawn style. The NAMED REAL PERSON rules below govern only people who are NOT in the attached image — they do not restrict, blur, hide or replace a face that the editor supplied here.
+- If an attached image already contains on-air chrome (a date stamp, LIVE or 24H LIVE badge, channel logo, or a 示意圖 / AI示意圖 label), do not draw another copy of those marks."""
 
 # 同一格放 2 張以上 AI改圖（2026-09-14 使用者：「使用者就是希望單槽多圖 AI 融合啊」）。
 # 上面單張版開頭是「One of the attached images is the picture…」——多張一起送時這句
@@ -352,7 +354,32 @@ ATTACHED IMAGES — FUSE ALL {count} OF THEM INTO ONE PICTURE (CRITICAL)
 - Give each image its own clear share of the frame — side by side, foreground and background, or a natural blend — keeping each image's subject, framing and camera angle recognisable. Do not pick one image and discard the rest; a picture that shows only some of the {count} images is wrong.
 - Do redraw them: repaint, restyle and colour-grade them into this graphic's illustration style, and extend or crop the edges as the layout needs. Apart from whatever an editor's instruction below asks you to change, the treatment changes and the content does not.
 - Do not copy readable text or brand marks visible inside the attached images, except a brand the source material names — that one may be reproduced on its own objects; the BRANDS rule above still applies in full.
-- People in the attached images stay who they are: reproduce every face in every attached image as it appears, recognisable, in the redrawn style. The NAMED REAL PERSON rules below govern only people who are NOT in the attached images — they do not restrict, blur, hide or replace a face that the editor supplied here."""
+- People in the attached images stay who they are: reproduce every face in every attached image as it appears, recognisable, in the redrawn style. The NAMED REAL PERSON rules below govern only people who are NOT in the attached images — they do not restrict, blur, hide or replace a face that the editor supplied here.
+- If an attached image already contains on-air chrome (a date stamp, LIVE or 24H LIVE badge, channel logo, or a 示意圖 / AI示意圖 label), do not draw another copy of those marks."""
+
+# 同一請求 ≥2 張原圖放置（2026-09-14 B26＋D9）：單張版開頭「One of the attached images」
+# 等於授權模型挑一張放。多張版把張數寫死、依上傳順序由左到右，並避開編號陷阱——
+# `_native_reference_files` 會把肖像／地圖底圖排在使用者上傳之前，「attached image 1」
+# 不是使用者的第一張。只在 asis 張數 ≥2 時取代單張版注入。
+USER_REFERENCE_ASIS_MULTI_RULES_TEMPLATE = """==================================================
+ATTACHED IMAGES — PLACE ALL {count} AS-IS, DO NOT REDRAW (CRITICAL)
+==================================================
+- The user supplied {count} images that must each be placed into the graphic exactly as supplied: unchanged pixels, colours, proportions and content. Do NOT re-draw, re-style, repaint, colour-grade, stylise or reinterpret them in the graphic's own illustration style. Every one of the {count} images must be recognisably present — none may be dropped, merged away or reduced to a vague background hint.
+- Place them in the user's upload order: the first user-supplied as-is image occupies the leftmost / first reading position; subsequent images follow in that same order; the last occupies the rightmost / last reading position. Do not reorder or swap them.
+- These {count} images are the USER-SUPPLIED uploads. Auto-attached portrait photographs or map basemaps may precede them in the whole request's file list — do NOT number them by the whole request's attached-file index ("attached image 1" is not necessarily the user's first upload).
+- Do not crop, stretch, rotate, mirror or otherwise distort the attached images; if they must be resized to fit the layout, scale them uniformly (preserve aspect ratio) only.
+- These attached images are exempt from the "re-draw in the graphic's own visual style" instruction that applies to other attached reference images; place each as its own distinct element in the composition (e.g. an inset panel or designated area), not blended or repainted into the surrounding artwork.
+- Any brand marks, logos, readable text or real human faces already present in the attached images may remain exactly as supplied — the BRANDS rule and the face-rendering rules above govern what you generate elsewhere in the graphic, not these attached images' own untouched content.
+- If an attached image already contains on-air chrome (a date stamp, LIVE or 24H LIVE badge, channel logo, or a 示意圖 / AI示意圖 label), do not draw another copy of those marks."""
+
+# YT 雙格生圖（2026-09-14 D4）：左右身分寫進 prompt。編號陷阱同上——只數使用者上傳。
+USER_REFERENCE_YT_SLOT_PLACEMENT_TEMPLATE = """==================================================
+USER-SUPPLIED SLOT PLACEMENT (CRITICAL)
+==================================================
+- These instructions refer to the USER-SUPPLIED uploads only. Auto-attached portrait photographs or map basemaps may precede them in the whole request's file list — do NOT number them by the whole request's attached-file index ("attached image 1" is not necessarily the user's first upload).
+- The first {left_count} user-supplied image(s) belong to the LEFT half (first title / first story). Place them on the LEFT.
+- The next {right_count} user-supplied image(s) belong to the RIGHT half (second title / second story). Place them on the RIGHT.
+- Do not swap the two sides."""
 
 # 使用者在指令欄寫的需求（2026-09-13 使用者裁決：「AI改圖 如果使用者在給 AI 指令欄
 # 寫需求 會吃到嗎? 應該要吃到」，權限＝**可以改內容**）。

@@ -209,6 +209,27 @@ class AiEditPromptTests(unittest.TestCase):
             out = main.apply_user_references_to_image_request(req)
         self.assertIn(news_prompt.USER_REFERENCE_NO_DISCLAIMER_RULES, out.prompt)
 
+    def test_named_portrait_subjects_keep_the_ai_disclaimer_label(self):
+        """B28：畫真人＋掛真名時，有附圖也不能洗掉 AI示意圖。"""
+        req = main.ImageGenerateRequest(
+            prompt="BASE",
+            reference_images=[main.UserReferenceImage(data_url=_data_url(), purpose="scene")],
+            portrait_subjects=["吳軒彤"],
+        )
+        with patch.object(main, "supports_multiple_reference_images", return_value=True):
+            out = main.apply_user_references_to_image_request(req)
+        self.assertNotIn(news_prompt.USER_REFERENCE_NO_DISCLAIMER_RULES, out.prompt)
+
+    def test_blank_portrait_subjects_still_drop_the_label(self):
+        req = main.ImageGenerateRequest(
+            prompt="BASE",
+            reference_images=[main.UserReferenceImage(data_url=_data_url(), purpose="scene")],
+            portrait_subjects=["  ", ""],
+        )
+        with patch.object(main, "supports_multiple_reference_images", return_value=True):
+            out = main.apply_user_references_to_image_request(req)
+        self.assertIn(news_prompt.USER_REFERENCE_NO_DISCLAIMER_RULES, out.prompt)
+
     def test_one_ai_edit_among_others_is_enough_to_keep_the_label(self):
         """一張成品只有一個標籤：有任何一塊是 AI 重繪的就得標。"""
         req = main.ImageGenerateRequest(

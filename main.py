@@ -50,10 +50,12 @@ from news_prompt import (
     PORTRAIT_MODES,
     PROMPT_VERSION,
     USER_REFERENCE_ASIS_DIGEST_RULES,
+    USER_REFERENCE_ASIS_MULTI_RULES_TEMPLATE,
     USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE,
     USER_REFERENCE_AIEDIT_INSTRUCTION_TEMPLATE,
     USER_REFERENCE_MODES,
     USER_REFERENCE_NO_DISCLAIMER_RULES,
+    USER_REFERENCE_YT_SLOT_PLACEMENT_TEMPLATE,
     build_prompt,
     build_refine_prompt,
     compose_variable,
@@ -3610,12 +3612,16 @@ def apply_user_references_to_image_request(
     prompt = req.prompt
     purposes = dict.fromkeys(ref.purpose for ref in req.reference_images)
     aiedit_count = sum(1 for ref in req.reference_images if ref.purpose == "aiedit")
+    asis_count = sum(1 for ref in req.reference_images if ref.purpose == "asis")
     for purpose in purposes:
         block = USER_REFERENCE_MODES.get(purpose, "")
         if purpose == "aiedit" and aiedit_count >= 2:
             # 2026-09-14：多張 AI改圖 走融合版——單張版的「One of the attached images」
             # 會讓模型只挑一張畫（第四輪 A2：4 張參考只剩 1 張）
             block = USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE.format(count=aiedit_count)
+        elif purpose == "asis" and asis_count >= 2:
+            # 2026-09-14 B26＋D9：多張原圖放置同樣不能走單數「One of」
+            block = USER_REFERENCE_ASIS_MULTI_RULES_TEMPLATE.format(count=asis_count)
         if block and block not in prompt:
             prompt = f"{prompt.rstrip()}\n\n{block}"
     # AI改圖 專屬：使用者指令欄要真的送到生圖模型手上（2026-09-13 使用者裁決）。
@@ -3638,6 +3644,10 @@ def apply_user_references_to_image_request(
     # 親自提供的真實素材——那個 override 的語意不成立，「AI示意圖」標籤照舊要留。
     # 混了別種用途也一樣留：同一張成品只有一個標籤，有任何一塊是 AI 重繪就得標。
     if any(ref.purpose == "aiedit" for ref in req.reference_images):
+        return req.model_copy(update={"prompt": prompt}) if prompt != req.prompt else req
+    # 例外三（2026-09-14 B28）：畫真人並掛真實姓名時，「有上傳就不標示意圖」
+    # 的 override 不成立——D13 的前提就是畫面上還有 AI示意圖標籤。
+    if any(str(name).strip() for name in (req.portrait_subjects or [])):
         return req.model_copy(update={"prompt": prompt}) if prompt != req.prompt else req
     if USER_REFERENCE_NO_DISCLAIMER_RULES not in prompt:
         prompt = f"{prompt.rstrip()}\n\n{USER_REFERENCE_NO_DISCLAIMER_RULES}"
@@ -5557,6 +5567,54 @@ def resolve_yt_cover_plan(
     return YtCoverPlan(lines, visual, subjects, english, photos, dropped)
 
 
+def _yt_cover_asis_list(req: "YtCoverRequest") -> list[UserReferenceImage]:
+    """原圖放置清單：有附圖位就讀格子，否則讀共用區。"""
+    if req.uses_asis_slots():
+        return [ref for ref in (req.slot_refs(0) + req.slot_refs(1)) if ref.purpose == "asis"]
+    return [ref for ref in req.reference_images if ref.purpose == "asis"]
+
+
+def _yt_cover_gen_refs(req: "YtCoverRequest") -> list[UserReferenceImage]:
+    """生底圖時要附的參考圖（原圖放置以外）。有附圖位就把兩格的非 asis 一併帶上。"""
+    if req.uses_asis_slots():
+        return (
+            [ref for ref in req.reference_images if ref.purpose != "asis"]
+            + slot_generation_refs(req.slot_refs(0))
+            + slot_generation_refs(req.slot_refs(1))
+        )
+    return [ref for ref in req.reference_images if ref.purpose != "asis"]
+
+
+def _yt_cover_all_refs(req: "YtCoverRequest") -> list[UserReferenceImage]:
+    """AI 整張版：共用區非 asis ＋兩格全部附圖。有底圖（base）時不走這裡。"""
+    if req.uses_asis_slots():
+        return (
+            [ref for ref in req.reference_images if ref.purpose != "asis"]
+            + list(req.slot_refs(0))
+            + list(req.slot_refs(1))
+        )
+    return list(req.reference_images)
+
+
+def _yt_cover_apply_slot_placement(
+    req: "YtCoverRequest", image_req: ImageGenerateRequest
+) -> ImageGenerateRequest:
+    """兩格都有圖時，把左右身分寫進 prompt（D4）。單格或攤平後格子已空＝不注入。"""
+    left = req.slot_refs(0)
+    right = req.slot_refs(1)
+    if not left or not right:
+        return image_req
+    block = USER_REFERENCE_YT_SLOT_PLACEMENT_TEMPLATE.format(
+        left_count=len(left),
+        right_count=len(right),
+    )
+    if block in image_req.prompt:
+        return image_req
+    return image_req.model_copy(
+        update={"prompt": f"{image_req.prompt.rstrip()}\n\n{block}"}
+    )
+
+
 def _yt_cover_background(
     req: "YtCoverRequest", visual: str, subjects: list[str], english: list[str], *, excluded: list[str] | None = None
 ) -> tuple[bytes, str, bool, str]:
@@ -5568,7 +5626,7 @@ def _yt_cover_background(
             req.background_is_ai,
             "yt-cover:recomposite",
         )
-    asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
+    asis = _yt_cover_asis_list(req)
     if asis:
         raws = []
         for ref in asis[: compose.YT_SPLIT_MAX_PANELS]:
@@ -5596,7 +5654,7 @@ def _yt_cover_background(
         aspect_ratio="16:9",
         image_size=req.image_size,
         safe_frame=False,
-        reference_images=[ref for ref in req.reference_images if ref.purpose != "asis"],
+        reference_images=_yt_cover_gen_refs(req),
         portrait_subjects=subjects,
         portrait_subjects_en=english,
         editor_instruction=req.instruction,
@@ -5615,6 +5673,7 @@ def _yt_cover_background(
         flush=True,
     )
     image_req = apply_user_references_to_image_request(image_req)
+    image_req = _yt_cover_apply_slot_placement(req, image_req)
     image_req = image_req.model_copy(
         update={"prompt": f"{image_req.prompt.rstrip()}\n\n{editor_formats.YT_COVER_TEXT_FREE_OVERRIDE}"}
     )
@@ -5729,7 +5788,7 @@ def _yt_cover_full_image(
         safe_frame=False,
         reference_images=(
             [UserReferenceImage(data_url=_base_data_url(base), purpose="aiedit")]
-            if base is not None else list(req.reference_images)
+            if base is not None else _yt_cover_all_refs(req)
         ),
         portrait_subjects=[] if base is not None else subjects,
         portrait_subjects_en=[] if base is not None else english,
@@ -5750,6 +5809,8 @@ def _yt_cover_full_image(
         flush=True,
     )
     image_req = apply_user_references_to_image_request(image_req)
+    if base is None:
+        image_req = _yt_cover_apply_slot_placement(req, image_req)
     result = generate_image_raw(image_req)
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
     return base64.b64decode(result.image_data_base64), result.mime_type, result.model
