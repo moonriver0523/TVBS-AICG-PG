@@ -166,6 +166,31 @@ class NativeGptSizeTests(unittest.TestCase):
             with self.assertRaises(HTTPException):
                 main.generate_gpt_image(ImageGenerateRequest(prompt="p", aspect_ratio="21:9"))
         self.assertEqual(captured.get("size"), "1680x720")
+        self.assertEqual(captured.get("timeout"), main.NATIVE_IMAGE_TIMEOUT_SECONDS)
+
+    def test_native_edit_also_carries_the_openrouter_aligned_timeout(self):
+        captured = {}
+
+        class FakeImages:
+            def edit(self, **kwargs):
+                captured.update(kwargs)
+                raise HTTPException(status_code=599, detail="stop here")
+
+        class FakeClient:
+            images = FakeImages()
+
+        req = ImageGenerateRequest(
+            prompt="p",
+            aspect_ratio="16:9",
+            reference_image_data_url="data:image/png;base64,AAAA",
+        )
+        with patch.object(main, "openai_client", FakeClient()), patch.object(
+            main, "_native_reference_files", return_value=[("r.png", io.BytesIO(b"x"), "image/png")]
+        ):
+            with self.assertRaises(HTTPException):
+                main.generate_gpt_image(req)
+        self.assertEqual(captured.get("timeout"), 180)
+        self.assertEqual(main.NATIVE_IMAGE_TIMEOUT_SECONDS, 180)
 
     def test_unmappable_ratio_fails_loudly(self):
         with self.assertRaises(HTTPException) as ctx:

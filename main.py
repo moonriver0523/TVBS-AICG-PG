@@ -78,12 +78,18 @@ DIGEST_BACKEND = os.getenv(
     "DIGEST_BACKEND", "openrouter" if _openrouter_key else "native"
 ).strip()
 
+# SDK 預設 max_retries=2。消化外層 DIGEST_ATTEMPTS=5 已經在重試，SDK 再重試會讓
+# payload timeout=90 實際變成 270 秒，第一次 attempt 就能撞上 Cloud Run 300 秒硬砍
+# （B31）。暫時性網路錯誤改由外層迴圈吸收，不是關掉重試。三個後端同一把尺子。
+OPENAI_MAX_RETRIES = 0
+
 if DIGEST_BACKEND == "gemini":
     if not _gemini_key:
         raise RuntimeError("DIGEST_BACKEND=gemini 但未設定 GEMINI_API_KEY")
     openai_client = OpenAI(
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         api_key=_gemini_key,
+        max_retries=OPENAI_MAX_RETRIES,
     )
     DEFAULT_DIGEST_MODEL = os.getenv("GEMINI_DIGEST_MODEL", "gemini-3.6-flash")
     DEFAULT_TITLE_BREAK_MODEL = DEFAULT_DIGEST_MODEL   # flash 本來就快
@@ -94,14 +100,16 @@ if DIGEST_BACKEND == "gemini":
 # 環境變數，光在 .env 註解掉沒有用，因此改成 DIGEST_BACKEND 明說時聽它的。
 elif DIGEST_BACKEND == "openrouter" and _openrouter_key:
     openai_client = OpenAI(
-        base_url="https://openrouter.ai/api/v1", api_key=_openrouter_key
+        base_url="https://openrouter.ai/api/v1",
+        api_key=_openrouter_key,
+        max_retries=OPENAI_MAX_RETRIES,
     )
     DEFAULT_DIGEST_MODEL = "anthropic/claude-sonnet-5"
     # 斷句走小模型（2026-09-14 使用者裁決）。.env 與線上都是 OpenRouter 後端，只改原生分支
     # 等於沒改。slug 已查 GET /api/v1/models（2026-09-14）確有 openai/gpt-5.4-mini。
     DEFAULT_TITLE_BREAK_MODEL = "openai/gpt-5.4-mini"
 else:
-    openai_client = OpenAI()
+    openai_client = OpenAI(max_retries=OPENAI_MAX_RETRIES)
     # 2026-09-13：原生預設從 gpt-5.6-terra 換成 gpt-5.5。terra 在使用者 key 上
     # 其實存在，但 2026-09-05 已實測會頻道洩漏（.env 註解與 test_digest_quality）；
     # 5.5 是 /v1/models 列得到且 chat.completions 打得通的，內容乾淨與否待實拍。
@@ -253,8 +261,8 @@ def digest_provider_body() -> dict:
 DIGEST_DEADLINE_SECONDS = float(os.getenv("DIGEST_DEADLINE_SECONDS", "230"))
 # 單次消化呼叫的上限（2026-09-10 線上事故）。沒有這個上限時，一通卡住的上游請求會用掉
 # SDK 預設的 600 秒——比 DIGEST_DEADLINE_SECONDS(230) 與 Cloud Run 的 300 秒都長。
-# 死線只在「兩次 attempt 之間」檢查，所以擋不住第一通就卡死的情況：使用者看到的是
-# 進度條停在 35%（消化階段的上限值）永遠不動，連錯誤訊息都沒有。
+# 2026-09-14 B31：client max_retries=0，且死線在每個 attempt（含第 0 次）起跑前檢查，
+# 所以 90 秒是整次呼叫的上限，不是「每通 HTTP」。
 # 實測正常消化 22–26 秒，90 秒給到 3.5 倍餘裕；卡住時 90 秒就換下一次 attempt。
 DIGEST_TIMEOUT_SECONDS = float(os.getenv("DIGEST_TIMEOUT_SECONDS", "90"))
 
@@ -1592,6 +1600,9 @@ def build_digest_instructions(
 # generate() 就不該再記一次半套的。用 contextvar 而不是函式參數，免得這個純內部
 # 的旗標變成 /api/generate 對外可見的欄位。
 _inside_pipeline = contextvars.ContextVar("inside_pipeline", default=False)
+# apply_photo_availability 會再呼叫一次 generate()。deadline 放 contextvar，
+# 第二次沿用同一條牆鐘，單一請求不會變成 230+230（B31）。
+_digest_deadline = contextvars.ContextVar("digest_deadline", default=None)
 
 
 # 截斷監控。三個呼叫端（generate／hybrid／cover）各有各的預算，過去只有真的炸了
@@ -2078,167 +2089,178 @@ def generate(req: GenerateRequest):
     # 輸出上限依類型與消化程度分開給，理由見 digest_token_budget。
     max_output_tokens = digest_token_budget(type_label, req.density, req.news_text)
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
-    deadline = time.monotonic() + DIGEST_DEADLINE_SECONDS
-    for attempt in range(DIGEST_ATTEMPTS):
-        # 還沒開始就已經沒時間了：與其讓 Cloud Run 在第 300 秒直接斷線（使用者看到
-        # 的是「沒有生成」，連錯誤都沒有），不如在這裡停手，回一個看得懂的訊息。
-        # 看的是「這一次跑滿也來不及」而不是「現在超過死線沒」（2026-09-10）：
-        # 每次 attempt 最久跑 DIGEST_TIMEOUT_SECONDS，在死線前一刻才起跑的那次
-        # 會整整超出一個 timeout，剛好把 Cloud Run 的 300 秒吃掉。
-        if attempt and time.monotonic() + DIGEST_TIMEOUT_SECONDS > deadline:
-            print(
-                f"[generate] 已用掉 {DIGEST_DEADLINE_SECONDS:.0f} 秒預算，"
-                f"停在第 {attempt} 次 attempt 不再重試",
-                flush=True,
-            )
-            raise HTTPException(
-                status_code=503,
-                detail="AI 服務這次太久沒有回應，請縮短新聞內容或稍後重試",
-            )
-        try:
-            response = digest_completion(
-                model=model,
-                system_prompt=system_prompt,
-                news_text=req.news_text,
-                max_output_tokens=max_output_tokens,
-                schema_name="news_cg_digest",
-                schema=digest_schema(type_label),
-                site="generate",
-            )
-        except AuthenticationError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="AI 服務金鑰無效或尚未啟用計費",
-            ) from exc
-        except RateLimitError as exc:
-            raise HTTPException(
-                status_code=429,
-                detail="AI 服務用量已達限制，請稍後再試",
-            ) from exc
-        except (APIConnectionError, APIError) as exc:
-            last_detail = (
-                "無法連線至 AI 服務，請稍後再試"
-                if isinstance(exc, APIConnectionError)
-                else "AI 服務處理失敗，請確認模型權限或稍後重試"
-            )
-            print(f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} API error: {exc}", flush=True)
-            time.sleep(1.5)
-            continue
-
-        raw_content = response.choices[0].message.content or ""
-        finish_reason = response.choices[0].finish_reason if response.choices else "?"
-        try:
-            data = parse_digest_json(raw_content)
-        except (json.JSONDecodeError, IndexError, TypeError) as exc:
-            last_detail = "AI 回傳格式無法解析"
-            print(
-                f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} parse failed "
-                f"(finish_reason={finish_reason}): {exc}\n"
-                f"[generate] raw content: {digest_excerpt(raw_content)}",
-                flush=True,
-            )
-            if req.density == "verbatim" and finish_reason == "length":
-                # 不消化的預算已經照原文長度放大過（digest_token_budget），還撞到
-                # length 就是這篇真的塞不下——重試每次都會撞同一面牆，5 次要燒掉
-                # 90 秒才讓使用者收到一句看不懂的「格式無法解析」。直接講清楚。
-                raise HTTPException(
-                    status_code=400,
-                    detail="原文太長，「不消化」要模型逐字抄完整篇才做得到；"
-                    "請改用「字少」／「字多」，或把原文縮短再試。",
+    existing_deadline = _digest_deadline.get()
+    if existing_deadline is None:
+        deadline = time.monotonic() + DIGEST_DEADLINE_SECONDS
+        deadline_token = _digest_deadline.set(deadline)
+    else:
+        deadline = existing_deadline
+        deadline_token = None
+    try:
+        for attempt in range(DIGEST_ATTEMPTS):
+            # 還沒開始就已經沒時間了：與其讓 Cloud Run 在第 300 秒直接斷線（使用者看到
+            # 的是「沒有生成」，連錯誤都沒有），不如在這裡停手，回一個看得懂的訊息。
+            # 看的是「這一次跑滿也來不及」而不是「現在超過死線沒」（2026-09-10）：
+            # 每次 attempt 最久跑 DIGEST_TIMEOUT_SECONDS，在死線前一刻才起跑的那次
+            # 會整整超出一個 timeout，剛好把 Cloud Run 的 300 秒吃掉。
+            # 2026-09-14 B31：attempt 0 也查，第二次 generate() 沿用同一條 deadline。
+            if time.monotonic() + DIGEST_TIMEOUT_SECONDS > deadline:
+                print(
+                    f"[generate] 已用掉 {DIGEST_DEADLINE_SECONDS:.0f} 秒預算，"
+                    f"停在第 {attempt + 1} 次 attempt 不再重試",
+                    flush=True,
                 )
-            time.sleep(1.5)
-            continue
+                raise HTTPException(
+                    status_code=503,
+                    detail="AI 服務這次太久沒有回應，請縮短新聞內容或稍後重試",
+                )
+            try:
+                response = digest_completion(
+                    model=model,
+                    system_prompt=system_prompt,
+                    news_text=req.news_text,
+                    max_output_tokens=max_output_tokens,
+                    schema_name="news_cg_digest",
+                    schema=digest_schema(type_label),
+                    site="generate",
+                )
+            except AuthenticationError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="AI 服務金鑰無效或尚未啟用計費",
+                ) from exc
+            except RateLimitError as exc:
+                raise HTTPException(
+                    status_code=429,
+                    detail="AI 服務用量已達限制，請稍後再試",
+                ) from exc
+            except (APIConnectionError, APIError) as exc:
+                last_detail = (
+                    "無法連線至 AI 服務，請稍後再試"
+                    if isinstance(exc, APIConnectionError)
+                    else "AI 服務處理失敗，請確認模型權限或稍後重試"
+                )
+                print(f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} API error: {exc}", flush=True)
+                time.sleep(1.5)
+                continue
 
-        # 能解析不代表能用：截斷與字元污染都要跟解析失敗一樣重試，不能送去生圖
-        problem = digest_quality_problem(data, finish_reason)
-        # 不消化的逐字比對排在通用檢查之後：兩者都過不了時，先報通用的那個。
-        # 最後一次刻意不擋——擋了就是整條 502，而這時手上的結果通常只是頭尾多了
-        # 雜訊，仍比沒有圖好；改成印警告讓回查時看得到。
-        if not problem and req.density == "verbatim" and not req.user_instruction.strip():
-            verbatim_problem = verbatim_fidelity_problem(
-                data.get("variable") or "", req.news_text
-            )
-            if verbatim_problem:
-                if attempt < DIGEST_ATTEMPTS - 1:
-                    problem = verbatim_problem
-                else:
-                    print(
-                        f"[generate] 最後一次嘗試仍未逐字相符，放行：{verbatim_problem}",
-                        flush=True,
+            raw_content = response.choices[0].message.content or ""
+            finish_reason = response.choices[0].finish_reason if response.choices else "?"
+            try:
+                data = parse_digest_json(raw_content)
+            except (json.JSONDecodeError, IndexError, TypeError) as exc:
+                last_detail = "AI 回傳格式無法解析"
+                print(
+                    f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} parse failed "
+                    f"(finish_reason={finish_reason}): {exc}\n"
+                    f"[generate] raw content: {digest_excerpt(raw_content)}",
+                    flush=True,
+                )
+                if req.density == "verbatim" and finish_reason == "length":
+                    # 不消化的預算已經照原文長度放大過（digest_token_budget），還撞到
+                    # length 就是這篇真的塞不下——重試每次都會撞同一面牆，5 次要燒掉
+                    # 90 秒才讓使用者收到一句看不懂的「格式無法解析」。直接講清楚。
+                    raise HTTPException(
+                        status_code=400,
+                        detail="原文太長，「不消化」要模型逐字抄完整篇才做得到；"
+                        "請改用「字少」／「字多」，或把原文縮短再試。",
                     )
-        if problem:
-            last_detail = "AI 回傳內容異常，請稍後重試"
-            print(
-                f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} quality check failed: {problem}",
-                flush=True,
-            )
-            time.sleep(1.5)
-            continue
+                time.sleep(1.5)
+                continue
 
-        chart_type = data.get("chart_type", "")
-        if chart_type not in CHART_TYPE_CHOICES:
-            # AI 未回報或回報不在清單內；指定類型時退回原值，自動判斷時留空由前端處理
-            chart_type = "" if type_label == AUTO_TYPE_LABEL else type_label
+            # 能解析不代表能用：截斷與字元污染都要跟解析失敗一樣重試，不能送去生圖
+            problem = digest_quality_problem(data, finish_reason)
+            # 不消化的逐字比對排在通用檢查之後：兩者都過不了時，先報通用的那個。
+            # 最後一次刻意不擋——擋了就是整條 502，而這時手上的結果通常只是頭尾多了
+            # 雜訊，仍比沒有圖好；改成印警告讓回查時看得到。
+            if not problem and req.density == "verbatim" and not req.user_instruction.strip():
+                verbatim_problem = verbatim_fidelity_problem(
+                    data.get("variable") or "", req.news_text
+                )
+                if verbatim_problem:
+                    if attempt < DIGEST_ATTEMPTS - 1:
+                        problem = verbatim_problem
+                    else:
+                        print(
+                            f"[generate] 最後一次嘗試仍未逐字相符，放行：{verbatim_problem}",
+                            flush=True,
+                        )
+            if problem:
+                last_detail = "AI 回傳內容異常，請稍後重試"
+                print(
+                    f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} quality check failed: {problem}",
+                    flush=True,
+                )
+                time.sleep(1.5)
+                continue
 
-        variable = strip_wrapping_quotes(data.get("variable", ""))
-        if req.stamp is False and any(_STAMP_LINE_RE.match(line) for line in variable.splitlines()):
-            print("[generate] 蓋章 OFF 但消化結果仍有 <蓋章> 行，已強制移除", flush=True)
-            variable = drop_stamp_lines(variable)
-        # 播出鏡面 ＋ 蓋章 OFF：底帶那一行沒生出來就自己補（見 ensure_bottom_band_line）
-        if req.stamp is False and editor_formats.resolve_hole_side(req.editor_format, req.hole_side):
-            filled = ensure_bottom_band_line(variable)
-            if filled != variable:
-                print("[generate] 蓋章 OFF 但消化結果沒有 <底帶> 行，已把最後一張卡升級成底帶", flush=True)
-            variable = filled
-        result = GenerateResponse(
-            style=data.get("style", ""),
-            structure=data.get("structure", ""),
-            variable=variable,
-            chart_type=chart_type,
-            # 只有地圖類會真的去查（resolve_map_points 自己擋掉其他類型）。
-            # 查不到就是空陣列，後續一切照舊，不會有人拿到錯誤。
-            map_points=resolve_map_points(chart_type, data.get("map_places")),
-            map_missing=map_missing_places(),
-            portrait_subjects=clean_portrait_subjects(data.get("portrait_subjects")),
-            portrait_subjects_en=align_english_names(
-                clean_portrait_subjects(data.get("portrait_subjects")),
-                data.get("portrait_subjects_en"),
-                data.get("portrait_subjects"),
-            ),
-        )
-        # 網頁版走這個端點後自己在前端組生圖 prompt，後端看不到最終 prompt，
-        # 因此這裡只記到消化為止——有輸入與消化結果，事後仍可重跑重現。
-        if not _inside_pipeline.get():
-            # 網頁版的第二段消化在這裡做（LINE 走 generate_news_image 自己那條，
-            # 兩邊都做會白查一次圖）。落檔放在後面，記的是最終採用的那份。
-            result = apply_photo_availability(result, req)
-            request_log.log_generation(
-                request_id=request_log.new_request_id(),
-                source="digest",
-                news_text=req.news_text,
-                style=result.style,
-                structure=result.structure,
-                variable=result.variable,
-                chart_type=result.chart_type,
-                type_label=req.type_label,
-                role=req.role,
-                density=req.density,
-            )
-            # 存給稍後的生圖請求取用：那支端點只收到 prompt，拿不到新聞原文，
-            # 稽核歸檔要靠這裡記住的內容才補得齊（見 _archive_generation）。
-            _remember_digest(
-                news_text=req.news_text,
-                style=result.style,
-                structure=result.structure,
-                variable=result.variable,
-                chart_type=result.chart_type,
-                type_label=req.type_label,
-                role=req.role,
-                density=req.density,
-            )
-        return result
+            chart_type = data.get("chart_type", "")
+            if chart_type not in CHART_TYPE_CHOICES:
+                # AI 未回報或回報不在清單內；指定類型時退回原值，自動判斷時留空由前端處理
+                chart_type = "" if type_label == AUTO_TYPE_LABEL else type_label
 
-    raise HTTPException(status_code=502, detail=last_detail)
+            variable = strip_wrapping_quotes(data.get("variable", ""))
+            if req.stamp is False and any(_STAMP_LINE_RE.match(line) for line in variable.splitlines()):
+                print("[generate] 蓋章 OFF 但消化結果仍有 <蓋章> 行，已強制移除", flush=True)
+                variable = drop_stamp_lines(variable)
+            # 播出鏡面 ＋ 蓋章 OFF：底帶那一行沒生出來就自己補（見 ensure_bottom_band_line）
+            if req.stamp is False and editor_formats.resolve_hole_side(req.editor_format, req.hole_side):
+                filled = ensure_bottom_band_line(variable)
+                if filled != variable:
+                    print("[generate] 蓋章 OFF 但消化結果沒有 <底帶> 行，已把最後一張卡升級成底帶", flush=True)
+                variable = filled
+            result = GenerateResponse(
+                style=data.get("style", ""),
+                structure=data.get("structure", ""),
+                variable=variable,
+                chart_type=chart_type,
+                # 只有地圖類會真的去查（resolve_map_points 自己擋掉其他類型）。
+                # 查不到就是空陣列，後續一切照舊，不會有人拿到錯誤。
+                map_points=resolve_map_points(chart_type, data.get("map_places")),
+                map_missing=map_missing_places(),
+                portrait_subjects=clean_portrait_subjects(data.get("portrait_subjects")),
+                portrait_subjects_en=align_english_names(
+                    clean_portrait_subjects(data.get("portrait_subjects")),
+                    data.get("portrait_subjects_en"),
+                    data.get("portrait_subjects"),
+                ),
+            )
+            # 網頁版走這個端點後自己在前端組生圖 prompt，後端看不到最終 prompt，
+            # 因此這裡只記到消化為止——有輸入與消化結果，事後仍可重跑重現。
+            if not _inside_pipeline.get():
+                # 網頁版的第二段消化在這裡做（LINE 走 generate_news_image 自己那條，
+                # 兩邊都做會白查一次圖）。落檔放在後面，記的是最終採用的那份。
+                result = apply_photo_availability(result, req)
+                request_log.log_generation(
+                    request_id=request_log.new_request_id(),
+                    source="digest",
+                    news_text=req.news_text,
+                    style=result.style,
+                    structure=result.structure,
+                    variable=result.variable,
+                    chart_type=result.chart_type,
+                    type_label=req.type_label,
+                    role=req.role,
+                    density=req.density,
+                )
+                # 存給稍後的生圖請求取用：那支端點只收到 prompt，拿不到新聞原文，
+                # 稽核歸檔要靠這裡記住的內容才補得齊（見 _archive_generation）。
+                _remember_digest(
+                    news_text=req.news_text,
+                    style=result.style,
+                    structure=result.structure,
+                    variable=result.variable,
+                    chart_type=result.chart_type,
+                    type_label=req.type_label,
+                    role=req.role,
+                    density=req.density,
+                )
+            return result
+
+        raise HTTPException(status_code=502, detail=last_detail)
+    finally:
+        if deadline_token is not None:
+            _digest_deadline.reset(deadline_token)
 
 
 # ---- 混合版型：新聞原文 → 結構化內容（文字數字由 APP 繪製，AI 不碰像素文字）----
@@ -2958,6 +2980,10 @@ def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGener
 # 這裡挑貼合比例、又不超過兩者共同上限的尺寸——沿用同一組值，換模型不會連尺寸一起變。
 # 2026-08-01 之前這裡寫死 1280x720，等於無視呼叫端要的比例——安全框開 21:9
 # 也會靜靜拿回 16:9，是與 OpenRouter 那條同一類的靜默降級。
+# 原生 images.generate／edit 以前沒傳 timeout，吃 SDK 預設 read 600 秒（B31）。
+# 對齊 OpenRouter 那條 urlopen timeout=180。
+NATIVE_IMAGE_TIMEOUT_SECONDS = 180
+
 NATIVE_GPT_IMAGE_SIZES = {
     "1:1": "1024x1024",
     "4:3": "1280x960",
@@ -3023,6 +3049,7 @@ def generate_gpt_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
                 prompt=req.prompt,
                 size=size,
                 quality=quality,
+                timeout=NATIVE_IMAGE_TIMEOUT_SECONDS,
             )
         else:
             result = openai_client.images.generate(
@@ -3031,6 +3058,7 @@ def generate_gpt_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
                 size=size,
                 quality=quality,
                 output_format="png",
+                timeout=NATIVE_IMAGE_TIMEOUT_SECONDS,
             )
     except AuthenticationError as exc:
         raise HTTPException(

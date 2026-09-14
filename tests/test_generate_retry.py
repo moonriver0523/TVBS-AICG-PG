@@ -146,6 +146,62 @@ class GenerateRetryTests(unittest.TestCase):
         self.assertEqual(create.call_count, 1)
         self.sleep.assert_not_called()
 
+    def test_sdk_retries_are_disabled(self):
+        self.assertEqual(main.openai_client.max_retries, 0)
+        self.assertEqual(main.OPENAI_MAX_RETRIES, 0)
+
+    def test_deadline_is_checked_before_attempt_zero(self):
+        # 新請求自己算 deadline 時，attempt 0 永遠還有 230 秒，擋不到。
+        # 第二次 generate() 沿用已耗掉的 deadline 才是這條守門的意義。
+        token = main._digest_deadline.set(0.0)
+        try:
+            with patch.object(main.time, "monotonic", lambda: 0.0):
+                result, exc, create = self.call_with([ok_response()])
+        finally:
+            main._digest_deadline.reset(token)
+        self.assertIsNone(result)
+        self.assertEqual(exc.status_code, 503)
+        self.assertEqual(create.call_count, 0)
+        self.assertIn("太久沒有回應", exc.detail)
+
+    def test_photo_availability_retry_reuses_the_same_deadline(self):
+        now = [0.0]
+        calls = {"n": 0}
+
+        def tick(*_args, **_kwargs):
+            if calls["n"] == 0:
+                now[0] = 200.0
+                calls["n"] += 1
+                return ok_response({**VALID_PAYLOAD, "portrait_subjects": ["吳軒彤"]})
+            calls["n"] += 1
+            return ok_response()
+
+        with patch.object(main.time, "monotonic", lambda: now[0]), patch.object(
+            main, "lookup_portrait_photos", return_value=({}, ["吳軒彤"])
+        ), patch.object(main, "_remember_digest"):
+            result, exc, create = self.call_with(tick)
+        self.assertIsNone(result)
+        self.assertEqual(exc.status_code, 503)
+        self.assertEqual(create.call_count, 1)
+
+    def test_photo_availability_retry_still_runs_when_budget_remains(self):
+        now = [0.0]
+
+        def tick(*_args, **_kwargs):
+            now[0] += 10.0
+            subjects = [] if now[0] > 10.0 else ["吳軒彤"]
+            return ok_response({**VALID_PAYLOAD, "portrait_subjects": subjects})
+
+        with patch.object(main.time, "monotonic", lambda: now[0]), patch.object(
+            main, "lookup_portrait_photos", return_value=({}, ["吳軒彤"])
+        ), patch.object(main, "_remember_digest"), patch.object(
+            main.request_log, "log_generation"
+        ):
+            result, exc, create = self.call_with(tick)
+        self.assertIsNone(exc)
+        self.assertEqual(create.call_count, 2)
+        self.assertEqual(result.portrait_subjects, [])
+
     def test_markdown_fenced_json_is_accepted_without_retry(self):
         fenced = SimpleNamespace(
             choices=[
