@@ -2399,3 +2399,82 @@ process-local）。2026-08-17 上線的三項功能（PLAN.md）全部只做在�
 觀察點：(1) 招式池裡 `arrow`／`magnifier` 等條目仍寫著 "photograph"，CG 不一定有
 照片，措辭是否要跟著調待實拍判斷；(2) D16 的 10／13／18／22 是用 `gpt-5.5` 量的，
 正式站是 `claude-sonnet-5`，不合格要回報監督重裁，不在實作中自行微調。
+
+## 2-8 F1「程式面 no-op」的證據（2026-09-15，子代理 stage2；監督要求補）
+
+監督要求：不要只用推論交差，要給具體證據，而且要分清楚「條文已經夠開＝結案」與
+「該動但會破凍結＝另立待辦」，不准混成一句 no-op。
+
+查證後的答案是**四件不同的事**，處置各不相同。原始資料
+`D:\Downloads\AICG\後台紀錄\20260914\title_length_24.json`（24 格、`finish=stop` 24／24）。
+
+### 現行四個 density block 的內文條文（逐字，`main.py`）
+
+| 檔位 | 點數 | 每點字數 | 合計字數 |
+|---|---|---|---|
+| `minimal` | 「ONE point. Not one to three — one.」 | 「at most about twelve characters」 | 無 |
+| `simplified` | 「only 1 to 3 key points」 | 「short, scan-friendly line」（無數字） | 無 |
+| `standard` | 「up to six [內文小標] lines」 | 「about twenty-four characters」 | 「two hundred and forty to three hundred and twenty」 |
+| `maximum` | 「up to EIGHT」 | 「about thirty characters」 | 「three hundred and sixty to four hundred and eighty」 |
+
+條文的天花板梯子是 1／1-3／6／8 點，字數 12／—／240-320／360-480。**這個梯子本身很開。**
+
+### 實測（每格 內文點數／內文合計字元）
+
+字數口徑：`scripts/measure_title_length.py` 的 `chars_no_ws` **只去空白、沒有去 `<>`**，
+所以下表的字元數略高於上鏡實際值（同一份資料的標題欄，去 `<>` 後 13→11）。
+marker 數量在各檔之間沒有系統性差異，**級距的形狀不受這個偏差影響**；但單一格
+±10% 以內的差距要當成雜訊，不能當結論。
+
+| 樣本／角色 | 版型 | 原文字元 | minimal | simplified | standard | maximum |
+|---|---|---:|---|---|---|---|
+| short／編輯 | default | 17 | 1點/10 | 1點/10 | 1點/10 | 1點/10 |
+| short／記者 | default | 17 | 1點/8 | 1點/8 | 1點/8 | 1點/8 |
+| mid／編輯 | default | 56 | **3點**/30 | 2點/22 | 4點/40 | 4點/39 |
+| mid／記者 | default | 56 | 1點/6 | 2點/23 | 3點/28 | 3點/35 |
+| long／編輯 | **broadcast** | 295 | **3點**/32 | 3點/31 | 4點/105 | 4點/92 |
+| long／記者 | default | 295 | 1點/10 | 2點/50 | 7點/135 | 8點/159 |
+
+中位數（六格）：點數 1／2／3.5／3.5，合計字元 10／22.5／34／37——監督引用的
+「1／2／4／4、10／22／34／37」就是這一列（點數四捨五入）。**但中位數把四件不同的事
+混成一條線，逐格拆開之後結論完全不同。**
+
+### 四件事，四種處置
+
+**① 記者版／非卡片版型：條文已經拉得夠開 → 結案。**
+`long／記者`（295 字素材、資料圖表、default 版型）＝ **1／2／7／8 點、10／50／135／159 字**，
+四檔嚴格單調，且是倍數級距不是微調。`mid／記者` 同樣單調（1／2／3／3 點、6／23／28／35 字），
+頂端較窄只是因為 56 字的素材撐不到 8 點——條文自己就寫「If the material supports only
+three points, write three」。**在素材與版型都給得起的情況下，現行天花板有效。**
+
+**② 短稿四檔塌成同一個 ＝ 正確行為，不是缺陷。**
+17 字的原文，四檔全部 1 點／8–10 字。條文明文禁止為了湊數編東西
+（`maximum` 第 3 條「THIS STILL LICENSES NOTHING NEW」）。這一格**不該**被拉開。
+
+**③ 編輯版播出鏡面被卡片張數釘死 → 不是 F1 的數字問題，另立待辦（版型裁決）。**
+`long／編輯` 走 `broadcast`，實測 **3／3／4／4** 點——這正是
+`editor_formats._broadcast_point_count()` 釘的：`standard`／`maximum` 四張卡、其餘三張。
+density 拉桿在這個版型上**結構上就只剩「每張卡寫多長」可動**，105→92 那個反轉落在
+marker 雜訊範圍內，沒有意義。把 density 的數字調大**改不動它**。
+MASTER 的 F1 欄自己就預告過這件事：「卡片堆版型的點數被版型釘死，拉桿本來就沒差」。
+計畫 2-8 第 2 點也明文 F1 不改 `_broadcast_point_count`。
+**待辦（需使用者裁決）**：要不要讓播出鏡面的卡片張數隨 density 變（例如字極少＝兩張）。
+那是版面實體限制的裁決，不是 F1 的級距數字。
+
+**④ 編輯版 `minimal` 實測出 3 點，違反自己的「ONE point」→ 該動但會破凍結，另立待辦。**
+`mid／編輯` 與 `long／編輯` 的 `minimal` 都是 **3 點**；同樣兩則素材的記者版都是 1 點。
+差別只在角色，所以病灶在編輯樣板。根因查到了：`main.py:1000` 的格式說明寫
+「`[內文小標]＋條列重點`」，緊接著 `main.py:1006` 的 variable 範例**列了整整三行
+`[內文小標]`**。那個範例是模型最強的錨點，壓過後面 `MINIMAL_DENSITY_RULES` 第 1 條的
+「ONE point. Not one to three — one.」——這正是本 repo 記過多次的「具體範例壓過抽象規則」。
+**修法**是讓範例隨 density 變（或在 minimal 明文作廢那個範例的行數），
+**但 `EDITOR_SYSTEM_PROMPT_TEMPLATE` 逐位元存在於 4 份編輯凍結快照裡**
+（`grep 聯準會三度降息 tests/fixtures/editor-digest-*` 命中），動它就要重凍，
+而 CP1 的唯一一次重凍已經在 2-3 用掉。**本波不能做，另立待辦。**
+
+### 結論
+
+2-8 程式面 no-op 的結論成立，但理由不是「條文已經夠開」一句話：
+**① 結案、② 本來就該如此、③ 與 ④ 兩件另立待辦**，而 ③ ④ 都**不是**靠調 density
+數字能解決的——一個是版型實體限制（要使用者裁），一個是編輯樣板的範例錨點（要重凍）。
+四者都不需要、也不應該在本波動 `STANDARD`／`SIMPLIFIED` 兩塊。
