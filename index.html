@@ -312,7 +312,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260914-04</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260914-05</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -462,9 +462,10 @@
                         </div>
                         <div class="flex items-center gap-2">
                             <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-300"
-                                   title="由標題創意拉桿決定：0＝所有文字由程式壓字（零錯字、原圖零漂移）；1 級起整張連標題字交給 AI 畫（有設計感，但可能出錯字、原圖會被重畫）">
-                                <input id="coverAiTitle" type="checkbox" class="accent-red-600" disabled />標題由 AI 生成
-                                <span class="text-[9px] font-normal text-slate-500">（創意 0＝程式壓字零錯字，1 以上才交 AI）</span>
+                                   title="創意 0：預設由程式壓字（零錯字、原圖零漂移），要的話可以自己勾起來交 AI 畫；1 級起整張連標題字一律交給 AI（有設計感，但可能出錯字、原圖會被重畫），此時鎖定不可取消">
+                                <input id="coverAiTitle" type="checkbox" class="accent-red-600 disabled:opacity-40"
+                                       onchange="setCoverAiTitle(this.checked)" />標題由 AI 生成
+                                <span class="text-[9px] font-normal text-slate-500">（創意 0 預設關＝程式壓字零錯字，可自行勾開；1 以上一律交 AI）</span>
                             </label>
                             <!-- 標題創意拉桿（2026-09-08 ON/OFF → 2026-09-09 改 0–4 五段，
                                  2026-09-11 P5 起 DOM 由 app.js 的 renderCreativityBar() 共用元件灌入）：
@@ -574,9 +575,10 @@
                         </div>
                         <div class="flex items-center gap-2">
                             <label class="flex items-center gap-1.5 text-[10px] font-black text-slate-300"
-                                   title="由創意拉桿決定：0＝標題由程式壓字（零錯字、原圖零漂移）；1 級起整張連標題字交給 AI 畫（更像頻道實際版，但可能出錯字、原圖會被重畫）">
-                                <input id="ytCoverAiTitle" type="checkbox" class="accent-red-600" disabled />標題由 AI 生成
-                                <span class="text-[9px] font-normal text-slate-500">（創意 0＝程式壓字零錯字，1 以上才交 AI）</span>
+                                   title="創意 0：預設由程式壓字（零錯字、原圖零漂移），要的話可以自己勾起來交 AI 畫；1 級起整張連標題字一律交給 AI（更像頻道實際版，但可能出錯字、原圖會被重畫），此時鎖定不可取消">
+                                <input id="ytCoverAiTitle" type="checkbox" class="accent-red-600 disabled:opacity-40"
+                                       onchange="setYtAiTitle(this.checked)" />標題由 AI 生成
+                                <span class="text-[9px] font-normal text-slate-500">（創意 0 預設關＝程式壓字零錯字，可自行勾開；1 以上一律交 AI）</span>
                             </label>
                             <!-- 底部壓色框（2026-09-08）：整點直播的版面沒有底帶，那個版型不顯示 -->
                             <button id="ytBottomBandBtn" type="button" onclick="toggleYtBottomBand()"

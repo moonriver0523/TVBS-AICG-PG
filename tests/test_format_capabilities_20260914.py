@@ -148,7 +148,8 @@ class EndpointsReadTheTable(unittest.TestCase):
         self.assertIn('caps = editor_formats.capability_for("ten_cover")', src)
         self.assertIn("caps = editor_formats.capability_for(editor_formats.yt_format_key(req.layout))", src)
         self.assertEqual(src.count("limit=caps.asis_max"), 2)
-        self.assertEqual(src.count("if caps.zero_program_text:"), 2)
+        # 2026-09-14 晚：從「if 才強制」改成無條件定案、旗子當參數傳（明送就照辦）
+        self.assertEqual(src.count("zero_program_text=caps.zero_program_text,"), 2)
 
 
 if __name__ == "__main__":

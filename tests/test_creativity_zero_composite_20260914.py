@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
-"""創意 0 → 一律程式壓字（2026-09-14 使用者裁決）。
+"""創意 0 → 標題預設程式壓字（2026-09-14 使用者裁決；同日晚由「一律」放寬成「預設」）。
 
-十點／整點／新聞直播／熱搜／live24 全套：拉桿是唯一開關，0 級不管有沒有附圖、附圖是原圖放置
-還是 AI改圖，標題（整點連日期牌）都由程式畫；1 級起才送生圖畫標題。追加修改帶回底圖的請求
-不動（標題已經畫在上面）。取代 live24 專屬的 creativity<1 與整點極短標題兩條局部規則。
+十點／整點／新聞直播／熱搜／live24 全套：0 級不管有沒有附圖、附圖是原圖放置還是 AI改圖，標題
+（整點連日期牌）**預設**由程式畫；1 級起才送生圖畫標題。追加修改帶回底圖的請求不動（標題已經
+畫在上面）。取代 live24 專屬的 creativity<1 與整點極短標題兩條局部規則。
+
+放寬那一半（同日晚）：0 級的勾選框可以自己勾開，明送 title_mode="ai" 就照辦——所以下面的端點
+案例全部**省略** mode／title_mode，測的是「沒指定時的預設」；明送的那條另外驗（見各類的
+test_*_explicit_ai_at_zero_is_honoured）。
 """
 import base64
 import io
@@ -60,16 +64,30 @@ class _Harness(unittest.TestCase):
 
 
 class Predicate(unittest.TestCase):
-    def test_zero_forces_composite_and_one_keeps_the_request(self):
+    def test_an_unspecified_mode_takes_the_level_default(self):
+        """沒指定（None）＝套預設：0 級程式壓字，1 級起交 AI。"""
         f = editor_formats.title_mode_for_creativity
-        self.assertEqual(f(0, "ai", False), "composite")
+        self.assertEqual(f(0, None, False), "composite")
+        for level in (1, 2, 3, 4):
+            self.assertEqual(f(level, None, False), "ai")
+
+    def test_an_explicit_mode_is_always_honoured(self):
+        """放寬（2026-09-14 晚）：明點就照辦，包括 0 級明點 ai。"""
+        f = editor_formats.title_mode_for_creativity
+        self.assertEqual(f(0, "ai", False), "ai")
         self.assertEqual(f(0, "composite", False), "composite")
         for level in (1, 2, 3, 4):
             self.assertEqual(f(level, "ai", False), "ai")
             self.assertEqual(f(level, "composite", False), "composite")
 
+    def test_formats_outside_the_rule_default_to_ai_even_at_zero(self):
+        """zero_program_text=False 的版型（CG／直標）不吃這條預設。"""
+        f = editor_formats.title_mode_for_creativity
+        self.assertEqual(f(0, None, False, zero_program_text=False), "ai")
+
     def test_a_request_carrying_a_background_is_left_alone(self):
         """追加修改帶回底圖：標題已畫在上面，改成 composite 會再壓一層。"""
+        self.assertEqual(editor_formats.title_mode_for_creativity(0, None, True), "ai")
         self.assertEqual(editor_formats.title_mode_for_creativity(0, "ai", True), "ai")
 
     def test_the_hourly_short_title_special_case_is_gone(self):
@@ -82,15 +100,28 @@ class TenCover(_Harness):
     URL = "/api/editor/cover"
 
     def test_full_zero_creativity_is_program_text_even_when_ai_was_asked(self):
-        data, calls = self._run(self.URL, {"title_left": TITLE_L, "layout": "full", "mode": "ai"})
+        data, calls = self._run(self.URL, {"title_left": TITLE_L, "layout": "full"})
         self.assertEqual(data["mode"], "composite")
         self.assertEqual(len(calls), 1, "只生一張無字底圖")
         self.assertNotIn("TEXT TO RENDER", calls[0].prompt)
 
     def test_full_one_creativity_still_lets_the_model_draw_the_title(self):
-        data, calls = self._run(self.URL, {"title_left": TITLE_L, "layout": "full", "mode": "ai", "title_creativity": 1})
+        data, calls = self._run(self.URL, {"title_left": TITLE_L, "layout": "full", "title_creativity": 1})
         self.assertEqual(data["mode"], "ai")
         self.assertIn("TEXT TO RENDER", calls[-1].prompt)
+
+    def test_explicit_ai_at_zero_is_honoured(self):
+        """放寬（2026-09-14 晚）：0 級勾了「標題由 AI 生成」就照辦，不再被改回程式壓字。"""
+        data, calls = self._run(self.URL, {"title_left": TITLE_L, "layout": "full", "mode": "ai"})
+        self.assertEqual(data["mode"], "ai")
+        self.assertIn("TEXT TO RENDER", calls[-1].prompt)
+
+    def test_explicit_composite_at_one_is_honoured(self):
+        """反向也一樣：1 級明送 composite 照辦（勾選框鎖住只是前台，API 沒有理由擋）。"""
+        data, calls = self._run(self.URL, {
+            "title_left": TITLE_L, "layout": "full", "mode": "composite", "title_creativity": 1})
+        self.assertEqual(data["mode"], "composite")
+        self.assertNotIn("TEXT TO RENDER", calls[0].prompt)
 
     def test_split_zero_creativity_keeps_the_asis_panel_pixel_exact(self):
         """裁決 3：一邊原圖一邊 AI改圖 在創意 0 下，原圖那格根本不送進模型。
@@ -99,7 +130,7 @@ class TenCover(_Harness):
         （程式壓字會疊暗化層，不做逐值相等）。
         """
         data, calls = self._run(self.URL, {
-            "title_left": TITLE_L, "title_right": TITLE_R, "layout": "split", "mode": "ai",
+            "title_left": TITLE_L, "title_right": TITLE_R, "layout": "split",
             "slot_left": [_ref(RED, "asis")], "slot_right": [_ref(BLUE, "aiedit")],
         })
         self.assertEqual(data["mode"], "composite")
@@ -116,7 +147,7 @@ class TenCover(_Harness):
 
     def test_split_one_creativity_goes_two_stage_and_the_model_gets_the_base(self):
         data, calls = self._run(self.URL, {
-            "title_left": TITLE_L, "title_right": TITLE_R, "layout": "split", "mode": "ai", "title_creativity": 1,
+            "title_left": TITLE_L, "title_right": TITLE_R, "layout": "split", "title_creativity": 1,
             "slot_left": [_ref(RED, "asis")], "slot_right": [_ref(BLUE, "aiedit")],
         })
         self.assertEqual(data["mode"], "ai")
@@ -125,7 +156,7 @@ class TenCover(_Harness):
 
     def test_full_all_asis_zero_creativity_makes_no_image_call(self):
         data, calls = self._run(self.URL, {
-            "title_left": TITLE_L, "layout": "full", "mode": "ai",
+            "title_left": TITLE_L, "layout": "full",
             "slot_left": [_ref(RED, "asis"), _ref(BLUE, "asis")],
         })
         self.assertEqual(data["mode"], "composite")
@@ -135,7 +166,7 @@ class TenCover(_Harness):
         """追加修改回來（帶 background）：只重貼固定元素，不能被改成 composite（雙切會 400）。"""
         bg = base64.b64encode(_png_bytes(size=(1280, 720), colour=GREEN)).decode()
         data, calls = self._run(self.URL, {
-            "title_left": TITLE_L, "title_right": TITLE_R, "layout": "split", "mode": "ai",
+            "title_left": TITLE_L, "title_right": TITLE_R, "layout": "split",
             "background_image_base64": bg, "background_mime_type": "image/png",
         })
         self.assertEqual(data["mode"], "ai")
@@ -148,20 +179,29 @@ class YtCover(_Harness):
     def test_every_layout_at_zero_is_program_text(self):
         for layout in ("hourly", "news", "hot", "live24"):
             with self.subTest(layout=layout):
-                data, _ = self._run(self.URL, {"title": "前段 後段", "layout": layout, "title_mode": "ai"})
+                data, _ = self._run(self.URL, {"title": "前段 後段", "layout": layout})
                 self.assertEqual(data["title_mode"], "composite")
 
     def test_every_layout_at_one_keeps_ai_title(self):
         for layout in ("hourly", "news", "hot", "live24"):
             with self.subTest(layout=layout):
                 data, calls = self._run(self.URL, {
-                    "title": "前段 後段", "layout": layout, "title_mode": "ai", "creativity": 1})
+                    "title": "前段 後段", "layout": layout, "creativity": 1})
+                self.assertEqual(data["title_mode"], "ai")
+                self.assertIn("TEXT TO RENDER", calls[-1].prompt)
+
+    def test_explicit_ai_at_zero_is_honoured(self):
+        """放寬（2026-09-14 晚）：四版型在 0 級明送 ai 都照辦。"""
+        for layout in ("hourly", "news", "hot", "live24"):
+            with self.subTest(layout=layout):
+                data, calls = self._run(self.URL, {
+                    "title": "前段 後段", "layout": layout, "title_mode": "ai"})
                 self.assertEqual(data["title_mode"], "ai")
                 self.assertIn("TEXT TO RENDER", calls[-1].prompt)
 
     def test_hourly_dual_at_zero_is_program_text(self):
         data, _ = self._run(self.URL, {
-            "title": "前段 後段", "title_second": "第二 標題", "layout": "hourly", "title_mode": "ai",
+            "title": "前段 後段", "title_second": "第二 標題", "layout": "hourly",
             "time_text": "20:00",
         })
         self.assertEqual(data["title_mode"], "composite")
@@ -169,12 +209,12 @@ class YtCover(_Harness):
     def test_hourly_short_title_at_one_is_no_longer_forced(self):
         """以前「首段 ≤5 格」的整點 0 級會被改壓字；規則收進創意 0 後，1 級的極短標題照交模型。"""
         data, _ = self._run(self.URL, {
-            "title": "東北季風冷 今起增強", "layout": "hourly", "title_mode": "ai", "creativity": 1})
+            "title": "東北季風冷 今起增強", "layout": "hourly", "creativity": 1})
         self.assertEqual(data["title_mode"], "ai")
 
     def test_single_asis_at_zero_makes_no_image_call_and_keeps_the_photo(self):
         data, calls = self._run(self.URL, {
-            "title": "前段 後段", "layout": "news", "title_mode": "ai",
+            "title": "前段 後段", "layout": "news",
             "reference_images": [_ref(RED, "asis")],
         })
         self.assertEqual(data["title_mode"], "composite")
@@ -187,7 +227,7 @@ class YtCover(_Harness):
     def test_a_refine_round_trip_with_a_background_keeps_ai_mode(self):
         bg = base64.b64encode(_png_bytes(size=(1280, 720), colour=GREEN)).decode()
         data, calls = self._run(self.URL, {
-            "title": "前段 後段", "layout": "news", "title_mode": "ai",
+            "title": "前段 後段", "layout": "news",
             "background_image_base64": bg, "background_mime_type": "image/png",
         })
         self.assertEqual(data["title_mode"], "ai")
@@ -198,20 +238,34 @@ class Frontend(unittest.TestCase):
     APP_JS = (ROOT / "app.js").read_text(encoding="utf-8")
     INDEX = (ROOT / "index.html").read_text(encoding="utf-8")
 
-    def test_payloads_derive_the_mode_from_the_slider_not_the_checkbox(self):
-        self.assertIn("const composite = state.coverTitleCreativity === 0", self.APP_JS)
-        self.assertIn("title_mode: state.ytCreativity >= 1 ? 'ai' : 'composite'", self.APP_JS)
-        self.assertNotIn("document.getElementById('coverAiTitle')?.checked === false", self.APP_JS)
-        self.assertNotIn("document.getElementById('ytCoverAiTitle')?.checked === false", self.APP_JS)
+    def test_payloads_read_the_checkbox_value_not_the_slider(self):
+        """放寬後送出的是勾選框真值；拉桿只負責在 setter 裡把它重設成該級的預設。"""
+        self.assertIn("const composite = !state.coverAiTitle", self.APP_JS)
+        self.assertIn("title_mode: state.ytAiTitle ? 'ai' : 'composite'", self.APP_JS)
+        self.assertIn("state.coverAiTitle = level >= 1", self.APP_JS)
+        self.assertIn("state.ytAiTitle = level >= 1", self.APP_JS)
 
-    def test_the_checkboxes_are_read_only_mirrors_of_the_slider(self):
+    def test_the_checkboxes_unlock_at_zero_and_lock_from_one(self):
         import re
-        for box_id, state in (("coverAiTitle", "coverTitleCreativity"), ("ytCoverAiTitle", "ytCreativity")):
+        for box_id, setter, state_key, level_key in (
+            ("coverAiTitle", "setCoverAiTitle", "coverAiTitle", "coverTitleCreativity"),
+            ("ytCoverAiTitle", "setYtAiTitle", "ytAiTitle", "ytCreativity"),
+        ):
             with self.subTest(box=box_id):
-                tag = re.search(rf'<input id="{box_id}"[^>]*>', self.INDEX).group(0)
-                self.assertIn("disabled", tag)
-                self.assertNotIn("checked", tag)
-                self.assertIn(f"aiBox.checked = state.{state} >= 1", self.APP_JS)
+                tag = re.search(rf'<input id="{box_id}"[^>]*/>', self.INDEX, re.S).group(0)
+                # 不再寫死 disabled（改由 JS 依等級切），也不預設勾起。
+                # 注意不能直接 assertNotIn("checked")——onchange 裡的 this.checked 也含這個字，
+                # 要找的是**屬性**形式的 checked／disabled。
+                self.assertIsNone(re.search(r'\s(checked|disabled)(\s|/|>|=)', tag), tag)
+                self.assertIn(f'onchange="{setter}(this.checked)"', tag)
+                # 重繪一律從 state 畫回去，否則會洗掉使用者剛勾的選擇
+                self.assertIn(f"aiBox.checked = state.{state_key}", self.APP_JS)
+                self.assertIn(f"aiBox.disabled = state.{level_key} >= 1", self.APP_JS)
+
+    def test_the_state_defaults_to_program_text(self):
+        """「預設關閉」：兩顆 state 的初值都是 false。"""
+        self.assertIn("coverAiTitle: false", self.APP_JS)
+        self.assertIn("ytAiTitle: false", self.APP_JS)
 
     def test_the_sliders_are_no_longer_hidden_behind_the_checkbox(self):
         self.assertNotIn("|| !aiMode", self.APP_JS)

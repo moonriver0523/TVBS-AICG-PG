@@ -372,8 +372,10 @@ class RequestTests(unittest.TestCase):
                 mime_type="image/png", model="fake",
             )
 
+        # 刻意不送 mode（2026-09-14 晚起 None＝依創意等級取預設：0 級程式壓字、1 級起 AI）。
+        # 明送 "ai" 會連 0 級都照辦，那條另外驗（test_creativity_zero_composite_20260914）。
         body = {"title_left": "尼泊爾災區 無人機空拍", "title_right": "臺南易淹水 成氣候衝擊區",
-                "layout": "split", "mode": "ai"}
+                "layout": "split"}
         body.update(kw)
         with patch.object(main, "resolve_cover_visuals", return_value=("左場景", "右場景")), \
              patch.object(main, "generate_image_raw", side_effect=fake_raw):
@@ -387,7 +389,7 @@ class RequestTests(unittest.TestCase):
                 self.assertIn(f"level {level} of 4", self._prompt(title_creativity=level))
 
     def test_default_is_level_zero(self):
-        # 2026-09-14 起 0 級一律程式壓字：送模型的只剩無字底圖 prompt
+        # 2026-09-14 起 0 級預設程式壓字（沒明送 mode）：送模型的只剩無字底圖 prompt
         prompt = self._prompt()
         self.assertNotIn("DESIGNED TITLE", prompt)
         self.assertNotIn("TEXT TO RENDER", prompt)

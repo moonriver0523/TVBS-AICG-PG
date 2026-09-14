@@ -234,9 +234,10 @@ class FrontendTests(unittest.TestCase):
         self.assertNotIn("toggleCoverTitleStyle", APP_JS)
 
     def test_slider_only_shows_for_cover_layout(self):
-        # 2026-09-14 起勾選框只是拉桿的鏡像，拉桿永遠露出，只剩版型檢查
+        # 2026-09-14 起拉桿永遠露出，只剩版型檢查；勾選框從 state 畫回去、鎖定看等級
         self.assertIn("editorFormat().inputs !== 'cover';", APP_JS)
-        self.assertIn("aiBox.checked = state.coverTitleCreativity >= 1", APP_JS)
+        self.assertIn("aiBox.checked = state.coverAiTitle", APP_JS)
+        self.assertIn("aiBox.disabled = state.coverTitleCreativity >= 1", APP_JS)
 
 
 if __name__ == "__main__":

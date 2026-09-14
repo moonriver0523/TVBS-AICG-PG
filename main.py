@@ -3959,9 +3959,11 @@ class TenCoverRequest(BaseModel):
     date_text: str = Field(default="", max_length=20)
     badge: str = compose.COVER_DEFAULT_BADGE
     provider: Literal["gemini", "gpt"] = "gpt"
-    # ai＝整張交給生圖模型畫（預設，2026-09-03 使用者裁決要設計感）
-    # composite＝AI 只出兩張無文字底圖、文字由 Pillow 畫（零錯字但沒設計感，留作備援）
-    mode: Literal["ai", "composite"] = editor_formats.COVER_MODE_AI
+    # ai＝整張交給生圖模型畫（要設計感，2026-09-03 使用者裁決）
+    # composite＝AI 只出兩張無文字底圖、文字由 Pillow 畫（零錯字）
+    # 省略（None）＝交給 editor_formats.title_mode_for_creativity 依創意等級挑預設
+    #（0 級 → composite，1 級起 → ai）。2026-09-14 晚：0 級不再鎖死，明送 ai 就照辦。
+    mode: Literal["ai", "composite"] | None = None
     # 2026-09-08 使用者要求：AI 整張版的標題要有「設計感＋滿框」的選項（像節目片頭字卡）。
     # plain＝現行排版（預設）；designed＝在 TYPOGRAPHY 段追加 COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE。
     # 只影響 mode=ai：合成版的字是 Pillow 畫的，排版由 compose 的常數決定，這個欄位用不到。
@@ -5159,16 +5161,17 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         update={"layout": editor_formats.resolve_cover_layout(req.layout, req.title_right)}
     )
     caps = editor_formats.capability_for("ten_cover")   # 版型能力矩陣（2026-09-14 模組化第 1 步）
-    # 創意 0 → 程式壓字（2026-09-14 使用者裁決，理由見 editor_formats.title_mode_for_creativity）。
-    # 放在所有 ai_over_base／只改文字 判斷之前，下游一律看改寫後的 mode；回應也回改寫後的值，
-    # 前端靠 data.mode 決定「只改文字」要不要露出。
-    if caps.zero_program_text:
-        forced_mode = editor_formats.title_mode_for_creativity(
-            req.creativity_level(), req.mode, bool(req.background_image_base64)
-        )
-        if forced_mode != req.mode:
-            print("[cover] 創意 0 → 標題改程式壓字（零錯字、原圖零漂移）", flush=True)
-            req = req.model_copy(update={"mode": forced_mode})
+    # 標題模式定案（2026-09-14，理由見 editor_formats.title_mode_for_creativity）：呼叫端明送就照辦，
+    # 省略才依創意等級挑預設（0 級 → 程式壓字）。**一定要跑**，下游全部假設 mode 已經是字串。
+    # 放在所有 ai_over_base／只改文字 判斷之前；回應也回定案後的值，前端靠 data.mode 決定
+    # 「只改文字」要不要露出。
+    resolved_mode = editor_formats.title_mode_for_creativity(
+        req.creativity_level(), req.mode, bool(req.background_image_base64),
+        zero_program_text=caps.zero_program_text,
+    )
+    if resolved_mode != req.mode:
+        print(f"[cover] 標題模式未指定 → 依創意等級取 {resolved_mode}", flush=True)
+        req = req.model_copy(update={"mode": resolved_mode})
     if req.layout == "full":
         # 滿版原圖放置最多 N 張（2026-09-14；N 看能力矩陣），擋在下面的斷句模型之前
         reject_excess_asis(req.slot_refs(0) or req.reference_images, where="滿版", limit=caps.asis_max)
@@ -5325,9 +5328,10 @@ class YtCoverRequest(BaseModel):
     # full／blend／inset 三者都需要左格的圖；blend 與 inset 還需要右格也有圖，
     # 只有一格時一律退回滿版——半塊空白的雙切不是使用者要的東西。
     live24_bg: Literal["full", "blend", "inset"] = "blend"
-    # ai＝整張連標題字交給生圖模型畫，程式只後貼固定元素（2026-09-06 使用者裁決預設）；
+    # ai＝整張連標題字交給生圖模型畫，程式只後貼固定元素（2026-09-06 使用者裁決）；
     # composite＝模型只生無文字底圖，標題由程式壓字（零錯字）。
-    title_mode: Literal["ai", "composite"] = "ai"
+    # 省略（None）＝依創意等級挑預設，見 editor_formats.title_mode_for_creativity。
+    title_mode: Literal["ai", "composite"] | None = None
     # 國內外新聞直播的兩個獨立標示（頻道實際版面可並存）；整點直播忽略
     original_audio: bool = False     # LIVE 章上方「原音呈現」
     ai_translation: bool = False     # 日期下方「AI即時翻譯」
@@ -5867,16 +5871,16 @@ def yt_dual_background(
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     live24 = req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
     caps = editor_formats.capability_for(editor_formats.yt_format_key(req.layout))   # 版型能力矩陣
-    # 創意 0 → 程式壓字（2026-09-14 使用者裁決，理由見 editor_formats.title_mode_for_creativity）。
-    # 四個版型一體適用；live24 原本自己那條 creativity<1 與整點極短標題那條都被這裡涵蓋。
-    # 1 級起交給模型（2026-09-13 使用者裁決：「標題完全沒有被創意階梯影響 這是錯的」）。
-    if caps.zero_program_text:
-        forced_mode = editor_formats.title_mode_for_creativity(
-            req.creativity, req.title_mode, bool(req.background_image_base64)
-        )
-        if forced_mode != req.title_mode:
-            print("[yt-cover] 創意 0 → 標題改程式壓字（零錯字、原圖零漂移）", flush=True)
-            req = req.model_copy(update={"title_mode": forced_mode})
+    # 標題模式定案（2026-09-14，理由見 editor_formats.title_mode_for_creativity）：明送照辦、省略才取預設
+    #（0 級 → 程式壓字）。四個版型一體適用；live24 原本自己那條 creativity<1 與整點極短標題那條
+    # 都被這裡涵蓋。1 級起交給模型（2026-09-13 使用者裁決：「標題完全沒有被創意階梯影響 這是錯的」）。
+    resolved_mode = editor_formats.title_mode_for_creativity(
+        req.creativity, req.title_mode, bool(req.background_image_base64),
+        zero_program_text=caps.zero_program_text,
+    )
+    if resolved_mode != req.title_mode:
+        print(f"[yt-cover] 標題模式未指定 → 依創意等級取 {resolved_mode}", flush=True)
+        req = req.model_copy(update={"title_mode": resolved_mode})
     # live24 只有一個標題，hourly 那條「有第二標題＝雙則」的規則用不上。
     # 2026-09-13 使用者裁決：**兩個附圖位都有東西**才雙切，只放一格或都沒放＝滿版。
     dual = (
