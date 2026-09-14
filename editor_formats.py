@@ -2446,7 +2446,7 @@ FORMAT_CAPABILITIES: dict[str, Capability] = {
     "ten_cover": Capability(
         slots=True, shared_refs=False, asis_max=4, fusion=True,
         creativity_scope=CREATIVITY_SCOPE_TITLE, zero_program_text=True,
-        text_only_recompose=(COVER_LAYOUT_FULL,),
+        text_only_recompose=(COVER_LAYOUT_FULL, COVER_LAYOUT_SPLIT),   # 雙切 2026-09-14 補上
         refine=True, instruction=True, engine=True, digest_controls=False, safe_frame=False, stamp=False,
     ),
     "yt_live_cover": _YT_SLOT_CAPABILITY,

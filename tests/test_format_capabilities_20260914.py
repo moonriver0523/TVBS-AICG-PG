@@ -71,13 +71,13 @@ class TableShape(unittest.TestCase):
                 self.assertEqual(ef.hides_for(key), expected)
 
     def test_the_rulings_are_in_the_table(self):
-        """今天之前的裁決都要看得到：創意 0 壓字（封面類）、原圖上限 4、只改文字（十點只有滿版、YT 合成版都有）、直標什麼都沒有。"""
+        """今天之前的裁決都要看得到：創意 0 壓字（封面類）、原圖上限 4、只改文字（十點滿版／雙切、YT 合成版都有）、直標什麼都沒有。"""
         for key in ("ten_cover", "yt_live_cover", "yt_hourly_cover", "yt_live24_cover", "yt_hot_cover"):
             self.assertTrue(ef.capability_for(key).zero_program_text, key)
             self.assertEqual(ef.capability_for(key).asis_max, 4, key)
         for key in ("default", "broadcast", "yt_vstrip"):
             self.assertFalse(ef.capability_for(key).zero_program_text, key)
-        self.assertEqual(ef.capability_for("ten_cover").text_only_recompose, ("full",))
+        self.assertEqual(ef.capability_for("ten_cover").text_only_recompose, ("full", "split"))   # 雙切 2026-09-14
         # YT 合成版單則／雙則的只改文字本來就有（ytCoverRecomposeBtn）；整點與 live24 有雙則
         self.assertEqual(ef.capability_for("yt_hourly_cover").text_only_recompose, ("single", "dual"))
         self.assertEqual(ef.capability_for("yt_live24_cover").text_only_recompose, ("single", "dual"))

@@ -442,7 +442,7 @@ const EDITOR_FORMATS = {
     // （coverLayout: 'auto'，實際值一律問 coverLayoutNow()）。
     ten_cover: {
         label: '十點不一樣',
-        hint: '只填第一標題＝滿版一張圖；再填第二標題＝左右雙切、兩格各一個標題與附圖位。每格可放多張、每張自選用途：「原圖放置」直接上版，「AI改圖」交給 AI 照這張圖重畫一次，其餘當生圖參考；那格沒有原圖放置就由 AI 生底圖。標題創意 0（預設）所有文字由程式壓字、零錯字、原圖不動；拉到 1 以上才整張交給生圖模型設計。標頭帶整條由程式貼：Logo、節目標籤、日期與 ON AIR／精華都是正版檔，AI 只負責底圖與標題。',
+        hint: '只填第一標題＝滿版一張圖；再填第二標題＝左右雙切、兩格各一個標題與附圖位。每格可放多張、每張自選用途：「原圖放置」直接上版，「AI改圖」交給 AI 照這張圖重畫一次，其餘當生圖參考；那格沒有原圖放置就由 AI 生底圖。標題創意 0（預設）所有文字由程式壓字、零錯字、原圖不動，生成後可按「只改文字」換標題不重生底圖（滿版、雙切都可）；拉到 1 以上才整張交給生圖模型設計。標頭帶整條由程式貼：Logo、節目標籤、日期與 ON AIR／精華都是正版檔，AI 只負責底圖與標題。',
         coverLayout: 'auto',
         inputs: 'cover',
         slots: true,   // 一標一附圖位（與 editor_formats.FORMAT_CAPABILITIES.slots 對齊，parity 測試釘住）
@@ -1478,11 +1478,16 @@ function applyCoverLayoutFields() {
     document.querySelectorAll('.cover-split-only').forEach(el => el.classList.toggle('hidden', fullLayout));
     const leftBtn = document.getElementById('coverAsisLeftBtn');
     if (leftBtn) leftBtn.textContent = fullLayout ? '📁 ＋ 附圖（選填）' : '📁 ＋ 第一附圖（選填）';
-    // 「只改文字」只有滿版合成版有：雙切的成品是左右兩張底圖拼的，拼完分不回去。
+    // 「只改文字」滿版、雙切都有（雙切 2026-09-14 補上：後端把拼好的兩格底圖帶回來）。
+    // 底圖是哪個版面生的就只能用在那個版面——打了第二標題版面就換了，鈕跟著灰掉。
     const recompose = document.getElementById('coverRecomposeBtn');
     if (recompose) {
-        recompose.classList.toggle('hidden', !fullLayout);
-        recompose.disabled = !(fullLayout && state.tenCoverBackground);
+        recompose.classList.remove('hidden');
+        const bg = state.tenCoverBackground;
+        recompose.disabled = !(bg && bg.layout === coverLayoutNow());
+        recompose.title = bg && bg.layout !== coverLayoutNow()
+            ? '版面變了（滿版↔雙切），上一次的底圖對不上，請重新生成'
+            : '程式壓字版專用（滿版、雙切都可）：底圖不重生，只用新的標題／日期／標籤重壓文字';
     }
 }
 
@@ -2206,23 +2211,25 @@ async function recomposeTenCover(refined) {
     return data;
 }
 
-// 只改文字（2026-09-08，滿版合成版）：底圖不重生，用目前欄位重壓一次標題，零 API。
+// 只改文字（2026-09-08 滿版；2026-09-14 雙切也有）：底圖不重生，用目前欄位重壓一次標題，零 API。
 // 底圖走 state.tenCoverBackground，不是 refineSource——見該欄位的註解。
+// 記下它是哪個版面生的：滿版底圖是整圖、雙切底圖是拼好的兩格，混用會壓錯版，後端也會 400。
 function setTenCoverBackground(data) {
-    const usable = coverLayoutNow() === 'full'
-        && data.mode === 'composite' && !!data.background_image_base64;
+    const usable = data.mode === 'composite' && !!data.background_image_base64;
     state.tenCoverBackground = usable ? {
         base64: data.background_image_base64,
         mimeType: data.background_mime_type || 'image/png',
         isAi: !!data.background_is_ai,
+        rightIsAi: !!data.right_is_ai,
+        layout: coverLayoutNow(),
     } : null;
-    const btn = document.getElementById('coverRecomposeBtn');
-    if (btn) btn.disabled = !usable;
+    applyCoverLayoutFields();
 }
 
 async function recomposeTenCoverText() {
     const background = state.tenCoverBackground;
     if (!background) throw new Error('還沒有底圖，請先生成一次');
+    if (background.layout !== coverLayoutNow()) throw new Error('版面變了（滿版↔雙切），請重新生成');
     const res = await fetch(COVER_BACKEND_URL, {
         method: 'POST',
         headers: _apiHeaders(),
@@ -2232,6 +2239,8 @@ async function recomposeTenCoverText() {
             background_image_base64: background.base64,
             background_mime_type: background.mimeType,
             background_is_ai: background.isAi,
+            background_right_is_ai: background.rightIsAi,
+            background_layout: background.layout,
         }),
     });
     const data = await res.json().catch(() => ({}));
@@ -2241,15 +2250,18 @@ async function recomposeTenCoverText() {
 
 // 十點不一樣封面：使用者直接給兩個標題，中間沒有消化這一段，所以走自己的端點。
 // 下拉、產出區、下載都還在同一頁同一個位置，編輯不用切分頁。
-// recomposeOnly=true：滿版合成版的「只改文字」，底圖不重生（比照 handleYtCoverGenerate）。
+// recomposeOnly=true：合成版（滿版／雙切）的「只改文字」，底圖不重生（比照 handleYtCoverGenerate）。
 async function handleTenCoverGenerate(recomposeOnly = false) {
     const val = id => (document.getElementById(id)?.value || '').trim();
     const titleLeft = val('coverTitleLeft');
     const titleRight = val('coverTitleRight');
     const fullLayout = coverLayoutNow() === 'full';
     if (!titleLeft) return showToast('第一標題要填');
-    // 只改文字只做滿版合成版：AI 版的字是模型畫的、雙切拼完分不回去（後端也會回 400）
+    // 只改文字只有合成版有（AI 版的字是模型畫的）；底圖要跟現在的版面同一種
     if (recomposeOnly && !state.tenCoverBackground) return showToast('還沒有底圖，請先生成一次');
+    if (recomposeOnly && state.tenCoverBackground.layout !== coverLayoutNow()) {
+        return showToast('版面變了（滿版↔雙切），請重新生成');
+    }
 
     const btn = document.getElementById('aiBtn');
     const loading = document.getElementById('aiLoading');
