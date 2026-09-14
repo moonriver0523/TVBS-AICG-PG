@@ -65,6 +65,9 @@
 | B28 | **畫真人＋掛真名時「AI示意圖」標籤會被附圖規則洗掉** | D13 裁決的前提查證 | ⬜ | `apply_user_references_to_image_request` 的 2026-08-17 裁決：有使用者上傳就注入 `USER_REFERENCE_NO_DISCLAIMER_RULES`（不標示意圖），僅 `portrait_reference_data_urls` 與 `aiedit` 兩種例外保留標籤。D13 裁示「可以畫人可以掛名，因為已標 AI示意圖」——**那個前提在有附圖時不成立**。要補：畫真人並掛真實姓名時標籤強制保留 |
 | B29 | 稽核歸檔只存畫面描述，不存送進模型的完整 prompt | 王結玲撈證時發現 | ⬜ | `_archive_generation` 存的是 `f"FULL: {visual}"`（main.py:5107 等），不是 `apply_user_references_to_image_request` 注入後的完整 prompt。使用者回報「規則沒生效」時無法從後台反查，只能讀程式碼推論。不擋本波。**本波建議（不做）**：後台 `_row` 渲 `density`；歸檔改存 VARIABLE 段（或放寬 `MAX_PROMPT_CHARS=4000`），否則 D16 按檔位量測永遠 n=0 |
 | B30 | CG 線的「示意圖」浮水印沒有程式疊，只能求模型畫 | 董碧惠 2026-09-14 20:39 後台證據 | ⬜ | `WATERMARK_TEXT = "示意圖"`（`compose.py:305`）只由 `apply_broadcast_hole`（`compose.py:352`）貼，**僅播出鏡面**；封面線另有程式疊的 `AI示意圖`（`compose.py:445`／`719`／`1439`）。**情境示意圖這條 CG 線兩者都沒有**——`app.js:1957` 是叫模型自己把 VARIABLE 給的示意圖標籤畫出來，等於把中文字交給生圖模型，本來就不可靠。證據：董碧惠同一則金門金牌竊案連生 4 次（20:35／20:37 重抽、20:39 改圖、20:40 再重抽），20:39 的 USER CHANGE REQUEST 原文就是「右下圖片下方 加 示意圖」，改完隔一分鐘又退回重生。**建議**：CG 線比照封面線，改成程式後疊（同一支 `compose` 已有現成字型與半透明底樣式），並在前端給開關。不擋本波。
+| B31 | **消化死線守門對第一次 attempt 完全不生效，單次 attempt 最壞 270 秒** | 子代理速度調查 2026-09-14 | ⬜ | `DIGEST_DEADLINE_SECONDS=230`（`main.py:253`）的檢查寫在 `main.py:2088`，條件是 `if attempt and ...`——**attempt 0 根本不執行**。同時 `main.py:84/96/104` 三個 `OpenAI(...)` 都沒帶 `max_retries`，SDK 預設還會自己重試 2 次，所以 `payload["timeout"]=90`（`main.py:1699`）是**每通 HTTP** 的上限、不是整次呼叫的：一次 attempt 常見最壞 90×3=**270 秒**（對得上 `main.py:155-200` 註解記的「重試後 269 秒」），撞上 `BadRequestError` 退路（`main.py:1721-1756`）再乘 3 = 810 秒。**已超過 Cloud Run 300 秒硬砍**，保險在最需要的第一次就是關的。另 `apply_photo_availability`（`main.py:2033`）會再呼叫一次 `generate()`，而 `main.py:2081` 的 deadline **重新計算**，單一請求理論上限變成 230+230。**修法（純靜態即可確定，不必等實測）**：明確設 `max_retries`、把守門改成每個 attempt 前都查（含第 0 次）、第二次 `generate()` 沿用同一 deadline。生圖端反向問題：原生路徑 `images.generate`／`images.edit`（`main.py:3020`／`3028`）**完全沒傳 timeout**，吃 SDK 預設 read 600 秒 |
+| B32 | 維基查照在消化與生圖各查一次，且完全沒有快取 | 同 B31 | ⬜ | `/api/generate` 走 `apply_photo_availability` → `lookup_portrait_photos`（`main.py:2021`）查一輪；前端接著打 `/api/images/generate`，`apply_portrait_to_image_request` → `resolve_portraits`（`main.py:2417`／`3404`／`3372`）**又查一輪**。`photo_lookup.py` 無 `lru_cache`／無 `_CACHE`。單人最壞 2 候選名 × 2 語言（`photo_lookup.py:48`）×（query＋`_is_human`＋可能 P18＋圖片下載，`photo_lookup.py:151/170/175`），每通 timeout 10 秒（`photo_lookup.py:50`），且逐人序列（`main.py:3308-3321`）。加行程內 TTL 快取即可，不犧牲任何畫質 |
+| B33 | 封面「一次 API 都不打」的零成本路徑，其實已經先打了標題斷句 | 同 B31 | ⬜ | `_cover_composite` 的註解自稱「一次 API 都不打」（`main.py:4756`、`4764-4766`），但 `apply_title_break_hints` 在端點入口**無條件執行**，排在 `background_image_base64` 零 API 分支之前：`main.py:5183`（十點，零 API 分支在 `5214`）、`main.py:5896`（YT，零 API 分支在 `5958`／`5988`）。斷句模型 `gpt-5.4-mini`（`main.py:102`／`112`）timeout 8 秒。注意斷句本身有正確的短路（標題夠短就不送，`main.py:4251-4260`／`4306-4309`），**問題純粹在呼叫位置**。把呼叫移到零 API 分支之後即可 |
 | D4 | 生圖模式附圖左右指定（全線）| 待裁 |
 | D9 | CG 線原圖放置的順序／位置／內文搭配（四條路）| 待裁；路線 3 會牽動 **D12** |
 | B10 | 附圖尺寸失控（文件照被縮到看不清）| 併入 D9 的位置／佔比一起訂 |
@@ -296,6 +299,7 @@
 | F26 | 生成速度：生圖端的兩個旋鈕（已評估，暫不動） | 同 F25 | ⬜ **不建議動** | `quality` 現為 `medium`（`main.py:3000`，吃 `OPENAI_IMAGE_QUALITY`），降 `low` 會快但畫質掉；換 `flare` 比 `sunburst` 快，但 `main.py:2619` 註解記明當初就是為畫質選 sunburst。**兩個都是拿畫質換速度**，上鏡的東西不值得。留紀錄避免日後有人重新發現又重新評估一次 |
 | F27 | 生成速度：多張同輪次改並行 | 同 F25 | ⬜ | 若現況是一張一張序列跑，改並行是純賺（不犧牲畫質）。**要先確認現況是不是序列**，依賴 F25 的量測 |
 | F28 | 生成速度：思考上限可能還有空間 | 同 F25 | ⬜ | `DIGEST_REASONING_MAX_TOKENS = 2000`（`main.py:202`）是保守值。註解裡觀測到的思考 603–4873 是**封頂前**的數字，封頂後實際用多少沒量過。往下壓要小心截斷，**依賴 F25 的量測**。與 F20（無字檔位直接跳過整個 digest 呼叫）同向 |
+| F29 | 生成速度：稽核歸檔移出請求路徑 | 子代理速度調查 2026-09-14 | ⬜ | `_archive_generation`（`main.py:2447`／`3899`）在**回傳成品前**同步做 GCS 兩個 blob 上傳（`gcs_archive.py:49-53`）＋本機寫圖與 JSON（`audit_archive.py:68-85`）。改成 `BackgroundTasks` 或背景 thread 即可，**不犧牲任何畫質**，使用者等待直接少掉這一段。與 B29（歸檔內容不完整）同一支函式，**若要一起改，順序是先 B29 再 F29**，免得搬到背景後更難除錯 |
 
 ### 生成速度這一族（F25–F28）的前提，寫在這裡免得日後重打
 
@@ -311,6 +315,55 @@
 4. 所以**第一步一定是 F25 量測**，不是直接動旋鈕。
 
 **使用者裁示：「生圖速度先列 todo，之後處理。」本波不做。**
+
+### 子代理靜態調查結果（2026-09-14，純讀碼未實測）
+
+**架構前提（先前理解有誤，更正）**：網頁版的 `/api/generate` **只做消化、不生圖**，
+成品圖是前端再打第二支 `/api/images/generate` 拿的（`app.js:2846` → `2868`，序列），
+**兩支各自吃一份 Cloud Run 300 秒**。只有 LINE 那條 `generate_news_image`（`main.py:3771`）
+才把消化與生圖擠進同一個請求（`3787`／`3817`）。
+另：`DIGEST_TWO_STAGE` **預設是關的**（`main.py:826`），分類那一次 20 秒往返預設不發生。
+
+**並行現況**：全專案只有兩個並行點，都是封面版型的左右兩格底圖（各 `max_workers=2`）——
+`main.py:4739`（十點雙切）、`main.py:5842`（YT 雙則）。**其餘全部序列**，包括
+封面 AI 標題模式的兩段生圖首尾相接（`main.py:5233-5237`／`5990-6013`）、
+YT 雙則的兩次畫面描述（`5958-5962`）、逐人查照（`3308-3321`）、
+逐點 geocode（`1458`，且 `map_lookup.py:129` 每點間硬性 sleep 補滿 1 秒）。
+⚠ 前端 `app.js:3131` 的 `for (round < 6)` **不是六連生**，是上傳圖的 JPEG 品質降階迴圈（`app.js:3122`）。
+
+**現有計時：全專案只有一處真的量牆鐘時間**——標題斷句（`main.py:4268/4283/4287`）。
+`log_digest_usage`（`main.py:1606-1636`）記 token 與狀態但**沒有秒數**，
+`request_log.py:65/118` 落檔欄位也沒有 duration。**所以現在沒有人知道時間花在哪，這就是 F25 的理由。**
+
+**要加分段計時，最少動這 6 點**（各包一層 `perf_counter`）：
+
+1. `digest_completion` 的 `return response` 前（`main.py:1748`）——**CP 值最高的單一改動**，
+   一處涵蓋主消化／分類／斷句／封面描述全部 5 個呼叫端，`site` 參數現成可當標籤
+2. `generate()` 的 attempt 迴圈（`main.py:2097-2180`）——分開「重試放大」與「單次慢」
+3. `resolve_map_points`（`main.py:1441`）——geocode 總計，含強制 sleep
+4. `lookup_portrait_photos`（`main.py:3295`）——查照總計，順便暴露 B32 的重複查詢
+5. `generate_image_raw`（`main.py:2738`）——生圖牆鐘
+6. `finalize_image_result`（`main.py:2827`）與 `_archive_generation`（`main.py:399`）——分開量 Pillow 後製與歸檔上傳
+
+### 加速候選清單（依 CP 值）
+
+| # | 候選 | 犧牲畫質 | 確定性 | 已另立 |
+|---|---|---|---|---|
+| 1 | 歸檔移出請求路徑（`main.py:2447`／`3899`、`gcs_archive.py:49-53`、`audit_archive.py:68-85`），改 `BackgroundTasks` | N | **純靜態確定** | F29 |
+| 2 | `photo_lookup` 加行程內 TTL 快取，消掉重複查照 | N | **純靜態確定** | **B32** |
+| 3 | 斷句呼叫移到零 API 分支之後 | N | **純靜態確定** | **B33** |
+| 4 | 明確設 `max_retries`，讓 90 秒真的是上限 | N | **純靜態確定** | **B31** |
+| 5 | 第二次 `generate()` 共用同一 deadline | N | **純靜態確定** | **B31** |
+| 6 | 封面斷句與畫面描述並行（`main.py:5183`→`5220`，兩者無依賴） | N | 可並行為靜態確定，秒數需實測 | F27 |
+| 7 | Nominatim 1 秒節流改併發（`map_lookup.py:129`、`main.py:539`，4 點 ≥3 秒純等待） | N | 靜態確定，**但違反對方使用政策，需裁決** | D-（未開） |
+| 8 | OSM 圖磚並行下載（`map_lookup.py:255-266`，24 張序列 ×8 秒） | N | 需實測（僅冷快取有感） | F27 |
+| 9 | 合併／跳過封面兩段生圖的第一段（`main.py:5233-5237`／`5990-6013`） | **Y** | 需實測＋需裁決 | F26 家族 |
+| 10 | `OPENAI_IMAGE_QUALITY` `medium`→`low`（`main.py:3000`）／降 `DIGEST_MAX_TOKENS`（`main.py:185-186`） | **Y** | 需實測 | **F26（已評估為不建議動）** |
+
+**監督判讀**：第 2～5 項是**缺陷不是調校**，已改列 B31／B32／B33，
+不必等 F25 的實測就能確定現行行為是錯的；其中 **B31 會讓使用者在 Cloud Run 上直接吃到逾時**，
+是這一族裡唯一有使用者可見後果的。第 1 項獨立為 F29。
+第 7 項要動別人的使用政策，屬裁決項，**未開，不得自行動工**。
 
 ---
 
