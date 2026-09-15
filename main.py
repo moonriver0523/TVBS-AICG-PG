@@ -2477,7 +2477,7 @@ def _generate_ndjson_lines(req: GenerateRequest, ctx: contextvars.Context):
     contextvars.Context（見 generate_stream）。threading.Thread 起於一個
     全新的空 context，不會自動帶著 _current_user 這類 contextvar——改之前
     generate() 是跑在 Starlette 用 anyio to_thread.run_sync 開的執行緒，
-    那條路徑會複製 context，才會一直「湊巧」拿得到登入身分；换成自己開
+    那條路徑會複製 context，才會一直「湊巧」拿得到登入身分；換成自己開
     thread 之後若不手動複製，current_user() 在背景執行緒裡會是空字典，
     generate() 尾端 _remember_digest() 第一行就 return，稽核歸檔悄悄漏記
     新聞原文，跟 0911 查到的「後台缺欄位」是同一類缺陷。
