@@ -225,11 +225,37 @@ class PromptTruncationTests(unittest.TestCase):
         import request_log
         self.assertEqual(request_log.MAX_PROMPT_CHARS, audit_archive.MAX_PROMPT_CHARS)
 
-    def test_the_cap_clears_the_variable_fields_section(self):
-        """實測規則前綴約 1900–3000 字、structure 最大 2097、variable 最大 336；
-        低於 6500 就會再次切在 VARIABLE FIELDS 之前。"""
+    def test_the_cap_covers_the_worst_case_prompt(self):
+        """實際組一份最壞情況的 prompt 來比，不要釘一個猜出來的數字。
+
+        規則區塊只會愈加愈多（每次裁決都往裡面塞條文），寫死一個數字的話，
+        下一次條文長出來時這支測試不會叫——而症狀是 prompt 又被默默切掉，
+        跟 B29 一模一樣。所以這裡現算現比。
+
+        style／structure／variable 的長度取本機 log 實測上限（1255／2840／336）。
+        """
+        import news_prompt
         import request_log
-        self.assertGreaterEqual(request_log.MAX_PROMPT_CHARS, 6500)
+
+        longest = 0
+        for role in ("編輯", "記者"):
+            for safe_frame in (False, True):
+                for no_text in (False, True):
+                    for type_label in ("地圖／位置", "資料圖表"):
+                        for portrait_mode in news_prompt.PORTRAIT_MODES:
+                            prompt = news_prompt.build_prompt(
+                                role=role, engine="gpt", type_label=type_label,
+                                style="S" * 1255, structure="T" * 2840,
+                                variable=news_prompt.compose_variable("V" * 336),
+                                safe_frame=safe_frame, portrait_mode=portrait_mode,
+                                no_text=no_text,
+                            )
+                            longest = max(longest, len(prompt))
+        self.assertGreater(longest, 4000, "最壞情況應該遠超過舊的 4000 上限")
+        self.assertGreaterEqual(
+            request_log.MAX_PROMPT_CHARS, longest,
+            f"最壞情況 prompt 已經 {longest} 字，超過上限就會再次切掉 VARIABLE FIELDS",
+        )
 
 
 if __name__ == "__main__":
