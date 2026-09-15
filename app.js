@@ -2156,11 +2156,16 @@ const REFINE_BACKEND_URL = `${API_BASE}/api/images/refine`;
 // 後端有給 detail 時直接照用（那是後端刻意寫給人看的訊息）；
 // 只有 fallback（例如 524 這種被 Cloudflare 邊緣層直接攔掉、後端來不及回應的情況）
 // 才需要把狀態碼翻成使用者看得懂、且知道「下一步該做什麼」的中文。
-function _apiError(data, status) {
+// context: 這個函式被 12 個呼叫點共用（消化／生圖／封面／改圖…），「縮短新聞、降字數拉桿」
+// 這個建議只對「消化新聞」那一步成立——生圖、改圖、封面都不吃新聞稿或字數拉桿，硬套同一句
+// 會給錯的下一步（B38 驗收時發現）。只有 _digestFetch 傳 'digest'，其餘呼叫點走中性版本。
+function _apiError(data, status, context) {
     const detail = data && data.detail;
     if (typeof detail === "string") return detail;
     if (status === 408 || status === 504 || status === 524) {
-        return `新聞太長，消化超過時間上限。建議縮短新聞內容，或把字數拉桿降一階再試（HTTP ${status}）`;
+        return context === "digest"
+            ? `新聞太長，消化超過時間上限。建議縮短新聞內容，或把字數拉桿降一階再試（HTTP ${status}）`
+            : `處理超過時間上限，請稍後再試（HTTP ${status}）`;
     }
     if (status === 502 || status === 503) {
         return `AI 服務暫時忙碌或無回應，請稍後再試（HTTP ${status}）`;
@@ -2237,7 +2242,7 @@ async function _digestFetch(input, signal) {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-        throw new Error(_apiError(data, response.status));
+        throw new Error(_apiError(data, response.status, "digest"));
     }
     return data;
 }
