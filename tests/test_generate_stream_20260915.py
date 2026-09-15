@@ -9,6 +9,7 @@ generate_news_image／apply_photo_availability／這三支既有測試檔，全�
 直接呼叫 main.generate()，不經 HTTP，串流只是外面那層 wire format）。
 """
 
+import asyncio
 import json
 import os
 import unittest
@@ -19,7 +20,7 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 import main  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from main import GenerateResponse, app  # noqa: E402
+from main import GenerateRequest, GenerateResponse, app  # noqa: E402
 
 client = TestClient(app)
 
@@ -119,6 +120,42 @@ class GenerateStreamTests(unittest.TestCase):
         pings = [line for line in lines if line["type"] == "ping"]
         self.assertGreaterEqual(len(pings), 2, "長工期間應該送出多行心跳，不是只有結果那一行")
         self.assertEqual(lines[-1]["type"], "result")
+
+    def test_background_thread_still_sees_the_logged_in_user(self):
+        """回歸測試：threading.Thread 起於全新空 context，不會自動帶著
+        _current_user 這個 contextvar。改之前 generate() 跑在 Starlette 用
+        anyio to_thread.run_sync 開的執行緒（那條路徑會複製 context），現在
+        自己開 thread，若沒有在 generate_stream()——還在 middleware 的
+        context 內——就 contextvars.copy_context()，背景執行緒裡的
+        current_user() 會變成空字典，generate() 尾端的 _remember_digest()
+        會悄悄跳過不寫，稽核歸檔漏記新聞原文卻沒有任何錯誤或提示。
+
+        刻意從 generate_stream() 進去、不直接呼叫 _generate_ndjson_lines()
+        ——要測的正是「複製這一步有沒有寫在還沒離開 middleware context 的
+        那一層」，繞過 generate_stream() 直接測內層會剛好測不到這個坑。
+        """
+        seen = {}
+
+        def stub_generate(_req):
+            seen["user"] = main.current_user()
+            return FAKE_DIGEST
+
+        token = main._current_user.set({"user_id": "u1", "email": "u1@example.com"})
+        try:
+            with patch.object(main, "generate", side_effect=stub_generate):
+                response = main.generate_stream(
+                    GenerateRequest(news_text=NEWS, type_label="資料圖表")
+                )
+
+                async def drain():
+                    async for _ in response.body_iterator:
+                        pass
+
+                asyncio.run(drain())
+        finally:
+            main._current_user.reset(token)
+
+        self.assertEqual(seen.get("user"), {"user_id": "u1", "email": "u1@example.com"})
 
     def test_wrong_api_key_is_rejected_before_streaming_starts(self):
         # 驗證還沒過就不會進到 generator，狀態碼此時還沒定死，仍照 HTTP 語意回 401。

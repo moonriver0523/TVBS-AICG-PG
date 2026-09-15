@@ -2464,7 +2464,7 @@ def generate(req: GenerateRequest):
 DIGEST_HEARTBEAT_SECONDS = 7
 
 
-def _generate_ndjson_lines(req: GenerateRequest):
+def _generate_ndjson_lines(req: GenerateRequest, ctx: contextvars.Context):
     """背景執行緒跑 generate()（可能長達 DIGEST_DEADLINE_SECONDS 秒），
     主執行緒每隔 DIGEST_HEARTBEAT_SECONDS 送一行 ping 讓連線看起來活著；
     結束送一行 result 或 error，兩者都是這個 generator 的最後一行。
@@ -2472,6 +2472,15 @@ def _generate_ndjson_lines(req: GenerateRequest):
     ⚠ HTTP 狀態碼在第一個位元組送出後就定死是 200，這裡送出第一行 ping 或
     result／error 之後就再也不能改成別的狀態碼了——所有成敗都編在內容裡，
     前端要看這裡送出的 type 欄位判斷，不能看 response.ok（見 app.js _digestFetch）。
+
+    ctx：呼叫端在還沒離開 Clerk middleware 的 context 時複製好的
+    contextvars.Context（見 generate_stream）。threading.Thread 起於一個
+    全新的空 context，不會自動帶著 _current_user 這類 contextvar——改之前
+    generate() 是跑在 Starlette 用 anyio to_thread.run_sync 開的執行緒，
+    那條路徑會複製 context，才會一直「湊巧」拿得到登入身分；换成自己開
+    thread 之後若不手動複製，current_user() 在背景執行緒裡會是空字典，
+    generate() 尾端 _remember_digest() 第一行就 return，稽核歸檔悄悄漏記
+    新聞原文，跟 0911 查到的「後台缺欄位」是同一類缺陷。
     """
     outcome: dict = {}
 
@@ -2484,7 +2493,7 @@ def _generate_ndjson_lines(req: GenerateRequest):
             print(f"[generate-stream] 未預期的例外：{exc}", flush=True)
             outcome["error"] = (500, "AI 服務處理失敗，請確認模型權限或稍後重試")
 
-    thread = threading.Thread(target=worker, daemon=True)
+    thread = threading.Thread(target=ctx.run, args=(worker,), daemon=True)
     thread.start()
     while thread.is_alive():
         thread.join(timeout=DIGEST_HEARTBEAT_SECONDS)
@@ -2500,7 +2509,12 @@ def _generate_ndjson_lines(req: GenerateRequest):
 
 @app.post("/api/generate", dependencies=[Depends(verify_internal_api_key)])
 def generate_stream(req: GenerateRequest):
-    return StreamingResponse(_generate_ndjson_lines(req), media_type="application/x-ndjson")
+    # ⚠ 一定要在這裡複製——這裡還在 Clerk middleware 的 context 內
+    # （_current_user 已經 set 好）。StreamingResponse 的 body 是 middleware
+    # 的 finally 跑完（_current_user 已 reset）之後才被消耗的，複製寫在
+    # generator 函式體裡就太晚了，見 _generate_ndjson_lines 的說明。
+    ctx = contextvars.copy_context()
+    return StreamingResponse(_generate_ndjson_lines(req, ctx), media_type="application/x-ndjson")
 
 
 # ---- 混合版型：新聞原文 → 結構化內容（文字數字由 APP 繪製，AI 不碰像素文字）----
