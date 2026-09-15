@@ -2189,11 +2189,12 @@ function _apiHeaders() {
     return { "Content-Type": "application/json", "X-API-Key": _INTERNAL_API_KEY };
 }
 
-/* 前端這一側的保險絲（2026-09-10 線上事故）：後端現在每一次消化呼叫都有 90 秒上限、
-   整體 230 秒死線，所以正常情況一定會回一個看得懂的錯誤。但只要中間有任何一層
-   （Cloud Run、公司測試環境前面的反向代理）把連線吊著不回，fetch 沒有預設逾時，
-   進度條就會停在 35%（消化階段的上限值）永遠不動——使用者只看得到「卡住」。
-   時間設在 Cloud Run 的 300 秒之內，讓後端的訊息永遠有機會先回來。 */
+/* 前端這一側的保險絲（2026-09-10 線上事故，2026-09-15 B39 改寫語意）：
+   /api/generate 現在是串流＋心跳（後端每 5~10 秒送一行 ping），正常情況下連線
+   會一直有位元組流動、不會被公司 Cloudflare 的 proxy timeout（約 100~120 秒）
+   當成靜默連線掐斷。這條逾時不再是「等後端訊息」的保險——那件事交給心跳處理
+   ——而是「整趟串流真的卡死超過這個時間」的最後一道防線（例如背景執行緒本身
+   卡住、心跳都送不出來），所以維持一個遠大於正常耗時的寬鬆上限即可。 */
 const DIGEST_FETCH_TIMEOUT_MS = 290_000;
 
 async function digestNewsText(input) {
@@ -2216,6 +2217,11 @@ async function digestNewsText(input) {
     return response;
 }
 
+// B39（2026-09-15）：/api/generate 改成 NDJSON 串流＋心跳，一行一個 JSON 物件——
+// {"type":"ping"} 處理期間陸續送、{"type":"result",...} 或 {"type":"error",...}
+// 是最後一行。⚠ 一旦開始串流，HTTP 狀態碼就定死是 200，成敗只能看這裡讀到的
+// 內容判斷，不能看 response.ok（那只反映「有沒有開始串流」，例如驗證失敗會在
+// 串流開始前就回真正的狀態碼，此時 response.ok 仍然有意義，見下面第一段判斷）。
 async function _digestFetch(input, signal) {
     const response = await fetch(AI_BACKEND_URL, {
         method: "POST",
@@ -2240,11 +2246,48 @@ async function _digestFetch(input, signal) {
             asis_reference_count: uploadedAsisCount(),
         }),
     });
-    const data = await response.json().catch(() => ({}));
+    // 驗證／請求格式錯誤等會在串流開始前就被擋下（X-API-Key、Pydantic 驗證），
+    // 這時狀態碼還沒定死，照舊看 status 判斷。
     if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
         throw new Error(_apiError(data, response.status, "digest"));
     }
-    return data;
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+        let chunk;
+        try {
+            chunk = await reader.read();
+        } catch (err) {
+            if (err.name === "AbortError") throw err;
+            throw new Error("消化連線中途中斷，請稍後再試");
+        }
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        let newlineIdx;
+        while ((newlineIdx = buffer.indexOf("\n")) >= 0) {
+            const line = buffer.slice(0, newlineIdx).trim();
+            buffer = buffer.slice(newlineIdx + 1);
+            if (!line) continue;
+            let msg;
+            try {
+                msg = JSON.parse(line);
+            } catch (err) {
+                throw new Error("消化回應格式異常，請稍後再試");
+            }
+            if (msg.type === "ping") continue;   // 只是活著訊號，忽略
+            if (msg.type === "result") {
+                delete msg.type;   // 只是這一層的信封，往上不該看到
+                return msg;
+            }
+            if (msg.type === "error") {
+                throw new Error(_apiError({ detail: msg.detail }, msg.status, "digest"));
+            }
+        }
+    }
+    throw new Error("消化連線中途中斷，尚未收到結果，請稍後再試");
 }
 
 // 指令欄可蓋過版面形式（2026-09-03），AI 回報的類型因此可能跟下拉選的不一樣。

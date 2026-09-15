@@ -21,7 +21,7 @@ import certifi
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from openai import (
     APIConnectionError,
     APIError,
@@ -2234,11 +2234,10 @@ def apply_photo_availability(
         _inside_pipeline.reset(token)
 
 
-@app.post(
-    "/api/generate",
-    response_model=GenerateResponse,
-    dependencies=[Depends(verify_internal_api_key)],
-)
+# 純業務邏輯，不掛路由——網頁版的 /api/generate（見下面 generate_stream，B39
+# 改成串流）與 LINE／整合端的 generate_news_image() 共用同一份實作，兩邊都是
+# 直接呼叫這個函式，不經 HTTP。呼叫端要的是「消化完成或明確失敗」，跟外面那層
+# 用什麼格式把結果送出去無關。
 def generate(req: GenerateRequest):
     # seed（F0）在最前面就定下來，並寫回 req：apply_photo_availability 會拿這份 req
     # 再呼叫一次 generate()，沒寫回的話第二次會再抽一顆，同一個請求的兩段消化就用了
@@ -2455,6 +2454,53 @@ def generate(req: GenerateRequest):
     finally:
         if deadline_token is not None:
             _digest_deadline.reset(deadline_token)
+
+
+# B39（2026-09-15）：公司 Cloudflare 的 proxy timeout 不能調，實測約 100～120 秒
+# 就會對「一個位元組都沒回」的連線送 524，遠比 DIGEST_DEADLINE_SECONDS=230 短。
+# 524 的定義是源站在時限內完全沒回應——連線上只要持續有位元組流動就不會觸發，
+# 所以不必讓 generate() 跑得更快，只要別讓連線在消化期間看起來像斷線。
+# 心跳間隔取 5～10 秒中段：夠短能穩穩躲過 CF 的切線，也不會為了心跳白費頻寬。
+DIGEST_HEARTBEAT_SECONDS = 7
+
+
+def _generate_ndjson_lines(req: GenerateRequest):
+    """背景執行緒跑 generate()（可能長達 DIGEST_DEADLINE_SECONDS 秒），
+    主執行緒每隔 DIGEST_HEARTBEAT_SECONDS 送一行 ping 讓連線看起來活著；
+    結束送一行 result 或 error，兩者都是這個 generator 的最後一行。
+
+    ⚠ HTTP 狀態碼在第一個位元組送出後就定死是 200，這裡送出第一行 ping 或
+    result／error 之後就再也不能改成別的狀態碼了——所有成敗都編在內容裡，
+    前端要看這裡送出的 type 欄位判斷，不能看 response.ok（見 app.js _digestFetch）。
+    """
+    outcome: dict = {}
+
+    def worker():
+        try:
+            outcome["result"] = generate(req)
+        except HTTPException as exc:
+            outcome["error"] = (exc.status_code, exc.detail)
+        except Exception as exc:  # noqa: BLE001 — 背景執行緒的例外不能悶掉，否則連線會卡死到 fetch 逾時都沒有提示
+            print(f"[generate-stream] 未預期的例外：{exc}", flush=True)
+            outcome["error"] = (500, "AI 服務處理失敗，請確認模型權限或稍後重試")
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    while thread.is_alive():
+        thread.join(timeout=DIGEST_HEARTBEAT_SECONDS)
+        if thread.is_alive():
+            yield json.dumps({"type": "ping"}) + "\n"
+    if "error" in outcome:
+        status, detail = outcome["error"]
+        yield json.dumps({"type": "error", "status": status, "detail": detail}, ensure_ascii=False) + "\n"
+    else:
+        payload = {"type": "result", **outcome["result"].model_dump(mode="json")}
+        yield json.dumps(payload, ensure_ascii=False) + "\n"
+
+
+@app.post("/api/generate", dependencies=[Depends(verify_internal_api_key)])
+def generate_stream(req: GenerateRequest):
+    return StreamingResponse(_generate_ndjson_lines(req), media_type="application/x-ndjson")
 
 
 # ---- 混合版型：新聞原文 → 結構化內容（文字數字由 APP 繪製，AI 不碰像素文字）----
