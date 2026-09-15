@@ -27,9 +27,24 @@ from openai import (
     APIError,
     AuthenticationError,
     BadRequestError,
-    OpenAI,
     RateLimitError,
 )
+
+# Langfuse 觀測（2026-09-14）：langfuse.openai 的 OpenAI 是原生 SDK 的直接替換，
+# 換掉這一個名字，底下 20 個呼叫點一行都不用改，就會自動記錄每次呼叫的
+# model／token／成本／延遲，並綁到發起請求的同仁（見 clerk_login_gate）。
+#
+# 為什麼不自己記 token：各家模型計價不同且會變動，自行維護價目表必然過期。
+# Langfuse 內建價目表，且公司其他工具（EchoScript）已在同一個實例上，
+# 日後要比較各工具的 AI 支出才有共同基準。
+#
+# 例外類別仍從原生 openai 匯入——langfuse.openai 只包裝 client，不保證
+# re-export 那些類別，從它拿會在未來版本悄悄壞掉。
+# 沒裝 langfuse（本機開發、未設定的環境）就退回原生，行為完全不變。
+try:
+    from langfuse.openai import OpenAI
+except ImportError:
+    from openai import OpenAI
 from PIL import Image
 from pydantic import BaseModel, Field
 
@@ -369,6 +384,21 @@ def current_user() -> dict:
     return _current_user.get() or {}
 
 
+# Langfuse 的身分綁定（2026-09-14）。掛在登入門那一層，所有端點一次涵蓋——
+# 逐個端點加等於每新增一個版型就要記得補一次，遲早漏掉（稽核歸檔就是這樣漏掉
+# 四個編輯端點的，見 2026-09-11 的修正）。
+#
+# user_id 用 email 而非 Clerk 的 user_xxx：Langfuse 介面上要能一眼看出是誰，
+# 而 email 在本站已是穩定識別（Clerk 的 allowlist 只放公司網域）。
+try:
+    from langfuse import propagate_attributes as _lf_propagate
+except ImportError:  # 沒裝 langfuse 時退成什麼都不做的空 context manager
+    import contextlib
+
+    def _lf_propagate(**_kwargs):
+        return contextlib.nullcontext()
+
+
 # 消化與生圖是兩次獨立的請求（app.js:1145-1146 的 AI_BACKEND_URL / IMAGE_BACKEND_URL），
 # 生圖那支只收到 prompt，專案原本就把 news_text 寫死成 ""（見 main.py 的 web-image
 # 歸檔呼叫）。但稽核要求「完整記錄同仁生成的內容」，新聞原文是其中最重要的一項，
@@ -451,7 +481,9 @@ async def clerk_login_gate(request, call_next):
 
     token = _current_user.set(user)
     try:
-        return await call_next(request)
+        # 這個 with 內發出的每一次 LLM 呼叫都會帶上 user_id 送進 Langfuse
+        with _lf_propagate(user_id=user.get("email") or user.get("user_id", "")):
+            return await call_next(request)
     finally:
         _current_user.reset(token)
 
