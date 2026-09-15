@@ -2153,10 +2153,25 @@ const AI_BACKEND_URL = `${API_BASE}/api/generate`;
 const IMAGE_BACKEND_URL = `${API_BASE}/api/images/generate`;
 const REFINE_BACKEND_URL = `${API_BASE}/api/images/refine`;
 
+// 後端有給 detail 時直接照用（那是後端刻意寫給人看的訊息）；
+// 只有 fallback（例如 524 這種被 Cloudflare 邊緣層直接攔掉、後端來不及回應的情況）
+// 才需要把狀態碼翻成使用者看得懂、且知道「下一步該做什麼」的中文。
 function _apiError(data, status) {
     const detail = data && data.detail;
     if (typeof detail === "string") return detail;
-    return "HTTP " + status;
+    if (status === 408 || status === 504 || status === 524) {
+        return `新聞太長，消化超過時間上限。建議縮短新聞內容，或把字數拉桿降一階再試（HTTP ${status}）`;
+    }
+    if (status === 502 || status === 503) {
+        return `AI 服務暫時忙碌或無回應，請稍後再試（HTTP ${status}）`;
+    }
+    if (status === 429) {
+        return `請求太頻繁，請稍等一下再試（HTTP ${status}）`;
+    }
+    if (status === 401 || status === 403) {
+        return `登入可能已過期，請重新整理頁面後再登入（HTTP ${status}）`;
+    }
+    return `生成失敗（HTTP ${status}），請稍後再試`;
 }
 
 // 後端 /api/generate、/api/images/generate 現在要求 X-API-Key（見 main.py
@@ -2908,6 +2923,7 @@ async function handleOneClickGenerate() {
     let completed = false;
 
     try {
+        hideGenerateErrorBanner();
         showToast("消化中…");
         beginGenerationProgress("digest");
         const digest = await digestNewsText(input);
@@ -2974,10 +2990,13 @@ async function handleOneClickGenerate() {
         document.getElementById("oneClickEmpty").classList.add("hidden");
         document.getElementById("oneClickResult").classList.remove("hidden");
         completed = true;
+        hideGenerateErrorBanner();
         showToast(titleMatch ? `已生成：${titleMatch[1].trim()}` : "已完成圖片生成");
     } catch (err) {
         console.error(err);
-        showToast(err.message || "生成失敗，請稍後再試");
+        const msg = err.message || "生成失敗，請稍後再試";
+        showGenerateErrorBanner(msg);
+        showToast(msg);
     } finally {
         btn.disabled = false;
         btnText.classList.remove("hidden");
@@ -3600,6 +3619,25 @@ function showToast(msg) {
     toast.innerText = msg;
     toast.style.opacity = '1'; toast.classList.add('toast-animate');
     setTimeout(() => { toast.style.opacity = '0'; toast.classList.remove('toast-animate'); }, 3000);
+}
+
+// B38：一鍵生成失敗時的訊息要留在畫面上讓使用者自己關掉，不能像 toast 3 秒就消失。
+function showGenerateErrorBanner(msg) {
+    const banner = document.getElementById('oneClickErrorBanner');
+    if (!banner) return;
+    document.getElementById('oneClickErrorMsg').innerText = msg;
+    banner.classList.remove('hidden');
+    const staleNotice = document.getElementById('oneClickStaleNotice');
+    if (staleNotice && !document.getElementById('oneClickResult').classList.contains('hidden')) {
+        staleNotice.classList.remove('hidden');
+    }
+}
+
+function hideGenerateErrorBanner() {
+    const banner = document.getElementById('oneClickErrorBanner');
+    if (banner) banner.classList.add('hidden');
+    const staleNotice = document.getElementById('oneClickStaleNotice');
+    if (staleNotice) staleNotice.classList.add('hidden');
 }
 
 function clearMatrix() {

@@ -747,6 +747,12 @@
                         <h3 class="text-[10px] font-black text-red-500 uppercase tracking-[0.2em]">生成結果</h3>
                         <span id="oneClickMeta" class="text-[9px] font-mono text-slate-500"></span>
                     </div>
+                    <!-- B38：失敗訊息要留在畫面上讓使用者自己關掉，不能像 toast 3 秒就消失 -->
+                    <div id="oneClickErrorBanner" class="hidden mb-3 flex items-start justify-between gap-3 rounded-lg border border-red-700 bg-red-950/60 px-3 py-2.5 text-[11px] text-red-200 leading-relaxed">
+                        <span id="oneClickErrorMsg" class="flex-1"></span>
+                        <button type="button" onclick="hideGenerateErrorBanner()" title="關閉"
+                                class="shrink-0 text-red-300 hover:text-white font-black leading-none px-1">✕</button>
+                    </div>
                     <div id="oneClickEmpty" class="min-h-[280px] flex items-center justify-center rounded-lg border border-dashed border-slate-800 bg-slate-950/40 px-6 text-center text-[12px] text-slate-500 leading-relaxed">
                         螢幕待命。貼稿後按一鍵生成，成圖會上這面牆。
                     </div>
@@ -761,6 +767,7 @@
                                 <a id="oneClickDownload" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg.jpg">下載圖片</a>
                             </div>
                         </div>
+                        <p id="oneClickStaleNotice" class="hidden mb-2 text-[10px] text-slate-500">⚠ 這是上一次的結果，本次生成失敗</p>
                         <img id="oneClickImage" alt="一鍵生成的新聞 CG" class="w-full rounded-lg border border-slate-800" />
 
                         <!-- ③ 追加指令修改：以置框前原圖為基礎就地改圖，不重跑消化 -->
