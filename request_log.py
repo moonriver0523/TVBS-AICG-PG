@@ -82,6 +82,7 @@ def log_generation(
     portrait_subject: str = "",
     portrait_mode: str = "",
     portrait_photo_source: str = "",
+    seed: int | None = None,
 ) -> None:
     """記一筆成功的生成。任何例外都吞掉——記錄失敗不該波及請求本身。"""
     if not ENABLED:
@@ -108,6 +109,9 @@ def log_generation(
                 "portrait_subject": portrait_subject,
                 "portrait_mode": portrait_mode,
                 "portrait_photo_source": portrait_photo_source,
+                # 變化池的 seed（F0／D1）。使用者回報「這一張好」時，靠它把同一種
+                # 長相抽回來——這就是 D1 說的「印在成品籤上」的資料落點。
+                "seed": seed,
                 "prompt": prompt[:MAX_PROMPT_CHARS],
             }
         )

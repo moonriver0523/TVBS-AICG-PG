@@ -30,6 +30,27 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 FIXTURE_PATH = REPO_ROOT / "tests" / "fixtures" / "yt_design_brief_rng_pins_20260911.json"
 
 
+def _without_d2_policy(brief: str) -> str:
+    """D2 改的是全域安全文案，不屬於 seed 抽籤序列。"""
+    return (
+        brief.replace(ef.COVER_NO_GREEN_ROW, "")
+        .replace(
+            "then add whatever else the design needs — the palette is fully open (never green)",
+            "D2-L4-COLOUR-POLICY",
+        )
+        .replace(
+            "then add what else you need — palette is fully open; no chroma-key green",
+            "D2-L4-COLOUR-POLICY",
+        )
+        .replace(
+            "- NO GREEN ON ANY TEXT — no green-family colour (green, lime, teal, mint, olive) on a"
+            " character, outline, shadow, filled block, tag or plate: the image is keyed over a studio"
+            " green screen. This outranks the palette.",
+            "",
+        )
+    )
+
+
 class YtDesignBriefRngPinTests(unittest.TestCase):
     """換接線前後，同一顆 seed／layout／level 抽到的完整 brief 文字要逐字元一致。"""
 
@@ -57,7 +78,7 @@ class YtDesignBriefRngPinTests(unittest.TestCase):
                     seed=row["seed"],
                     layout=row["layout"],
                 )
-                self.assertEqual(brief, row["brief"])
+                self.assertEqual(_without_d2_policy(brief), _without_d2_policy(row["brief"]))
 
 
 if __name__ == "__main__":

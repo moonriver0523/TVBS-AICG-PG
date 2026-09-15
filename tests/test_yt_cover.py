@@ -317,6 +317,61 @@ class BackgroundPathTests(unittest.TestCase):
         self.assertEqual(captured["req"].aspect_ratio, "16:9")
         self.assertFalse(captured["req"].safe_frame)
 
+    def test_slot_aiedit_reaches_the_generated_background(self):
+        """B27：附圖位裡的 AI改圖必須進生圖，不能只讀共用清單。"""
+        captured = {}
+
+        def fake_generate(image_req):
+            captured["req"] = image_req
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(_png_bytes(size=(1280, 720))).decode("ascii"),
+                mime_type="image/png", model="fake-image",
+            )
+
+        req = main.YtCoverRequest(
+            title="前段 後段",
+            slot_left=[main.UserReferenceImage(data_url=_data_url(_png_bytes((800, 800))), purpose="aiedit")],
+        )
+        with patch.object(main, "generate_image_raw", side_effect=fake_generate), \
+             patch.object(main, "apply_portrait_to_image_request", side_effect=lambda r: r):
+            _, _, is_ai, _ = main._yt_cover_background(req, "視覺", [], [])
+        self.assertTrue(is_ai)
+        self.assertEqual([r.purpose for r in captured["req"].reference_images], ["aiedit"])
+        self.assertIn("REDRAW THIS SAME PICTURE", captured["req"].prompt)
+        self.assertNotIn("USER-SUPPLIED SLOT PLACEMENT", captured["req"].prompt)
+
+    def test_dual_full_image_reads_both_slots_and_names_left_right(self):
+        """B27＋D4：雙則 AI 整張版讀兩格附圖，prompt 明寫左右。"""
+        captured = {}
+
+        def fake_generate(image_req):
+            captured["req"] = image_req
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(_png_bytes(size=(1280, 720))).decode("ascii"),
+                mime_type="image/png", model="fake-image",
+            )
+
+        req = main.YtCoverRequest(
+            title="第一則",
+            title_second="第二則",
+            layout=editor_formats.YT_COVER_LAYOUT_HOURLY,
+            slot_left=[main.UserReferenceImage(data_url=_data_url(_png_bytes((400, 400))), purpose="scene")],
+            slot_right=[main.UserReferenceImage(data_url=_data_url(_png_bytes((400, 400))), purpose="aiedit")],
+        )
+        with patch.object(main, "generate_image_raw", side_effect=fake_generate), \
+             patch.object(main, "apply_portrait_to_image_request", side_effect=lambda r: r):
+            main._yt_cover_full_image(req, ("第一則", "第二則"), "視覺", [], [])
+        self.assertEqual(
+            [r.purpose for r in captured["req"].reference_images],
+            ["scene", "aiedit"],
+        )
+        prompt = captured["req"].prompt
+        self.assertIn("USER-SUPPLIED SLOT PLACEMENT", prompt)
+        self.assertIn("LEFT half", prompt)
+        self.assertIn("RIGHT half", prompt)
+        self.assertIn("do NOT number them by the whole request's attached-file index", prompt)
+        self.assertNotIn("TEXT-FREE BACKGROUND", prompt)
+
 
 class SplitBackgroundTests(unittest.TestCase):
     """2026-09-06：原圖放置附圖 2 張＝雙切、3 張＝三切，斜切＋白色細分隔線。"""

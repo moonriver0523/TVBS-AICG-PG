@@ -9,6 +9,7 @@ import json
 import os
 import pathlib
 import re
+import secrets
 import ssl
 import threading
 import time
@@ -20,7 +21,7 @@ import certifi
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from openai import (
     APIConnectionError,
     APIError,
@@ -65,10 +66,12 @@ from news_prompt import (
     PORTRAIT_MODES,
     PROMPT_VERSION,
     USER_REFERENCE_ASIS_DIGEST_RULES,
+    USER_REFERENCE_ASIS_MULTI_RULES_TEMPLATE,
     USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE,
     USER_REFERENCE_AIEDIT_INSTRUCTION_TEMPLATE,
     USER_REFERENCE_MODES,
     USER_REFERENCE_NO_DISCLAIMER_RULES,
+    USER_REFERENCE_YT_SLOT_PLACEMENT_TEMPLATE,
     build_prompt,
     build_refine_prompt,
     compose_variable,
@@ -93,12 +96,18 @@ DIGEST_BACKEND = os.getenv(
     "DIGEST_BACKEND", "openrouter" if _openrouter_key else "native"
 ).strip()
 
+# SDK 預設 max_retries=2。消化外層 DIGEST_ATTEMPTS=5 已經在重試，SDK 再重試會讓
+# payload timeout=90 實際變成 270 秒，第一次 attempt 就能撞上 Cloud Run 300 秒硬砍
+# （B31）。暫時性網路錯誤改由外層迴圈吸收，不是關掉重試。三個後端同一把尺子。
+OPENAI_MAX_RETRIES = 0
+
 if DIGEST_BACKEND == "gemini":
     if not _gemini_key:
         raise RuntimeError("DIGEST_BACKEND=gemini 但未設定 GEMINI_API_KEY")
     openai_client = OpenAI(
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         api_key=_gemini_key,
+        max_retries=OPENAI_MAX_RETRIES,
     )
     DEFAULT_DIGEST_MODEL = os.getenv("GEMINI_DIGEST_MODEL", "gemini-3.6-flash")
     DEFAULT_TITLE_BREAK_MODEL = DEFAULT_DIGEST_MODEL   # flash 本來就快
@@ -109,14 +118,16 @@ if DIGEST_BACKEND == "gemini":
 # 環境變數，光在 .env 註解掉沒有用，因此改成 DIGEST_BACKEND 明說時聽它的。
 elif DIGEST_BACKEND == "openrouter" and _openrouter_key:
     openai_client = OpenAI(
-        base_url="https://openrouter.ai/api/v1", api_key=_openrouter_key
+        base_url="https://openrouter.ai/api/v1",
+        api_key=_openrouter_key,
+        max_retries=OPENAI_MAX_RETRIES,
     )
     DEFAULT_DIGEST_MODEL = "anthropic/claude-sonnet-5"
     # 斷句走小模型（2026-09-14 使用者裁決）。.env 與線上都是 OpenRouter 後端，只改原生分支
     # 等於沒改。slug 已查 GET /api/v1/models（2026-09-14）確有 openai/gpt-5.4-mini。
     DEFAULT_TITLE_BREAK_MODEL = "openai/gpt-5.4-mini"
 else:
-    openai_client = OpenAI()
+    openai_client = OpenAI(max_retries=OPENAI_MAX_RETRIES)
     # 2026-09-13：原生預設從 gpt-5.6-terra 換成 gpt-5.5。terra 在使用者 key 上
     # 其實存在，但 2026-09-05 已實測會頻道洩漏（.env 註解與 test_digest_quality）；
     # 5.5 是 /v1/models 列得到且 chat.completions 打得通的，內容乾淨與否待實拍。
@@ -268,8 +279,8 @@ def digest_provider_body() -> dict:
 DIGEST_DEADLINE_SECONDS = float(os.getenv("DIGEST_DEADLINE_SECONDS", "230"))
 # 單次消化呼叫的上限（2026-09-10 線上事故）。沒有這個上限時，一通卡住的上游請求會用掉
 # SDK 預設的 600 秒——比 DIGEST_DEADLINE_SECONDS(230) 與 Cloud Run 的 300 秒都長。
-# 死線只在「兩次 attempt 之間」檢查，所以擋不住第一通就卡死的情況：使用者看到的是
-# 進度條停在 35%（消化階段的上限值）永遠不動，連錯誤訊息都沒有。
+# 2026-09-14 B31：client max_retries=0，且死線在每個 attempt（含第 0 次）起跑前檢查，
+# 所以 90 秒是整次呼叫的上限，不是「每通 HTTP」。
 # 實測正常消化 22–26 秒，90 秒給到 3.5 倍餘裕；卡住時 90 秒就換下一次 attempt。
 DIGEST_TIMEOUT_SECONDS = float(os.getenv("DIGEST_TIMEOUT_SECONDS", "90"))
 
@@ -507,8 +518,12 @@ async def site_password_gate(request, call_next):
 # 預設還是字少。」——兩端各補一級。新的兩級是**既有級的加碼**，不是新寫一套：
 # minimal = SIMPLIFIED 再收緊、maximum = STANDARD 再放寬，這樣自由度／資訊量一定單調。
 # 由少到多的順序寫在 DIGEST_DENSITY_ORDER，前台拉桿與測試都以它為準。
-DigestDensity = Literal["verbatim", "minimal", "simplified", "standard", "maximum"]
-DIGEST_DENSITY_ORDER = ("verbatim", "minimal", "simplified", "standard", "maximum")
+#
+# 2026-09-14 D14 使用者裁決：再加一檔「完全不要文字」，放在**最左端**。拉桿因此
+# 六段。兩個極端（無字／不改字）被推到拉桿兩頭，不會擠在同一側被選錯——這正是
+# 使用者在 D14 裡要解決的事。預設仍是字少，沒有改。
+DigestDensity = Literal["no_text", "verbatim", "minimal", "simplified", "standard", "maximum"]
+DIGEST_DENSITY_ORDER = ("no_text", "verbatim", "minimal", "simplified", "standard", "maximum")
 # 色調。None＝呼叫端沒表態（LINE、舊呼叫端），完全不注入。
 DigestTone = Literal["light", "dark"]
 
@@ -518,6 +533,29 @@ DigestTone = Literal["light", "dark"]
 # 沒有 4 人以上的證據。消化端用同一個上限把版面壓在 3 人以內（見
 # REAL_WORLD_FIDELITY_RULES 第 6 條），生圖端則絕不自行截斷（見 resolve_portraits）。
 MAX_PORTRAIT_FACES = 3
+
+
+# ============================================================
+# F0：三條線共用的 seed（D1，2026-09-14 使用者裁決）
+#
+# 使用者要的兩件事同時成立：**重生會變**（不然「再生一張」等於白按）與
+# **好的那張撈得回來**（回報「這組好」時要能重現）。作法是請求帶一顆明確的
+# 整數 seed，前端按「重新生成」才遞增；沒帶時後端現抽一顆並在回應裡回報。
+#
+# **seed 絕對不進 prompt**（監督 2026-09-14 Q2 升級為硬規則）。理由不只是模型
+# 會把數字寫錯：seed 一旦拼進 prompt 就改變了生圖輸入，同一顆 seed 再也複現不出
+# 原圖——F0 這個功能本身就自我否定了。它只走「請求欄位 → 程式抽籤 → 回應／
+# request_log／audit_archive」這條資料路徑。
+#
+# 上限取 2**31：JSON 與 JavaScript 的整數在這個範圍內都不會失真，前端遞增後送
+# 回來也還是同一個值。用 secrets 而不是 random：後者的預設種子在同一個行程裡
+# 是共享狀態，別處呼叫 random.seed() 就會讓「不可預測」悄悄失效。
+SEED_MAX = 2 ** 31
+
+
+def next_generation_seed() -> int:
+    """抽一顆新的生成 seed。呼叫端沒帶 seed 時用，每個請求只抽一次。"""
+    return secrets.randbelow(SEED_MAX)
 
 
 class GenerateRequest(BaseModel):
@@ -558,6 +596,8 @@ class GenerateRequest(BaseModel):
     # 消化階段就要知道方向——內容要趕到影片那半邊的對面，方向講錯等於重點被蓋掉。
     # 只有 editor_format="broadcast" 吃得到；舊別名一律用自己釘死的那一側。
     hole_side: Literal["left", "right"] = "left"
+    # 變化池的 seed（F0／D1）。None＝後端現抽一顆並在回應裡回報。
+    seed: int | None = Field(default=None, ge=0, lt=SEED_MAX)
 
 
 class MapPoint(BaseModel):
@@ -598,6 +638,8 @@ class GenerateResponse(BaseModel):
     # 地圖類：消化端列了但實查不到座標（或被查點白名單擋掉）的地名。前端據此提示使用者，
     # 否則「只查到 1 點不做底圖」對使用者是完全安靜的失敗（2026-09-08）。
     map_missing: list[str] = Field(default_factory=list)
+    # 這次實際採用的 seed（F0）：前端要拿它當「重新生成」的遞增起點，稽核要拿它回查。
+    seed: int = 0
 
 
 # input_references 的上限。模型端 GPT Image 2／2.5 收 0–16、Gemini 0–14（PLAN.md 查證），
@@ -986,7 +1028,7 @@ Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style
    - 台灣繁體中文。總字數嚴禁超過 150-180 個字。寫作難度預設為高中程度，專業但不艱澀。
    - 嚴禁出現「，」與「。」，短句停頓統一使用全形空格替代。
    - 格式依序為（使用真實換行 \\n，缺一不可）：
-     [標題] 大標題強制拆分為兩行、不含標點
+     [標題] 大標題預設拆分為兩行、不含標點；只有字極少 MODE 可依可讀性使用單行，但不強制單行
      [內文小標]＋條列重點，每行不超過 15 字
      最後一行必須是 <蓋章> 開頭，標示整張 CG 最核心的結論或金句（精簡有力）
    - 需要變色或加框的關鍵詞（數據、人名）用 <文字> 標示。
@@ -1019,6 +1061,7 @@ STANDARD_DENSITY_RULES = """
 6. A LATER BLOCK MAY FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT. When a format-specific block below states an exact number of [內文小標] lines, that number wins over the "up to six" in rule two: the card stack of that layout physically has that many rows. Rules three, four and five still apply inside those rows.
 7. THIS LICENSES NOTHING NEW. Every added line must come from the source material. Do not invent a figure, do not restate a point you already made in different words, and do not pad with generic background to reach a length. If the material genuinely supports only two points, write two — a padded graphic is worse than a short one.
 8. Design "structure" for that quantity: enough rows or cards for the points you wrote, sized so the longer lines stay legible on air rather than shrinking to fit.
+9. HEADLINE LIMIT: [標題] may contain no more than 18 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 """
 
 # 第 3、4 條要指名蓋掉的上限——但那兩個上限只寫在編輯版樣板裡。對記者版指名一個
@@ -1047,6 +1090,7 @@ SIMPLIFIED MODE OVERRIDE — THESE RULES OVERRIDE ANY EARLIER STANDARD-MODE LENG
    C. one large thematic image/map/scene with text confined to one compact area.
 5. Do not add multiple secondary card groups, unnecessary decorative icons, competing focal points, or invented filler text.
 6. For editor role, ignore the earlier 150-180 character target. <蓋章> is optional, must appear only when the source supports a clear conclusion or quote, and counts as one of the maximum three points.
+7. HEADLINE LIMIT: [標題] may contain no more than 13 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 """
 
 
@@ -1060,6 +1104,7 @@ MINIMAL_DENSITY_RULES = """
 3. The graphic is a single dominant statement: one huge number, name or conclusion, with at most ONE short supporting label beside or beneath it. No card stack, no bullet列, no secondary group, no callout cluster.
 4. The headline and that one point must not say the same thing twice in different words. If they would, rewrite the point to carry what the headline does not.
 5. Design "structure" for that: one focal element occupying the middle of the content area at a size readable across a room, everything else empty.
+6. HEADLINE LIMIT: [標題] may contain no more than 10 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 """
 
 # 「字超多」檔（2026-09-10 五段拉桿的右一）。STANDARD 之後才注入。
@@ -1071,8 +1116,11 @@ MAXIMUM_DENSITY_RULES = """
 1. POINT COUNT: carry every distinct point the material supports, up to EIGHT [內文小標] lines. The rule above stopped at six; this setting does not.
 2. LINE LENGTH AND TOTAL: each [內文小標] line may run to about thirty characters, and the whole graphic may reach roughly three hundred and sixty to four hundred and eighty characters. Every line still has to be readable on air — long is not the same as cramped.
 3. THIS STILL LICENSES NOTHING NEW. Every added line comes from the source material. Do not invent a figure, a date, a name or a cause to reach the count; do not restate an earlier point in different words; do not pad with generic background. If the material supports only three points, write three — this setting raises the ceiling, it does not set a quota.
-4. Group the points: when you write more than five, say in "structure" that they are arranged in labelled groups or two columns rather than one long list, so the viewer can find the one that matters.
-5. A LATER BLOCK MAY STILL FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT, and that number wins over the "up to eight" here: those card stacks physically have that many rows.
+4. YOU MAY SPLIT WHAT IS ALREADY THERE. Where the source states a compound fact in one breath — one sentence carrying two distinct figures, two places, two measures or two consequences — you may write it out as two separate points instead of one crowded entry. This is the one thing this setting unlocks that the 字多 block did not.
+5. THAT IS A LICENCE TO SPLIT, NEVER A LICENCE TO SUPPLY. The split halves must both already be present in the source, in the source's own terms. Do not add a cause, a person, a time, a figure, a place, a consequence or any background the source did not state; do not manufacture a second point by saying the same thing again in other words; and where the second half would have to be invented to make the split work, leave the fact whole as one point. After splitting, the set of facts on the graphic must be identical to the set of facts in the source — only their arrangement changed.
+6. Group the points: when you write more than five, say in "structure" that they are arranged in labelled groups or two columns rather than one long list, so the viewer can find the one that matters.
+7. A LATER BLOCK MAY STILL FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT, and that number wins over the "up to eight" here: those card stacks physically have that many rows.
+8. HEADLINE LIMIT: [標題] may contain no more than 22 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 """
 
 
@@ -1140,7 +1188,6 @@ In "structure", require all of the following, not as options:
 _CG_L3_EXTRA = """- BREAK THE GRID: the supporting points stop being a stack of equal rows. Arrange them asymmetrically — stepped down a diagonal, split into a short column beside the hero zone, or wrapped around the hero element on two sides — and say in "structure" which arrangement you chose. The number of points does not change; only how they sit.
 - THE SUBJECT IMAGE BECOMES AN OBJECT, NOT A BACKDROP: cut the main subject out and let it overlap the edge of a panel or the hero zone, instead of sitting flat behind everything as a full-frame photograph.
 - SIZE HIERARCHY INSIDE THE TYPE: the headline and the single most important figure are set far larger than the supporting lines — a clear step, not a nudge — while the supporting lines stay at one consistent size as each other.
-- One or two flat wordless pictograms, chosen from what the story is about, sit beside the headline or the leading card.
 - The background carries a themed texture or gradient related to the subject (circuitry, water, smoke, topography), kept dark and low-contrast behind the text so nothing competes with the words.
 """
 
@@ -1156,7 +1203,7 @@ _CG_L4_EXTRA = """- GO FURTHER — THIS IS THE LOUDEST SETTING. Everything above
 - ONE SIDE OF THE FRAME IS GIVEN TO A SINGLE DRAMATIC IMAGE running the full height of the content area, so the graphic reads as picture-and-panels rather than as text over a background.
 - Stack outlines on the headline and the hero figure (a thick dark one, then a bright one outside it) and give them a deep three-dimensional extrusion with a treatment drawn from the story — molten metal, neon, cracked stone, wet chrome.
 - THE HEADLINE BLOCK TILTS OR ARCS — this is required at this setting, not offered (a few degrees, never more than about eight) — and its characters step up and down instead of sitting on one baseline.
-- Add energy around the hero element: radiating lines, sparks, shards, a splashed or torn colour shape, a burst of glow. Up to three wordless pictograms.
+- Add energy around the hero element: radiating lines, sparks, shards, a splashed or torn colour shape, a burst of glow.
 - The background may darken further so all of this still reads.
 - LOUD IS NOT THE SAME AS BROKEN: nothing tilts far enough to touch or overrun the reserved empty margin, no decoration crosses a stroke, every point the material supports is still present and still legible at broadcast distance, and no card is dropped, merged or duplicated to make an angle work.
 """
@@ -1169,12 +1216,85 @@ _CG_CREATIVITY_BLOCKS = {
 }
 
 
-def cg_creativity_rules(level: int) -> str:
-    """0＝完全不注入（現行成品）；1–4 追加該級的美術條文＋不變的 FIXED 段。"""
+# ---- A1／A5／A2：CG 線接上既有變化池與程式決定的配件（2026-09-15）----
+#
+# 使用者回報「最高級還是不夠亮」的直接原因不是條文寫得不夠狠，是**每一級注入的
+# 都是同一段固定文字**：沒有抽籤，模型每次讀到一模一樣的指示，自然每次交同一個
+# 長相。十點封面 2026-09-11 已經把這件事驗過一輪，解法是同一批池子＋同一顆 seed，
+# 而且輸出一律是命令句——「你可以選」推不動模型，這個 repo 記過三次。
+#
+# 池子與抽籤順序沿用 creativity.draw()：plate → stagger → typeface → palette →
+# anchor → tilt_dir。**不另立一套 CG 專用池**，那正是 A5（十點創意階梯移植回通用版）
+# 要消掉的重複。配件接著同一顆 rng 往下抽（見 creativity.accessories 的 rng 參數）。
+_CG_DESIGN_DRAW_TEMPLATE = """
+THE DESIGN DRAW FOR THIS GRAPHIC — THESE SIX ARE ALREADY DECIDED FOR YOU. THEY ARE GIVENS, NOT A MENU, AND THEY DO NOT CHANGE WHAT THE TEXT SAYS:
+- PLATE SHAPE: every panel, card or plate sitting behind text is {plate}. One shape language across the whole graphic.
+- ARRANGEMENT: {stagger}.
+- TYPEFACE: set the headline and the key figures in {typeface}.
+- PALETTE: work in these four and no others — {c0} leads, {c1} is the ground, {c2} is the accent, {c3} is held in reserve. WHICH element carries the accent is decided by meaning, never by row order; the directional colour convention stated earlier still wins for any rise or fall in the data.
+- HEADLINE BLOCK: sit it {anchor}.
+- TILT DIRECTION: wherever a level above asks for a tilt or an angle, it runs {tilt_dir}.
+"""
+
+# 配件段的抬頭。測試與注入點都指名它，所以是模組層常數而不是內嵌字串。
+CG_ACCESSORY_HEADING = (
+    "WORDLESS DEVICES CHOSEN FOR THIS GRAPHIC — DRAW EVERY ONE OF THEM, THEY ARE NOT OPTIONS:"
+)
+
+# 釘在每一件配件後面的幾何。十點那句寫的是「中央切線」（雙切版面才有的東西），
+# CG 沒有那條線；CG 的硬邊界是播出安全留白。
+_CG_ACCESSORY_NOTE = (
+    "  ← INSIDE THE CONTENT AREA ONLY: never into the reserved empty margin, never"
+    " across a stroke, and it carries no writing of its own."
+)
+
+# 池子裡唯一帶著十點版面家具的條目：iconrow 寫的是「深藍底條的上方」，那是十點封面
+# 的底帶，CG 沒有。只換這一條的措辭，**不動池子長度也不動抽籤順序**——增刪條目會把
+# 所有既有 seed 的長相換掉（見 creativity.py 開頭的風險 2）。
+_CG_ACCESSORY_OVERRIDES = {
+    "iconrow": (
+        "A SHORT ROW OF SMALL {shape} WORDLESS ICON CHIPS along one edge of the content"
+        " area, evenly spaced and equal in size, each holding one flat pictogram from"
+        " the story."
+    ),
+}
+
+
+def cg_creativity_rules(level: int, *, seed=None) -> str:
+    """0＝完全不注入（現行成品）；1–4 追加該級的美術條文＋這一輪的抽籤＋不變的 FIXED 段。
+
+    `seed`：同一顆 seed 抽出同一種長相（F0／D1）。**seed 本身不會出現在回傳的字串裡**
+    ——它只決定抽到什麼，不是要模型畫出來的字（監督 2026-09-14 Q2）。
+    """
     block = _CG_CREATIVITY_BLOCKS.get(level)
     if not block:
         return ""
-    return block + _CG_CREATIVITY_FIXED
+    d = creativity.draw(seed, anchor=True)
+    draw_block = _CG_DESIGN_DRAW_TEMPLATE.format(
+        plate=d.plate,
+        stagger=d.stagger,
+        typeface=d.typeface,
+        c0=d.palette[0], c1=d.palette[1], c2=d.palette[2], c3=d.palette[3],
+        anchor=d.anchor,
+        tilt_dir=d.tilt_dir,
+    )
+    # 配件件數由 A2 那張表決定，**三條線共用同一張**（CP4 裁決，2026-09-15 更正：
+    # 就是封面現行那張，CG 不另立）。rng 接 draw 那一顆往下抽，
+    # 不另開 random.Random(seed)——那樣抽到的是另一串序列。
+    # visuals 不傳：CG 的畫面描述是**這次消化的產物**，組 prompt 時還不存在，
+    # 所以國旗那條確定性換入在 CG 線上本來就不會觸發（不是漏接）。
+    devices = creativity.accessories(
+        level,
+        counts=creativity.COVER_ACCESSORY_COUNTS,
+        rng=d.rng,
+        placement_note=_CG_ACCESSORY_NOTE,
+        overrides=_CG_ACCESSORY_OVERRIDES,
+    )
+    device_block = ""
+    if devices:
+        listed = "\n".join(f"- {text}" for text in devices)
+        device_block = f"\n{CG_ACCESSORY_HEADING}\n{listed}\n"
+    return block + draw_block + device_block + _CG_CREATIVITY_FIXED
 
 
 # 「不消化」檔（2026-09-03 使用者要求）。原本只有標準／簡化兩檔，兩檔都會改寫使用者
@@ -1221,6 +1341,26 @@ STAMP BANNER: ON (USER SETTING — OVERRIDES ANY EARLIER RULE THAT MAKES <蓋章
 """
 
 
+# 「無字」檔（2026-09-14 D14 使用者裁決，F20 實作）。拉桿最左端。
+#
+# 為什麼獨立一塊、不動既有四塊：那四塊全部在講「文字要多少」，這一檔是把文字產物
+# 整個關掉，語意上不是同一條梯子的延伸。混進去會讓既有檔位跟著長出「除非無字」的
+# 例外句，而條件句正是這個 repo 記過最多次的病灶。
+#
+# **仍然照常呼叫消化**（監督 2026-09-14 Q3）：生圖端還是需要 style／structure／
+# 圖表類型／地圖與肖像結果，跳過整個 digest 是另一件大工程，不在 D14 已裁的形式內。
+# 這一塊做的是最小可用解——照常消化，但產出的是無文字的視覺描述。
+NO_TEXT_DENSITY_RULES = """
+
+無字 MODE (THE USER ASKED FOR A PICTURE WITH NO WRITING ON IT) — THIS BLOCK OVERRIDES EVERY LENGTH, COUNT, MARKER AND FORMAT REQUIREMENT STATED ABOVE:
+1. THE GRAPHIC CARRIES NO WRITING AT ALL. Not a headline, not a label, not a caption, not a legend, not a figure, not a date, not a source line, not a watermark, not a logo, not a unit, not a single letter or digit anywhere in the frame.
+2. "variable" MUST BE COMPLETELY EMPTY — an empty string. Do not put markers in it, do not put the news wording in it, do not put a placeholder in it.
+3. "style" and "structure" describe a WORDLESS image only. They may still say what the picture shows, how it is lit, how it is composed and where the subject sits; they may NOT ask for any text element, any labelled callout, any chart axis label, any map place name, any tag, chip, badge or banner carrying words, and they may not describe a space "reserved for the headline".
+4. EVERYTHING ELSE STILL BINDS: the reserved broadcast margin, the ban on expressing positions and sizes as numbers, content fidelity to the source, the named-real-people rules, the child depiction rule, the map accuracy rules and the attached-reference rules are all unchanged. A wordless picture may still be factually wrong, and that is still a defect.
+5. A DATA STORY WITHOUT LABELS IS A PICTURE, NOT A CHART. Where the material is numeric and there is nothing to draw but a labelled chart, ask for the scene or the object the story is about instead — never for an unlabelled chart whose bars mean nothing to a viewer.
+"""
+
+
 # 擺在所有規則的最後（含指令欄），因為本 repo 的慣例是「位置＋明文 OVERRIDE 同向」，
 # 而 VERBATIM_DENSITY_RULES 夾在中間，實測（2026-09-03 gpt-5.6-terra）壓不住樣板
 # 開頭的「Digest the raw news text」：83 字的原文被改寫成 59 字、標點全刪。
@@ -1235,6 +1375,28 @@ Read your draft "variable" against the news material one character at a time bef
 - Nothing has been added except the structural markers, and no marker name has been written out as text.
 If the draft fails any of these, throw it away and rebuild it from the user's exact wording.
 The only thing that may relax this is an explicit request from the user asking you to shorten or rewrite. The interface setting alone never does.
+"""
+
+
+# 無字檔的最終覆蓋，放在整份 prompt 的最尾巴（理由同 VERBATIM_FINAL_REMINDER：
+# 中段的 density block 壓不住樣板開頭與各版型區塊的命令句，位置在後才壓得住）。
+#
+# 為什麼要逐個點名 [標題]／[內文小標]／<蓋章>／底帶／卡片列數：這個 repo 記過三次
+# 「留矛盾句，模型會挑最寬鬆的那一句遵守」。播出鏡面那塊要求「exactly four cards，
+# 每張卡一個 [內文小標]」，蓋章 ON 要求「最後一行是 <蓋章>」——不點名關掉的話，
+# 模型會同時想遵守「完全無字」與「四張卡各一行字」，結果是照樣寫字。
+NO_TEXT_FINAL_REMINDER = """
+
+FINAL OVERRIDE — THIS GRAPHIC HAS NO WRITING ON IT AT ALL:
+Earlier blocks in this prompt asked you for text products. Every one of them is cancelled for this request, by name:
+- NO [標題] line. The instruction to write a headline, and any instruction to split it across rows, does not apply.
+- NO [內文小標] lines. Any block above that fixed an exact number of them — a card stack, a broadcast mirror layout, a column of points — is satisfied with zero of them, and "structure" must describe those card or panel areas as carrying picture or empty space, never writing.
+- NO <蓋章> and no conclusion banner, whatever the stamp setting said.
+- NO <底帶>, no lower third, no ticker, no strapline.
+- No digits, no dates, no place names, no legends, no axis labels, no tags, no chips, no badges, no source line, no watermark, no signature, no logo.
+- THE VISUAL CREATIVITY BLOCK, IF ONE APPEARS ABOVE, KEEPS EVERYTHING THAT IS NOT TYPE. Its arrangement, plate shapes, palette and wordless devices all still apply and still make the picture. Its instructions about the typeface, the display treatment of the headline, stacked outlines, knocked-out type and the size step between the headline and the supporting lines apply to nothing here — there is no type on this graphic to apply them to.
+"variable" is an empty string. If your draft has anything in it, delete it.
+This is the whole point of the setting the user chose: they want the picture, and they will add any words themselves afterwards.
 """
 
 
@@ -1341,6 +1503,15 @@ DIRECTIONAL COLOUR CONVENTION (Taiwan convention — the Western one is wrong he
 2. Keep the pairing consistent across every element — arrows, triangles, bars, lines, sparklines, highlight blocks and the emphasised figure itself. If one graphic shows both a riser and a faller, they must be red and green respectively in the same image.
 3. Colour semantics and arrow direction are CONTENT, not layout geometry. The ban above on percentages, pixels, ratios and numbers applies only to positions and sizes on the canvas. It does NOT stop you from saying that a value rose or fell, from asking for an up arrow or a down arrow, or from naming a colour. State the direction plainly; being vague about direction to avoid "numbers" is a defect.
 4. In a graphic that shows a rise or a fall, do not use red or green decoratively for anything unrelated, so the pairing cannot be misread.
+"""
+
+
+CHROMA_KEY_GREEN_SAFETY_RULES = """
+
+CHROMA-KEY GREEN SAFETY (applies at every density and creativity level):
+1. Never use chroma-key green or neon/lime key green for text fills, outlines, shadows, plates behind text, tags, chips, or purely decorative shapes; these colours are keyed out on air.
+2. This is a narrow studio-key restriction, not a ban on ordinary green. Deep green, dark green and olive green remain available when appropriate.
+3. The Taiwan directional convention above still wins for market data: non-chroma data green remains allowed for falls, losses and negative values.
 """
 
 
@@ -1528,7 +1699,10 @@ def build_digest_instructions(
     map_scope_guard: bool = False,
     hole_side: str | None = None,
     visual_creativity: int = 0,
+    seed: int | None = None,
 ) -> str:
+    # seed（F0）：這一步只把資料流打通到這裡，實際拿去抽變化池是 2-6 的事。
+    # 它**永遠不會被拼進回傳的字串**——見 next_generation_seed 上方的說明。
     is_editor = role == "編輯"
     template = EDITOR_SYSTEM_PROMPT_TEMPLATE if is_editor else SYSTEM_PROMPT_TEMPLATE
     if full_bleed:
@@ -1547,6 +1721,7 @@ def build_digest_instructions(
     instructions += REAL_WORLD_FIDELITY_RULES
     instructions += CHILD_DEPICTION_STYLE_RULES
     instructions += DIRECTIONAL_COLOR_RULES
+    instructions += CHROMA_KEY_GREEN_SAFETY_RULES
     # 自動判斷模式組 prompt 時還不知道 AI 會選哪一類，也要注入；
     # 區塊開頭自我限縮「非地圖類整段忽略」。
     #
@@ -1572,9 +1747,17 @@ def build_digest_instructions(
             instructions += MINIMAL_DENSITY_RULES
     elif density == "verbatim":
         instructions += VERBATIM_DENSITY_RULES
+    elif density == "no_text":
+        instructions += NO_TEXT_DENSITY_RULES
     # 蓋章緊接在 density 之後：ON 的第 5 條要引用逐字模式，順序不能倒過來。
     # None＝呼叫端沒表態（LINE、舊呼叫端），完全不注入，維持既有行為。
-    if stamp is True:
+    #
+    # 無字檔一律不注入蓋章條文（2026-09-14 D14）：STAMP_ON 要求「最後一行是 <蓋章>」，
+    # 跟「完全無字」正面衝突，兩條一起送出模型會挑寬鬆的那句遵守。關掉這件事由
+    # NO_TEXT_FINAL_REMINDER 點名負責，那裡壓在整份 prompt 最後面。
+    if density == "no_text":
+        pass
+    elif stamp is True:
         instructions += STAMP_ON_RULES
     elif stamp is False:
         instructions += STAMP_OFF_RULES
@@ -1594,7 +1777,7 @@ def build_digest_instructions(
     # 創意拉桿放在版型區塊之後：本 repo 的慣例是「位置在後＋明文 OVERRIDE」才壓得住
     # 前面那些命令句。但它自己第一句就限縮成「只覆蓋美術」，而 FIXED 段再把
     # 字句、點數、安全框、清單外文字四件事釘回去。
-    instructions += cg_creativity_rules(visual_creativity)
+    instructions += cg_creativity_rules(visual_creativity, seed=seed)
     # 沒有 asis 附圖時完全不注入，消化 prompt 逐字元不變。
     if asis_reference_count:
         instructions += USER_REFERENCE_ASIS_DIGEST_RULES
@@ -1617,6 +1800,10 @@ def build_digest_instructions(
     # 中段的 VERBATIM_DENSITY_RULES 實測壓不住（見該區塊上方的註解）。
     if density == "verbatim":
         instructions += VERBATIM_FINAL_REMINDER
+    # 無字同理，而且要更後面：它要壓過的不只是樣板開頭，還有版型區塊釘死的卡片數
+    # 與蓋章行（見 NO_TEXT_FINAL_REMINDER 上方的說明）。
+    elif density == "no_text":
+        instructions += NO_TEXT_FINAL_REMINDER
     return instructions
 
 
@@ -1624,6 +1811,9 @@ def build_digest_instructions(
 # generate() 就不該再記一次半套的。用 contextvar 而不是函式參數，免得這個純內部
 # 的旗標變成 /api/generate 對外可見的欄位。
 _inside_pipeline = contextvars.ContextVar("inside_pipeline", default=False)
+# apply_photo_availability 會再呼叫一次 generate()。deadline 放 contextvar，
+# 第二次沿用同一條牆鐘，單一請求不會變成 230+230（B31）。
+_digest_deadline = contextvars.ContextVar("digest_deadline", default=None)
 
 
 # 截斷監控。三個呼叫端（generate／hybrid／cover）各有各的預算，過去只有真的炸了
@@ -1951,15 +2141,21 @@ def verbatim_fidelity_problem(variable: str, news_text: str) -> str:
     )
 
 
-def digest_quality_problem(data: dict, finish_reason: str) -> str:
+def digest_quality_problem(data: dict, finish_reason: str, density: str | None = None) -> str:
     """檢查消化結果是否可用，通過回傳空字串，否則回傳給 log 用的問題描述。
 
     語法合法不等於內容可用。截斷（finish_reason=length）與字元污染都會產生
     「能解析但不能用」的結果，必須跟解析失敗一樣走重試，不能直接送去生圖。
+
+    `density`（2026-09-14 D14）：無字檔**要求** variable 是空字串，所以「欄位為空」
+    對它是正確答案而不是故障。不分檔一律擋的話，無字會連撞 5 次重試然後回 502，
+    而且使用者看到的是「AI 回傳內容異常」——完全看不出是設定本身被擋掉。
+    其餘檢查（型別、異常字元、頻道洩漏、簡體字）對無字照舊全部生效。
     """
     if finish_reason == "length":
         return "輸出被截斷（finish_reason=length）"
 
+    variable_may_be_empty = density == "no_text"
     for field in ("style", "structure", "variable"):
         value = data.get(field) or ""
         # 模型偶爾無視 strict schema 把欄位回成巢狀物件／陣列（2026-08-17 實測：
@@ -1967,7 +2163,7 @@ def digest_quality_problem(data: dict, finish_reason: str) -> str:
         # 炸 500）。型別不對與截斷同級：能解析不代表能用，走重試。
         if not isinstance(value, str):
             return f"{field} 不是字串（{type(value).__name__}）"
-        if not value.strip():
+        if not value.strip() and not (field == "variable" and variable_may_be_empty):
             return f"{field} 為空"
         stray = DIGEST_ALLOWED_CHARS.sub("", value)
         if len(stray) >= DIGEST_MAX_STRAY_CHARS:
@@ -2070,12 +2266,17 @@ def apply_photo_availability(
         _inside_pipeline.reset(token)
 
 
-@app.post(
-    "/api/generate",
-    response_model=GenerateResponse,
-    dependencies=[Depends(verify_internal_api_key)],
-)
+# 純業務邏輯，不掛路由——網頁版的 /api/generate（見下面 generate_stream，B39
+# 改成串流）與 LINE／整合端的 generate_news_image() 共用同一份實作，兩邊都是
+# 直接呼叫這個函式，不經 HTTP。呼叫端要的是「消化完成或明確失敗」，跟外面那層
+# 用什麼格式把結果送出去無關。
 def generate(req: GenerateRequest):
+    # seed（F0）在最前面就定下來，並寫回 req：apply_photo_availability 會拿這份 req
+    # 再呼叫一次 generate()，沒寫回的話第二次會再抽一顆，同一個請求的兩段消化就用了
+    # 兩種長相，回應報的 seed 也重現不出成品。
+    if req.seed is None:
+        req = req.model_copy(update={"seed": next_generation_seed()})
+    seed = req.seed
     # DIGEST_MODEL 可覆寫；沿用舊環境變數 OPENAI_DIGEST_MODEL 作為次要相容
     model = resolve_digest_model()
     # 兩段式（條件注入）：分類成功就整段當成使用者指定了該類型——組 prompt、
@@ -2102,6 +2303,7 @@ def generate(req: GenerateRequest):
         editor_format=req.editor_format,
         hole_side=req.hole_side,
         visual_creativity=req.visual_creativity,
+        seed=seed,
     )
 
     # 上游（OpenRouter 多 provider 輪替）偶發 502、輸出截斷或不合 schema 的回傳是常態，
@@ -2110,167 +2312,241 @@ def generate(req: GenerateRequest):
     # 輸出上限依類型與消化程度分開給，理由見 digest_token_budget。
     max_output_tokens = digest_token_budget(type_label, req.density, req.news_text)
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
-    deadline = time.monotonic() + DIGEST_DEADLINE_SECONDS
-    for attempt in range(DIGEST_ATTEMPTS):
-        # 還沒開始就已經沒時間了：與其讓 Cloud Run 在第 300 秒直接斷線（使用者看到
-        # 的是「沒有生成」，連錯誤都沒有），不如在這裡停手，回一個看得懂的訊息。
-        # 看的是「這一次跑滿也來不及」而不是「現在超過死線沒」（2026-09-10）：
-        # 每次 attempt 最久跑 DIGEST_TIMEOUT_SECONDS，在死線前一刻才起跑的那次
-        # 會整整超出一個 timeout，剛好把 Cloud Run 的 300 秒吃掉。
-        if attempt and time.monotonic() + DIGEST_TIMEOUT_SECONDS > deadline:
-            print(
-                f"[generate] 已用掉 {DIGEST_DEADLINE_SECONDS:.0f} 秒預算，"
-                f"停在第 {attempt} 次 attempt 不再重試",
-                flush=True,
-            )
-            raise HTTPException(
-                status_code=503,
-                detail="AI 服務這次太久沒有回應，請縮短新聞內容或稍後重試",
-            )
-        try:
-            response = digest_completion(
-                model=model,
-                system_prompt=system_prompt,
-                news_text=req.news_text,
-                max_output_tokens=max_output_tokens,
-                schema_name="news_cg_digest",
-                schema=digest_schema(type_label),
-                site="generate",
-            )
-        except AuthenticationError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="AI 服務金鑰無效或尚未啟用計費",
-            ) from exc
-        except RateLimitError as exc:
-            raise HTTPException(
-                status_code=429,
-                detail="AI 服務用量已達限制，請稍後再試",
-            ) from exc
-        except (APIConnectionError, APIError) as exc:
-            last_detail = (
-                "無法連線至 AI 服務，請稍後再試"
-                if isinstance(exc, APIConnectionError)
-                else "AI 服務處理失敗，請確認模型權限或稍後重試"
-            )
-            print(f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} API error: {exc}", flush=True)
-            time.sleep(1.5)
-            continue
-
-        raw_content = response.choices[0].message.content or ""
-        finish_reason = response.choices[0].finish_reason if response.choices else "?"
-        try:
-            data = parse_digest_json(raw_content)
-        except (json.JSONDecodeError, IndexError, TypeError) as exc:
-            last_detail = "AI 回傳格式無法解析"
-            print(
-                f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} parse failed "
-                f"(finish_reason={finish_reason}): {exc}\n"
-                f"[generate] raw content: {digest_excerpt(raw_content)}",
-                flush=True,
-            )
-            if req.density == "verbatim" and finish_reason == "length":
-                # 不消化的預算已經照原文長度放大過（digest_token_budget），還撞到
-                # length 就是這篇真的塞不下——重試每次都會撞同一面牆，5 次要燒掉
-                # 90 秒才讓使用者收到一句看不懂的「格式無法解析」。直接講清楚。
-                raise HTTPException(
-                    status_code=400,
-                    detail="原文太長，「不消化」要模型逐字抄完整篇才做得到；"
-                    "請改用「字少」／「字多」，或把原文縮短再試。",
+    existing_deadline = _digest_deadline.get()
+    if existing_deadline is None:
+        deadline = time.monotonic() + DIGEST_DEADLINE_SECONDS
+        deadline_token = _digest_deadline.set(deadline)
+    else:
+        deadline = existing_deadline
+        deadline_token = None
+    try:
+        for attempt in range(DIGEST_ATTEMPTS):
+            # 還沒開始就已經沒時間了：與其讓 Cloud Run 在第 300 秒直接斷線（使用者看到
+            # 的是「沒有生成」，連錯誤都沒有），不如在這裡停手，回一個看得懂的訊息。
+            # 看的是「這一次跑滿也來不及」而不是「現在超過死線沒」（2026-09-10）：
+            # 每次 attempt 最久跑 DIGEST_TIMEOUT_SECONDS，在死線前一刻才起跑的那次
+            # 會整整超出一個 timeout，剛好把 Cloud Run 的 300 秒吃掉。
+            # 2026-09-14 B31：attempt 0 也查，第二次 generate() 沿用同一條 deadline。
+            if time.monotonic() + DIGEST_TIMEOUT_SECONDS > deadline:
+                print(
+                    f"[generate] 已用掉 {DIGEST_DEADLINE_SECONDS:.0f} 秒預算，"
+                    f"停在第 {attempt + 1} 次 attempt 不再重試",
+                    flush=True,
                 )
-            time.sleep(1.5)
-            continue
+                raise HTTPException(
+                    status_code=503,
+                    detail="AI 服務這次太久沒有回應，請縮短新聞內容或稍後重試",
+                )
+            try:
+                response = digest_completion(
+                    model=model,
+                    system_prompt=system_prompt,
+                    news_text=req.news_text,
+                    max_output_tokens=max_output_tokens,
+                    schema_name="news_cg_digest",
+                    schema=digest_schema(type_label),
+                    site="generate",
+                )
+            except AuthenticationError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="AI 服務金鑰無效或尚未啟用計費",
+                ) from exc
+            except RateLimitError as exc:
+                raise HTTPException(
+                    status_code=429,
+                    detail="AI 服務用量已達限制，請稍後再試",
+                ) from exc
+            except (APIConnectionError, APIError) as exc:
+                last_detail = (
+                    "無法連線至 AI 服務，請稍後再試"
+                    if isinstance(exc, APIConnectionError)
+                    else "AI 服務處理失敗，請確認模型權限或稍後重試"
+                )
+                print(f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} API error: {exc}", flush=True)
+                time.sleep(1.5)
+                continue
 
-        # 能解析不代表能用：截斷與字元污染都要跟解析失敗一樣重試，不能送去生圖
-        problem = digest_quality_problem(data, finish_reason)
-        # 不消化的逐字比對排在通用檢查之後：兩者都過不了時，先報通用的那個。
-        # 最後一次刻意不擋——擋了就是整條 502，而這時手上的結果通常只是頭尾多了
-        # 雜訊，仍比沒有圖好；改成印警告讓回查時看得到。
-        if not problem and req.density == "verbatim" and not req.user_instruction.strip():
-            verbatim_problem = verbatim_fidelity_problem(
-                data.get("variable") or "", req.news_text
-            )
-            if verbatim_problem:
-                if attempt < DIGEST_ATTEMPTS - 1:
-                    problem = verbatim_problem
-                else:
-                    print(
-                        f"[generate] 最後一次嘗試仍未逐字相符，放行：{verbatim_problem}",
-                        flush=True,
+            raw_content = response.choices[0].message.content or ""
+            finish_reason = response.choices[0].finish_reason if response.choices else "?"
+            try:
+                data = parse_digest_json(raw_content)
+            except (json.JSONDecodeError, IndexError, TypeError) as exc:
+                last_detail = "AI 回傳格式無法解析"
+                print(
+                    f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} parse failed "
+                    f"(finish_reason={finish_reason}): {exc}\n"
+                    f"[generate] raw content: {digest_excerpt(raw_content)}",
+                    flush=True,
+                )
+                if req.density == "verbatim" and finish_reason == "length":
+                    # 不消化的預算已經照原文長度放大過（digest_token_budget），還撞到
+                    # length 就是這篇真的塞不下——重試每次都會撞同一面牆，5 次要燒掉
+                    # 90 秒才讓使用者收到一句看不懂的「格式無法解析」。直接講清楚。
+                    raise HTTPException(
+                        status_code=400,
+                        detail="原文太長，「不消化」要模型逐字抄完整篇才做得到；"
+                        "請改用「字少」／「字多」，或把原文縮短再試。",
                     )
-        if problem:
-            last_detail = "AI 回傳內容異常，請稍後重試"
-            print(
-                f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} quality check failed: {problem}",
-                flush=True,
-            )
-            time.sleep(1.5)
-            continue
+                time.sleep(1.5)
+                continue
 
-        chart_type = data.get("chart_type", "")
-        if chart_type not in CHART_TYPE_CHOICES:
-            # AI 未回報或回報不在清單內；指定類型時退回原值，自動判斷時留空由前端處理
-            chart_type = "" if type_label == AUTO_TYPE_LABEL else type_label
+            # 能解析不代表能用：截斷與字元污染都要跟解析失敗一樣重試，不能送去生圖
+            problem = digest_quality_problem(data, finish_reason, density=req.density)
+            # 不消化的逐字比對排在通用檢查之後：兩者都過不了時，先報通用的那個。
+            # 最後一次刻意不擋——擋了就是整條 502，而這時手上的結果通常只是頭尾多了
+            # 雜訊，仍比沒有圖好；改成印警告讓回查時看得到。
+            if not problem and req.density == "verbatim" and not req.user_instruction.strip():
+                verbatim_problem = verbatim_fidelity_problem(
+                    data.get("variable") or "", req.news_text
+                )
+                if verbatim_problem:
+                    if attempt < DIGEST_ATTEMPTS - 1:
+                        problem = verbatim_problem
+                    else:
+                        print(
+                            f"[generate] 最後一次嘗試仍未逐字相符，放行：{verbatim_problem}",
+                            flush=True,
+                        )
+            if problem:
+                last_detail = "AI 回傳內容異常，請稍後重試"
+                print(
+                    f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} quality check failed: {problem}",
+                    flush=True,
+                )
+                time.sleep(1.5)
+                continue
 
-        variable = strip_wrapping_quotes(data.get("variable", ""))
-        if req.stamp is False and any(_STAMP_LINE_RE.match(line) for line in variable.splitlines()):
-            print("[generate] 蓋章 OFF 但消化結果仍有 <蓋章> 行，已強制移除", flush=True)
-            variable = drop_stamp_lines(variable)
-        # 播出鏡面 ＋ 蓋章 OFF：底帶那一行沒生出來就自己補（見 ensure_bottom_band_line）
-        if req.stamp is False and editor_formats.resolve_hole_side(req.editor_format, req.hole_side):
-            filled = ensure_bottom_band_line(variable)
-            if filled != variable:
-                print("[generate] 蓋章 OFF 但消化結果沒有 <底帶> 行，已把最後一張卡升級成底帶", flush=True)
-            variable = filled
-        result = GenerateResponse(
-            style=data.get("style", ""),
-            structure=data.get("structure", ""),
-            variable=variable,
-            chart_type=chart_type,
-            # 只有地圖類會真的去查（resolve_map_points 自己擋掉其他類型）。
-            # 查不到就是空陣列，後續一切照舊，不會有人拿到錯誤。
-            map_points=resolve_map_points(chart_type, data.get("map_places")),
-            map_missing=map_missing_places(),
-            portrait_subjects=clean_portrait_subjects(data.get("portrait_subjects")),
-            portrait_subjects_en=align_english_names(
-                clean_portrait_subjects(data.get("portrait_subjects")),
-                data.get("portrait_subjects_en"),
-                data.get("portrait_subjects"),
-            ),
-        )
-        # 網頁版走這個端點後自己在前端組生圖 prompt，後端看不到最終 prompt，
-        # 因此這裡只記到消化為止——有輸入與消化結果，事後仍可重跑重現。
-        if not _inside_pipeline.get():
-            # 網頁版的第二段消化在這裡做（LINE 走 generate_news_image 自己那條，
-            # 兩邊都做會白查一次圖）。落檔放在後面，記的是最終採用的那份。
-            result = apply_photo_availability(result, req)
-            request_log.log_generation(
-                request_id=request_log.new_request_id(),
-                source="digest",
-                news_text=req.news_text,
-                style=result.style,
-                structure=result.structure,
-                variable=result.variable,
-                chart_type=result.chart_type,
-                type_label=req.type_label,
-                role=req.role,
-                density=req.density,
-            )
-            # 存給稍後的生圖請求取用：那支端點只收到 prompt，拿不到新聞原文，
-            # 稽核歸檔要靠這裡記住的內容才補得齊（見 _archive_generation）。
-            _remember_digest(
-                news_text=req.news_text,
-                style=result.style,
-                structure=result.structure,
-                variable=result.variable,
-                chart_type=result.chart_type,
-                type_label=req.type_label,
-                role=req.role,
-                density=req.density,
-            )
-        return result
+            chart_type = data.get("chart_type", "")
+            if chart_type not in CHART_TYPE_CHOICES:
+                # AI 未回報或回報不在清單內；指定類型時退回原值，自動判斷時留空由前端處理
+                chart_type = "" if type_label == AUTO_TYPE_LABEL else type_label
 
-    raise HTTPException(status_code=502, detail=last_detail)
+            variable = strip_wrapping_quotes(data.get("variable", ""))
+            if req.stamp is False and any(_STAMP_LINE_RE.match(line) for line in variable.splitlines()):
+                print("[generate] 蓋章 OFF 但消化結果仍有 <蓋章> 行，已強制移除", flush=True)
+                variable = drop_stamp_lines(variable)
+            # 播出鏡面 ＋ 蓋章 OFF：底帶那一行沒生出來就自己補（見 ensure_bottom_band_line）
+            if req.stamp is False and editor_formats.resolve_hole_side(req.editor_format, req.hole_side):
+                filled = ensure_bottom_band_line(variable)
+                if filled != variable:
+                    print("[generate] 蓋章 OFF 但消化結果沒有 <底帶> 行，已把最後一張卡升級成底帶", flush=True)
+                variable = filled
+            result = GenerateResponse(
+                style=data.get("style", ""),
+                structure=data.get("structure", ""),
+                variable=variable,
+                chart_type=chart_type,
+                # 只有地圖類會真的去查（resolve_map_points 自己擋掉其他類型）。
+                # 查不到就是空陣列，後續一切照舊，不會有人拿到錯誤。
+                map_points=resolve_map_points(chart_type, data.get("map_places")),
+                map_missing=map_missing_places(),
+                portrait_subjects=clean_portrait_subjects(data.get("portrait_subjects")),
+                portrait_subjects_en=align_english_names(
+                    clean_portrait_subjects(data.get("portrait_subjects")),
+                    data.get("portrait_subjects_en"),
+                    data.get("portrait_subjects"),
+                ),
+                seed=seed,
+            )
+            # 網頁版走這個端點後自己在前端組生圖 prompt，後端看不到最終 prompt，
+            # 因此這裡只記到消化為止——有輸入與消化結果，事後仍可重跑重現。
+            if not _inside_pipeline.get():
+                # 網頁版的第二段消化在這裡做（LINE 走 generate_news_image 自己那條，
+                # 兩邊都做會白查一次圖）。落檔放在後面，記的是最終採用的那份。
+                result = apply_photo_availability(result, req)
+                request_log.log_generation(
+                    request_id=request_log.new_request_id(),
+                    source="digest",
+                    news_text=req.news_text,
+                    style=result.style,
+                    structure=result.structure,
+                    variable=result.variable,
+                    chart_type=result.chart_type,
+                    type_label=req.type_label,
+                    role=req.role,
+                    density=req.density,
+                    seed=seed,
+                )
+                # 存給稍後的生圖請求取用：那支端點只收到 prompt，拿不到新聞原文，
+                # 稽核歸檔要靠這裡記住的內容才補得齊（見 _archive_generation）。
+                _remember_digest(
+                    news_text=req.news_text,
+                    style=result.style,
+                    structure=result.structure,
+                    variable=result.variable,
+                    chart_type=result.chart_type,
+                    type_label=req.type_label,
+                    role=req.role,
+                    density=req.density,
+                )
+            return result
+
+        raise HTTPException(status_code=502, detail=last_detail)
+    finally:
+        if deadline_token is not None:
+            _digest_deadline.reset(deadline_token)
+
+
+# B39（2026-09-15）：公司 Cloudflare 的 proxy timeout 不能調，實測約 100～120 秒
+# 就會對「一個位元組都沒回」的連線送 524，遠比 DIGEST_DEADLINE_SECONDS=230 短。
+# 524 的定義是源站在時限內完全沒回應——連線上只要持續有位元組流動就不會觸發，
+# 所以不必讓 generate() 跑得更快，只要別讓連線在消化期間看起來像斷線。
+# 心跳間隔取 5～10 秒中段：夠短能穩穩躲過 CF 的切線，也不會為了心跳白費頻寬。
+DIGEST_HEARTBEAT_SECONDS = 7
+
+
+def _generate_ndjson_lines(req: GenerateRequest, ctx: contextvars.Context):
+    """背景執行緒跑 generate()（可能長達 DIGEST_DEADLINE_SECONDS 秒），
+    主執行緒每隔 DIGEST_HEARTBEAT_SECONDS 送一行 ping 讓連線看起來活著；
+    結束送一行 result 或 error，兩者都是這個 generator 的最後一行。
+
+    ⚠ HTTP 狀態碼在第一個位元組送出後就定死是 200，這裡送出第一行 ping 或
+    result／error 之後就再也不能改成別的狀態碼了——所有成敗都編在內容裡，
+    前端要看這裡送出的 type 欄位判斷，不能看 response.ok（見 app.js _digestFetch）。
+
+    ctx：呼叫端在還沒離開 Clerk middleware 的 context 時複製好的
+    contextvars.Context（見 generate_stream）。threading.Thread 起於一個
+    全新的空 context，不會自動帶著 _current_user 這類 contextvar——改之前
+    generate() 是跑在 Starlette 用 anyio to_thread.run_sync 開的執行緒，
+    那條路徑會複製 context，才會一直「湊巧」拿得到登入身分；換成自己開
+    thread 之後若不手動複製，current_user() 在背景執行緒裡會是空字典，
+    generate() 尾端 _remember_digest() 第一行就 return，稽核歸檔悄悄漏記
+    新聞原文，跟 0911 查到的「後台缺欄位」是同一類缺陷。
+    """
+    outcome: dict = {}
+
+    def worker():
+        try:
+            outcome["result"] = generate(req)
+        except HTTPException as exc:
+            outcome["error"] = (exc.status_code, exc.detail)
+        except Exception as exc:  # noqa: BLE001 — 背景執行緒的例外不能悶掉，否則連線會卡死到 fetch 逾時都沒有提示
+            print(f"[generate-stream] 未預期的例外：{exc}", flush=True)
+            outcome["error"] = (500, "AI 服務處理失敗，請確認模型權限或稍後重試")
+
+    thread = threading.Thread(target=ctx.run, args=(worker,), daemon=True)
+    thread.start()
+    while thread.is_alive():
+        thread.join(timeout=DIGEST_HEARTBEAT_SECONDS)
+        if thread.is_alive():
+            yield json.dumps({"type": "ping"}) + "\n"
+    if "error" in outcome:
+        status, detail = outcome["error"]
+        yield json.dumps({"type": "error", "status": status, "detail": detail}, ensure_ascii=False) + "\n"
+    else:
+        payload = {"type": "result", **outcome["result"].model_dump(mode="json")}
+        yield json.dumps(payload, ensure_ascii=False) + "\n"
+
+
+@app.post("/api/generate", dependencies=[Depends(verify_internal_api_key)])
+def generate_stream(req: GenerateRequest):
+    # ⚠ 一定要在這裡複製——這裡還在 Clerk middleware 的 context 內
+    # （_current_user 已經 set 好）。StreamingResponse 的 body 是 middleware
+    # 的 finally 跑完（_current_user 已 reset）之後才被消耗的，複製寫在
+    # generator 函式體裡就太晚了，見 _generate_ndjson_lines 的說明。
+    ctx = contextvars.copy_context()
+    return StreamingResponse(_generate_ndjson_lines(req, ctx), media_type="application/x-ndjson")
 
 
 # ---- 混合版型：新聞原文 → 結構化內容（文字數字由 APP 繪製，AI 不碰像素文字）----
@@ -2990,6 +3266,10 @@ def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGener
 # 這裡挑貼合比例、又不超過兩者共同上限的尺寸——沿用同一組值，換模型不會連尺寸一起變。
 # 2026-08-01 之前這裡寫死 1280x720，等於無視呼叫端要的比例——安全框開 21:9
 # 也會靜靜拿回 16:9，是與 OpenRouter 那條同一類的靜默降級。
+# 原生 images.generate／edit 以前沒傳 timeout，吃 SDK 預設 read 600 秒（B31）。
+# 對齊 OpenRouter 那條 urlopen timeout=180。
+NATIVE_IMAGE_TIMEOUT_SECONDS = 180
+
 NATIVE_GPT_IMAGE_SIZES = {
     "1:1": "1024x1024",
     "4:3": "1280x960",
@@ -3055,6 +3335,7 @@ def generate_gpt_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
                 prompt=req.prompt,
                 size=size,
                 quality=quality,
+                timeout=NATIVE_IMAGE_TIMEOUT_SECONDS,
             )
         else:
             result = openai_client.images.generate(
@@ -3063,6 +3344,7 @@ def generate_gpt_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
                 size=size,
                 quality=quality,
                 output_format="png",
+                timeout=NATIVE_IMAGE_TIMEOUT_SECONDS,
             )
     except AuthenticationError as exc:
         raise HTTPException(
@@ -3213,6 +3495,8 @@ class NewsImageGenerateRequest(BaseModel):
     # 挖空側（2026-09-08 WP1），語意同 GenerateRequest.hole_side：只有合併後的
     # editor_format="broadcast" 吃得到，舊別名 broadcast_left／right 一律用自己那側。
     hole_side: Literal["left", "right"] = "left"
+    # 變化池的 seed（F0／D1），語意同 GenerateRequest.seed。LINE 端不傳。
+    seed: int | None = Field(default=None, ge=0, lt=SEED_MAX)
 
 
 class NewsImageGenerateResponse(BaseModel):
@@ -3227,6 +3511,8 @@ class NewsImageGenerateResponse(BaseModel):
     # ImageGenerateResponse.source_image_base64（成品拿去顯示，這格拿去改圖）
     source_image_base64: str = ""
     source_mime_type: str = ""
+    # 這次實際採用的 seed（F0），語意同 GenerateResponse.seed。
+    seed: int = 0
 
 
 def _extract_title(variable: str) -> str:
@@ -3614,12 +3900,16 @@ def apply_user_references_to_image_request(
     prompt = req.prompt
     purposes = dict.fromkeys(ref.purpose for ref in req.reference_images)
     aiedit_count = sum(1 for ref in req.reference_images if ref.purpose == "aiedit")
+    asis_count = sum(1 for ref in req.reference_images if ref.purpose == "asis")
     for purpose in purposes:
         block = USER_REFERENCE_MODES.get(purpose, "")
         if purpose == "aiedit" and aiedit_count >= 2:
             # 2026-09-14：多張 AI改圖 走融合版——單張版的「One of the attached images」
             # 會讓模型只挑一張畫（第四輪 A2：4 張參考只剩 1 張）
             block = USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE.format(count=aiedit_count)
+        elif purpose == "asis" and asis_count >= 2:
+            # 2026-09-14 B26＋D9：多張原圖放置同樣不能走單數「One of」
+            block = USER_REFERENCE_ASIS_MULTI_RULES_TEMPLATE.format(count=asis_count)
         if block and block not in prompt:
             prompt = f"{prompt.rstrip()}\n\n{block}"
     # AI改圖 專屬：使用者指令欄要真的送到生圖模型手上（2026-09-13 使用者裁決）。
@@ -3642,6 +3932,10 @@ def apply_user_references_to_image_request(
     # 親自提供的真實素材——那個 override 的語意不成立，「AI示意圖」標籤照舊要留。
     # 混了別種用途也一樣留：同一張成品只有一個標籤，有任何一塊是 AI 重繪就得標。
     if any(ref.purpose == "aiedit" for ref in req.reference_images):
+        return req.model_copy(update={"prompt": prompt}) if prompt != req.prompt else req
+    # 例外三（2026-09-14 B28）：畫真人並掛真實姓名時，「有上傳就不標示意圖」
+    # 的 override 不成立——D13 的前提就是畫面上還有 AI示意圖標籤。
+    if any(str(name).strip() for name in (req.portrait_subjects or [])):
         return req.model_copy(update={"prompt": prompt}) if prompt != req.prompt else req
     if USER_REFERENCE_NO_DISCLAIMER_RULES not in prompt:
         prompt = f"{prompt.rstrip()}\n\n{USER_REFERENCE_NO_DISCLAIMER_RULES}"
@@ -3828,6 +4122,9 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 editor_format=req.editor_format,
                 hole_side=req.hole_side,
                 visual_creativity=req.visual_creativity,
+                # F0：這支端點自己重組一份 GenerateRequest，漏掉哪個欄位都不會報錯，
+                # 只會安靜地讓網頁版有、LINE／整合端沒有。
+                seed=req.seed,
             )
         )
         digest, portrait_photos = resolve_digest_portraits(digest, req, provider)
@@ -3844,6 +4141,9 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             safe_frame=req.safe_frame,
             aspect_ratio=aspect_ratio,
             portrait_mode=portrait_mode,
+            # 無字檔（D14／F20）：消化端已經產出空的 variable，生圖端還要一段
+            # 明文覆蓋才壓得住前面那些「把 VARIABLE FIELDS 畫上去」的條款。
+            no_text=(req.density == "no_text"),
         )
         try:
             image = generate_image(
@@ -3915,6 +4215,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             portrait_photo_source="、".join(
                 photo.source_page for photo in reference_photos
             ),
+            seed=digest.seed,
         )
         # LINE 版圖檔已由 line_bot.py 存進 static/generated/，這裡只補網頁版的缺口
         if req.source != "line":
@@ -3936,6 +4237,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 provider=provider,
                 image_model=image.model,
                 portrait_subject="、".join(digest.portrait_subjects),
+                seed=digest.seed,
             )
         return NewsImageGenerateResponse(
             image_data_base64=image.image_data_base64,
@@ -3945,6 +4247,8 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             request_id=request_id,
             source_image_base64=image.source_image_base64,
             source_mime_type=image.source_mime_type,
+            # 回報實際用的那顆（沒帶 seed 時是消化階段現抽的）
+            seed=digest.seed,
         )
     finally:
         _inside_pipeline.reset(token)
@@ -4076,6 +4380,9 @@ class TenCoverRequest(BaseModel):
     # 光看 bytes 分不出來；前端帶回來才能在版面變了（改了第二標題）時明講 400，而不是
     # 默默把雙切標題壓在一張整圖上。空字串＝舊呼叫端沒帶，不檢查。
     background_layout: str = ""
+    # 變化池的 seed（F0／D1）。None＝後端現抽一顆並在回應裡回報；帶了就照那顆抽，
+    # 同一顆 seed ＝同一種長相。取代原本 seed=None 每次隨機、重現不出來的行為。
+    seed: int | None = Field(default=None, ge=0, lt=SEED_MAX)
 
 
 # 版型名稱：跟前台下拉選單（app.js 的 EDITOR_FORMATS.label）用同一組字，
@@ -4105,6 +4412,8 @@ class TenCoverResponse(ImageGenerateResponse):
     background_image_base64: str = ""
     background_mime_type: str = ""
     background_is_ai: bool = False
+    # 這次實際採用的 seed（F0）。前端拿它當「重新生成」的遞增起點。
+    seed: int = 0
 
 
 def ten_cover_asis_images(req: "TenCoverRequest") -> list[bytes]:
@@ -4569,6 +4878,10 @@ def _cover_ai(
     # 4 級 3 件），抽哪幾件由程式隨機抽，所以同一則新聞重生會換一組。標題傳進去是為了
     # 「N種／N大」時第一件固定用數量呼應的無字圖示列。
     level = req.creativity_level()
+    # F0：整張圖的變化全部掛在同一顆 seed 上。以前這兩支都拿 seed=None，各自
+    # 開一顆 random.Random(None)，所以「這一張好」永遠撈不回來。
+    # （style_clause 那段沒有抽籤，招式已搬進 design_brief，所以不必帶 seed。）
+    seed = req.seed
     style_clause = editor_formats.cover_ai_title_style_clause(level)
     # 2026-09-11 第二輪：數字全部搬到 CANVAS 正後方那塊 DESIGN BRIEF。第一輪把整份條文
     # 放在 TYPOGRAPHY 段尾，實拍四級長得一模一樣——L4 的 prompt 14K 字元，條文坐在
@@ -4577,7 +4890,7 @@ def _cover_ai(
     # visuals=（2026-09-11 第十批）：畫面描述傳進去只為了讓招式段判斷有沒有旗子可用
     # （見 editor_formats.cover_accessories）——不影響其餘措辭。
     design_brief = editor_formats.cover_design_brief(
-        level, titles=titles, full_width=(req.layout == "full"), visuals=visuals
+        level, titles=titles, seed=seed, full_width=(req.layout == "full"), visuals=visuals
     )
     colour_rule = editor_formats.cover_title_colour_rule(level)
     # 3 級起才把反色底字釘在行清單上（條文本身也是 3 級起才要求）。
@@ -5146,6 +5459,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         image_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
         source="editor-cover-full",
+        seed=req.seed,
         type_label=f"{COVER_TYPE_LABEL_TEN}（滿版）",
         news_text=req.title_left,
         variable=req.title_left,
@@ -5172,6 +5486,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         left_is_ai=is_ai,
         right_is_ai=False,
         mode=req.mode,
+        seed=req.seed,
     )
 
 
@@ -5187,6 +5502,10 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
             detail=f"未知的標籤：{req.badge}（可用：{list(compose.COVER_BADGES)}）",
         )
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
+    # F0：seed 在入口定一次，滿版／雙切／只改文字每條路徑共用同一顆，回應才報得出
+    # 實際採用的值。沒帶就現抽——舊呼叫端（LINE 等）因此也拿得到可回查的 seed。
+    if req.seed is None:
+        req = req.model_copy(update={"seed": next_generation_seed()})
     # 版面在入口就正規化成 split／full 一次（2026-09-08 WP1）：下游那一票
     # `req.layout == "full"` 的判斷因此完全不用動，也不會有人再看到 None。
     req = req.model_copy(
@@ -5305,6 +5624,7 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         image_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
         source="editor-cover",
+        seed=req.seed,
         type_label=f"{COVER_TYPE_LABEL_TEN}（雙切）",
         news_text=f"{req.title_left} ｜ {req.title_right}",
         variable=f"{req.title_left}\n{req.title_right}",
@@ -5330,6 +5650,7 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         left_is_ai=panel_is_ai[0],
         right_is_ai=panel_is_ai[1],
         mode=req.mode,
+        seed=req.seed,
     )
 
 
@@ -5414,6 +5735,10 @@ class YtCoverRequest(BaseModel):
     background_mime_type: str = "image/png"
     # 那張底圖是不是 AI 生的——決定要不要疊「AI示意圖」。前端原樣帶回上一次的回應值。
     background_is_ai: bool = False
+    # 變化池的 seed（F0／D1）。None＝後端現抽一顆並在回應裡回報。取代原本
+    # seed=f"{title}|{date}" 的寫法——那種 seed 只要標題與日期沒變就永遠同一種長相，
+    # 使用者按幾次「重新生成」都拿到同一張。
+    seed: int | None = Field(default=None, ge=0, lt=SEED_MAX)
 
     def slot_refs(self, side: int) -> list[UserReferenceImage]:
         """第 side 格（0＝第一則／單則、1＝第二則）的附圖清單。"""
@@ -5453,6 +5778,8 @@ class YtCoverResponse(ImageGenerateResponse):
     title_mode: str = "ai"
     # 整點雙則（2026-09-08 WP2）：前端據此顯示版面與對應的下載短名
     dual: bool = False
+    # 這次實際採用的 seed（F0）。前端拿它當「重新生成」的遞增起點。
+    seed: int = 0
 
 
 def derive_yt_cover_plan(
@@ -5561,6 +5888,54 @@ def resolve_yt_cover_plan(
     return YtCoverPlan(lines, visual, subjects, english, photos, dropped)
 
 
+def _yt_cover_asis_list(req: "YtCoverRequest") -> list[UserReferenceImage]:
+    """原圖放置清單：有附圖位就讀格子，否則讀共用區。"""
+    if req.uses_asis_slots():
+        return [ref for ref in (req.slot_refs(0) + req.slot_refs(1)) if ref.purpose == "asis"]
+    return [ref for ref in req.reference_images if ref.purpose == "asis"]
+
+
+def _yt_cover_gen_refs(req: "YtCoverRequest") -> list[UserReferenceImage]:
+    """生底圖時要附的參考圖（原圖放置以外）。有附圖位就把兩格的非 asis 一併帶上。"""
+    if req.uses_asis_slots():
+        return (
+            [ref for ref in req.reference_images if ref.purpose != "asis"]
+            + slot_generation_refs(req.slot_refs(0))
+            + slot_generation_refs(req.slot_refs(1))
+        )
+    return [ref for ref in req.reference_images if ref.purpose != "asis"]
+
+
+def _yt_cover_all_refs(req: "YtCoverRequest") -> list[UserReferenceImage]:
+    """AI 整張版：共用區非 asis ＋兩格全部附圖。有底圖（base）時不走這裡。"""
+    if req.uses_asis_slots():
+        return (
+            [ref for ref in req.reference_images if ref.purpose != "asis"]
+            + list(req.slot_refs(0))
+            + list(req.slot_refs(1))
+        )
+    return list(req.reference_images)
+
+
+def _yt_cover_apply_slot_placement(
+    req: "YtCoverRequest", image_req: ImageGenerateRequest
+) -> ImageGenerateRequest:
+    """兩格都有圖時，把左右身分寫進 prompt（D4）。單格或攤平後格子已空＝不注入。"""
+    left = req.slot_refs(0)
+    right = req.slot_refs(1)
+    if not left or not right:
+        return image_req
+    block = USER_REFERENCE_YT_SLOT_PLACEMENT_TEMPLATE.format(
+        left_count=len(left),
+        right_count=len(right),
+    )
+    if block in image_req.prompt:
+        return image_req
+    return image_req.model_copy(
+        update={"prompt": f"{image_req.prompt.rstrip()}\n\n{block}"}
+    )
+
+
 def _yt_cover_background(
     req: "YtCoverRequest", visual: str, subjects: list[str], english: list[str], *, excluded: list[str] | None = None
 ) -> tuple[bytes, str, bool, str]:
@@ -5572,7 +5947,7 @@ def _yt_cover_background(
             req.background_is_ai,
             "yt-cover:recomposite",
         )
-    asis = [ref for ref in req.reference_images if ref.purpose == "asis"]
+    asis = _yt_cover_asis_list(req)
     if asis:
         raws = []
         for ref in asis[: compose.YT_SPLIT_MAX_PANELS]:
@@ -5600,7 +5975,7 @@ def _yt_cover_background(
         aspect_ratio="16:9",
         image_size=req.image_size,
         safe_frame=False,
-        reference_images=[ref for ref in req.reference_images if ref.purpose != "asis"],
+        reference_images=_yt_cover_gen_refs(req),
         portrait_subjects=subjects,
         portrait_subjects_en=english,
         editor_instruction=req.instruction,
@@ -5619,6 +5994,7 @@ def _yt_cover_background(
         flush=True,
     )
     image_req = apply_user_references_to_image_request(image_req)
+    image_req = _yt_cover_apply_slot_placement(req, image_req)
     image_req = image_req.model_copy(
         update={"prompt": f"{image_req.prompt.rstrip()}\n\n{editor_formats.YT_COVER_TEXT_FREE_OVERRIDE}"}
     )
@@ -5703,7 +6079,7 @@ def _yt_cover_full_image(
             # 同一段 FIXED。差別只有靠左／置中，以及日期牌——只有整點把牌交給模型，
             # news 的日期由程式貼在左上角，hot 根本沒有日期。
             design_brief=editor_formats.yt_design_brief(
-                req.creativity, lines=lines, seed=f"{req.title}|{date_text}",
+                req.creativity, lines=lines, seed=req.seed,
                 layout=req.layout,
                 # 底帶開著時，整幅底帶與「每行各自一塊底板」是兩個打架的指示——
                 # brief 要知道，才能明講兩者關係而不是讓模型自己挑一個遵守。
@@ -5733,7 +6109,7 @@ def _yt_cover_full_image(
         safe_frame=False,
         reference_images=(
             [UserReferenceImage(data_url=_base_data_url(base), purpose="aiedit")]
-            if base is not None else list(req.reference_images)
+            if base is not None else _yt_cover_all_refs(req)
         ),
         portrait_subjects=[] if base is not None else subjects,
         portrait_subjects_en=[] if base is not None else english,
@@ -5754,6 +6130,8 @@ def _yt_cover_full_image(
         flush=True,
     )
     image_req = apply_user_references_to_image_request(image_req)
+    if base is None:
+        image_req = _yt_cover_apply_slot_placement(req, image_req)
     result = generate_image_raw(image_req)
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
     return base64.b64decode(result.image_data_base64), result.mime_type, result.model
@@ -5901,6 +6279,10 @@ def yt_dual_background(
     dependencies=[Depends(verify_internal_api_key)],
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
+    # F0：seed 在入口定一次。取代舊的 seed=f"{title}|{date}"——那種 seed 綁在內容上，
+    # 標題與日期沒改就永遠同一種長相，使用者按「重新生成」拿到的是同一張。
+    if req.seed is None:
+        req = req.model_copy(update={"seed": next_generation_seed()})
     live24 = req.layout == editor_formats.YT_COVER_LAYOUT_LIVE24
     caps = editor_formats.capability_for(editor_formats.yt_format_key(req.layout))   # 版型能力矩陣
     # 標題模式定案（2026-09-14，理由見 editor_formats.title_mode_for_creativity）：明送照辦、省略才取預設
@@ -6136,6 +6518,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         image_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
         source=log_source,
+        seed=req.seed,
         type_label=COVER_TYPE_LABEL_YT.get(req.layout, "YT封面")
                    + ("（雙則）" if dual else ""),
         news_text=log_title,
@@ -6158,6 +6541,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         background_is_ai=is_ai,
         title_mode=req.title_mode,
         dual=dual,
+        seed=req.seed,
     )
 
 

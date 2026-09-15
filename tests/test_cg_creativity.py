@@ -33,8 +33,11 @@ APP_JS = (Path(__file__).resolve().parent.parent / "app.js").read_text(encoding=
 INDEX_HTML = (Path(__file__).resolve().parent.parent / "index.html").read_text(encoding="utf-8")
 
 
-def _rules(level):
-    return main.cg_creativity_rules(level)
+# 2026-09-15（Stage 2-6）：CG 條文接上變化池後，不帶 seed 每次抽出來的長相都不一樣。
+# 這份測試看的是「梯子有沒有單調成長」，不是抽到哪一組，所以一律釘 seed=0——不釘的話
+# 同一條斷言會時好時壞，而閃爍的測試比沒有測試更糟。
+def _rules(level, seed=0):
+    return main.cg_creativity_rules(level, seed=seed)
 
 
 def _prompt(level, **kw):
@@ -134,15 +137,25 @@ class LadderTests(unittest.TestCase):
             self.assertNotIn(pinned, _rules(1))
 
     def test_freedoms_only_ever_grow(self):
-        # 字級落差、圖示、主題背景：3 級才開
+        # 字級落差、無字配件、主題背景：3 級才開
+        #
+        # 2026-09-15（Stage 2-6／A2）：配件那半的斷言從 "pictograms" 改成配件段抬頭。
+        # 舊條文用的是許可句（「一兩個圖示」「至多三個」），而這個 repo 已經記過
+        # 「許可句推不動模型」——A2 的裁決就是把件數改由程式決定並逐件列出。改後
+        # 3／4 級列的是實際抽到的配件，措辭隨抽籤變，"pictograms" 這個字面本來就
+        # 不保證出現；配件段抬頭才是「這一級到底有沒有配件」的穩定判準，語意與舊
+        # 斷言相同（圖示類裝飾 3 級起才有），而且順便釘住了它是由程式列出的清單。
         for level in (1, 2):
             with self.subTest(level=level):
                 self.assertNotIn("SIZE HIERARCHY INSIDE THE TYPE", _rules(level))
-                self.assertNotIn("pictograms", _rules(level))
         for level in (3, 4):
             with self.subTest(level=level):
                 self.assertIn("SIZE HIERARCHY INSIDE THE TYPE", _rules(level))
-                self.assertIn("pictograms", _rules(level))
+        # 無字配件從 2 級起有（A2 的共用件數表 {2:1, 3:2, 4:3}），1 級一件都沒有
+        self.assertNotIn(main.CG_ACCESSORY_HEADING, _rules(1))
+        for level in (2, 3, 4):
+            with self.subTest(level=level):
+                self.assertIn(main.CG_ACCESSORY_HEADING, _rules(level))
         # 傾斜、多層描邊、爆裂：只有最高級
         for level in (1, 2, 3):
             with self.subTest(level=level):

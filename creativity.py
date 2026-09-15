@@ -50,6 +50,7 @@
 一起被抽掉。
 """
 import random
+import re
 from dataclasses import dataclass, field
 
 # ============================================================
@@ -118,10 +119,11 @@ COVER_TYPEFACES: tuple[str, ...] = (
 # 配色。四個位置＝主色／次色／重點色／備用色，全部是播出安全的高彩度色。
 # 「哪個字拿重點色」仍然由呼叫端自己的 COLOUR FOLLOWS MEANING 那句決定——
 # 池子決定用哪幾色，意義決定落在誰身上。這樣才不會回到白→黃→紅的行序配色。
-# 2026-09-14 使用者鐵則：**任何綠色系都不准進池**（lime／teal／mint／olive 都算）。
-# 成品要疊在攝影棚綠屏前，綠色系文字會被去背吃掉、當場穿幫。配色條文另有硬禁令
-# （editor_formats.COVER_NO_GREEN_RULE），這裡是第一道：池子本身就沒有綠。
-COVER_BANNED_COLOUR_WORDS: tuple[str, ...] = ("green", "teal", "lime", "mint", "olive", "chartreuse", "emerald")
+# 2026-09-14 D2：只排除會被攝影棚綠幕去背吃掉的 chroma-key／neon key 綠描述。
+# 現有 palette 本來沒有綠色；不為了證明深綠、墨綠或橄欖綠可用而改動既有設計。
+COVER_CHROMA_KEY_BANNED_COLOUR_WORDS: tuple[str, ...] = (
+    "chroma-key green", "neon key green", "lime key green"
+)
 
 COVER_PALETTES: tuple[tuple[str, str, str, str], ...] = (
     ("white", "deep navy", "vivid red", "bright golden yellow"),
@@ -203,6 +205,110 @@ COVER_FLAG_ACCESSORY: tuple[str, str] = (
     " panel behind one row — never redrawn from memory, never swapped for a"
     " different country's flag, and never labelled with a name.",
 )
+
+
+# ============================================================
+# 招式件數與選取（2-5，2026-09-15）：從 editor_formats 搬進來
+# ============================================================
+# 原本件數表與 cover_accessories() 都住在 editor_formats，理由寫的是「跟 titles／
+# full_width 耦合，是十點專屬」。實際看那支函式，耦合的只有兩處：件數表要不要
+# 查、以及每一件後面釘的那句幾何提示。**抽籤本身跟版型完全無關**——洗牌、依
+# 件數取前幾件、{shape} 換形狀、圖示類掛一次指示、有旗子就換最後一件，這整段
+# 是 CG 線（A1／A2）要原樣重用的東西。
+#
+# 所以這裡只搬「資料需求」：level、件數表、rng／seed、visuals、以及呼叫端**自己
+# 算好**的一句 placement_note。十點的幾何（雙切才有的中央切線）留在
+# editor_formats._accessory_geometry_note，不進這支檔案——本模組開頭那條「不准
+# 出現版面尺寸／版型資訊」的約束照舊。
+#
+# **抽籤消耗的亂數序列一個字都不准變**：52 筆 cover RNG pin 與 YT 的 fixture 全
+# 部釘在這串序列上。搬家就是搬家，不順手改。
+
+# 招式件數表。就是梯子的骨架：一眼可見、可數、由程式決定。
+#
+# A2（CP4 使用者裁決，2026-09-15 更正）：**三條線共用這一張，CG 不另立**。
+# 使用者裁的是「跟封面一致」，而封面現行 level 2 就是 1 件——另立一張 {2: 0} 的
+# CG 表會讓「共用一張表」這句話當場不成立，而把封面改成 {2: 0} 則會動到 52 筆
+# cover RNG pin 與 YT fixture，屬於沒有被授權的視覺變更。用現行這張，兩個要求
+# 同時成立。名字沿用 COVER_ 前綴：既有呼叫點與測試都指名它，改名的收益不抵風險。
+COVER_ACCESSORY_COUNTS = {0: 0, 1: 0, 2: 1, 3: 2, 4: 3}
+
+
+# 國旗招式只在抽得到 2 件以上時才換得進去——1 件那級換掉唯一那件，等於把整級
+# 讓給國旗，跟使用者原話的分量不成比例。
+FLAG_ACCESSORY_MIN_COUNT = 2
+
+# 偵測畫面描述裡有沒有旗子：英文 "flag"（含 flags／flagpole 等變化）或中文「旗」。
+# 確定性判斷，不是隨機——見 COVER_FLAG_ACCESSORY 上方的說明。
+_FLAG_MENTION_RE = re.compile(r"flag|旗", re.IGNORECASE)
+
+# 「畫一個圖示」的招式有三條：icon／bubbles／iconrow。三條共用同一句正面指示，
+# 不在各自的池子文字裡各寫一次——那樣下次漏改一條又是同一個坑。
+_ICON_LIKE_KEYS = frozenset({"icon", "bubbles", "iconrow"})
+_ICON_SUBJECT_GUIDANCE = (
+    "MATCH SUBJECT AND REGISTER: headline's noun, else photo's subject — a"
+    " raincloud beside a death is weather, not grief. "
+)
+
+
+def visuals_mention_flag(visuals) -> bool:
+    """`visuals` 可以是單一字串（YT）或字串的 tuple/list（十點左右兩格）。"""
+    if isinstance(visuals, str):
+        text = visuals
+    else:
+        text = " ".join(v for v in visuals if v)
+    return bool(text) and bool(_FLAG_MENTION_RE.search(text))
+
+
+def accessories(
+    level: int,
+    *,
+    counts=None,
+    rng=None,
+    seed=None,
+    visuals=(),
+    placement_note: str = "",
+    overrides=None,
+) -> list[str]:
+    """該級要畫的招式（無字），形狀已填好、每一件後面接著呼叫端給的幾何提示。
+
+    `counts`：件數表。預設就是封面線那張；CG 線傳自己那張（A2）。
+    `rng`：呼叫端抽完變化池的那顆 `random.Random`，要接著同一串序列往下抽——
+    另外開一顆 `random.Random(seed)` 抽到的是另一串，同一顆 seed 卻會換一組招式。
+    單獨呼叫時才退回自己開一顆。
+    `placement_note`：釘在每一件後面的幾何提示，由呼叫端依自己的版型算好。
+    `visuals`：畫面描述。偵測到旗子、且這一級抽得到 FLAG_ACCESSORY_MIN_COUNT 件
+    以上時，把抽到的**最後一件**確定性換成國旗招式（不進隨機池，理由見
+    COVER_FLAG_ACCESSORY 上方）。換掉之後仍然接同一句 placement_note。
+    `overrides`：{key: 替代條目文字}。池子裡有少數條目帶著十點封面的版面家具
+    （iconrow 寫的是「深藍底條上方」，CG 根本沒有那條底帶），那種條目要換掉措辭
+    才用得到別條線上。**只換文字、不動池子長度也不動抽籤順序**——增刪條目會把所有
+    既有 seed 的長相換掉，這正是本檔案開頭「風險 2」要擋的事。
+    """
+    counts = COVER_ACCESSORY_COUNTS if counts is None else counts
+    want = counts.get(level, 0)
+    if want <= 0:
+        return []
+    rng = rng if rng is not None else random.Random(seed)
+    # 洗牌洗整組 (key, text)，不是只洗 text——洗牌本身（Fisher-Yates）消耗的 rng
+    # 呼叫次數只看串列長度，跟元素內容無關；要保留 key 才認得出哪幾件是圖示類。
+    entries = list(COVER_ACCESSORY_POOL)
+    rng.shuffle(entries)
+    picked: list[str] = []
+    icon_guidance_used = False
+    for key, text in entries[:want]:
+        if overrides and key in overrides:
+            text = overrides[key]
+        if "{shape}" in text:
+            text = text.replace("{shape}", rng.choice(COVER_ACCESSORY_SHAPES))
+        if key in _ICON_LIKE_KEYS and not icon_guidance_used:
+            # 同一輪最多掛一次：件數上限只有 3，重複三遍只是噪音。
+            text = _ICON_SUBJECT_GUIDANCE + text
+            icon_guidance_used = True
+        picked.append(text + placement_note)
+    if want >= FLAG_ACCESSORY_MIN_COUNT and visuals_mention_flag(visuals):
+        picked[-1] = COVER_FLAG_ACCESSORY[1] + placement_note
+    return picked
 
 
 @dataclass(frozen=True)

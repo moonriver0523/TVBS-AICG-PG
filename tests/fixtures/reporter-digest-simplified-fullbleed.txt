@@ -56,6 +56,12 @@ DIRECTIONAL COLOUR CONVENTION (Taiwan convention — the Western one is wrong he
 4. In a graphic that shows a rise or a fall, do not use red or green decoratively for anything unrelated, so the pairing cannot be misread.
 
 
+CHROMA-KEY GREEN SAFETY (applies at every density and creativity level):
+1. Never use chroma-key green or neon/lime key green for text fills, outlines, shadows, plates behind text, tags, chips, or purely decorative shapes; these colours are keyed out on air.
+2. This is a narrow studio-key restriction, not a ban on ordinary green. Deep green, dark green and olive green remain available when appropriate.
+3. The Taiwan directional convention above still wins for market data: non-chroma data green remains allowed for falls, losses and negative values.
+
+
 MAP SCOPE GUARD (the chart type above was chosen for you and is NOT a map): if the graphic you end up specifying would put real, named places on a map or show them in their true relative positions — a locator, a coastline, a road or district layout, a route, or markers pinned to real geography — that is a map, and drawing one under this chart type is the exact failure this block exists to prevent. Do not ask for one. Where the story genuinely needs a sense of place, ask instead for a schematic locator or a plain coordinate grid with the place names as labels, say plainly in "structure" that the layout is schematic, and never invent coastlines, islands, landmasses or borders.
 
 
@@ -69,6 +75,7 @@ SIMPLIFIED MODE OVERRIDE — THESE RULES OVERRIDE ANY EARLIER STANDARD-MODE LENG
    C. one large thematic image/map/scene with text confined to one compact area.
 5. Do not add multiple secondary card groups, unnecessary decorative icons, competing focal points, or invented filler text.
 6. For editor role, ignore the earlier 150-180 character target. <蓋章> is optional, must appear only when the source supports a clear conclusion or quote, and counts as one of the maximum three points.
+7. HEADLINE LIMIT: [標題] may contain no more than 13 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 
 
 USER INSTRUCTIONS INSIDE THE MATERIAL (DO THIS FIRST, BEFORE APPLYING ANY RULE ABOVE):

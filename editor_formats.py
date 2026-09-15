@@ -570,28 +570,13 @@ COVER_FLAG_ACCESSORY = creativity.COVER_FLAG_ACCESSORY
 # 所以改成池子裡一件普通的圖示列，不宣稱任何數字。
 
 
-# 件數就是梯子的骨架：一眼可見、可數、由程式決定。
-COVER_ACCESSORY_COUNTS = {0: 0, 1: 0, 2: 1, 3: 2, 4: 3}
-
-# 國旗招式只在 3 級以上（COVER_ACCESSORY_COUNTS 給到 2 件以上）才換得進去——
-# 2 級只有 1 件招式，換掉唯一那件會讓 2 級的「規矩」感一次全部讓給國旗，
-# 跟使用者原話「照片裡已經有的旗子，可以被拉出來當設計元素」的分量不成比例。
-_FLAG_ACCESSORY_MIN_COUNT = 2
-
-# 偵測畫面描述裡有沒有旗子：英文 "flag"（含 flags／flagpole 等變化，用詞界）
-# 或中文「旗」。這是確定性判斷，不是隨機——見 creativity.COVER_FLAG_ACCESSORY
-# 上面的註解：挪威那則新聞（畫面描述提到 flag）每次重生都會觸發，使用者實拍
-# 驗得到；沒提到旗子的畫面則完全不觸發，既有 seed 的長相不受影響。
-_FLAG_MENTION_RE = re.compile(r"flag|旗", re.IGNORECASE)
-
-
-def _visuals_mention_flag(visuals) -> bool:
-    """`visuals` 可以是單一字串（YT）或字串的 tuple/list（十點左右兩格）。"""
-    if isinstance(visuals, str):
-        text = visuals
-    else:
-        text = " ".join(v for v in visuals if v)
-    return bool(text) and bool(_FLAG_MENTION_RE.search(text))
+# 件數表與抽籤本體 2026-09-15（Stage 2-5）搬進 creativity.py：那一段跟版型無關，
+# CG 線（A1／A2）要原樣重用。這裡留同名別名與 adapter，既有呼叫點與測試不用改，
+# 跟 P2 的 LEVEL_NAMES、P3 的池子走同一個模式——是「同一個物件」，不是各留一份。
+COVER_ACCESSORY_COUNTS = creativity.COVER_ACCESSORY_COUNTS
+_FLAG_ACCESSORY_MIN_COUNT = creativity.FLAG_ACCESSORY_MIN_COUNT
+_FLAG_MENTION_RE = creativity._FLAG_MENTION_RE
+_visuals_mention_flag = creativity.visuals_mention_flag
 
 
 def _accessory_geometry_note(full_width: bool) -> str:
@@ -610,67 +595,39 @@ def _accessory_geometry_note(full_width: bool) -> str:
     return note + "."
 
 
-# 「畫一個圖示」的招式有三條：icon／bubbles／iconrow。實拍：國王逝世的封面，L4
-# 抽到 icon 配了一朵雨雲，掛在「辭世」旁邊——根因是舊版 icon 條目文字帶著一份
-# 災難／氣象例子清單（已在 creativity.py 拿掉），那份清單被模型當成錨點，蓋過了
-# 條目裡本來就有的「taken from the subject」。不在三條各自的池子文字裡各補一次
-# 正面方法——那樣下次漏改一條又是同一個坑，改成這裡集中管：抽到這三條的任何一條，
-# 就在它前面掛一句共通指示。語氣要對：只給方法不夠，這個 repo 已經證實過具體反例
-# 才擋得住圖模亂套錨點（見 P1 反色底字、招式排除區那幾次教訓）——十點 L3 自己
-# 抽到的 iconrow 是蠟燭／王冠／百合，熱搜 L3 抽到黑色輓帶，證明模型沒有被清單
-# 錨住時挑得很好，問題是清單不是能力。
-_ICON_LIKE_KEYS = frozenset({"icon", "bubbles", "iconrow"})
-# 原稿長得多（先講方法、再講反例，各自成句），但 test_the_ladder_is_pinned_to_
-# numbers_not_adjectives 釘著 L4 最壞情況 brief 要短於 3000 字元——那條上限本身
-# 就是「位置比長度更決定生死，但長度別把自己稀釋掉」那個教訓（見它的註解），這句
-# 一次性插進去每級都會加長，算過 40 顆 seed × 雙切/滿版的最壞值後砍到這個長度，
-# 換來還有一點餘裕（約 20 字元）。方法與反例都留著，只是不重複鋪陳。
-_ICON_SUBJECT_GUIDANCE = (
-    "MATCH SUBJECT AND REGISTER: headline's noun, else photo's subject — a"
-    " raincloud beside a death is weather, not grief. "
-)
+# 圖示類招式（icon／bubbles／iconrow）的共通指示與判定，2026-09-15 一併搬進
+# creativity.py——它管的是池子裡那三條條目的內容，不是十點的版型。既有測試
+# （test_cover_icon_subject_guidance_20260911）指名 editor_formats 這兩個名字，
+# 留別名接住。
+_ICON_LIKE_KEYS = creativity._ICON_LIKE_KEYS
+_ICON_SUBJECT_GUIDANCE = creativity._ICON_SUBJECT_GUIDANCE
 
 
 def cover_accessories(level: int, titles=(), seed=None, full_width: bool = False,
                       rng=None, visuals=()) -> list[str]:
-    """該級要畫的招式（無字），形狀與幾何都已經填好。
+    """十點封面的招式 adapter：抽籤走共用的 creativity.accessories，幾何自己補。
+
+    公開的參數與名稱一個都沒變（既有呼叫點與測試指名這一支），但抽籤本體已經搬到
+    creativity.py——十點的版型資訊（`titles`、`full_width`）不進那支共用函式，
+    只由這裡換算成一句幾何提示交過去。
+
+    `titles` 目前不參與抽籤（2026-09-11 第二輪拿掉「數量呼應」後就沒有用途了），
+    保留在簽名上是因為既有呼叫端與測試都還帶著它。
 
     `rng` 由 cover_design_brief 傳進來，讓所有變化軸共用同一顆——一個 seed
-    就決定整張的長相，才重現得出來。單獨呼叫時退回自己開一顆。
+    就決定整張的長相，才重現得出來。單獨呼叫時退回共用函式自己開一顆。
 
     `visuals`（2026-09-11 第十批）：畫面描述（十點傳 (visual_left, visual_right)，
-    YT 傳單一字串）。偵測到旗子、且這一級抽得到 2 件以上招式時，把抽到的**最後
-    一件**確定性換成國旗招式——不是丟進池子跟其他九件一起抽（見
-    creativity.COVER_FLAG_ACCESSORY 的註解：那樣會讓所有既有 seed 的長相跟著換，
-    而且沒有旗子的照片也可能抽到它）。換掉之後仍然要接同一支 `_accessory_geometry_note`
-    ——test_every_accessory_carries_its_own_placement_note 釘住「每一件招式都帶
-    自己的排除區」，國旗這件不例外。
+    YT 傳單一字串）。旗子的確定性換入規則見 creativity.accessories。
     """
-    want = COVER_ACCESSORY_COUNTS.get(level, 0)
-    if want <= 0:
-        return []
-    rng = rng if rng is not None else random.Random(seed)
-    # 洗牌洗整組 (key, text)，不是只洗 text——洗牌本身（Fisher-Yates）消耗的 rng
-    # 呼叫次數只看串列長度，跟元素內容無關，所以這裡從「洗一串字串」改成「洗一串
-    # tuple」不會動到既有 seed 的抽籤結果；要保留 key 才認得出哪幾件是圖示類
-    # （見下面 _ICON_LIKE_KEYS），沒有 key 就沒辦法只管住那三條、不動到其他六件。
-    entries = list(COVER_ACCESSORY_POOL)
-    rng.shuffle(entries)
-    note = _accessory_geometry_note(full_width)
-    picked: list[str] = []
-    icon_guidance_used = False
-    for key, text in entries[:want]:
-        if "{shape}" in text:
-            text = text.replace("{shape}", rng.choice(COVER_ACCESSORY_SHAPES))
-        if key in _ICON_LIKE_KEYS and not icon_guidance_used:
-            # 同一輪最多掛一次：件數上限只有 3，就算三條圖示類全被抽到，指示重複
-            # 三遍只是噪音，不會多壓住什麼。
-            text = _ICON_SUBJECT_GUIDANCE + text
-            icon_guidance_used = True
-        picked.append(text + note)
-    if want >= _FLAG_ACCESSORY_MIN_COUNT and _visuals_mention_flag(visuals):
-        picked[-1] = COVER_FLAG_ACCESSORY[1] + note
-    return picked
+    return creativity.accessories(
+        level,
+        counts=COVER_ACCESSORY_COUNTS,
+        rng=rng,
+        seed=seed,
+        visuals=visuals,
+        placement_note=_accessory_geometry_note(full_width),
+    )
 
 
 # ---- AI 標題疊在程式拼好的底圖上（2026-09-13 使用者裁決）----
@@ -730,7 +687,7 @@ COVER_TITLE_BRIEF_SPECS = {
     3: dict(height="30%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True, anchor=True,
             colours="THREE colours plus ONE accent: {0} dominant, {1} second, {2} on the word that carries the news, {3} as the accent"),
     4: dict(height="36%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True, anchor=True,
-            colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open (never green)"),
+            colours="start from {0}, {1}, {2} and {3}, then add what else you need — palette is fully open; no chroma-key green"),
 }
 
 
@@ -858,19 +815,18 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
 # 反色底字的色塊、小籤、日期牌。放在配色規則本體（每一級都會帶到），不放 OVERRIDE
 # 段——2026-09-11 已證明離得遠的條文壓不過釘在行上的指示。
 COVER_NO_GREEN_RULE = (
-    "- NO GREEN ANYWHERE ON TEXT — THIS OUTRANKS EVERY PALETTE INSTRUCTION. The finished"
-    " image is keyed over a studio green screen, so any green-family colour (green, lime,"
-    " teal, mint, olive, chartreuse, emerald, yellow-green, blue-green) on a character, an"
-    " outline, a shadow, a filled block behind characters, a tag, a chip or a plate will be"
-    " keyed out on air. If a palette, a brief or the story suggests green, substitute a"
-    " non-green colour. This applies at every creativity level.\n"
+    "- NO chroma-key green ON TEXT — THIS OUTRANKS EVERY PALETTE INSTRUCTION. The finished"
+    " image is keyed over a studio green screen, so chroma-key green or neon/lime key green on"
+    " a character, an outline, a shadow, a filled block behind characters, a tag, a chip or a"
+    " plate will be keyed out on air. Deep green, dark green and olive green remain allowed;"
+    " only the studio-key colours are forbidden. This applies at every creativity level.\n"
 )
 
 # brief 版（CANVAS 後面那塊有 3000 字上限，塞不下整段）：一行就夠，完整條文在配色規則。
 COVER_NO_GREEN_ROW = (
-    "- NO GREEN ON ANY TEXT — no green-family colour (green, lime, teal, mint, olive) on a"
-    " character, outline, shadow, filled block, tag or plate: the image is keyed over a studio"
-    " green screen. This outranks the palette."
+    "- NO chroma-key green ON TEXT — no chroma-key green or neon/lime key green on a character,"
+    " outline, shadow, filled block, tag or plate: the image is keyed over a studio green screen."
+    " Deep green, dark green and olive green remain allowed. This outranks the palette."
 )
 
 
@@ -1070,17 +1026,6 @@ YT_COVER_LAYOUT_HOT = "hot"          # 今日熱搜（2026-09-06 型錄 H 類）
 # 24H LIVE（2026-09-13）：hourly 的鏡像——Logo 換兩層版移右上、章換成左上的 24H LIVE
 # 角標素材、標題從兩行白黃改成一行深紅斜體。**純合成版**，沒有 AI 標題路徑。
 YT_COVER_LAYOUT_LIVE24 = "live24"
-# live24 的底圖模式（2026-09-13 使用者裁決：「前台加一題底圖模式」）。
-# 為什麼要多一個欄位：漸層與疊圖都要「兩格都有圖」，共用同一個觸發訊號分不開。
-LIVE24_BG_FULL = "full"        # 滿版：一張鋪滿
-LIVE24_BG_BLEND = "blend"      # 雙切漸層：兩張羽化拼接（預設，維持接線當天的行為）
-LIVE24_BG_INSET = "inset"      # 雙切疊圖：大底圖＋右側白框斜照片
-LIVE24_BG_MODES = (LIVE24_BG_FULL, LIVE24_BG_BLEND, LIVE24_BG_INSET)
-LIVE24_BG_LABELS = {
-    LIVE24_BG_FULL: "滿版",
-    LIVE24_BG_BLEND: "雙切漸層",
-    LIVE24_BG_INSET: "雙切疊圖",
-}
 # live24 的底圖模式（2026-09-13 使用者裁決：「前台加一題底圖模式」）。
 # 為什麼要多一個欄位：漸層與疊圖都要「兩格都有圖」，共用同一個觸發訊號分不開。
 LIVE24_BG_FULL = "full"        # 滿版：一張鋪滿
@@ -1661,7 +1606,7 @@ YT_BRIEF_SPECS = {
     3: dict(height="40%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True,
             colours="THREE colours plus ONE accent: {0} dominant, {1} second, {2} on the word that carries the news, {3} as the accent"),
     4: dict(height="44%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True,
-            colours="start from {0}, {1}, {2} and {3}, then add whatever else the design needs — the palette is fully open (never green)"),
+            colours="start from {0}, {1}, {2} and {3}, then add what else you need — palette is fully open; no chroma-key green"),
 }
 # 兩行標題的字底。程式壓字版實測落在 97.9%，取整。
 YT_HOURLY_TITLE_BOTTOM_RATIO = 0.98

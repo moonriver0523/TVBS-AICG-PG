@@ -398,8 +398,30 @@ let state = {
         sourceCorner: 'tl',       // 來源句角落（2026-09-09 起四角可選，取代 sourceFollowLogo）
         live: true,               // LIVE 章可取消
     },
+    // ---- 變化池 seed（F0／D1，2026-09-14 使用者裁決）----
+    // 三條線各存一顆：CG（第一頁一鍵生成）、十點不一樣、YT 封面。null＝還沒生過，
+    // 後端會現抽一顆並在回應裡回報，前端存下來。
+    //
+    // 「重新生成」才遞增（bumpSeed）：普通重貼、只改文字、追加修改後重貼固定元素
+    // 一律**原樣送回目前這顆**——那幾條路徑要的是同一種長相，換 seed 等於偷偷換版。
+    // 使用者回報「這一組好」時，後台紀錄裡的 seed 就是撈回它的鑰匙。
+    cgSeed: null,
+    coverSeed: null,
+    ytSeed: null,
     refineStack: []
 };
+
+/* 重新生成：把這條線的 seed 往前推一格。沒有前一顆就回 null，讓後端現抽。
+   刻意不在前端亂數：後端抽、回應回報、前端只負責遞增與回送，這樣「同一顆 seed
+   抽出同一種長相」只有一份實作，前後端不會各抽各的。 */
+function bumpSeed(current) {
+    return (typeof current === 'number') ? (current + 1) % 2147483648 : null;
+}
+
+/* 後端回報實際採用的 seed，存回對應那條線（line＝'cgSeed'／'coverSeed'／'ytSeed'）。 */
+function rememberSeed(line, data) {
+    if (data && typeof data.seed === 'number') state[line] = data.seed;
+}
 
 function curType() { return CHART_TYPES[state.chartType]; }
 
@@ -649,8 +671,9 @@ function downloadFileName(kind, title, ext) {
     return `${parts.filter(Boolean).join('_')}.${extension}`;
 }
 
-/* 消化程度三檔。key 與後端 DigestDensity 一致，改這裡要同步改 main.py */
+/* 消化程度六檔。key 與後端 DigestDensity 一致，改這裡要同步改 main.py */
 const DENSITY_LABELS = {
+    no_text: '無字',      // 2026-09-14 D14：六段拉桿最左端，整張圖一個字都不出現
     verbatim: '不改字',   // 2026-09-07 使用者裁決：UI 顯示改「不改字」，key 與後端 verbatim 不動
     minimal: '字極少',    // 2026-09-10 五段拉桿新增
     simplified: '字少',
@@ -1141,7 +1164,9 @@ function setEditorFormat(key) {
 
 // 拉桿的左→右順序。左端是「不改字」——它不是「字更少」，是逐字複製（輸出長度＝
 // 輸入長度，貼長稿反而比字多還長）。2026-09-09 使用者知情裁決：三檔仍放同一條拉桿。
-const DENSITY_ORDER = ['verbatim', 'minimal', 'simplified', 'standard', 'maximum'];
+// 2026-09-14 D14：最左端再加「無字」。兩個極端（無字／不改字）被推到拉桿兩頭，
+// 不會擠在同一側被選錯——這就是使用者裁決要解決的事。預設仍是字少。
+const DENSITY_ORDER = ['no_text', 'verbatim', 'minimal', 'simplified', 'standard', 'maximum'];
 
 function updateDigestDensityBar() {
     const range = document.getElementById('digestDensityRange');
@@ -1232,6 +1257,8 @@ function switchDigestDensity(density) {
     const label = DENSITY_LABELS[density] || density;
     showToast(density === 'verbatim'
         ? '已切換至「不改字」：貼上的內文一字不改，AI 只做版面'
+        : density === 'no_text'
+        ? '已切換至「無字」：整張圖不出現任何文字，標題與說明請自己加'
         : `AI 消化已切換至「${label}」`);
 }
 
@@ -1823,12 +1850,26 @@ function syncOutput() {
         structure: structureContent,
         variable: processedVariable,
         safeFrame: state.safeFrame,
-        aspectRatio: currentAspectRatio()
+        aspectRatio: currentAspectRatio(),
+        noText: state.digestDensity === 'no_text'
     });
     updatePromptCounter();
 }
 
-function buildPrompt({ role, engine, typeLabel, style, structure, variable, safeFrame = false, aspectRatio = '16:9' }) {
+// 無字檔（2026-09-14 D14／F20）的生圖端覆蓋。與 news_prompt.NO_TEXT_IMAGE_OVERRIDE
+// 逐字相同（test_prompt_parity 守著）：網頁版在前端組 prompt、LINE／整合端在後端組，
+// 只改一邊不會有任何執行期錯誤，只會讓兩條路徑悄悄出不一樣的圖。
+const NO_TEXT_IMAGE_OVERRIDE =
+`
+==================================================
+NO TEXT AT ALL (OVERRIDES EVERY EARLIER RULE ABOUT RENDERING WORDS)
+==================================================
+- The user asked for a picture with no writing on it. Render NO text of any kind: no headline, no label, no caption, no legend, no axis value, no date, no place name, no source line, no badge, no logo, no watermark, no signature — not a single letter or digit anywhere in the frame.
+- VARIABLE FIELDS is empty on purpose. Every earlier instruction about rendering the words, figures or markers supplied there does not apply, and any placeholder standing in for those fields is not something to draw.
+- Everything else still binds in full: the reserved margin, likeness and scene fidelity, the use of any attached references, and the ban on inventing content.
+- The empty area where a headline would have gone is the correct result. Do not fill it with words.`;
+
+function buildPrompt({ role, engine, typeLabel, style, structure, variable, safeFrame = false, aspectRatio = '16:9', noText = false }) {
     // 共用的正文區塊（style / structure / variable）
     const textRules = role === '編輯' ? EDITOR_TEXT_RULES : REPORTER_TEXT_RULES;
     // 分流的依據是「後端會不會水平拉伸」，不是安全框開關本身：
@@ -1892,11 +1933,17 @@ FINAL OUTPUT RULE
   -> NEVER add extra captions, bullet points, sub-headings, or explanatory sentences of your own.
   -> Empty space is correct and acceptable. If the layout looks sparse, enlarge or space out the supplied elements — do NOT fill the gap with invented content.`;
 
+    // 無字檔的覆蓋接在 body 後面，**刻意不寫進上面那段樣板字串裡**：
+    // tests/test_content_fidelity 的雙來源比對是用正規表示式從 app.js 原始碼抓
+    // 「FINAL OUTPUT RULE 到樣板結尾」那一段，跟 news_prompt 逐字比對。在樣板裡
+    // 插一個 ${...} 會讓抓到的字面多出那段程式碼、比對就永遠對不起來。
+    const fullBody = noText ? `${body}\n${NO_TEXT_IMAGE_OVERRIDE}` : body;
+
     // 依引擎切換開頭語法
     if (engine === 'gpt') {
         return `Generate an image: a professional international TV news infographic (${typeLabel}) for broadcast and digital editorial use. Follow the specification below exactly. Do not redesign or reinterpret the layout logic. Current Operating Context: ${role} Workflow.
 
-${body}`;
+${fullBody}`;
     }
     // gemini（預設）
     return `Create a professional international TV news infographic (${typeLabel}) designed for broadcast and digital editorial use.
@@ -1904,7 +1951,7 @@ The output must strictly follow the style, structure, and data logic defined bel
 Do not redesign, reinterpret, or alter the layout logic.
 Current Operating Context: ${role} Workflow.
 
-${body}`;
+${fullBody}`;
 }
 
 /* ---- 滿版模式常數（safe_frame=true）----
@@ -2106,10 +2153,30 @@ const AI_BACKEND_URL = `${API_BASE}/api/generate`;
 const IMAGE_BACKEND_URL = `${API_BASE}/api/images/generate`;
 const REFINE_BACKEND_URL = `${API_BASE}/api/images/refine`;
 
-function _apiError(data, status) {
+// 後端有給 detail 時直接照用（那是後端刻意寫給人看的訊息）；
+// 只有 fallback（例如 524 這種被 Cloudflare 邊緣層直接攔掉、後端來不及回應的情況）
+// 才需要把狀態碼翻成使用者看得懂、且知道「下一步該做什麼」的中文。
+// context: 這個函式被 12 個呼叫點共用（消化／生圖／封面／改圖…），「縮短新聞、降字數拉桿」
+// 這個建議只對「消化新聞」那一步成立——生圖、改圖、封面都不吃新聞稿或字數拉桿，硬套同一句
+// 會給錯的下一步（B38 驗收時發現）。只有 _digestFetch 傳 'digest'，其餘呼叫點走中性版本。
+function _apiError(data, status, context) {
     const detail = data && data.detail;
     if (typeof detail === "string") return detail;
-    return "HTTP " + status;
+    if (status === 408 || status === 504 || status === 524) {
+        return context === "digest"
+            ? `新聞太長，消化超過時間上限。建議縮短新聞內容，或把字數拉桿降一階再試（HTTP ${status}）`
+            : `處理超過時間上限，請稍後再試（HTTP ${status}）`;
+    }
+    if (status === 502 || status === 503) {
+        return `AI 服務暫時忙碌或無回應，請稍後再試（HTTP ${status}）`;
+    }
+    if (status === 429) {
+        return `請求太頻繁，請稍等一下再試（HTTP ${status}）`;
+    }
+    if (status === 401 || status === 403) {
+        return `登入可能已過期，請重新整理頁面後再登入（HTTP ${status}）`;
+    }
+    return `生成失敗（HTTP ${status}），請稍後再試`;
 }
 
 // 後端 /api/generate、/api/images/generate 現在要求 X-API-Key（見 main.py
@@ -2122,14 +2189,18 @@ function _apiHeaders() {
     return { "Content-Type": "application/json", "X-API-Key": _INTERNAL_API_KEY };
 }
 
-/* 前端這一側的保險絲（2026-09-10 線上事故）：後端現在每一次消化呼叫都有 90 秒上限、
-   整體 230 秒死線，所以正常情況一定會回一個看得懂的錯誤。但只要中間有任何一層
-   （Cloud Run、公司測試環境前面的反向代理）把連線吊著不回，fetch 沒有預設逾時，
-   進度條就會停在 35%（消化階段的上限值）永遠不動——使用者只看得到「卡住」。
-   時間設在 Cloud Run 的 300 秒之內，讓後端的訊息永遠有機會先回來。 */
+/* 前端這一側的保險絲（2026-09-10 線上事故，2026-09-15 B39 改寫語意）：
+   /api/generate 現在是串流＋心跳（後端每 5~10 秒送一行 ping），正常情況下連線
+   會一直有位元組流動、不會被公司 Cloudflare 的 proxy timeout（約 100~120 秒）
+   當成靜默連線掐斷。這條逾時不再是「等後端訊息」的保險——那件事交給心跳處理
+   ——而是「整趟串流真的卡死超過這個時間」的最後一道防線（例如背景執行緒本身
+   卡住、心跳都送不出來），所以維持一個遠大於正常耗時的寬鬆上限即可。 */
 const DIGEST_FETCH_TIMEOUT_MS = 290_000;
 
 async function digestNewsText(input) {
+    // CG 線沒有獨立的「重新生成」鈕——再按一次一鍵生成就是重生，所以遞增放這裡。
+    // 第一次是 null，遞增後仍是 null，由後端現抽並在回應裡回報（見 rememberSeed）。
+    state.cgSeed = bumpSeed(state.cgSeed);
     const abort = new AbortController();
     const fuse = setTimeout(() => abort.abort(), DIGEST_FETCH_TIMEOUT_MS);
     let response;
@@ -2146,6 +2217,11 @@ async function digestNewsText(input) {
     return response;
 }
 
+// B39（2026-09-15）：/api/generate 改成 NDJSON 串流＋心跳，一行一個 JSON 物件——
+// {"type":"ping"} 處理期間陸續送、{"type":"result",...} 或 {"type":"error",...}
+// 是最後一行。⚠ 一旦開始串流，HTTP 狀態碼就定死是 200，成敗只能看這裡讀到的
+// 內容判斷，不能看 response.ok（那只反映「有沒有開始串流」，例如驗證失敗會在
+// 串流開始前就回真正的狀態碼，此時 response.ok 仍然有意義，見下面第一段判斷）。
 async function _digestFetch(input, signal) {
     const response = await fetch(AI_BACKEND_URL, {
         method: "POST",
@@ -2157,6 +2233,7 @@ async function _digestFetch(input, signal) {
             role: state.currentRole,
             density: state.digestDensity,
             visual_creativity: state.cgCreativity,
+            seed: state.cgSeed,
             stamp: state.stamp,
             tone: state.tone,
             editor_format: state.editorFormat,
@@ -2169,11 +2246,48 @@ async function _digestFetch(input, signal) {
             asis_reference_count: uploadedAsisCount(),
         }),
     });
-    const data = await response.json().catch(() => ({}));
+    // 驗證／請求格式錯誤等會在串流開始前就被擋下（X-API-Key、Pydantic 驗證），
+    // 這時狀態碼還沒定死，照舊看 status 判斷。
     if (!response.ok) {
-        throw new Error(_apiError(data, response.status));
+        const data = await response.json().catch(() => ({}));
+        throw new Error(_apiError(data, response.status, "digest"));
     }
-    return data;
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+        let chunk;
+        try {
+            chunk = await reader.read();
+        } catch (err) {
+            if (err.name === "AbortError") throw err;
+            throw new Error("消化連線中途中斷，請稍後再試");
+        }
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        let newlineIdx;
+        while ((newlineIdx = buffer.indexOf("\n")) >= 0) {
+            const line = buffer.slice(0, newlineIdx).trim();
+            buffer = buffer.slice(newlineIdx + 1);
+            if (!line) continue;
+            let msg;
+            try {
+                msg = JSON.parse(line);
+            } catch (err) {
+                throw new Error("消化回應格式異常，請稍後再試");
+            }
+            if (msg.type === "ping") continue;   // 只是活著訊號，忽略
+            if (msg.type === "result") {
+                delete msg.type;   // 只是這一層的信封，往上不該看到
+                return msg;
+            }
+            if (msg.type === "error") {
+                throw new Error(_apiError({ detail: msg.detail }, msg.status, "digest"));
+            }
+        }
+    }
+    throw new Error("消化連線中途中斷，尚未收到結果，請稍後再試");
 }
 
 // 指令欄可蓋過版面形式（2026-09-03），AI 回報的類型因此可能跟下拉選的不一樣。
@@ -2186,6 +2300,7 @@ function noteChartTypeOverride(data) {
 }
 
 function applyDigestToForm(data) {
+    rememberSeed('cgSeed', data);
     state.mapPoints = Array.isArray(data.map_points) ? data.map_points : [];
     // 地圖類：查不到座標的地名要講出來（2026-09-08）。不足 2 點時後端不做真實底圖，
     // 以前畫面完全沒提示，使用者重打六次都拿到一樣的結果。
@@ -2235,6 +2350,8 @@ function tenCoverFields() {
         side_labels: val('coverSideLabels'),
         info_chips: val('coverInfoChips'),
         provider: effectiveImageProvider(),
+        // 重貼固定元素／只改文字：原樣送回目前這顆，長相不准變（遞增只在重生那條路徑）
+        seed: state.coverSeed,
     };
 }
 
@@ -2319,6 +2436,8 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
             showToast('用現有底圖重壓文字…');
             data = await recomposeTenCoverText();
         } else {
+            // 真正重生這一條路徑才遞增 seed（只改文字／重貼固定元素走上面那半邊，不動）
+            state.coverSeed = bumpSeed(state.coverSeed);
             const slots = coverAsisSlots();
             if (fullLayout) slots.right = false;   // 滿版只有一個附圖位
             const slotCount = (slots.left ? 1 : 0) + (slots.right ? 1 : 0);
@@ -2355,6 +2474,7 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
                     date_text: val('coverDate'),
                     badge: document.getElementById('coverBadge')?.value || 'on_air',
                     title_creativity: state.coverTitleCreativity,
+                    seed: state.coverSeed,
                     mode: composite ? 'composite' : 'ai',
                     provider: effectiveImageProvider(),
                     // 十點把通用附圖區整個收起來（hides.refUpload），照片一律走上面那兩顆
@@ -2368,6 +2488,7 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
             if (!res.ok) throw new Error(_apiError(data, res.status));
         }
 
+        rememberSeed('coverSeed', data);
         const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
         document.getElementById('oneClickImage').src = imageUrl;
         const download = document.getElementById('oneClickDownload');
@@ -2516,6 +2637,8 @@ function ytCoverFields() {
         slot_right: ytUsesAsisSlots() && ytLayoutNow() === 'dual' ? slotPayload(state.ytAsis.right) : [],
         // 指令欄（2026-09-08 WP1）：餵給底圖推導當畫面提示
         instruction: coverInstructionForApi(),
+        // 只改文字／重貼固定元素也走這支，所以這裡一律送目前這顆；遞增只在重生那條路徑
+        seed: state.ytSeed,
     };
 }
 
@@ -2609,6 +2732,8 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
                 headers: _apiHeaders(),
                 body: JSON.stringify({
                     ...fields,
+                    // fields 帶的是目前這顆；真正重生要遞增，所以在這裡覆蓋掉
+                    seed: (state.ytSeed = bumpSeed(state.ytSeed)),
                     provider: effectiveImageProvider(),
                     image_size: state.imageSize,
                     // 整點把共用附圖區收起來（hides.refUpload），那裡殘留的圖不能偷偷送出去
@@ -2618,6 +2743,7 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
             data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(_apiError(data, res.status));
         }
+        rememberSeed('ytSeed', data);
         showYtCoverResult(data, fields);
         completed = true;
     } catch (err) {
@@ -2845,6 +2971,7 @@ async function handleOneClickGenerate() {
     let completed = false;
 
     try {
+        hideGenerateErrorBanner();
         showToast("消化中…");
         beginGenerationProgress("digest");
         const digest = await digestNewsText(input);
@@ -2859,6 +2986,7 @@ async function handleOneClickGenerate() {
             variable: variable ? `${SYSTEM_DISCLAIMER}\n${variable}` : "[No Variables Defined]",
             safeFrame: state.safeFrame,
             aspectRatio: currentAspectRatio(),
+            noText: state.digestDensity === 'no_text',
         });
         showToast("生圖中，約 30–120 秒…");
         // 2K 與 GPT 都明顯較慢，預估時間拉長免得進度早早貼上限乾等
@@ -2910,10 +3038,13 @@ async function handleOneClickGenerate() {
         document.getElementById("oneClickEmpty").classList.add("hidden");
         document.getElementById("oneClickResult").classList.remove("hidden");
         completed = true;
+        hideGenerateErrorBanner();
         showToast(titleMatch ? `已生成：${titleMatch[1].trim()}` : "已完成圖片生成");
     } catch (err) {
         console.error(err);
-        showToast(err.message || "生成失敗，請稍後再試");
+        const msg = err.message || "生成失敗，請稍後再試";
+        showGenerateErrorBanner(msg);
+        showToast(msg);
     } finally {
         btn.disabled = false;
         btnText.classList.remove("hidden");
@@ -3536,6 +3667,25 @@ function showToast(msg) {
     toast.innerText = msg;
     toast.style.opacity = '1'; toast.classList.add('toast-animate');
     setTimeout(() => { toast.style.opacity = '0'; toast.classList.remove('toast-animate'); }, 3000);
+}
+
+// B38：一鍵生成失敗時的訊息要留在畫面上讓使用者自己關掉，不能像 toast 3 秒就消失。
+function showGenerateErrorBanner(msg) {
+    const banner = document.getElementById('oneClickErrorBanner');
+    if (!banner) return;
+    document.getElementById('oneClickErrorMsg').innerText = msg;
+    banner.classList.remove('hidden');
+    const staleNotice = document.getElementById('oneClickStaleNotice');
+    if (staleNotice && !document.getElementById('oneClickResult').classList.contains('hidden')) {
+        staleNotice.classList.remove('hidden');
+    }
+}
+
+function hideGenerateErrorBanner() {
+    const banner = document.getElementById('oneClickErrorBanner');
+    if (banner) banner.classList.add('hidden');
+    const staleNotice = document.getElementById('oneClickStaleNotice');
+    if (staleNotice) staleNotice.classList.add('hidden');
 }
 
 function clearMatrix() {
