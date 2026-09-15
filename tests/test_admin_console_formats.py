@@ -179,5 +179,58 @@ class ConsoleTypeColumnTests(unittest.TestCase):
         self.assertEqual(kept[0]["source"], "editor-yt-cover-hourly")
 
 
+class ConsoleGenerationParamsTests(unittest.TestCase):
+    """後台要印得出角色／份量／seed（F39，2026-09-16）。
+
+    背景：09-15 要回查曹雪卿那 22 筆「同一篇稿為什麼份量差八倍」（B57／B60），
+    發現三個參數**早就寫進歸檔 JSON**，但這一頁從來沒渲染，也沒有 raw JSON 端點，
+    等於只能付費重測。這幾支守著渲染不要再掉。
+    """
+
+    def test_the_params_are_rendered(self):
+        line = admin_console._params_line(
+            {"role": "編輯", "density": "maximum", "seed": 12345}
+        )
+        self.assertIn("編輯", line)
+        self.assertIn("maximum", line)
+        self.assertIn("12345", line)
+
+    def test_missing_params_show_a_dash_instead_of_disappearing(self):
+        """藏起來的話，讀的人分不出「這個版型沒帶」與「後台不顯示」。"""
+        self.assertEqual(admin_console._params_line({}).count("－"), 3)
+
+    def test_seed_zero_is_not_treated_as_missing(self):
+        """seed 0 是合法的籤，用真值判斷會把它印成沒有。"""
+        self.assertIn("seed: 0", admin_console._params_line({"seed": 0}))
+
+    def test_the_row_carries_the_params(self):
+        row = admin_console._row(
+            {"role": "記者", "density": "minimal", "seed": 7, "ts": "2026-09-16T10:00:00"}
+        )
+        self.assertIn("記者", row)
+        self.assertIn("minimal", row)
+        self.assertIn("seed: 7", row)
+
+
+class PromptTruncationTests(unittest.TestCase):
+    """prompt 截斷上限（B29／F39，2026-09-16）。
+
+    4000 會把 `VARIABLE FIELDS` 整段切掉——正式站 09-15 那 22 筆裡有 8 筆就是這樣，
+    而那一段正是「實際生出幾塊內文」的唯一紀錄。
+    """
+
+    def test_the_two_caps_stay_in_sync(self):
+        """兩邊不同步的話，後台看到的 prompt 會比 JSONL 短，回查會誤判資料沒寫進去。"""
+        import audit_archive
+        import request_log
+        self.assertEqual(request_log.MAX_PROMPT_CHARS, audit_archive.MAX_PROMPT_CHARS)
+
+    def test_the_cap_clears_the_variable_fields_section(self):
+        """實測規則前綴約 1900–3000 字、structure 最大 2097、variable 最大 336；
+        低於 6500 就會再次切在 VARIABLE FIELDS 之前。"""
+        import request_log
+        self.assertGreaterEqual(request_log.MAX_PROMPT_CHARS, 6500)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -26,8 +26,10 @@ ENABLED = os.getenv("AUDIT_ARCHIVE_DIR", "").strip() != ""
 ARCHIVE_DIR = pathlib.Path(os.getenv("AUDIT_ARCHIVE_DIR", "").strip() or ".")
 
 # 新聞原文完整留著才有稽核價值（input_filter 上限 5000 字，量級可接受）；
-# prompt 是規則拼出來的，截斷即可，與 request_log.MAX_PROMPT_CHARS 一致。
-MAX_PROMPT_CHARS = 4000
+# prompt 截斷上限，與 request_log.MAX_PROMPT_CHARS 一致（理由與實測寫在那一支）。
+# 2026-09-16 隨之從 4000 調到 12000：兩邊不同步的話，後台看到的 prompt 會比 JSONL 短，
+# 回查時會誤以為資料沒寫進去。
+MAX_PROMPT_CHARS = 12000
 
 
 def _month_dir(now: datetime) -> pathlib.Path:
