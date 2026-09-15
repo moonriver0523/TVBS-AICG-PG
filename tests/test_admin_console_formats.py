@@ -179,5 +179,84 @@ class ConsoleTypeColumnTests(unittest.TestCase):
         self.assertEqual(kept[0]["source"], "editor-yt-cover-hourly")
 
 
+class ConsoleGenerationParamsTests(unittest.TestCase):
+    """後台要印得出角色／份量／seed（F39，2026-09-16）。
+
+    背景：09-15 要回查曹雪卿那 22 筆「同一篇稿為什麼份量差八倍」（B57／B60），
+    發現三個參數**早就寫進歸檔 JSON**，但這一頁從來沒渲染，也沒有 raw JSON 端點，
+    等於只能付費重測。這幾支守著渲染不要再掉。
+    """
+
+    def test_the_params_are_rendered(self):
+        line = admin_console._params_line(
+            {"role": "編輯", "density": "maximum", "seed": 12345}
+        )
+        self.assertIn("編輯", line)
+        self.assertIn("maximum", line)
+        self.assertIn("12345", line)
+
+    def test_missing_params_show_a_dash_instead_of_disappearing(self):
+        """藏起來的話，讀的人分不出「這個版型沒帶」與「後台不顯示」。"""
+        self.assertEqual(admin_console._params_line({}).count("－"), 3)
+
+    def test_seed_zero_is_not_treated_as_missing(self):
+        """seed 0 是合法的籤，用真值判斷會把它印成沒有。"""
+        self.assertIn("seed: 0", admin_console._params_line({"seed": 0}))
+
+    def test_the_row_carries_the_params(self):
+        row = admin_console._row(
+            {"role": "記者", "density": "minimal", "seed": 7, "ts": "2026-09-16T10:00:00"}
+        )
+        self.assertIn("記者", row)
+        self.assertIn("minimal", row)
+        self.assertIn("seed: 7", row)
+
+
+class PromptTruncationTests(unittest.TestCase):
+    """prompt 截斷上限（B29／F39，2026-09-16）。
+
+    4000 會把 `VARIABLE FIELDS` 整段切掉——正式站 09-15 那 22 筆裡有 8 筆就是這樣，
+    而那一段正是「實際生出幾塊內文」的唯一紀錄。
+    """
+
+    def test_the_two_caps_stay_in_sync(self):
+        """兩邊不同步的話，後台看到的 prompt 會比 JSONL 短，回查會誤判資料沒寫進去。"""
+        import audit_archive
+        import request_log
+        self.assertEqual(request_log.MAX_PROMPT_CHARS, audit_archive.MAX_PROMPT_CHARS)
+
+    def test_the_cap_covers_the_worst_case_prompt(self):
+        """實際組一份最壞情況的 prompt 來比，不要釘一個猜出來的數字。
+
+        規則區塊只會愈加愈多（每次裁決都往裡面塞條文），寫死一個數字的話，
+        下一次條文長出來時這支測試不會叫——而症狀是 prompt 又被默默切掉，
+        跟 B29 一模一樣。所以這裡現算現比。
+
+        style／structure／variable 的長度取本機 log 實測上限（1255／2840／336）。
+        """
+        import news_prompt
+        import request_log
+
+        longest = 0
+        for role in ("編輯", "記者"):
+            for safe_frame in (False, True):
+                for no_text in (False, True):
+                    for type_label in ("地圖／位置", "資料圖表"):
+                        for portrait_mode in news_prompt.PORTRAIT_MODES:
+                            prompt = news_prompt.build_prompt(
+                                role=role, engine="gpt", type_label=type_label,
+                                style="S" * 1255, structure="T" * 2840,
+                                variable=news_prompt.compose_variable("V" * 336),
+                                safe_frame=safe_frame, portrait_mode=portrait_mode,
+                                no_text=no_text,
+                            )
+                            longest = max(longest, len(prompt))
+        self.assertGreater(longest, 4000, "最壞情況應該遠超過舊的 4000 上限")
+        self.assertGreaterEqual(
+            request_log.MAX_PROMPT_CHARS, longest,
+            f"最壞情況 prompt 已經 {longest} 字，超過上限就會再次切掉 VARIABLE FIELDS",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -61,6 +61,27 @@ def _type_of(record: dict) -> str:
             or record.get("source") or "（未分類）")
 
 
+def _params_line(record: dict) -> str:
+    """角色／份量／seed 這三個生成參數。
+
+    2026-09-16 補（F39）：`_archive_generation` 從 `dffef81` 起就把 `role`／`density`
+    傳進歸檔、`seed` 從 F0 起也有（見 `main.py` 的 `/api/news-image/generate` 呼叫端），
+    但這一頁從來沒印出來——所以「同一篇稿、同一個檔位為什麼出來的份量差八倍」
+    （B57／B60）只能靠付費重測，不能靠既有紀錄回查。三個欄位本來就在磁碟上的
+    JSON 裡，這裡只是把它們渲染出來，沒有動任何寫入端。
+
+    缺值一律印「－」而不是整段藏起來：藏起來的話讀的人分不出「這個版型沒帶這個
+    參數」與「後台不顯示這個參數」，而那正是這次要解決的問題本身。
+    """
+    seed = record.get("seed")
+    return " · ".join([
+        f"角色: {_esc(record.get('role')) or '－'}",
+        f"份量: {_esc(record.get('density')) or '－'}",
+        # 不能直接 _esc(seed)：_esc 走 `value or ""`，seed 0 會被當成空值印成空白。
+        f"seed: {_esc(str(seed)) if seed is not None else '－'}",
+    ])
+
+
 def _row(record: dict) -> str:
     # 姓名與 email 都顯示：姓名好認人，email 是唯一的（同名同姓分得開）。
     name = record.get("user_name", "")
@@ -81,6 +102,7 @@ def _row(record: dict) -> str:
 
     news = _esc(record.get("news_text", ""))
     prompt = _esc(record.get("prompt", ""))
+    params = _params_line(record)
     return f"""
     <tr>
       <td class="nowrap">{_esc(record.get("ts", ""))[:19].replace("T", " ")}</td>
@@ -91,6 +113,7 @@ def _row(record: dict) -> str:
         <details><summary>新聞原文（{len(record.get("news_text", "") or "")} 字）</summary>
           <pre>{news}</pre></details>
         <details><summary>最終 prompt</summary><pre>{prompt}</pre></details>
+        <div class="meta muted">{params}</div>
         <div class="meta muted">
           model: {_esc(record.get("image_model"))} ·
           provider: {_esc(record.get("provider"))} ·

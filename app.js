@@ -805,7 +805,16 @@ window.onload = () => {
    避免重複 id 造成 getElementById 取到錯誤的節點。
    第三頁不走 Prompt 流程，沒有 outputMount-3，面板會留在隱藏的前頁裡
    ============================================================ */
+// 2026-09-15 使用者裁決：建構中的分頁一律不讓使用者進去。分頁鈕在 index.html 加了 hidden，
+// 這裡再擋一次——舊書籤、殘留的 onclick 或 console 呼叫都可能繞過藏起來的按鈕。
+// 要開放回來：清空這個集合，並拿掉 index.html 那兩個 hidden。
+const DISABLED_PAGES = new Set([2, 3]);
+
 function switchPage(page) {
+    if (DISABLED_PAGES.has(page)) {
+        showToast('這個功能還在建構中');
+        page = 1;
+    }
     state.currentPage = page;
 
     [1, 2, 3].forEach(n => {
