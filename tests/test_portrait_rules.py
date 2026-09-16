@@ -117,6 +117,21 @@ class PortraitDigestContractTests(unittest.TestCase):
         self.assertIn("EVERY specific named real person", main.REAL_WORLD_FIDELITY_RULES)
         self.assertIn("listing only the first is a defect", main.REAL_WORLD_FIDELITY_RULES)
 
+    def test_names_are_extracted_verbatim_never_inferred(self):
+        rules = main.REAL_WORLD_FIDELITY_RULES
+        self.assertIn("copied VERBATIM", rules)
+        self.assertIn("never infer a person from a job title", rules)
+        self.assertIn("總統", rules)
+        self.assertIn("執行長", rules)
+        self.assertIn("common knowledge", rules)
+        self.assertNotIn("from your own knowledge", rules)
+
+    def test_english_name_stays_empty_when_the_source_has_none(self):
+        rules = main.REAL_WORLD_FIDELITY_RULES
+        self.assertIn("MUST be an empty string", rules)
+        self.assertIn('portrait_subjects_en=[""]', rules)
+        self.assertNotIn("otherwise from your own knowledge of the person", rules)
+
 
 class ResolvePortraitTests(unittest.TestCase):
     def test_no_subject_means_no_portrait_handling(self):

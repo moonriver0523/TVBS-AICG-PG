@@ -284,5 +284,20 @@ class HeadlineSubjectRuleTests(unittest.TestCase):
         self.assertIn("merely reacted, commented, protested or announced a response", prompt)
 
 
+class DensityBlockCountTests(unittest.TestCase):
+    def test_existing_short_variable_still_passes_without_a_density(self):
+        """舊呼叫不傳 density 時不得突然被塊數下限擋下。"""
+        self.assertEqual(digest_quality_problem(GOOD, "stop"), "")
+
+    def test_shortfall_names_observed_and_required(self):
+        variable = "[標題] 標題\n[內文小標] 只有一點"
+        problem = digest_quality_problem(
+            with_field("variable", variable), "stop", density="standard"
+        )
+        self.assertIn("observed=1", problem)
+        self.assertIn("required=5", problem)
+        self.assertIn("[內文小標]", problem)
+
+
 if __name__ == "__main__":
     unittest.main()

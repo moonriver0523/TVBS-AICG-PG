@@ -421,8 +421,16 @@ class F1DensityLadderTests(unittest.TestCase):
     def test_the_point_ceilings_are_monotonic_too(self):
         self.assertIn("ONE point", main.MINIMAL_DENSITY_RULES)
         self.assertIn("1 to 3 key points", main.SIMPLIFIED_DENSITY_RULES)
-        self.assertIn("up to six", main.STANDARD_DENSITY_RULES)
-        self.assertIn("up to EIGHT", main.MAXIMUM_DENSITY_RULES)
+        std_min, std_target = main.density_point_bounds("standard")
+        max_min, max_target = main.density_point_bounds("maximum")
+        self.assertLess(std_target, max_target)
+        self.assertLess(std_min, max_min)
+        prompt_std = main.build_digest_instructions("記者", "standard", "資料圖表")
+        prompt_max = main.build_digest_instructions("記者", "maximum", "資料圖表")
+        self.assertIn(f"TARGET {main.density_count_word(std_target)}", prompt_std)
+        self.assertIn(
+            f"TARGET {main.density_count_word(max_target).upper()}", prompt_max
+        )
 
     def test_the_broadcast_card_count_is_a_layout_limit_not_a_density_one(self):
         """版面實體限制不隨拉桿長：F1 不動 _broadcast_point_count 的既定差異。"""

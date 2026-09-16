@@ -34,7 +34,14 @@ def _digest_content(chart_type="資料圖表", **extra):
     data = {
         "style": "clean broadcast style",
         "structure": "The entire infographic is treated as one group.",
-        "variable": "[標題]桶裝瓦斯9月調漲\n[內文小標]欣欣天然氣漲2%\n[內文小標]大台北瓦斯漲3%",
+        "variable": (
+            "[標題]桶裝瓦斯9月調漲\n"
+            "[內文小標]欣欣天然氣漲2%\n"
+            "[內文小標]大台北瓦斯漲3%\n"
+            "[內文小標]中油同步調整\n"
+            "[內文小標]家庭用戶月增約百元\n"
+            "[內文小標]九月一日起實施"
+        ),
         "chart_type": chart_type,
         "portrait_subjects": [],
         "portrait_subjects_en": [],

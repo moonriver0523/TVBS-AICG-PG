@@ -134,7 +134,8 @@ class StandardDensityTests(unittest.TestCase):
 
     def test_block_loosens_count_length_and_density(self):
         text = self._instructions("編輯", "standard")
-        self.assertIn("up to six [內文小標] lines", text)
+        _, target = main.density_point_bounds("standard")
+        self.assertIn(f"TARGET {main.density_count_word(target)} [內文小標] lines", text)
         self.assertIn("about twenty-four characters", text)
         self.assertIn("two hundred and forty to three hundred and twenty", text)
 
@@ -145,14 +146,16 @@ class StandardDensityTests(unittest.TestCase):
         self.assertIn("Do not invent a figure", text)
 
     def test_layout_specific_counts_still_win(self):
-        """播出鏡面的卡數是版面實體限制，不得被「最多六點」蓋掉。"""
+        """播出鏡面的卡數是版面實體限制，不得被一般密度下限蓋掉。"""
         text = self._instructions(
             "編輯", "standard", stamp=True, editor_format="broadcast_left"
         )
+        _, target = main.density_point_bounds("standard")
+        target_phrase = f"TARGET {main.density_count_word(target)} [內文小標] lines"
         self.assertIn("A LATER BLOCK MAY FIX AN EXACT COUNT", text)
         self.assertIn("exactly four [內文小標] lines", text)
         self.assertLess(
-            text.index("up to six [內文小標] lines"),
+            text.index(target_phrase),
             text.index("exactly four [內文小標] lines"),
             "版型區塊必須排在字多區塊之後，位置與明文 OVERRIDE 要同向",
         )

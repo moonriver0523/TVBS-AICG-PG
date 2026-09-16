@@ -269,6 +269,19 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(visual, "沒有空格的標題")
 
 
+class DerivePromptTests(unittest.TestCase):
+    def test_names_are_extracted_verbatim_never_inferred(self):
+        text = editor_formats.YT_COVER_DERIVE_SYSTEM
+        self.assertIn("copied VERBATIM", text)
+        self.assertIn("Never infer a name from a title", text)
+        self.assertIn("empty string when it is not", text)
+        self.assertIn("common knowledge", text)
+        self.assertIn("portrait-style shot of that person", text)
+        self.assertNotIn("from your own knowledge", text)
+        self.assertNotIn("Donald Trump", text)
+        self.assertNotIn("genuinely do not know it", text)
+
+
 class BackgroundPathTests(unittest.TestCase):
     def test_asis_reference_is_cropped_not_generated(self):
         req = main.YtCoverRequest(

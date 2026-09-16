@@ -13,6 +13,10 @@
 - 2026-09-14：CP1 經使用者放行，D16 以 10／13／18／22 接上標題可見字元上限，D2
   收窄為只禁螢光綠／chroma-key green。這是有意改動記者 prompt，不是誤傷；同次補齊
   編輯的 standard／simplified × fullbleed／safearea 四份 digest 快照。
+- 2026-09-16：Stage 3（B57＋F41 文字端）經使用者放行重凍。八份 digest 快照都因
+  F41 改寫 REAL_WORLD_FIDELITY_RULES 第 5、7 條（人名只准逐字擷取，英文名原文不
+  存在就留空）。其中四份 standard 另外因 B57 把「最多六點」改成 target 6／下限 5。
+  未改 image snapshot、RNG pins 或其他 fixture。
 """
 
 import os

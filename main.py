@@ -1231,17 +1231,100 @@ Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style
 # 上限可蓋，對它而言這塊是正向指示（多列幾點、每點帶得動細節）。
 #
 # 第 6 條刻意留給後面的版型區塊：播出鏡面的第 6 條寫「exactly four．．．no more and
-# no fewer」，那是版面實體限制（卡片就那幾列），不能被這塊的「最多六點」蓋掉。
+# no fewer」，那是版面實體限制（卡片就那幾列），不能被這塊的 target／下限蓋掉。
+# POINT COUNT 的數字只准從 density_point_bounds() 填進來，禁止在這段文字再寫一份。
+_DENSITY_COUNT_WORDS = {
+    1: "one",
+    2: "two",
+    3: "three",
+    4: "four",
+    5: "five",
+    6: "six",
+    7: "seven",
+    8: "eight",
+    9: "nine",
+}
+_DENSITY_COUNT_VALUES = {word: n for n, word in _DENSITY_COUNT_WORDS.items()}
+_DENSITY_POINT_LINE_RE = re.compile(r"^\s*[\[【]內文小標[\]】]")
+_DENSITY_POINT_TARGETS = {"standard": 6, "maximum": 8}
+_DENSITY_POINT_FLOOR_DELTA = 1
+
+
+def density_count_word(n: int) -> str:
+    """把塊數寫進 prompt 用的英文數字。業務數字本身不在這裡。"""
+    return _DENSITY_COUNT_WORDS[n]
+
+
+def _format_exact_point_count(format_key: str | None, density: str | None) -> int | None:
+    """版型若釘死卡片列數，回傳那個整數；否則 None。
+
+    播出鏡面的張數以 editor_formats._broadcast_point_count 為唯一來源，
+    這裡只做 three／four → 3／4 的用詞轉換，不另寫一份 3、4。
+    """
+    if not format_key:
+        return None
+    if not editor_formats.resolve_hole_side(format_key):
+        return None
+    word = editor_formats._broadcast_point_count(density)["count_word"]
+    return _DENSITY_COUNT_VALUES[word]
+
+
+def density_point_bounds(
+    density: str | None, format_key: str | None = None
+) -> tuple[int | None, int | None]:
+    """[內文小標] 的 (minimum, target)。沒有塊數契約時兩邊都是 None。
+
+    一般版型：standard target 6／下限 5，maximum target 8／下限 7。
+    特定版型若有更嚴格的 exact count，exact 優先——minimum 與 target 都等於該數。
+    只對 standard／maximum 生效；其他密度維持既有 1／1–3／逐字／無字契約。
+    """
+    if density not in _DENSITY_POINT_TARGETS:
+        return None, None
+    exact = _format_exact_point_count(format_key, density)
+    if exact is not None:
+        return exact, exact
+    target = _DENSITY_POINT_TARGETS[density]
+    return target - _DENSITY_POINT_FLOOR_DELTA, target
+
+
+def _density_bound_words(density: str) -> dict[str, str]:
+    """把 density_point_bounds 的數字編成 prompt 佔位符。不含 format_key：
+    通用密度區塊永遠寫級距本身，版型 exact 由後面的區塊覆蓋。"""
+    minimum, target = density_point_bounds(density)
+    if minimum is None or target is None:
+        raise ValueError(f"{density} 沒有塊數契約，不能編成密度規則")
+    _, standard_target = density_point_bounds("standard")
+    if standard_target is None:
+        raise ValueError("standard 必須有 target，才能寫進字超多區塊")
+    return {
+        "minimum_word": density_count_word(minimum),
+        "target_word": density_count_word(target),
+        "target_word_upper": density_count_word(target).upper(),
+        "standard_target_word": density_count_word(standard_target),
+    }
+
+
+def count_density_points(variable: str) -> int:
+    """數 variable 裡以 [內文小標]／【內文小標】開頭的塊。
+
+    只認行首標記，不數換行、不把 [標題]、<蓋章>、<底帶>、來源、備註算進去。
+    播出鏡面「短標｜細節」寫在同一行仍是一塊。
+    """
+    return sum(
+        1 for line in (variable or "").splitlines() if _DENSITY_POINT_LINE_RE.match(line)
+    )
+
+
 STANDARD_DENSITY_RULES = """
 
 字多 MODE (THE USER ASKED FOR THE DENSE VERSION) — THIS BLOCK OVERRIDES THE LENGTH AND COUNT LIMITS STATED ABOVE:
 1. This is the densest of the three digestion settings, and the user chose it because the graphic was coming back carrying too little information. Your job here is to fill the graphic, not to summarise it down.
-2. POINT COUNT: carry every distinct point the source material genuinely supports, up to six [內文小標] lines. Do not stop at three out of habit. Two facts that belong to different aspects of the story are two points, not one merged line.
+2. POINT COUNT: TARGET {target_word} [內文小標] lines. Never fewer than {minimum_word}. Carry every distinct point the source material genuinely supports up to that target. Do not stop at three out of habit. Two facts that belong to different aspects of the story are two points, not one merged line.
 3. LINE LENGTH: {line_limit_clause} Each [內文小標] line may run to about twenty-four characters, long enough to carry a figure and what that figure means in the same line.
 4. TOTAL LENGTH: {total_limit_clause} Aim for roughly two hundred and forty to three hundred and twenty characters in total.
 5. DENSITY PER POINT: a point that states only a bare fact is under-written at this setting. Give each line its figure AND its consequence, its comparison, its timing or its source — whichever the material supplies.
-6. A LATER BLOCK MAY FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT. When a format-specific block below states an exact number of [內文小標] lines, that number wins over the "up to six" in rule two: the card stack of that layout physically has that many rows. Rules three, four and five still apply inside those rows.
-7. THIS LICENSES NOTHING NEW. Every added line must come from the source material. Do not invent a figure, do not restate a point you already made in different words, and do not pad with generic background to reach a length. If the material genuinely supports only two points, write two — a padded graphic is worse than a short one.
+6. A LATER BLOCK MAY FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT. When a format-specific block below states an exact number of [內文小標] lines, that number wins over the target of {target_word} and the minimum of {minimum_word} in rule two: the card stack of that layout physically has that many rows. Rules three, four and five still apply inside those rows.
+7. THIS LICENSES NOTHING NEW. Every added line must come from the source material. Do not invent a figure, do not restate a point you already made in different words, and do not pad with generic background to reach a length. Falling short of {minimum_word} lines is a defect — do not stop at three out of habit.
 8. Design "structure" for that quantity: enough rows or cards for the points you wrote, sized so the longer lines stay legible on air rather than shrinking to fit.
 9. HEADLINE LIMIT: [標題] may contain no more than 18 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 """
@@ -1295,13 +1378,13 @@ MINIMAL_DENSITY_RULES = """
 MAXIMUM_DENSITY_RULES = """
 
 字超多 MODE — THIS BLOCK GOES BEYOND THE 字多 BLOCK ABOVE AND OVERRIDES IT WHEREVER THEY DISAGREE:
-1. POINT COUNT: carry every distinct point the material supports, up to EIGHT [內文小標] lines. The rule above stopped at six; this setting does not.
+1. POINT COUNT: TARGET {target_word_upper} [內文小標] lines. Never fewer than {minimum_word}. The rule above targeted {standard_target_word}; this setting raises both the target and the floor.
 2. LINE LENGTH AND TOTAL: each [內文小標] line may run to about thirty characters, and the whole graphic may reach roughly three hundred and sixty to four hundred and eighty characters. Every line still has to be readable on air — long is not the same as cramped.
-3. THIS STILL LICENSES NOTHING NEW. Every added line comes from the source material. Do not invent a figure, a date, a name or a cause to reach the count; do not restate an earlier point in different words; do not pad with generic background. If the material supports only three points, write three — this setting raises the ceiling, it does not set a quota.
+3. THIS STILL LICENSES NOTHING NEW. Every added line comes from the source material. Do not invent a figure, a date, a name or a cause to reach the count; do not restate an earlier point in different words; do not pad with generic background. Falling short of {minimum_word} lines is a defect — do not stop at three out of habit.
 4. YOU MAY SPLIT WHAT IS ALREADY THERE. Where the source states a compound fact in one breath — one sentence carrying two distinct figures, two places, two measures or two consequences — you may write it out as two separate points instead of one crowded entry. This is the one thing this setting unlocks that the 字多 block did not.
 5. THAT IS A LICENCE TO SPLIT, NEVER A LICENCE TO SUPPLY. The split halves must both already be present in the source, in the source's own terms. Do not add a cause, a person, a time, a figure, a place, a consequence or any background the source did not state; do not manufacture a second point by saying the same thing again in other words; and where the second half would have to be invented to make the split work, leave the fact whole as one point. After splitting, the set of facts on the graphic must be identical to the set of facts in the source — only their arrangement changed.
 6. Group the points: when you write more than five, say in "structure" that they are arranged in labelled groups or two columns rather than one long list, so the viewer can find the one that matters.
-7. A LATER BLOCK MAY STILL FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT, and that number wins over the "up to eight" here: those card stacks physically have that many rows.
+7. A LATER BLOCK MAY STILL FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT, and that number wins over the target of {target_word} and the minimum of {minimum_word} here: those card stacks physically have that many rows.
 8. HEADLINE LIMIT: [標題] may contain no more than 22 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 """
 
@@ -1656,9 +1739,9 @@ REAL-WORLD ACCURACY (governs "style" and "structure" — the pictures you commis
 2. REAL PLACES AND OBJECTS: when the story shows a verifiable real place or object — a skyline, a specific building, a highway or interchange, an airport, a facility, or a specific model of aircraft, ship, vehicle or equipment — ask for it to be depicted as faithfully to its real appearance as your knowledge allows: real shape, real layout, real proportions, real distinguishing features. Do not stylise reality away when the real look is known.
 3. LABEL WHAT IS NOT REAL: if you are not confident the depiction will match the real thing, or the scene is a generic stand-in or a reconstruction rather than a documented view, you MUST plan a clearly visible 示意圖 label — write the word 示意圖 into "variable" and tell "structure" where it sits. An unlabelled reconstruction presented as real is a defect. Do not fabricate identifying detail you do not actually know and pass it off as real.
 4. BRANDS: ONLY THOSE IN THE SOURCE. A brand the source material names MAY be shown with its real logo, wordmark or brand text, rendered as faithfully to the real mark as possible, on the objects that belong to it — its own signage, packaging, product body, vehicle livery, screen or jersey; plain typeset text is equally acceptable. Never put one brand's mark on another brand's object. Every OTHER brandable surface — signage, storefronts, banners, packaging, product bodies, vehicle liveries, screens, jerseys, badges and building facades — must be de-identified: blank surfaces or generic abstract marks, no readable brand text, no trademark, no ticker symbol, no exchange name for any brand the source material does not name, and never an invented one. Whenever the scene contains any object that would normally carry a brand, write into "structure" explicitly WHICH brands the source material names (and may therefore appear with their real mark) and that every other brandable surface stays de-identified — do not assume the renderer will infer it.
-5. NAMED REAL PEOPLE: you do NOT decide how the face is drawn. List in "portrait_subjects" EVERY specific named real person whose face the graphic would show — one entry per person, names exactly as the source material writes them, no title, no company. If the layout shows two people, list both; listing only the first is a defect. In "structure" describe only WHERE each figure sits and what it wears, never the rendering treatment (do not write "photorealistic", "faithful likeness", "back view", "silhouette", "illustration" or similar). The backend looks up reference photographs and appends the binding portrait rules itself. Leave "portrait_subjects" as an empty array for every other graphic, including crowds and unnamed or generic figures. Always plan the 示意圖 label into "variable" when a person is depicted. Never place a person in a scene, action or context the source material does not describe.
+5. NAMED REAL PEOPLE: you do NOT decide how the face is drawn. List in "portrait_subjects" EVERY specific named real person whose face the graphic would show — one entry per person. Names MUST be copied VERBATIM from the news text or from the user's explicit input; never infer a person from a job title (總統, 執行長), an event, a country, an organisation, or common knowledge. A title, office or role without a personal name is not a name — leave the array empty. Copy the name exactly as written, no title, no company. If the layout shows two people, list both; listing only the first is a defect. In "structure" describe only WHERE each figure sits and what it wears, never the rendering treatment (do not write "photorealistic", "faithful likeness", "back view", "silhouette", "illustration" or similar). You may describe a role or title in "structure", but that does not license filling "portrait_subjects". The backend looks up reference photographs and appends the binding portrait rules itself. Leave "portrait_subjects" as an empty array for every other graphic, including crowds and unnamed or generic figures. Always plan the 示意圖 label into "variable" when a person is depicted. Never place a person in a scene, action or context the source material does not describe.
 6. AT MOST THREE FACES: the layout you design may show identifiable faces for AT MOST THREE named real people. When the source material names more, choose the three most central to the story and design "structure" so that ONLY those three appear as identifiable individual figures. The other named people are NOT removed from the story — their names and what they said may still appear as TEXT (a quote panel, a caption, a list item, a label on a chart), and that text should carry their points. What they must not have is a face: do not draw them as an identifiable figure, and never place their name beside any depicted figure, because a name sitting next to a drawn face reads as that person. "portrait_subjects" must be a truthful mirror of the faces you designed: never design a layout with four faces and list only three — the unlisted face is the exact defect this rule exists to prevent.
-7. NAMES IN ENGLISH TOO: fill "portrait_subjects_en" with the same people in the same order and the same length as "portrait_subjects" — each entry being that person's name in English or its original Latin spelling (e.g. 川普 → "Donald Trump", 瓦希迪 → "Ahmad Vahidi", 巴薩尼 → "Masoud Barzani"). Take it from the source material when it gives one, otherwise from your own knowledge of the person. Use an empty string ONLY when you genuinely do not know it; never guess a spelling you are unsure of, and never translate the meaning of a Chinese name into English words. This is how the backend finds the reference photograph: Taiwanese transliterations are frequently not the title of any Chinese encyclopedia article, so without the English name the person cannot be looked up and no face can be drawn.
+7. NAMES IN ENGLISH TOO: fill "portrait_subjects_en" with the same people in the same order and the same length as "portrait_subjects" — each entry being that person's name in English or its original Latin spelling, copied VERBATIM from the news text or the user's explicit input when that spelling is present there. If the English or Latin name does not appear in the source material or the user's input, that entry MUST be an empty string. Never translate a Chinese name, never guess a spelling, and never fill the English name from common knowledge, a title, an event, a country or an organisation. Example: source writes 「川普」 only → portrait_subjects=["川普"], portrait_subjects_en=[""]; source writes 「川普 Donald Trump」 → ["川普"] / ["Donald Trump"]. This is how the backend finds the reference photograph: Taiwanese transliterations are frequently not the title of any Chinese encyclopedia article, so without an English name that actually appears in the material the person cannot be looked up and no face can be drawn.
 """
 
 
@@ -1920,9 +2003,12 @@ def build_digest_instructions(
         # 與使用者自己指定非地圖類型，走的是同一條守門：兩者的前提都是「這張圖不畫地圖」。
         instructions += MAP_SCOPE_GUARD_RULES
     if density in ("standard", "maximum"):
-        instructions += STANDARD_DENSITY_RULES.format(**_STANDARD_LIMIT_CLAUSES[is_editor])
+        instructions += STANDARD_DENSITY_RULES.format(
+            **_STANDARD_LIMIT_CLAUSES[is_editor],
+            **_density_bound_words("standard"),
+        )
         if density == "maximum":
-            instructions += MAXIMUM_DENSITY_RULES
+            instructions += MAXIMUM_DENSITY_RULES.format(**_density_bound_words("maximum"))
     elif density in ("simplified", "minimal"):
         instructions += SIMPLIFIED_DENSITY_RULES
         if density == "minimal":
@@ -2354,7 +2440,12 @@ def verbatim_fidelity_problem(variable: str, news_text: str) -> str:
     )
 
 
-def digest_quality_problem(data: dict, finish_reason: str, density: str | None = None) -> str:
+def digest_quality_problem(
+    data: dict,
+    finish_reason: str,
+    density: str | None = None,
+    format_key: str | None = None,
+) -> str:
     """檢查消化結果是否可用，通過回傳空字串，否則回傳給 log 用的問題描述。
 
     語法合法不等於內容可用。截斷（finish_reason=length）與字元污染都會產生
@@ -2411,6 +2502,21 @@ def digest_quality_problem(data: dict, finish_reason: str, density: str | None =
         ratio = len(set(lines)) / len(lines)
         if ratio < DIGEST_MIN_UNIQUE_LINE_RATIO:
             return f"variable {len(lines)} 行中僅 {ratio:.0%} 不重複，疑似逐詞灌行失控"
+
+    minimum, target = density_point_bounds(density, format_key)
+    if minimum is not None:
+        observed = count_density_points(variable)
+        if target is not None and minimum == target:
+            if observed != minimum:
+                return (
+                    f"variable [內文小標] 塊數不符"
+                    f"（observed={observed} required={minimum}）"
+                )
+        elif observed < minimum:
+            return (
+                f"variable [內文小標] 塊數不足"
+                f"（observed={observed} required={minimum}）"
+            )
 
     return ""
 
@@ -2625,7 +2731,12 @@ def generate(req: GenerateRequest):
                 continue
 
             # 能解析不代表能用：截斷與字元污染都要跟解析失敗一樣重試，不能送去生圖
-            problem = digest_quality_problem(data, finish_reason, density=req.density)
+            problem = digest_quality_problem(
+                data,
+                finish_reason,
+                density=req.density,
+                format_key=req.editor_format if req.role == "編輯" else None,
+            )
             # 不消化的逐字比對排在通用檢查之後：兩者都過不了時，先報通用的那個。
             # 最後一次刻意不擋——擋了就是整條 502，而這時手上的結果通常只是頭尾多了
             # 雜訊，仍比沒有圖好；改成印警告讓回查時看得到。

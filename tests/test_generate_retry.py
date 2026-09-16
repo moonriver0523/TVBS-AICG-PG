@@ -22,7 +22,14 @@ from main import GenerateRequest, generate  # noqa: E402
 VALID_PAYLOAD = {
     "style": "cinematic broadcast style",
     "structure": "three panels",
-    "variable": "[標題]\n[內文]",
+    "variable": (
+        "[標題] 測試標題\n"
+        "[內文小標] 重點一\n"
+        "[內文小標] 重點二\n"
+        "[內文小標] 重點三\n"
+        "[內文小標] 重點四\n"
+        "[內文小標] 重點五"
+    ),
     "chart_type": "資料圖表",
 }
 

@@ -49,6 +49,15 @@ class DerivePromptTests(unittest.TestCase):
         for key in ("portrait_subjects_left", "portrait_subjects_left_en", "portrait_subjects_right", "portrait_subjects_right_en"):
             self.assertIn(key, editor_formats.COVER_VISUAL_SCHEMA["required"])
 
+    def test_names_are_extracted_verbatim_never_inferred(self):
+        text = editor_formats.COVER_VISUAL_DERIVE_SYSTEM
+        self.assertIn("copied VERBATIM", text)
+        self.assertIn("Never infer a name from a title", text)
+        self.assertIn("empty string when it is not", text)
+        self.assertIn("common knowledge", text)
+        self.assertNotIn("the name Wikipedia uses", text)
+        self.assertNotIn("Friedrich Merz", text)
+
 
 class PortraitWiringTests(unittest.TestCase):
     def _run(self, body, derive=MERZ, found=True):

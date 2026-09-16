@@ -261,7 +261,15 @@ def _fake_completion():
     class Message:
         content = json.dumps({
             "style": "S", "structure": "T",
-            "variable": "[標題]休達大批移民湧入", "chart_type": "資料圖表",
+            "variable": (
+                "[標題]休達大批移民湧入\n"
+                "[內文小標]陸路進入\n"
+                "[內文小標]海路進入\n"
+                "[內文小標]當局加強戒備\n"
+                "[內文小標]援助物資到位\n"
+                "[內文小標]邊境持續管制"
+            ),
+            "chart_type": "資料圖表",
         })
 
     class Choice:
