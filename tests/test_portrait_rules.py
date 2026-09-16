@@ -22,7 +22,9 @@ import photo_lookup  # noqa: E402
 from main import (  # noqa: E402
     DIGEST_OUTPUT_SCHEMA,
     GenerateResponse,
+    GenerateRequest,
     ImageGenerateRequest,
+    apply_photo_availability,
     apply_portrait_to_image_request,
     resolve_portrait,
     supports_reference_image,
@@ -351,7 +353,7 @@ class ExcludePeopleDigestTests(unittest.TestCase):
 
 
 class ResolveDigestPortraitsTests(unittest.TestCase):
-    """兩段式消化：查不到照片就重新消化一次，只重試一次。"""
+    """兩段式消化：只有第 4 層才重新消化，第 3 層留在版面並通知。"""
 
     def _digest(self, subjects):
         return main.GenerateResponse(
@@ -363,7 +365,14 @@ class ResolveDigestPortraitsTests(unittest.TestCase):
         return main.NewsImageGenerateRequest(news_text="新聞內容" * 10)
 
     def test_no_retry_when_every_photo_is_found(self):
-        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO):
+        photo_outcome = photo_lookup.PortraitLookupOutcome(
+            photo=PHOTO, entry_found=True, matched_name="甲", language="zh"
+        )
+        with patch.object(
+            main,
+            "lookup_portrait_outcomes",
+            return_value={"甲": photo_outcome, "乙": photo_outcome},
+        ):
             with patch.object(main, "supports_reference_image", return_value=True):
                 with patch.object(main, "generate") as regenerate:
                     digest, photos = main.resolve_digest_portraits(
@@ -374,11 +383,18 @@ class ResolveDigestPortraitsTests(unittest.TestCase):
         self.assertEqual(digest.portrait_subjects, ["甲", "乙"])
 
     def test_missing_photo_triggers_exactly_one_redigest(self):
-        def lookup(name, **kwargs):
-            return None if name == "吳軒彤" else PHOTO
-
         retried = self._digest(["鄭明典"])
-        with patch.object(photo_lookup, "find_reference_photo", side_effect=lookup):
+        photo_outcome = photo_lookup.PortraitLookupOutcome(
+            photo=PHOTO, entry_found=True, matched_name="鄭明典", language="zh"
+        )
+        with patch.object(
+            main,
+            "lookup_portrait_outcomes",
+            side_effect=[
+                {"鄭明典": photo_outcome, "吳軒彤": NO_ENTRY_OUTCOME},
+                {"鄭明典": photo_outcome},
+            ],
+        ):
             with patch.object(main, "supports_reference_image", return_value=True):
                 with patch.object(main, "generate", return_value=retried) as regenerate:
                     digest, photos = main.resolve_digest_portraits(
@@ -393,7 +409,14 @@ class ResolveDigestPortraitsTests(unittest.TestCase):
     def test_second_pass_still_missing_gives_up_instead_of_looping(self):
         """第二次消化又挑出沒照片的人時不再重試——無限重試會一直燒消化費用。"""
         retried = self._digest(["另一個查不到的人"])
-        with patch.object(photo_lookup, "find_reference_photo", return_value=None):
+        with patch.object(
+            main,
+            "lookup_portrait_outcomes",
+            side_effect=[
+                {"甲": NO_ENTRY_OUTCOME},
+                {"另一個查不到的人": NO_ENTRY_OUTCOME},
+            ],
+        ):
             with patch.object(main, "supports_reference_image", return_value=True):
                 with patch.object(main, "generate", return_value=retried) as regenerate:
                     digest, photos = main.resolve_digest_portraits(
@@ -403,8 +426,81 @@ class ResolveDigestPortraitsTests(unittest.TestCase):
         self.assertEqual(photos, {})
         # 交給 resolve_portraits 退回全員不畫臉
         with patch.object(main, "supports_reference_image", return_value=True):
-            mode, _ = main.resolve_portraits(digest.portrait_subjects, "gpt", photos=photos)
+            mode, _ = main.resolve_portraits(
+                digest.portrait_subjects,
+                "gpt",
+                photos=photos,
+                outcomes={"另一個查不到的人": NO_ENTRY_OUTCOME},
+            )
         self.assertEqual(mode, "no_reference")
+
+    def test_entry_only_stays_in_line_layout_and_records_notice(self):
+        main.reset_portrait_notices()
+        entry_only = _entry_only_outcome("甲")
+        with patch.object(
+            main, "lookup_portrait_outcomes", return_value={"甲": entry_only}
+        ):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                with patch.object(main, "generate") as regenerate:
+                    digest, photos = main.resolve_digest_portraits(
+                        self._digest(["甲"]), self._req(), "gpt"
+                    )
+        regenerate.assert_not_called()
+        self.assertEqual(digest.portrait_subjects, ["甲"])
+        self.assertEqual(photos, {})
+        self.assertEqual(len(main.collected_portrait_notices()), 1)
+
+
+class ApplyPhotoAvailabilityTests(unittest.TestCase):
+    """網頁版消化端也必須在 F40 第 3／4 層分流。"""
+
+    def _result(self, names):
+        return GenerateResponse(
+            style="s", structure="t", variable="v", chart_type="資料圖表",
+            portrait_subjects=names,
+        )
+
+    def _request(self, portrait_photo_count=0):
+        return GenerateRequest(
+            news_text="新聞內容", type_label="自動判斷", portrait_photo_count=portrait_photo_count
+        )
+
+    def test_entry_only_stays_in_layout_and_records_notice(self):
+        main.reset_portrait_notices()
+        with patch.object(
+            main,
+            "lookup_portrait_outcomes",
+            return_value={"甲": _entry_only_outcome("甲")},
+        ):
+            with patch.object(main, "generate") as regenerate:
+                result = apply_photo_availability(self._result(["甲"]), self._request())
+        regenerate.assert_not_called()
+        self.assertEqual(result.portrait_subjects, ["甲"])
+        self.assertEqual(len(main.collected_portrait_notices()), 1)
+
+    def test_no_entry_is_the_only_case_that_redigests(self):
+        retried = self._result([])
+        with patch.object(
+            main,
+            "lookup_portrait_outcomes",
+            return_value={"甲": NO_ENTRY_OUTCOME},
+        ):
+            with patch.object(main, "generate", return_value=retried) as regenerate:
+                result = apply_photo_availability(self._result(["甲"]), self._request())
+        regenerate.assert_called_once()
+        self.assertEqual(regenerate.call_args.args[0].exclude_people, ["甲"])
+        self.assertIs(result, retried)
+
+    def test_mixed_entry_only_and_no_entry_excludes_only_no_entry(self):
+        retried = self._result(["甲"])
+        with patch.object(
+            main,
+            "lookup_portrait_outcomes",
+            return_value={"甲": _entry_only_outcome("甲"), "乙": NO_ENTRY_OUTCOME},
+        ):
+            with patch.object(main, "generate", return_value=retried) as regenerate:
+                apply_photo_availability(self._result(["甲", "乙"]), self._request())
+        self.assertEqual(regenerate.call_args.args[0].exclude_people, ["乙"])
 
 
 class CleanPortraitSubjectsTests(unittest.TestCase):

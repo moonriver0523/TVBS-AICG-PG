@@ -828,6 +828,8 @@ class GenerateResponse(BaseModel):
     # 地圖類：消化端列了但實查不到座標（或被查點白名單擋掉）的地名。前端據此提示使用者，
     # 否則「只查到 1 點不做底圖」對使用者是完全安靜的失敗（2026-09-08）。
     map_missing: list[str] = Field(default_factory=list)
+    # F40 第 3 層：有維基條目但沒有合格照片時，非致命提示一路帶到前端。
+    notices: list[str] = Field(default_factory=list)
     # 這次實際採用的 seed（F0）：前端要拿它當「重新生成」的遞增起點，稽核要拿它回查。
     seed: int = 0
 
@@ -2599,29 +2601,39 @@ def verify_internal_api_key(
 def apply_photo_availability(
     result: GenerateResponse, req: GenerateRequest
 ) -> GenerateResponse:
-    """網頁版：查不到參考照的人，重新消化一次把他們排出版面（2026-08-18 使用者裁決）。
+    """網頁版消化端接上 F40 四層分流。
 
-    與 LINE 那條（resolve_digest_portraits）同一個道理，差別只在網頁版的消化與生圖
-    是兩支獨立的 API，所以要在消化端就處理完——前端拿到的消化結果已經是「只剩畫得
-    出臉的人」的版面，不需要多一次來回。
+    只有第 4 層（連維基條目都查不到）才重新消化、把人排出版面；第 3 層（有條目但
+    沒有合格照片）保留在版面，並以 nonfatal notice 告知使用者。
 
     使用者上傳的肖像照視為對應**系統查不到的人**、依序對應：會自己上傳照片，通常
     正是因為那個人維基查不到（吳軒彤那個原始情境）。這是一個假設，寫在這裡是為了
     日後有人覺得對應錯了時，知道該改哪裡。
 
+    使用者上傳肖像照的數量仍依序覆蓋查不到照片的人；其餘才進四層判斷。第 4 層
     只重試一次，理由同 resolve_digest_portraits。
     """
     subjects = result.portrait_subjects
     if not subjects:
         return result
-    _, missing = lookup_portrait_photos(subjects, result.portrait_subjects_en)
+    outcomes = lookup_portrait_outcomes(subjects, result.portrait_subjects_en)
+    photos = {
+        name: outcome.photo
+        for name, outcome in outcomes.items()
+        if outcome.photo is not None
+    }
+    missing = [name for name in subjects if name not in photos]
     if req.portrait_photo_count:
         missing = missing[req.portrait_photo_count :]
-    if not missing:
+    entry_only = [name for name in missing if outcomes[name].entry_found]
+    no_entry = [name for name in missing if not outcomes[name].entry_found]
+    if not no_entry:
+        if entry_only:
+            _record_portrait_notice(portrait_entry_only_notice(entry_only))
         return result
 
     print(
-        f"[portrait] 網頁版查不到參考照（{'、'.join(missing)}），"
+        f"[portrait] 網頁版連維基條目都查不到（{'、'.join(no_entry)}），"
         "重新消化一次把他們排出版面",
         flush=True,
     )
@@ -2629,9 +2641,24 @@ def apply_photo_availability(
     # 也不要重複落檔——最終結果由外層那筆記錄。
     token = _inside_pipeline.set(True)
     try:
-        return generate(
-            req.model_copy(update={"exclude_people": missing})
+        retried = generate(
+            req.model_copy(update={"exclude_people": no_entry})
         )
+        retried_outcomes = lookup_portrait_outcomes(
+            retried.portrait_subjects, retried.portrait_subjects_en
+        )
+        retried_missing = [
+            name for name in retried.portrait_subjects if name not in retried_outcomes
+            or retried_outcomes[name].photo is None
+        ]
+        if req.portrait_photo_count:
+            retried_missing = retried_missing[req.portrait_photo_count :]
+        retried_entry_only = [
+            name for name in retried_missing if retried_outcomes[name].entry_found
+        ]
+        if retried_entry_only:
+            _record_portrait_notice(portrait_entry_only_notice(retried_entry_only))
+        return retried
     finally:
         _inside_pipeline.reset(token)
 
@@ -2641,6 +2668,8 @@ def apply_photo_availability(
 # 直接呼叫這個函式，不經 HTTP。呼叫端要的是「消化完成或明確失敗」，跟外面那層
 # 用什麼格式把結果送出去無關。
 def generate(req: GenerateRequest):
+    if not _inside_pipeline.get():
+        reset_portrait_notices()
     # seed（F0）在最前面就定下來，並寫回 req：apply_photo_availability 會拿這份 req
     # 再呼叫一次 generate()，沒寫回的話第二次會再抽一顆，同一個請求的兩段消化就用了
     # 兩種長相，回應報的 seed 也重現不出成品。
@@ -2880,6 +2909,9 @@ def generate(req: GenerateRequest):
                 # 網頁版的第二段消化在這裡做（LINE 走 generate_news_image 自己那條，
                 # 兩邊都做會白查一次圖）。落檔放在後面，記的是最終採用的那份。
                 result = apply_photo_availability(result, req)
+                notices = collected_portrait_notices()
+                if notices:
+                    result = result.model_copy(update={"notices": notices})
                 request_log.log_generation(
                     request_id=request_log.new_request_id(),
                     source="digest",
@@ -3951,6 +3983,14 @@ def generate_gemini_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
         mime_type, _, encoded = _split_data_url(req.reference_image_data_url)
         if encoded:
             content.append({"type": "image", "mime_type": mime_type, "data": encoded})
+    # B63：具名換臉同時需要原圖與目標肖像。原生 Gemini 的一般多圖路徑仍維持
+    # 原有能力界線；這裡只補送 refine 明確標成 portrait 的第二張參考圖。
+    for ref in req.reference_images:
+        if ref.purpose != "portrait":
+            continue
+        mime_type, _, encoded = _split_data_url(ref.data_url)
+        if encoded:
+            content.append({"type": "image", "mime_type": mime_type, "data": encoded})
     payload = {
         "model": model,
         "input": content,
@@ -4067,6 +4107,8 @@ class NewsImageGenerateResponse(BaseModel):
     source_mime_type: str = ""
     # 這次實際採用的 seed（F0），語意同 GenerateResponse.seed。
     seed: int = 0
+    # F40 第 3 層的 nonfatal notice；只走訊息欄，不畫進圖。
+    notices: list[str] = Field(default_factory=list)
 
 
 def _extract_title(variable: str) -> str:
@@ -4571,6 +4613,12 @@ class ImageRefineRequest(BaseModel):
     # YT 直播封面：附圖是無文字底圖，改完仍須無文字（文字由程式疊）。
     # 見 news_prompt.TEXT_FREE_REFINE_RULES。
     text_free: bool = False
+    # B63：具名換臉只接受這個結構化欄位，不從 instruction 猜姓名。
+    replacement_person: str = ""
+    # B63：有提供時，purpose="portrait" 的第一張使用者上傳肖像優先於自動查圖。
+    reference_images: list[UserReferenceImage] = Field(
+        default_factory=list, max_length=MAX_INPUT_REFERENCES
+    )
     # B51（2026-09-16）：結構化的封面種類，白名單值見 editor_formats.COVER_REFINE_KINDS。
     # 非空時 refine_image() 直接跳過 resolve_frame_plan()，不置對位框——封面的固定元素
     # （Logo／節目標籤／日期）由前端 recompose 貼，置框會把整張畫面縮放/推出版面，
@@ -4597,6 +4645,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
     request_id = request_log.new_request_id()
     started = _generation_clock()
     _reset_generation_retries()
+    reset_portrait_notices()
     prompt = ""
     try:
         if not supports_reference_image(req.provider):
@@ -4604,8 +4653,40 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
                 status_code=400,
                 detail="目前的生圖後端無法附上參考圖，無法以圖改圖；請整張重新生成",
             )
+        replacement_person = req.replacement_person.strip()
+        replacement_mode = ""
+        replacement_reference = ""
+        replacement_images = [
+            ref for ref in req.reference_images if ref.purpose == "portrait"
+        ][:1]
+        if replacement_person and replacement_images:
+            replacement_mode = "user_uploaded"
+        elif replacement_person:
+            outcome = lookup_portrait_outcomes([replacement_person]).get(replacement_person)
+            if outcome is not None and outcome.photo is not None:
+                replacement_mode = "wikipedia_photo"
+                replacement_reference = outcome.photo.data_url()
+                replacement_images = [
+                    UserReferenceImage(data_url=replacement_reference, purpose="portrait")
+                ]
+            elif outcome is not None and outcome.entry_found:
+                replacement_mode = "entry_only"
+                _record_portrait_notice(portrait_entry_only_notice([replacement_person]))
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"無法完成具名換臉：「{replacement_person}」：查不到對應的 Wikipedia "
+                        "人物條目，不能讓模型自行捏造一張臉。請改走「原圖放置」並自行上傳照片。"
+                    ),
+                )
         image_req = ImageGenerateRequest(
-            prompt=build_refine_prompt(req.instruction, text_free=req.text_free),
+            prompt=build_refine_prompt(
+                req.instruction,
+                text_free=req.text_free,
+                replacement_person=replacement_person,
+                replacement_mode=replacement_mode,
+            ),
             provider=req.provider,
             aspect_ratio=req.aspect_ratio,
             image_size=req.image_size,
@@ -4615,6 +4696,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             reference_image_data_url=(
                 f"data:{req.source_mime_type};base64,{req.source_image_base64}"
             ),
+            reference_images=replacement_images if replacement_person else [],
         )
         prompt = image_req.prompt
         if req.cover_kind:
@@ -4660,13 +4742,16 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
         prompt=image_req.prompt,
         **meta,
     )
+    notices = collected_portrait_notices()
+    if notices:
+        result = result.model_copy(update={"notices": notices})
     return result
 
 
 def resolve_digest_portraits(
     digest: GenerateResponse, req: NewsImageGenerateRequest, provider: str
 ) -> tuple[GenerateResponse, dict[str, photo_lookup.ReferencePhoto]]:
-    """查參考照；有人查不到就重新消化一次，把那些人排出版面。
+    """查參考照；只有連維基條目都查不到的人才重新消化排出版面。
 
     回傳 (最終採用的消化結果, 已查到的照片)。
 
@@ -4684,12 +4769,22 @@ def resolve_digest_portraits(
     if not subjects or not supports_reference_image(provider):
         return digest, {}
 
-    photos, missing = lookup_portrait_photos(subjects, digest.portrait_subjects_en)
-    if not missing:
+    outcomes = lookup_portrait_outcomes(subjects, digest.portrait_subjects_en)
+    photos = {
+        name: outcome.photo
+        for name, outcome in outcomes.items()
+        if outcome.photo is not None
+    }
+    missing = [name for name in subjects if name not in photos]
+    entry_only = [name for name in missing if outcomes[name].entry_found]
+    no_entry = [name for name in missing if not outcomes[name].entry_found]
+    if not no_entry:
+        if entry_only:
+            _record_portrait_notice(portrait_entry_only_notice(entry_only))
         return digest, photos
 
     print(
-        f"[portrait] 查不到參考照（{'、'.join(missing)}），重新消化一次把他們排出版面",
+        f"[portrait] 連維基條目都查不到（{'、'.join(no_entry)}），重新消化一次把他們排出版面",
         flush=True,
     )
     retried = generate(
@@ -4704,17 +4799,31 @@ def resolve_digest_portraits(
             tone=req.tone,
             editor_format=req.editor_format,
             hole_side=req.hole_side,
-            exclude_people=missing,
+            exclude_people=no_entry,
         )
     )
     if not retried.portrait_subjects:
         return retried, {}
-    photos, missing = lookup_portrait_photos(
+    retried_outcomes = lookup_portrait_outcomes(
         retried.portrait_subjects, retried.portrait_subjects_en
     )
-    if missing:
+    photos = {
+        name: outcome.photo
+        for name, outcome in retried_outcomes.items()
+        if outcome.photo
+    }
+    retried_missing = [name for name in retried.portrait_subjects if name not in photos]
+    retried_entry_only = [
+        name for name in retried_missing if retried_outcomes[name].entry_found
+    ]
+    retried_no_entry = [
+        name for name in retried_missing if not retried_outcomes[name].entry_found
+    ]
+    if retried_entry_only:
+        _record_portrait_notice(portrait_entry_only_notice(retried_entry_only))
+    if retried_no_entry:
         print(
-            f"[portrait] 重新消化後仍有人查不到照片（{'、'.join(missing)}），不再重試",
+            f"[portrait] 重新消化後仍有人連維基條目都查不到（{'、'.join(retried_no_entry)}），不再重試",
             flush=True,
         )
     return retried, photos
@@ -4724,6 +4833,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
     # 前置過濾（縱深防禦）：擋垃圾／亂碼／注入輸入，避免燒掉付費呼叫。
     # LINE 路徑在 line_bot 已含頻率限制地查過一次，這裡 client_id 為空時
     # 只做內容檢查、不重複觸發頻率限制。
+    reset_portrait_notices()
     request_id = request_log.new_request_id()
     started = _generation_clock()
     _reset_generation_retries()
@@ -4861,6 +4971,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             source_mime_type=image.source_mime_type,
             # 回報實際用的那顆（沒帶 seed 時是消化階段現抽的）
             seed=digest.seed,
+            notices=collected_portrait_notices(),
         )
     except Exception as exc:
         fields = {
@@ -6174,6 +6285,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         right_is_ai=False,
         mode=req.mode,
         seed=req.seed,
+        notices=collected_portrait_notices(),
     )
 
 

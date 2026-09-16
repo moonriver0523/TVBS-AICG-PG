@@ -2412,6 +2412,8 @@ function tenCoverFields() {
         layout: fullLayout ? 'full' : 'split',
         // 畫面描述欄已移除（2026-09-08 WP1），改送共用的指令欄當畫面提示
         instruction: coverInstructionForApi(),
+        // B53：後端消化用新聞原文，原樣送出，不摘要、不截斷、不抽人名。
+        news_text: document.getElementById('coverNewsText')?.value || '',
         date_text: val('coverDate'),
         badge: document.getElementById('coverBadge')?.value || 'on_air',
         title_creativity: state.coverTitleCreativity,
@@ -2483,6 +2485,7 @@ async function recomposeTenCoverText() {
 // 下拉、產出區、下載都還在同一頁同一個位置，編輯不用切分頁。
 // recomposeOnly=true：合成版（滿版／雙切）的「只改文字」，底圖不重生（比照 handleYtCoverGenerate）。
 async function handleTenCoverGenerate(recomposeOnly = false) {
+    clearGenerateBannerForNewRequest();
     const val = id => (document.getElementById(id)?.value || '').trim();
     const titleLeft = val('coverTitleLeft');
     const titleRight = val('coverTitleRight');
@@ -2540,6 +2543,8 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
                     title_right: fullLayout ? '' : titleRight,
                     layout: fullLayout ? 'full' : 'split',
                     instruction: coverInstructionForApi(),
+                    // B53：原樣送新聞原文給封面補畫面描述，不摘要、不截斷、不抽人名。
+                    news_text: document.getElementById('coverNewsText')?.value || '',
                     date_text: val('coverDate'),
                     badge: document.getElementById('coverBadge')?.value || 'on_air',
                     title_creativity: state.coverTitleCreativity,
@@ -2576,6 +2581,7 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
         document.getElementById('oneClickMeta').innerText = fullLayout ? titleLeft : `${titleLeft}｜${titleRight}`;
         document.getElementById('oneClickEmpty').classList.add('hidden');
         document.getElementById('oneClickResult').classList.remove('hidden');
+        showGenerateNoticeBanner(data.notices);
         completed = true;
         showToast('封面已完成');
     } catch (err) {
@@ -2706,6 +2712,8 @@ function ytCoverFields() {
         slot_right: ytUsesAsisSlots() && ytLayoutNow() === 'dual' ? slotPayload(state.ytAsis.right) : [],
         // 指令欄（2026-09-08 WP1）：餵給底圖推導當畫面提示
         instruction: coverInstructionForApi(),
+        // B53：後端消化用新聞原文，原樣送出，不摘要、不截斷、不抽人名。
+        news_text: document.getElementById('ytCoverNewsText')?.value || '',
         // 只改文字／重貼固定元素也走這支，所以這裡一律送目前這顆；遞增只在重生那條路徑
         seed: state.ytSeed,
     };
@@ -2759,6 +2767,7 @@ function showYtCoverResult(data, fields) {
 
 // YT 直播封面。recomposeOnly=true：底圖不重生，只用目前欄位重疊文字。
 async function handleYtCoverGenerate(recomposeOnly = false) {
+    clearGenerateBannerForNewRequest();
     const fields = ytCoverFields();
     if (!fields.title) return showToast('請輸入直播標題');
     // 雙則每行最多 YT_HOURLY_LINE_MAX_CHARS 個全形字寬（半形算半字），送出前先擋，別燒完兩次生圖才被後端退
@@ -2814,6 +2823,7 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
         }
         rememberSeed('ytSeed', data);
         showYtCoverResult(data, fields);
+        showGenerateNoticeBanner(data.notices);
         completed = true;
     } catch (err) {
         console.error(err);
@@ -3024,6 +3034,7 @@ async function handleYtVstripGenerate() {
 }
 
 async function handleOneClickGenerate() {
+    clearGenerateBannerForNewRequest();
     if (editorFormat().inputs === 'cover') return handleTenCoverGenerate();
     if (editorFormat().inputs === 'yt_cover') return handleYtCoverGenerate();
     if (editorFormat().inputs === 'yt_vstrip') return handleYtVstripGenerate();
@@ -3045,6 +3056,7 @@ async function handleOneClickGenerate() {
         beginGenerationProgress("digest");
         const digest = await digestNewsText(input);
         applyDigestToForm(digest);
+        showGenerateNoticeBanner(digest.notices);
         const variable = (digest.variable || "").replace(SYSTEM_DISCLAIMER, "").trim();
         const prompt = buildPrompt({
             role: state.currentRole,
@@ -3109,6 +3121,7 @@ async function handleOneClickGenerate() {
         document.getElementById("oneClickResult").classList.remove("hidden");
         completed = true;
         hideGenerateErrorBanner();
+        showGenerateNoticeBanner(data.notices);
         showToast(titleMatch ? `已生成：${titleMatch[1].trim()}` : "已完成圖片生成");
     } catch (err) {
         console.error(err);
@@ -3617,6 +3630,8 @@ function resetRefineState(source, display) {
     state.refineStack = [];
     const input = document.getElementById('refineInput');
     if (input) input.value = '';
+    const replacement = document.getElementById('replacementPerson');
+    if (replacement) replacement.value = '';
     updateRefineControls();
 }
 
@@ -3642,6 +3657,14 @@ async function handleRefine() {
     const instruction = input.value.trim();
     if (!instruction) return showToast('請輸入要修改的內容');
     if (!state.refineSource) return showToast('沒有可修改的圖，請先生成一張');
+    const replacementInput = document.getElementById('replacementPerson');
+    const replacementPerson = (replacementInput?.value || '').trim();
+    if (!replacementPerson && requestsNamedFaceReplacement(instruction)) {
+        showGenerateErrorBanner('要換臉時請填寫「換臉對象（具名時必填）」欄位，系統不會從自由文字猜姓名。');
+        replacementInput?.focus();
+        return;
+    }
+    clearGenerateBannerForNewRequest();
 
     const btn = document.getElementById('refineBtn');
     const btnText = document.getElementById('refineBtnText');
@@ -3682,6 +3705,10 @@ async function handleRefine() {
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
                 broadcast_hole: isCover ? '' : broadcastHoleForApi(),
                 text_free: ytTextFree,
+                replacement_person: replacementPerson,
+                reference_images: replacementPerson
+                    ? userRefImagesPayload().filter(ref => ref.purpose === 'portrait')
+                    : [],
             }),
         });
         const data = await response.json().catch(() => ({}));
@@ -3702,6 +3729,9 @@ async function handleRefine() {
         state.refineSource = refineSourceFromResponse(shown);
         state.refineDisplay = shown;
         showRefinedImage(shown);
+        showGenerateNoticeBanner(
+            Array.isArray(shown.notices) && shown.notices.length ? shown.notices : data.notices
+        );
         // 封面的成品標籤維持版型名，不顯示內部的 recomposite 模型字串
         if (isCover) document.getElementById('oneClickLabel').innerText = editorFormat().label;
         input.value = '';
@@ -3750,6 +3780,7 @@ function showToast(msg) {
 function showGenerateErrorBanner(msg) {
     const banner = document.getElementById('oneClickErrorBanner');
     if (!banner) return;
+    banner.dataset.notice = '0';
     document.getElementById('oneClickErrorMsg').innerText = msg;
     banner.classList.remove('hidden');
     const staleNotice = document.getElementById('oneClickStaleNotice');
@@ -3758,11 +3789,40 @@ function showGenerateErrorBanner(msg) {
     }
 }
 
-function hideGenerateErrorBanner() {
+function hideGenerateErrorBanner(force = false) {
     const banner = document.getElementById('oneClickErrorBanner');
+    if (banner && banner.dataset.notice === '1' && !force) return;
     if (banner) banner.classList.add('hidden');
+    if (banner) banner.dataset.notice = '';
     const staleNotice = document.getElementById('oneClickStaleNotice');
     if (staleNotice) staleNotice.classList.add('hidden');
+}
+
+function showGenerateNoticeBanner(notices) {
+    const messages = Array.isArray(notices) ? notices.filter(Boolean) : [];
+    if (!messages.length) return;
+    const banner = document.getElementById('oneClickErrorBanner');
+    if (!banner) return;
+    banner.dataset.notice = '1';
+    document.getElementById('oneClickErrorMsg').innerText = messages.join('\n');
+    banner.classList.remove('hidden');
+    const staleNotice = document.getElementById('oneClickStaleNotice');
+    if (staleNotice) staleNotice.classList.add('hidden');
+}
+
+function clearGenerateBannerForNewRequest() {
+    hideGenerateErrorBanner(true);
+}
+
+// 只判斷「這段話是否在要求換臉」，不從自由文字抽取或猜測姓名。
+function requestsNamedFaceReplacement(text) {
+    const value = String(text || '').toLowerCase();
+    const directTerms = ['換臉', '換人', 'face swap', 'swap face', 'replace the face'];
+    if (directTerms.some(term => value.includes(term))) return true;
+    const faceTerms = ['臉', '人臉', '人頭', 'face'];
+    const changeTerms = ['換成', '換為', '替換', '換掉', 'replace', 'swap'];
+    return faceTerms.some(term => value.includes(term))
+        && changeTerms.some(term => value.includes(term));
 }
 
 function clearMatrix() {

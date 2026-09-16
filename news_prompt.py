@@ -508,18 +508,71 @@ REFINE_REAL_WORLD_RULES = (
 )
 
 
-def build_refine_prompt(instruction: str, *, text_free: bool = False) -> str:
+REFINE_REPLACEMENT_COMMON_RULES = """==================================================
+NAMED FACE REPLACEMENT SCOPE (CRITICAL)
+==================================================
+- The named replacement target is: {person}.
+- Replace ONLY the face of that one target person. The replacement scope is exactly that one face.
+- Keep every other person's face exactly as it is. Do not restyle, replace, age, beautify, complete or re-render any other face.
+- Preserve the existing composition, framing, layout, colours, lighting, typography, every existing word, every logo and badge, and every other image element exactly as they are.
+- Do not add, remove or move any person, object, text or logo. Do not change the target's body, pose, clothing or position except for the target face itself."""
+
+REFINE_REPLACEMENT_USER_PHOTO_RULES = (
+    SOURCE_BRANDS_RULE
+    + "\n"
+    + REFINE_REPLACEMENT_COMMON_RULES
+    + "\n- A qualifying portrait photograph supplied by the user for the target is attached. Use that photograph as the target face reference; do not invent a different identity."
+)
+
+REFINE_REPLACEMENT_WIKIPEDIA_PHOTO_RULES = (
+    SOURCE_BRANDS_RULE
+    + "\n"
+    + REFINE_REPLACEMENT_COMMON_RULES
+    + "\n- A qualifying Wikipedia portrait photograph of the target is attached. Use that photograph as the target face reference; do not invent a different identity."
+)
+
+REFINE_REPLACEMENT_ENTRY_ONLY_RULES = (
+    SOURCE_BRANDS_RULE
+    + "\n"
+    + REFINE_REPLACEMENT_COMMON_RULES
+    + "\n- A Wikipedia entry exists for the target, but no qualifying portrait photograph is attached. You may draw a plausible face for the target from the news context, but do not claim or imply that the result is a verified or pinpoint-accurate likeness."
+)
+
+# 「查無維基條目」刻意**沒有**對應的 rules 常數：那一種結果在 `refine_image()` 就直接
+# 回 400 擋掉，根本走不到組 prompt 這一步。寫一條規則請模型「不要捏臉」是錯的防線——
+# 0916 王結玲那次換出第三張誰都不是的臉，正是因為把這件事交給模型自律（見 MASTER B63）。
+# 唯一可靠的擋法是程式端不把它送出去。
+
+
+def build_refine_prompt(
+    instruction: str,
+    *,
+    text_free: bool = False,
+    replacement_person: str = "",
+    replacement_mode: str = "",
+) -> str:
     """組追加修改（refine）的生圖 prompt。附圖＝上次置框前原圖，經 input_references 送出。
 
     text_free：附圖是無文字底圖（YT 直播封面那條線），改用 TEXT_FREE_REFINE_RULES。
     兩條線都帶 REFINE_REAL_WORLD_RULES（禁品牌＋具名真人），理由見該常數。
     """
+    if replacement_person and replacement_mode:
+        replacement_rules = {
+            "user_uploaded": REFINE_REPLACEMENT_USER_PHOTO_RULES,
+            "wikipedia_photo": REFINE_REPLACEMENT_WIKIPEDIA_PHOTO_RULES,
+            "entry_only": REFINE_REPLACEMENT_ENTRY_ONLY_RULES,
+        }.get(replacement_mode)
+        if replacement_rules is None:
+            raise ValueError(f"unknown replacement mode: {replacement_mode}")
+        base_rules = replacement_rules.format(person=replacement_person)
+    else:
+        base_rules = REFINE_REAL_WORLD_RULES
     if text_free:
         return (
             "Modify the attached text-free background photograph according to the change "
             "request below. This is an edit of an existing image, not a new design.\n\n"
             f"{TEXT_FREE_REFINE_RULES}\n"
-            f"{REFINE_REAL_WORLD_RULES}\n\n"
+            f"{base_rules}\n\n"
             "==================================================\n"
             "USER CHANGE REQUEST\n"
             "==================================================\n"
@@ -529,7 +582,7 @@ def build_refine_prompt(instruction: str, *, text_free: bool = False) -> str:
         "Modify the attached news infographic image according to the change "
         "request below. This is an edit of an existing image, not a new design.\n\n"
         f"{IMAGE_REFINE_RULES}\n"
-        f"{REFINE_REAL_WORLD_RULES}\n\n"
+        f"{base_rules}\n\n"
         "==================================================\n"
         "USER CHANGE REQUEST\n"
         "==================================================\n"
