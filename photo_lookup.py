@@ -22,6 +22,13 @@
 
 行程內 TTL 快取（B32，2026-09-15）：消化與生圖對同一人名會連查兩次。命中 15 分鐘、
 查無 60 秒、上限 256 筆或 64 MB（以先到為準）從最舊淘汰。timeout 不進 key。呼叫端無感。
+
+結構化查詢結果（F40，2026-09-16）：`find_reference_photo()` 只回得出「有沒有照片」，
+分不出「這個人根本沒有維基條目」與「有條目、身分也驗過是人，只是條目沒有合格照片」——
+這兩種在 F40 四層分流裡是不同層（第 3 層允許模型依語境自畫＋提示使用者，第 4 層才是
+完全不安排人物）。`find_portrait_outcome()` 回傳 `PortraitLookupOutcome`，多帶一個
+`entry_found` 欄位；`find_reference_photo()` 保留原樣signature/行為，改成只取
+`.photo` 的相容 wrapper，呼叫端與既有測試不用改。快取也存完整 outcome。
 """
 
 from __future__ import annotations
@@ -61,7 +68,7 @@ CACHE_MAX_BYTES = 64 * 1024 * 1024
 
 _CACHE_MISS = object()
 _CACHE_LOCK = threading.Lock()
-_CACHE: OrderedDict[tuple, tuple[float, ReferencePhoto | None]] = OrderedDict()
+_CACHE: OrderedDict[tuple, tuple[float, "PortraitLookupOutcome"]] = OrderedDict()
 
 
 @dataclass(frozen=True)
@@ -76,6 +83,23 @@ class ReferencePhoto:
 
     def data_url(self) -> str:
         return f"data:{self.mime_type};base64,{self.image_base64}"
+
+
+@dataclass(frozen=True)
+class PortraitLookupOutcome:
+    """F40 四層分流要用的完整查詢結果，不只是「有沒有照片」。
+
+    `entry_found`：任一候選名字／語系確認查到「這個人」的維基條目（Wikidata
+    P31=Q5 驗過是人），不論那個條目有沒有合格首圖。`photo` 是 None 但
+    `entry_found` 是 True＝F40 第 3 層（允許模型畫、要通知使用者）；
+    兩者都是空／False＝第 4 層（連條目都沒有，畫面不安排這個人）。
+    `matched_name`／`language`：命中時是哪個候選名字、哪個語系查到的，供落檔回查。
+    """
+
+    photo: ReferencePhoto | None
+    entry_found: bool
+    matched_name: str | None
+    language: str | None
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -145,7 +169,12 @@ def _download(image_url: str, timeout: int) -> tuple[str, str] | None:
     return base64.b64encode(image_bytes).decode("ascii"), _guess_mime(image_url)
 
 
-def _lookup_lang(name: str, lang: str, timeout: int) -> ReferencePhoto | None:
+def _lookup_lang(name: str, lang: str, timeout: int) -> tuple[bool, ReferencePhoto | None]:
+    """查單一語系：回傳 (entry_found, photo)。
+
+    `entry_found` 只要求「確認是這個人的維基條目」（Wikidata P31=Q5 驗過），
+    不要求有照片——F40 第 3 層就是靠這個旗標和「有沒有照片」分開才判得出來。
+    """
     # 一次要齊首圖與 Wikidata 實體 ID：pageimages 給圖、pageprops 給 wikibase_item。
     # redirects=1 是台灣譯名的命脈——「普欽」「澤倫斯基」都是靠維基重導向才對得上
     # 條目，Wikidata 的 wbsearchentities 沒有重導向機制，改用它會弄丟這些人。
@@ -163,7 +192,7 @@ def _lookup_lang(name: str, lang: str, timeout: int) -> ReferencePhoto | None:
     )
     payload = _get_json(f"https://{lang}.wikipedia.org/w/api.php?{params}", timeout)
     if payload is None:
-        return None
+        return False, None
 
     pages = (payload.get("query") or {}).get("pages") or []
     for page in pages:
@@ -175,6 +204,7 @@ def _lookup_lang(name: str, lang: str, timeout: int) -> ReferencePhoto | None:
         if not qid or not _is_human(qid, timeout):
             continue
 
+        # 走到這裡＝條目存在且確認是人：entry_found 成立，不論下面找不找得到照片。
         title = page.get("title") or name
         article_url = f"https://{lang}.wikipedia.org/wiki/{quote(title.replace(' ', '_'))}"
         image_url = (page.get("thumbnail") or {}).get("source")
@@ -184,20 +214,20 @@ def _lookup_lang(name: str, lang: str, timeout: int) -> ReferencePhoto | None:
             image_url = _p18_url(qid, timeout)
             source_page = f"https://www.wikidata.org/wiki/{qid}"
         if not image_url:
-            continue
+            return True, None
 
         downloaded = _download(image_url, timeout)
         if downloaded is None:
-            continue
+            return True, None
         image_base64, mime_type = downloaded
-        return ReferencePhoto(
+        return True, ReferencePhoto(
             image_base64=image_base64,
             mime_type=mime_type,
             image_url=image_url,
             source_page=source_page,
             lang=lang,
         )
-    return None
+    return False, None
 
 
 def _guess_mime(url: str) -> str:
@@ -237,16 +267,22 @@ def _cache_get(key: tuple):
         return value
 
 
-def _entry_bytes(value: ReferencePhoto | None) -> int:
-    return 0 if value is None else len(value.image_base64)
+def _entry_bytes(value: "PortraitLookupOutcome | None") -> int:
+    if value is None or value.photo is None:
+        return 0
+    return len(value.photo.image_base64)
 
 
 def _cache_nbytes() -> int:
-    return sum(_entry_bytes(photo) for _expires, photo in _CACHE.values())
+    return sum(_entry_bytes(outcome) for _expires, outcome in _CACHE.values())
 
 
-def _cache_put(key: tuple, value: ReferencePhoto | None) -> None:
-    ttl = HIT_TTL_SECONDS if value is not None else MISS_TTL_SECONDS
+def _cache_put(key: tuple, value: "PortraitLookupOutcome") -> None:
+    # 有照片或至少確認有條目（F40 第 3 層）都算「有意義的結果」，用長 TTL；
+    # 兩者皆無（第 4 層／查無此人）才用短 TTL，理由同舊版註解：這種人有機會
+    # 是還沒建條目或臺灣譯名還沒補上，短期內可能補上。
+    informative = value is not None and (value.photo is not None or value.entry_found)
+    ttl = HIT_TTL_SECONDS if informative else MISS_TTL_SECONDS
     expires_at = time.monotonic() + ttl
     with _CACHE_LOCK:
         if key in _CACHE:
@@ -258,14 +294,14 @@ def _cache_put(key: tuple, value: ReferencePhoto | None) -> None:
             _CACHE.popitem(last=False)
 
 
-def find_reference_photo(
+def find_portrait_outcome(
     name: str,
     *,
     alt_names: tuple[str, ...] | list[str] = (),
     langs: tuple[str, ...] = DEFAULT_LANGS,
     timeout: int = _TIMEOUT,
-) -> ReferencePhoto | None:
-    """依人名查一張參考照片；查不到回 None（呼叫端必須能接受沒有照片）。
+) -> PortraitLookupOutcome:
+    """依人名查完整結果（F40 四層分流用）：照片、有沒有確認到條目、命中哪個候選／語系。
 
     `alt_names` 通常是英文原名（2026-08-18 加）。**臺灣譯名往往不是中文維基的
     條目名、也沒有重導向**——實測「卡利巴夫」「阿拉奇」「巴薩尼」「瓦希迪」四位
@@ -275,6 +311,10 @@ def find_reference_photo(
     刻意不用「中文全文搜尋」補救：實測 4 個譯名裡 2 個搜到完全不相干的條目
     （阿拉奇→阿布拉莫維奇、巴薩尼→威尼斯商人），抓錯人比查不到嚴重得多。
     英文原名是結構化的事實，由消化端從新聞原文或既有知識給出，不用猜。
+
+    找照片優先於找條目：只要任何候選／語系查到照片就立刻回傳；找不到照片時
+    才退而求其次，看有沒有任何候選／語系至少確認到條目（entry_found），
+    供 F40 第 3 層使用。兩者都沒有才是第 4 層（查無此人）。
     """
     key = _cache_key(name, alt_names, langs)
     cached = _cache_get(key)
@@ -288,14 +328,46 @@ def find_reference_photo(
     ]
     # 同名去重但保留順序：中文優先（臺灣新聞的人物多半中文條目較貼近本地認知）
     seen: set[str] = set()
+    entry_match: tuple[str, str] | None = None
     for candidate in candidates:
         if candidate in seen:
             continue
         seen.add(candidate)
         for lang in langs:
-            photo = _lookup_lang(candidate, lang, timeout)
+            entry_found, photo = _lookup_lang(candidate, lang, timeout)
             if photo is not None:
-                _cache_put(key, photo)
-                return photo
-    _cache_put(key, None)
-    return None
+                outcome = PortraitLookupOutcome(
+                    photo=photo, entry_found=True, matched_name=candidate, language=lang
+                )
+                _cache_put(key, outcome)
+                return outcome
+            if entry_found and entry_match is None:
+                entry_match = (candidate, lang)
+    if entry_match is not None:
+        outcome = PortraitLookupOutcome(
+            photo=None, entry_found=True, matched_name=entry_match[0], language=entry_match[1]
+        )
+    else:
+        outcome = PortraitLookupOutcome(
+            photo=None, entry_found=False, matched_name=None, language=None
+        )
+    _cache_put(key, outcome)
+    return outcome
+
+
+def find_reference_photo(
+    name: str,
+    *,
+    alt_names: tuple[str, ...] | list[str] = (),
+    langs: tuple[str, ...] = DEFAULT_LANGS,
+    timeout: int = _TIMEOUT,
+) -> ReferencePhoto | None:
+    """依人名查一張參考照片；查不到回 None（呼叫端必須能接受沒有照片）。
+
+    相容 wrapper：只回傳 `find_portrait_outcome()` 的 `.photo`。既有呼叫端只在乎
+    「有沒有照片」，不需要跟著改。要分辨「有條目沒照片」與「查無此人」的呼叫端
+    請直接用 `find_portrait_outcome()`。
+    """
+    return find_portrait_outcome(
+        name, alt_names=alt_names, langs=langs, timeout=timeout
+    ).photo

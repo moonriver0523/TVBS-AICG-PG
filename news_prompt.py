@@ -10,7 +10,7 @@ LINE Bot 是純後端流程、沒有瀏覽器，因此在這裡有一份對應�
 
 # 供外部整合（如 /api/news-image/generate 的呼叫端）追蹤這批規則的版本；
 # 這裡或對應的 app.js 常數只要有實質修改，就手動遞增這個字串。
-PROMPT_VERSION = "v6-2026-08-17"
+PROMPT_VERSION = "v7-2026-09-16"
 
 # 地圖類型的標籤字面值。定義在本模組（而非 main.py）是因為匯入方向是
 # main → news_prompt：build_prompt() 要用它決定是否注入地圖規則，
@@ -205,15 +205,18 @@ DIRECTIONAL COLOUR CONVENTION (TAIWAN)
 - An up arrow means up and a down arrow means down: match every arrow to the direction stated in VARIABLE FIELDS.
 - Do not use red and green decoratively for unrelated purposes in a graphic that shows a rise or a fall."""
 
-# 真人肖像的處理方式不交給模型判斷：後端查得到參考照片就走插畫化肖像，
-# 查不到就退回不生成臉孔。兩種情況各有一個區塊，由 build_prompt 依
-# portrait_mode 注入；兩者都沒注入時，REAL_WORLD_RENDERING_RULES 的預設
-# 條款仍然擋著（不畫臉），所以漏傳參數不會變成「放行寫實肖像」。
+# 真人肖像的處理方式不交給模型判斷：後端查得到參考照片就走肖像規則，查不到
+# 再分「有維基條目」「連條目都沒有」兩種（F40，2026-09-16 四層分流）。四種情況
+# 各有一個區塊，由 build_prompt 依 portrait_mode 注入；都沒注入時，
+# REAL_WORLD_RENDERING_RULES 的預設條款仍然擋著（不畫臉），所以漏傳參數不會
+# 變成「放行寫實肖像」。
 #
-# 措辭沿用 2026-08-01 實驗的 v1：加強版（v2，明列筆觸／禁照片特徵）實測筆觸
-# 過度刻意、顯得造作，v1 已足以讓觀眾辨識為插畫，使用者拍板採 v1。
+# 措辭沿用 2026-08-01 實驗的 v1，2026-09-16（B66）改寫成「寫實為主、帶一點點
+# 插畫筆觸感」——使用者實拍發現 v1「插畫化」措辭畫出來其實是寫實照片感，
+# 裁定與其再加強插畫化措辭把畫面拉醜，不如承認寫實化就是想要的結果，
+# 把條文改成與行為一致，並靠加強「AI示意圖」標示合規。
 #
-# ⚠️ 這三個常數**刻意不同步到 app.js**，是本檔頂端「兩份來源」規則的明列例外。
+# ⚠️ 這幾個常數**刻意不同步到 app.js**，是本檔頂端「兩份來源」規則的明列例外。
 # 網頁版自己組 prompt 直打 /api/images/generate，沒有消化端填的 portrait_subjects、
 # 也沒有後端的參考照查圖，同步過去只會得到一個永遠注入不了的區塊。網頁版因此
 # 停在 REAL_WORLD_RENDERING_RULES 的預設（不畫臉），那也是尚未裁決前的安全值。
@@ -223,20 +226,34 @@ PORTRAIT_WITH_REFERENCE_RULES = """=============================================
 NAMED REAL PERSON — PORTRAIT TREATMENT (CRITICAL)
 ==================================================
 - A reference photograph of the named real person is attached to this request. Base the portrait on that photograph.
-- Render the portrait as a hand-painted editorial portrait illustration rather than a photograph, while preserving the recognisable likeness of the reference photograph: the same facial structure, hairstyle, glasses and build, so that viewers identify the same individual.
-- The illustration must be readable as an illustration. Do not aim for a photographic reproduction of the reference image.
+- Render the portrait as a realistic editorial news portrait: the primary impression is a faithful likeness of the reference photograph — the same facial structure, hairstyle, glasses and build, so that viewers recognise the same individual at a glance. Keep only a light illustrative touch on top of that realism, such as a subtle painterly texture or brushwork in the finish.
+- Do not aim for a flat photographic reproduction of the reference image, and do not push the treatment into an overtly hand-drawn or cartoon style either — realism must dominate, the illustrative touch stays understated.
 - Take only the person's likeness from the reference photograph. Pose, attire, framing and surroundings follow STRUCTURE, not the photograph's own background or occasion.
-- The 示意圖 label supplied in VARIABLE FIELDS sits beside the portrait and must stay clearly visible: this is an illustrated depiction, not a photograph of the person. If VARIABLE FIELDS supplies no such label, do not add one yourself.
+- The 示意圖 label supplied in VARIABLE FIELDS sits beside the portrait and must stay clearly visible: this is a depiction, not an actual photograph of the person. If VARIABLE FIELDS supplies no such label, do not add one yourself.
 - Never place the person in a scene, action or context that STRUCTURE does not describe."""
 
 PORTRAIT_NO_REFERENCE_RULES = """==================================================
-NAMED REAL PEOPLE — NO REFERENCE AVAILABLE (CRITICAL)
+NAMED REAL PEOPLE — NO PERSON IN THIS SCENE (CRITICAL)
 ==================================================
-- No reference photograph is available, so you MUST NOT draw the face of ANY named real person in this graphic. This applies to every such figure, including when the layout calls for two or more portraits side by side.
-- Depict each figure as a back view or a plain silhouette wearing the attire STRUCTURE describes. Never invent, guess or approximate anyone's facial features, and never substitute a generic face in their place — a fabricated face sitting under a real person's name label is the single most serious failure this rule exists to prevent.
-- Name labels may stay, but each must sit beside a faceless figure, never beside an invented face.
-- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible. If VARIABLE FIELDS supplies no such label, do not add one yourself.
+- No named real person in this graphic can be safely depicted, so the scene must be designed WITHOUT that person as a figure at all. This applies to every such person, including when the source material would suggest two or more of them side by side.
+- Do not draw ANY human figure to stand in for them — not facing the camera, not turned away, not a plain shape wearing their attire, not a faceless placeholder body. A drawn figure of any kind sitting where a real person's name is mentioned is the exact failure this rule exists to prevent.
+- Redesign the scene around buildings, venues, logos, signage, objects, documents, charts, maps or other non-person elements that the source material supports. Their name may still appear as plain text (a caption, a label, a quote panel) if VARIABLE FIELDS supplies it, but no figure of any kind represents them visually.
+- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible when the scene is a generic stand-in rather than a real, verifiable place or object. If VARIABLE FIELDS supplies no such label, do not add one yourself.
 - Never place a person in a scene, action or context that STRUCTURE does not describe."""
+
+# F40 第 3 層（2026-09-16 使用者裁決）：維基查得到這個人的條目、但條目沒有合格
+# 首圖時，允許模型依新聞語境自畫，不強制退回無人場景。⚠使用者明確裁定「不要
+# 在圖上標『長相為 AI 推測』」——那句免責文字改成不畫進圖裡，由後端在 API
+# response 另外回一則 notice 給前端訊息欄（main.ENTRY_ONLY_PORTRAIT_NOTICE）。
+# 這裡的措辭因此只管「怎麼畫」，不提免責聲明；示意圖標籤仍照一般規則保留。
+PORTRAIT_ENTRY_ONLY_RULES = """==================================================
+NAMED REAL PERSON — NO VERIFIED PHOTOGRAPH, DRAW FROM CONTEXT (CRITICAL)
+==================================================
+- No reference photograph is attached for this named real person, but the news context (their role, nationality, age, setting and any description the source material gives) is enough to depict them as a specific identifiable individual rather than a generic figure.
+- Draw a plausible likeness consistent with that context. Do not claim or imply pinpoint accuracy of their actual face — this is a contextual depiction, not a verified portrait.
+- Render it in the same realistic-editorial-with-a-light-illustrative-touch treatment as a reference-photo portrait: realism dominates, any illustrative texture stays understated.
+- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible. If VARIABLE FIELDS supplies no such label, do not add one yourself.
+- Never place the person in a scene, action or context that STRUCTURE does not describe."""
 
 # 2-3 位具名真人、且**每一位都查到參考照**時用這段（2026-08-18 使用者裁定放寬）。
 #
@@ -254,7 +271,7 @@ NAMED REAL PEOPLE — MULTIPLE PORTRAITS (CRITICAL)
 ==================================================
 - A reference photograph is attached for EVERY named real person whose face this graphic shows. Base each portrait on its own attached photograph.
 - Match each face to the correct person: use the resemblance between the attached photographs and the name labels, and NEVER swap likenesses between people. A face sitting under the wrong person's name is the single most serious failure this rule exists to prevent.
-- Render each portrait as a hand-painted editorial portrait illustration rather than a photograph, while preserving the recognisable likeness of its reference photograph: the same facial structure, hairstyle, glasses and build, so that viewers identify the same individual.
+- Render each portrait as a realistic editorial news portrait: the primary impression is a faithful likeness of its reference photograph — the same facial structure, hairstyle, glasses and build, so that viewers recognise the same individual at a glance. Keep only a light illustrative touch on top of that realism, such as a subtle painterly texture or brushwork in the finish; do not push any portrait into an overtly hand-drawn or cartoon style.
 - Take only each person's likeness from the photographs. Pose, attire, framing and surroundings follow STRUCTURE, not the photographs' own backgrounds or occasions.
 - An attached photograph may happen to show more than one person. Use only the person the name label refers to; never carry a bystander from a photograph into the graphic.
 - Other real people may be named in the text of this graphic without a photograph. That is intended: render their names as text only, never as a face, and never place such a name beside a depicted figure.
@@ -264,6 +281,7 @@ NAMED REAL PEOPLE — MULTIPLE PORTRAITS (CRITICAL)
 PORTRAIT_MODES = {
     "reference": PORTRAIT_WITH_REFERENCE_RULES,
     "reference_multi": PORTRAIT_MULTI_WITH_REFERENCE_RULES,
+    "entry_only": PORTRAIT_ENTRY_ONLY_RULES,
     "no_reference": PORTRAIT_NO_REFERENCE_RULES,
     "none": "",
 }
@@ -311,7 +329,7 @@ USER_REFERENCE_PORTRAIT_RULES = """=============================================
 NAMED REAL PERSON — USER-SUPPLIED PORTRAIT REFERENCE (CRITICAL)
 ==================================================
 - The user has attached portrait photograph(s) of the named real person(s) in this graphic. Base each portrait on its attached photograph.
-- Render each portrait as a hand-painted editorial portrait illustration rather than a photograph, while preserving the recognisable likeness of its reference photograph: the same facial structure, hairstyle, glasses and build, so that viewers identify the same individual.
+- Render each portrait as a realistic editorial news portrait: the primary impression is a faithful likeness of its attached photograph — the same facial structure, hairstyle, glasses and build, so that viewers recognise the same individual at a glance. Keep only a light illustrative touch on top of that realism, such as a subtle painterly texture or brushwork in the finish; do not push any portrait into an overtly hand-drawn or cartoon style.
 - When the layout shows more than one named person, match each face to the correct person: use the resemblance between the attached photographs and the name labels, and never swap likenesses between people.
 - Draw a recognisable face ONLY for a person whose photograph is attached. Any named real person WITHOUT an attached photograph must still be shown as a back view or a plain silhouette — never invent or approximate a face for them.
 - Take only each person's likeness from the photographs. Pose, attire, framing and surroundings follow STRUCTURE, not the photographs' own backgrounds or occasions.

@@ -39,6 +39,22 @@ def _lookup_only_merz(subjects, english=None):
     return found, [n for n in subjects if n not in found]
 
 
+def _outcomes_only_merz(subjects, english=None):
+    """轉成 F40 outcome 形狀：梅爾茨有照片，其餘查無條目（維持這批測試原本的假設）。"""
+    found, missing = _lookup_only_merz(subjects, english)
+    outcomes = {
+        name: photo_lookup.PortraitLookupOutcome(
+            photo=found[name], entry_found=True, matched_name=name, language="zh"
+        )
+        for name in found
+    }
+    for name in missing:
+        outcomes[name] = photo_lookup.PortraitLookupOutcome(
+            photo=None, entry_found=False, matched_name=None, language=None
+        )
+    return outcomes
+
+
 def _element_inner_html(html: str, element_id: str) -> str:
     """取出某個 <div id="..."> 的內容——數 div 開關標籤，不用正規式硬猜。"""
     start = html.index(f'<div id="{element_id}"')
@@ -53,7 +69,7 @@ def _element_inner_html(html: str, element_id: str) -> str:
 
 class ExcludedPeopleTests(unittest.TestCase):
     def test_keep_subjects_returns_dropped_names(self):
-        with patch.object(main, "lookup_portrait_photos", side_effect=_lookup_only_merz):
+        with patch.object(main, "lookup_portrait_outcomes", side_effect=_outcomes_only_merz):
             kept, en, photos, dropped = main.keep_subjects_with_photos(["梅爾茨", "蕭茲"], ["Friedrich Merz", "Olaf Scholz"], tag="t")
         self.assertEqual((kept, en, dropped), (["梅爾茨"], ["Friedrich Merz"], ["蕭茲"]))
         self.assertIn("梅爾茨", photos)
@@ -65,16 +81,17 @@ class ExcludedPeopleTests(unittest.TestCase):
         seen = []
         with patch.object(main, "digest_completion", return_value=_completion(derive)), \
              patch.object(main, "lookup_portrait_photos", side_effect=_lookup_only_merz), \
+             patch.object(main, "lookup_portrait_outcomes", side_effect=_outcomes_only_merz), \
              patch.object(main, "supports_reference_image", return_value=True), \
              patch.object(main, "generate_image_raw", side_effect=lambda r: (seen.append(r), _fake_raw(r))[1]):
             res = client.post("/api/editor/cover", json={"title_left": "梅爾茨 蕭茲 同框", "layout": "full", "mode": "composite"}, headers=_headers())
         self.assertEqual(res.status_code, 200, res.text)
         req = seen[0]
         self.assertEqual(req.portrait_subjects, ["梅爾茨"])
-        self.assertIn("PEOPLE WHO MUST NOT BE DRAWN", req.prompt)
-        self.assertIn("No usable reference photograph exists for: 蕭茲", req.prompt)
+        self.assertIn("PEOPLE WHO MUST NOT APPEAR AS A FIGURE", req.prompt)
+        self.assertIn("No Wikipedia entry could be confirmed for: 蕭茲", req.prompt)
         # 禁畫區塊要在肖像規則之後（後到者贏）
-        self.assertGreater(req.prompt.index("PEOPLE WHO MUST NOT BE DRAWN"), req.prompt.index(main.PORTRAIT_MODES["reference"].strip()[:40]))
+        self.assertGreater(req.prompt.index("PEOPLE WHO MUST NOT APPEAR AS A FIGURE"), req.prompt.index(main.PORTRAIT_MODES["reference"].strip()[:40]))
 
     def test_no_block_when_everyone_found(self):
         derive = {"visual_left": "梅爾茨", "visual_right": "x",
@@ -83,23 +100,25 @@ class ExcludedPeopleTests(unittest.TestCase):
         seen = []
         with patch.object(main, "digest_completion", return_value=_completion(derive)), \
              patch.object(main, "lookup_portrait_photos", side_effect=_lookup_only_merz), \
+             patch.object(main, "lookup_portrait_outcomes", side_effect=_outcomes_only_merz), \
              patch.object(main, "supports_reference_image", return_value=True), \
              patch.object(main, "generate_image_raw", side_effect=lambda r: (seen.append(r), _fake_raw(r))[1]):
             res = client.post("/api/editor/cover", json={"title_left": "梅爾茨 震驚 改革", "layout": "full", "mode": "composite"}, headers=_headers())
         self.assertEqual(res.status_code, 200, res.text)
-        self.assertNotIn("PEOPLE WHO MUST NOT BE DRAWN", seen[0].prompt)
+        self.assertNotIn("PEOPLE WHO MUST NOT APPEAR AS A FIGURE", seen[0].prompt)
 
     def test_yt_cover_prompt_forbids_the_dropped_person(self):
         seen = []
         plan = main.YtCoverPlan(("梅爾茨蕭茲", "同框"), "兩人同框正面", ["梅爾茨"], ["Friedrich Merz"], {}, ["蕭茲"])
         with patch.object(main, "resolve_yt_cover_plan", return_value=plan), \
              patch.object(main, "lookup_portrait_photos", side_effect=_lookup_only_merz), \
+             patch.object(main, "lookup_portrait_outcomes", side_effect=_outcomes_only_merz), \
              patch.object(main, "supports_reference_image", return_value=True), \
              patch.object(main, "generate_image_raw", side_effect=lambda r: (seen.append(r), _fake_raw(r))[1]):
             res = client.post("/api/editor/yt-cover", json={"title": "梅爾茨蕭茲 同框", "provider": "gpt"}, headers=_headers())
         self.assertEqual(res.status_code, 200, res.text)
         self.assertEqual(len(seen), 1)
-        self.assertIn("No usable reference photograph exists for: 蕭茲", seen[0].prompt)
+        self.assertIn("No Wikipedia entry could be confirmed for: 蕭茲", seen[0].prompt)
 
 
 class MapMissingTests(unittest.TestCase):

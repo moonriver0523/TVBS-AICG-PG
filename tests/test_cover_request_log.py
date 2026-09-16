@@ -59,6 +59,15 @@ def _found(subjects, english=None):
     return {name: PHOTO for name in subjects}, []
 
 
+def _outcomes_found(subjects, english=None):
+    return {
+        name: photo_lookup.PortraitLookupOutcome(
+            photo=PHOTO, entry_found=True, matched_name=name, language="zh"
+        )
+        for name in subjects
+    }
+
+
 class CoverLogFieldTests(unittest.TestCase):
     def _post(self, url, body, raw=None):
         logged, failed = [], []
@@ -71,6 +80,7 @@ class CoverLogFieldTests(unittest.TestCase):
 
         with patch.object(main, "digest_completion", return_value=_completion(DERIVED)), \
              patch.object(main, "lookup_portrait_photos", side_effect=_found), \
+             patch.object(main, "lookup_portrait_outcomes", side_effect=_outcomes_found), \
              patch.object(main, "supports_reference_image", return_value=True), \
              patch.object(main, "generate_image_raw", side_effect=raw or fake_raw), \
              patch.object(request_log, "log_generation", side_effect=lambda **kw: logged.append(kw)), \
@@ -126,6 +136,7 @@ class CoverLogFieldTests(unittest.TestCase):
                 logged: list = []
                 with patch.object(main, "digest_completion", return_value=_completion(DERIVED)), \
                      patch.object(main, "lookup_portrait_photos", side_effect=_found), \
+                     patch.object(main, "lookup_portrait_outcomes", side_effect=_outcomes_found), \
                      patch.object(main, "supports_reference_image", return_value=True), \
                      patch.object(main, "generate_image_raw", side_effect=boom), \
                      patch.object(request_log, "log_failure", side_effect=lambda **kw: logged.append(kw)):
@@ -154,6 +165,7 @@ class CoverLogFieldTests(unittest.TestCase):
                 logged, archived, succeeded = [], [], []
                 with patch.object(main, "digest_completion", return_value=_completion(DERIVED)), \
                      patch.object(main, "lookup_portrait_photos", side_effect=_found), \
+                     patch.object(main, "lookup_portrait_outcomes", side_effect=_outcomes_found), \
                      patch.object(main, "supports_reference_image", return_value=True), \
                      patch.object(main, "generate_image_raw", side_effect=boom), \
                      patch.object(request_log, "log_failure", side_effect=lambda **kw: logged.append(kw)), \

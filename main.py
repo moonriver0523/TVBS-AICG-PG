@@ -997,6 +997,10 @@ class ImageGenerateResponse(BaseModel):
     model: str
     source_image_base64: str = ""
     source_mime_type: str = ""
+    # F40 第 3 層通知（2026-09-16）：查不到合格參考照但確認有維基條目時，允許模型
+    # 依新聞語境自畫具名真人，但**不**在圖上標「長相為 AI 推測」（使用者明確裁定）——
+    # 改成這裡回一則文字給前端訊息欄。空清單＝這次沒有需要通知的事。
+    notices: list[str] = Field(default_factory=list)
 
 
 # 第一頁「懶人機制」：type_label 傳這個值代表由 AI 自行判斷最適合的圖表類型
@@ -1912,6 +1916,35 @@ _map_missing_places: contextvars.ContextVar[list[str]] = contextvars.ContextVar(
 
 def map_missing_places() -> list[str]:
     return list(_map_missing_places.get())
+
+
+# F40 第 3 層通知（2026-09-16）：resolve_portraits／apply_portrait_to_image_request 決定
+# 用 entry_only 模式（維基有條目、沒有合格照片，允許模型依語境自畫）時，要讓前端訊息欄
+# 顯示一句提示——但這兩個函式呼叫端很多、簽名不想全部改成回傳 notices，所以比照
+# _map_missing_places 用 ContextVar 帶出去。端點在處理一次請求前呼叫
+# reset_portrait_notices()，結尾用 collected_portrait_notices() 取回、寫進 response。
+_portrait_notices: contextvars.ContextVar[list[str]] = contextvars.ContextVar("portrait_notices", default=[])
+
+
+def reset_portrait_notices() -> None:
+    _portrait_notices.set([])
+
+
+def collected_portrait_notices() -> list[str]:
+    return list(_portrait_notices.get())
+
+
+def _record_portrait_notice(text: str) -> None:
+    _portrait_notices.set(_portrait_notices.get() + [text])
+
+
+def portrait_entry_only_notice(names: list[str]) -> str:
+    """F40 第 3 層的訊息欄文案。⚠使用者明確裁定：不要在圖上標「長相為 AI 推測」，
+    改成這則 notice 顯示在前端既有的紅色訊息框（非致命提示，見 MASTER 列管 F40）。"""
+    return (
+        f"「{'、'.join(names)}」目前查不到可用的維基百科照片，"
+        "畫面由生圖模型依新聞語境自行繪製，並非本人的精確肖像。"
+    )
 
 
 def resolve_map_points(chart_type: str, places: list[str] | None) -> list[MapPoint]:
@@ -3108,6 +3141,9 @@ def generate_image(req: ImageGenerateRequest):
     網頁版可帶 portrait_subjects，在這裡查參考照並注入肖像規則。
     generate_news_image 已組好 prompt，走這支時不要重複落檔。
     """
+    own_notices = not _inside_pipeline.get()
+    if own_notices:
+        reset_portrait_notices()
     req = apply_portrait_to_image_request(req)
     # 順序有意義：自動底圖要先加進 reference_images，下一行才會替它注入
     # ATTACHED MAP REFERENCE 那段用途規則（「標點已在真實位置，不要移動」）。
@@ -3157,6 +3193,10 @@ def generate_image(req: ImageGenerateRequest):
             prompt=req.prompt,
             **meta,
         )
+    if own_notices:
+        notices = collected_portrait_notices()
+        if notices:
+            result = result.model_copy(update={"notices": notices})
     return result
 
 
@@ -4058,6 +4098,11 @@ def lookup_portrait_photos(
 
     `english_names` 與 subjects 同順序（消化端的 portrait_subjects_en），中文譯名
     查不到時用它再查一次——臺灣譯名常常不是中文維基的條目名（2026-08-18）。
+
+    只回得出「有沒有照片」，分不出「查無此人」與「有條目沒照片」——F40 四層分流
+    要分這兩種的呼叫端請用 `lookup_portrait_outcomes()`。這支保留給還沒接上 F40
+    的既有呼叫端（`apply_photo_availability`、`resolve_digest_portraits`、
+    `apply_portrait_to_image_request` 的使用者上傳分支），行為與改動前逐字相同。
     """
     found: dict[str, photo_lookup.ReferencePhoto] = {}
     missing: list[str] = []
@@ -4076,29 +4121,62 @@ def lookup_portrait_photos(
     return found, missing
 
 
+def lookup_portrait_outcomes(
+    subjects: list[str],
+    english_names: list[str] | None = None,
+) -> dict[str, photo_lookup.PortraitLookupOutcome]:
+    """逐位查完整 outcome（含 entry_found），F40 四層分流判斷用。
+
+    與 `lookup_portrait_photos` 平行存在，不是取代它：查圖失敗一樣不讓整條請求
+    失敗，失敗就當「查無此人」（entry_found=False）。
+    """
+    outcomes: dict[str, photo_lookup.PortraitLookupOutcome] = {}
+    english_names = english_names or []
+    for index, subject in enumerate(subjects):
+        alt = english_names[index : index + 1] if index < len(english_names) else []
+        try:
+            outcome = photo_lookup.find_portrait_outcome(subject, alt_names=alt)
+        except Exception as exc:  # noqa: BLE001 — 查圖是加分項，不該拖垮生圖
+            print(f"[portrait] 查參考照片失敗（{subject}）：{exc}", flush=True)
+            outcome = photo_lookup.PortraitLookupOutcome(
+                photo=None, entry_found=False, matched_name=None, language=None
+            )
+        outcomes[subject] = outcome
+    return outcomes
+
+
 def resolve_portraits(
     portrait_subjects: list[str],
     provider: str,
     *,
     photos: dict[str, photo_lookup.ReferencePhoto] | None = None,
     english_names: list[str] | None = None,
+    outcomes: dict[str, photo_lookup.PortraitLookupOutcome] | None = None,
 ) -> tuple[str, list[photo_lookup.ReferencePhoto]]:
     """決定這次的肖像處理方式，回傳 (portrait_mode, 參考照片清單)。
 
-    四種結果：
+    F40 四層分流（2026-09-16 使用者裁決，優先序固定）：
     - 不是真人肖像題 → ("none", [])，沿用一般規則
-    - 1 位且查到照片 → ("reference", [照片])，措辭與行為與放寬前逐字相同
+    - 1 位且查到照片 → ("reference", [照片])
     - 2-3 位且**每一位都查到照片** → ("reference_multi", [照片…])
-    - 其餘（有人查不到、超過 3 位、後端送不出參考圖）→ ("no_reference", [])
+    - 沒照片但**每一位都確認查得到維基條目** → ("entry_only", [])：允許模型依新聞
+      語境自畫具名人物，呼叫端要用 `portrait_entry_only_notice()` 記一則 notice
+      （見 apply_portrait_to_image_request）——⚠使用者裁定不在圖上標「長相為 AI
+      推測」，通知走 response 的 notices，不畫進圖裡。
+    - 其餘（有人連條目都查不到、超過 3 位、後端送不出參考圖）→ ("no_reference", [])：
+      畫面不安排這個人（PORTRAIT_NO_REFERENCE_RULES 已改寫成無人場景，不是背影／剪影）。
 
-    **全有或全無，後端絕不自行截斷**（2026-08-18 實驗結論）：只要有一位沒有照片，
-    整張退回不畫臉。理由是實測 2/2 證明「有照片的畫、沒照片的畫剪影」這種逐人區分
-    生圖模型辦不到，沒照片的那位會被憑空捏臉還掛真名。也不能把 4 人截成 3 人——
-    版面是照 4 個人設計的，砍掉一個會留下一個沒人的空位。超過 3 人要在**消化階段**
-    就壓下來（見 REAL_WORLD_FIDELITY_RULES 第 6 條與 EXCLUDED_PEOPLE_RULES_TEMPLATE）。
+    **全有或全無，後端絕不自行截斷**（2026-08-18 實驗結論，entry_only 沿用同一原則）：
+    只要有一位沒有照片，整張退回「不逐人區分」的安全值。理由是實測 2/2 證明「有照片
+    的畫、沒照片的畫剪影」這種逐人區分生圖模型辦不到，沒照片的那位會被憑空捏臉還掛
+    真名。也不能把 4 人截成 3 人——版面是照 4 個人設計的，砍掉一個會留下一個沒人的
+    空位。超過 3 人要在**消化階段**就壓下來（見 REAL_WORLD_FIDELITY_RULES 第 6 條）。
+    這也是為什麼「一人有照片、另一人只有條目」混合時整組退到 entry_only、放棄那張
+    已查到的照片——同一個全有或全無的理由，屬於本輪判斷但計畫沒寫死的地方，
+    細節見任務回報。
 
-    `photos` 可由呼叫端先查好傳進來（兩段式消化流程會重複用到同一批查詢結果），
-    沒傳就自己查。
+    `photos`／`outcomes` 可由呼叫端先查好傳進來（兩段式消化流程會重複用到同一批
+    查詢結果），沒傳就自己查。
     """
     if not portrait_subjects:
         return "none", []
@@ -4115,18 +4193,33 @@ def resolve_portraits(
     if len(portrait_subjects) > 1 and not supports_multiple_reference_images(provider):
         print("[portrait] 目前後端送不出多張參考圖，多人肖像退回不生成臉孔", flush=True)
         return "no_reference", []
+    if outcomes is not None and photos is None:
+        photos = {name: o.photo for name, o in outcomes.items() if o.photo is not None}
     if photos is None:
         photos, _ = lookup_portrait_photos(portrait_subjects, english_names)
     missing = [name for name in portrait_subjects if name not in photos]
-    if missing:
+    if not missing:
+        ordered = [photos[name] for name in portrait_subjects]
+        mode = "reference" if len(ordered) == 1 else "reference_multi"
+        return mode, ordered
+    if outcomes is None:
+        outcomes = lookup_portrait_outcomes(portrait_subjects, english_names)
+    all_have_entries = all(
+        (outcomes.get(name) is not None and outcomes[name].entry_found)
+        for name in portrait_subjects
+    )
+    if all_have_entries:
         print(
-            f"[portrait] 查不到參考照（{'、'.join(missing)}），整張退回不生成臉孔",
+            f"[portrait] 沒有合格參考照但查得到條目（{'、'.join(missing)}），"
+            "允許模型依語境自畫並通知使用者",
             flush=True,
         )
-        return "no_reference", []
-    ordered = [photos[name] for name in portrait_subjects]
-    mode = "reference" if len(ordered) == 1 else "reference_multi"
-    return mode, ordered
+        return "entry_only", []
+    print(
+        f"[portrait] 查不到參考照（{'、'.join(missing)}），整張退回「無人場景」",
+        flush=True,
+    )
+    return "no_reference", []
 
 
 def resolve_portrait(
@@ -4162,6 +4255,8 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
         mode, photos = resolve_portraits(
             subjects, req.provider, english_names=english
         )
+        if mode == "entry_only":
+            _record_portrait_notice(portrait_entry_only_notice(subjects))
         block = PORTRAIT_MODES.get(mode, "")
         prompt = req.prompt
         if block and block not in prompt:
@@ -4750,6 +4845,10 @@ class TenCoverRequest(BaseModel):
     # resolve_cover_visuals 的推導步驟當畫面提示，兩格共用——不直接拼進生圖 prompt，
     # 那條線的規則明令底圖不得出現任何文字，指令裡的字會被模型畫上去。
     instruction: str = Field(default="", max_length=500)
+    # 新聞原文（B53，2026-09-16）：選填，有預設值不影響舊呼叫端。畫面描述只餵標題
+    # 時模型會認錯同名人物、拼錯英文名（見 MASTER 列管 B53）。有這欄時
+    # resolve_cover_visuals 會把它和標題一起當補畫面描述的來源材料。
+    news_text: str = Field(default="", max_length=20_000)
     date_text: str = Field(default="", max_length=20)
     badge: str = compose.COVER_DEFAULT_BADGE
     provider: Literal["gemini", "gpt"] = "gpt"
@@ -4954,14 +5053,14 @@ def cover_portrait_photos(visuals, side: int) -> dict:
 
 COVER_EXCLUDED_PEOPLE_BLOCK = """
 
-PEOPLE WHO MUST NOT BE DRAWN (OVERRIDES EVERYTHING ABOVE ABOUT THEM):
-No usable reference photograph exists for: {names}.
-- Do not draw any of them with a recognisable face. If the scene description mentions them, show them only as a back view or a plain silhouette, or leave them out of the frame entirely.
-- Never invent, guess or approximate their facial features, and never place any of their names beside a drawn face."""
+PEOPLE WHO MUST NOT APPEAR AS A FIGURE (OVERRIDES EVERYTHING ABOVE ABOUT THEM):
+No Wikipedia entry could be confirmed for: {names}.
+- Do not depict any of them as a human figure of any kind — not facing the camera, not turned away, not a faceless stand-in body. If the scene description mentions them, redesign the scene around non-person elements instead (buildings, venues, logos, signage, objects, documents) and leave them out as a figure entirely.
+- Never invent, guess or approximate their facial features, and never place any of their names beside a drawn figure."""
 
 
 def excluded_people_block(names: list[str]) -> str:
-    """被剔除（查不到參考照）的人：接在生圖 prompt 後的禁畫條款；沒有人就回空字串。"""
+    """被剔除（連維基條目都查不到）的人：接在生圖 prompt 後的禁畫條款；沒有人就回空字串。"""
     names = [n for n in names if n]
     if not names:
         return ""
@@ -4975,7 +5074,14 @@ def keep_subjects_with_photos(
     uploaded_portraits: int = 0,
     tag: str,
 ) -> tuple[list[str], list[str], dict, list[str]]:
-    """把查不到參考照的人從名單移除，回 (剩下的人, 對應英文名, 查到的照片, 被移除的人)。
+    """依 F40 四層分流整理封面／YT 封面的肖像名單。
+
+    回傳 (留在版面的人, 對應英文名, 查到的照片, **連條目都查不到**而被移除的人)。
+    「留在版面的人」包含有照片的（第 1／2 層）與查得到條目但沒照片的（第 3 層，
+    entry_only）——這些人下游 `apply_portrait_to_image_request`／`resolve_portraits`
+    會依同一批查詢結果（有快取，重查很便宜）自己再判一次該用哪種肖像規則、
+    要不要回 notice，這裡不用先分流出「entry_only」清單。只有第 4 層（連條目都
+    查不到）才會被真正移出名單，交給呼叫端用 `excluded_people_block` 寫進 prompt。
 
     被移除的人**必須**由呼叫端接進 `excluded_people_block` 寫進生圖 prompt（2026-09-08 審查
     必修）：畫面描述仍寫著「兩人同框」，剩一人時走的單人肖像規則沒有「其他人不畫臉」條款，
@@ -4986,7 +5092,7 @@ def keep_subjects_with_photos(
     所以在同一個地方做。
 
     不做這件事會怎樣：`resolve_portraits` 是全有或全無——兩個人裡有一個查不到，
-    整張退回不畫臉，連查得到的那位也變成背影。使用者看到的是「明明有照片還是畫背影」。
+    整張退回不畫臉。使用者看到的是「明明有照片還是不見了」。
 
     使用者上傳的肖像照視為對應**系統查不到的人**、依序對應（假設與理由完整寫在
     `apply_photo_availability`）：`uploaded_portraits` 張就保留前幾位查不到的人，
@@ -4998,31 +5104,35 @@ def keep_subjects_with_photos(
     """
     if not subjects:
         return [], [], {}, []
-    photos, missing = lookup_portrait_photos(subjects, english)
+    outcomes = lookup_portrait_outcomes(subjects, english)
+    photos = {name: o.photo for name, o in outcomes.items() if o.photo is not None}
+    missing = [name for name in subjects if name not in photos]
     if uploaded_portraits:
         missing = missing[uploaded_portraits:]
     if not missing:
         return list(subjects), list(english), photos, []
-    kept = [(name, en) for name, en in zip(subjects, english) if name not in missing]
+    no_entry = [name for name in missing if not outcomes[name].entry_found]
+    kept = [(name, en) for name, en in zip(subjects, english) if name not in no_entry]
     if not kept:
-        # 全部都查不到時**不清空名單**（刻意與 apply_photo_availability 不同）：
+        # 全部都查無條目時**不清空名單**（刻意與 apply_photo_availability 不同）：
         # 主流程清掉之後會重新消化一次，版面描述也跟著不提那個人；封面這條線
         # 沒有第二次消化，畫面描述仍寫著「梅爾茨站在講台前正面半身」。名單一空，
         # apply_portrait_to_image_request 就不注入任何肖像規則，模型會替一個真名
         # 憑空捏一張臉——這個專案定義最糟的組合。保留名單才會走 no_reference
-        # （明文禁止畫臉、改背影），那仍是可播的結果。
+        # （現在是「無人場景」，不是背影／剪影），那仍是可播的結果。
         print(
-            f"[{tag}] 查不到任何一位的參考照（{'、'.join(missing)}），"
-            "保留名單走「不生成臉孔」規則",
+            f"[{tag}] 查不到任何一位的照片或條目（{'、'.join(no_entry)}），"
+            "保留名單走「無人場景」規則",
             flush=True,
         )
         return list(subjects), list(english), photos, []
-    print(
-        f"[{tag}] 查不到參考照（{'、'.join(missing)}），把他們從肖像名單移除，"
-        "剩下的人照樣畫臉",
-        flush=True,
-    )
-    return [name for name, _ in kept], [en for _, en in kept], photos, missing
+    if no_entry:
+        print(
+            f"[{tag}] 查無條目（{'、'.join(no_entry)}），從肖像名單移除，"
+            "剩下的人照樣處理",
+            flush=True,
+        )
+    return [name for name, _ in kept], [en for _, en in kept], photos, no_entry
 
 
 # ---- 標題斷句交給消化模型（2026-09-14 使用者裁決）----
@@ -5127,6 +5237,18 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
         req.title_right.strip(),
         right or "(none — write one)",
     )
+    # 新聞原文（B53，2026-09-16）：選填，只有帶了才附加，留空時 material 與改動前
+    # 逐字相同（rng_pins fixture 不受影響）。標題與原文都只是**來源素材**，明講
+    # 不得逐字畫上圖——這段只餵給推導步驟當認人與畫面依據，畫面文字仍只能來自
+    # portrait_subjects／視覺描述本身，不能把原文字句抄進 visual_left／visual_right。
+    news_text = (getattr(req, "news_text", "") or "").strip()
+    if news_text:
+        material += (
+            "\\n\\nNews article source material (background only, for identifying the correct "
+            "named people and an accurate scene — do not copy its wording verbatim into your "
+            "output, and the headline above is source material under the same rule): "
+            + news_text
+        )
     # 使用者的指令欄（2026-09-08 WP1）：兩格共用，只當畫面提示。放在最後、明講它
     # 管的是「畫面長什麼樣」——不然模型會把它讀成「標題要改成這樣」。
     instruction = (getattr(req, "instruction", "") or "").strip()
@@ -5982,6 +6104,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
     dependencies=[Depends(verify_internal_api_key)],
 )
 def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
+    reset_portrait_notices()
     if req.badge not in compose.COVER_BADGES:
         _abort_generation(
             HTTPException(
@@ -6043,7 +6166,11 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     # 斷句交給消化模型（2026-09-14）：入口登記詞組邊界，下游所有斷行都只在邊界上切
     apply_title_break_hints(req.title_left, req.title_right)
     if req.layout == "full":
-        return _editor_cover_full(req, date_text)
+        full_result = _editor_cover_full(req, date_text)
+        notices = collected_portrait_notices()
+        if notices:
+            full_result = full_result.model_copy(update={"notices": notices})
+        return full_result
     if not req.title_right.strip():
         _abort_generation(
             HTTPException(status_code=400, detail="雙切版型左右標題都要填"),
@@ -6171,6 +6298,7 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         right_is_ai=panel_is_ai[1],
         mode=req.mode,
         seed=req.seed,
+        notices=collected_portrait_notices(),
     )
 
 
@@ -6228,6 +6356,8 @@ class YtCoverRequest(BaseModel):
     # 不直接拼進生圖 prompt：那條線一個字都不准畫，指令會被模型畫上去。
     # 有 asis 附圖或帶了現成底圖時根本不打推導，指令自然不生效。
     instruction: str = Field(default="", max_length=500)
+    # 新聞原文（B53，2026-09-16）：選填，有預設值不影響舊呼叫端。理由同 TenCoverRequest。
+    news_text: str = Field(default="", max_length=20_000)
     provider: Literal["gemini", "gpt"] = "gpt"
     image_size: str = "1K"
     # 與主流程共用同一組附圖欄位與用途：asis＝直接當底圖（不生圖）；
@@ -6303,12 +6433,19 @@ class YtCoverResponse(ImageGenerateResponse):
 
 
 def derive_yt_cover_plan(
-    title: str, preset_lines: tuple[str, str] | None, instruction: str = ""
+    title: str,
+    preset_lines: tuple[str, str] | None,
+    instruction: str = "",
+    news_text: str = "",
 ) -> dict:
     """請文字模型補畫面描述（＋分段、＋具名真人）。失敗回空 dict，呼叫端自己退路。
 
     instruction＝使用者指令欄（2026-09-08 WP1），只當畫面提示：底圖 prompt 用的是
     這一步推導出來的 visual，所以指令走這裡才不會變成畫在圖上的字。
+
+    news_text＝新聞原文（B53，2026-09-16），選填。只有帶了才附加，留空時 material
+    與改動前逐字相同。理由與用法同 resolve_cover_visuals：標題與原文都只是
+    **來源素材**，只餵給推導步驟認人與畫面依據，不得逐字畫上圖。
     """
     if preset_lines:
         split_note = (
@@ -6318,6 +6455,13 @@ def derive_yt_cover_plan(
     else:
         split_note = "The split is NOT decided — split the headline into two lines yourself."
     material = f"Headline: {title.strip()}\n\n{split_note}"
+    if news_text.strip():
+        material += (
+            "\n\nNews article source material (background only, for identifying the correct "
+            "named people and an accurate scene — do not copy its wording verbatim into your "
+            "output, and the headline above is source material under the same rule): "
+            + news_text.strip()
+        )
     if instruction.strip():
         material += (
             "\n\nExtra instruction from the editor about how the photograph should look "
@@ -6380,7 +6524,7 @@ def resolve_yt_cover_plan(
     if lines and not need_visual:
         return lines, "", [], []
 
-    data = derive_yt_cover_plan(title, lines, req.instruction)
+    data = derive_yt_cover_plan(title, lines, req.instruction, req.news_text)
     if not lines:
         line1 = str(data.get("line1") or "").strip()
         line2 = str(data.get("line2") or "").strip()
@@ -6727,7 +6871,7 @@ def yt_dual_panel_plan(panel_req: "YtCoverRequest") -> "YtCoverPlan":
     if any(ref.purpose == "asis" for ref in panel_req.reference_images):
         return YtCoverPlan(("", ""), "", [], [])
     title = panel_req.title.strip()
-    data = derive_yt_cover_plan(title, None, panel_req.instruction)
+    data = derive_yt_cover_plan(title, None, panel_req.instruction, panel_req.news_text)
     visual = str(data.get("visual") or "").strip() or title
     subjects = clean_portrait_subjects(data.get("portrait_subjects"))
     english = align_english_names(
@@ -6799,6 +6943,7 @@ def yt_dual_background(
     dependencies=[Depends(verify_internal_api_key)],
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
+    reset_portrait_notices()
     # F0：seed 在入口定一次。取代舊的 seed=f"{title}|{date}"——那種 seed 綁在內容上，
     # 標題與日期沒改就永遠同一種長相，使用者按「重新生成」拿到的是同一張。
     if req.seed is None:
@@ -7090,6 +7235,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         title_mode=req.title_mode,
         dual=dual,
         seed=req.seed,
+        notices=collected_portrait_notices(),
     )
 
 

@@ -17,6 +17,17 @@
   F41 改寫 REAL_WORLD_FIDELITY_RULES 第 5、7 條（人名只准逐字擷取，英文名原文不
   存在就留空）。其中四份 standard 另外因 B57 把「最多六點」改成 target 6／下限 5。
   未改 image snapshot、RNG pins 或其他 fixture。
+- 2026-09-16（Stage 5a，B53＋F40＋F41 生圖端＋B66）：這一批的凍結額度涵蓋
+  B57、B61、F40、F41、B66，但本檔管的是 `build_digest_instructions()`（文字端 digest
+  prompt），F40／B66 動到的是 `news_prompt.build_prompt()` 的 portrait_mode 相關常數
+  （PORTRAIT_WITH_REFERENCE_RULES／PORTRAIT_MULTI_WITH_REFERENCE_RULES／
+  USER_REFERENCE_PORTRAIT_RULES／PORTRAIT_NO_REFERENCE_RULES／新增的
+  PORTRAIT_ENTRY_ONLY_RULES）。這些常數只在明確傳入非 "none" 的 portrait_mode 時才
+  注入，而本檔所有快照都用預設 portrait_mode="none" 呼叫 `build_digest_instructions()`，
+  逐一核對後確認**沒有任何一份快照的文字因這批改動而變**，因此本批**沒有重建任何
+  fixture**（`tests/fixtures/` 目錄零異動，`git diff --stat` 可查證）。
+  B53（news_text 併入補畫面描述的 material）與四層分流的 mode 判斷邏輯只影響
+  `main.py` 的 cover／yt-cover／一般生圖路徑，同樣不動這裡管的 digest 快照。
 """
 
 import os
