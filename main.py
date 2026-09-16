@@ -208,8 +208,16 @@ GEMINI_DIGEST_MIN_TOKENS = 6000
 # 已經超過當時的 6000 預算，所以那類稿必然偶爾整個截斷（實測 raw content 空字串、
 # 重試後 269 秒才回應）。餘裕要抓在思考上而不是正文上：思考量會隨規則增加而漲，
 # 正文不會。這裡照 total 觀測最大值再留約六成。
-DIGEST_MAX_TOKENS = 6000
-MAP_DIGEST_MAX_TOKENS = 10000
+#
+# 2026-09-16 依 D21 甲案調整：DIGEST_MAX_TOKENS 6000→12000，
+# MAP_DIGEST_MAX_TOKENS 10000→16000。思考常吃滿舊上限、正文寫不出來；
+# timeout／attempt／reasoning headroom 不動。
+# 地圖必須維持大於一般——這是 2026-09-05 一次真實回歸留下的防線
+# （見上方 2026-09-05 註解與 tests/test_digest_quality.py TokenBudgetTests）：
+# 地圖類要寫的東西本來就多，思考會先把預算吃光；一般預算拉高時地圖必須
+# 跟著拉開，不准拆這條不變式。
+DIGEST_MAX_TOKENS = 12000
+MAP_DIGEST_MAX_TOKENS = 16000
 
 # 消化的**思考**上限（2026-09-09 使用者：「播出鏡面消化的時間太長了，偶有失敗，
 # 有精簡空間嗎？這也是先前使用者回報逾時沒有生成的原因」）。
@@ -1879,6 +1887,15 @@ def digest_excerpt(raw: str, head: int = 600, tail: int = 300) -> str:
     )
 
 
+def digest_retry_note(attempt: int, category: str, summary: str) -> str:
+    """給下一輪 digest 的修正說明。只含分類後原因，不含 provider 原文。"""
+    return (
+        f"[Retry context] Previous attempt {attempt} failed "
+        f"(category={category}): {summary}. "
+        "Correct this failure and return complete valid JSON."
+    )
+
+
 def digest_completion(
     *,
     model: str,
@@ -1890,6 +1907,8 @@ def digest_completion(
     site: str = "digest",
     raw_user_message: bool = False,
     timeout: float | None = None,
+    retry_context: str = "",
+    reasoning_max_tokens: int | None = None,
 ):
     """呼叫 Chat Completions 取結構化消化結果。
 
@@ -1907,18 +1926,29 @@ def digest_completion(
 
     走 Gemini 時把呼叫端要求的上限拉到 GEMINI_DIGEST_MIN_TOKENS 以上——Gemini
     的隱藏思考 token 用一般上限（1200-1500）幾乎必然截斷正文（同日實測撞到）。
+
+    retry_context：可選，只附加在 user message 尾端，不改 system prompt。
+    未傳時產生的 payload 與舊版相同。
+
+    reasoning_max_tokens：可選，覆寫這一次的思考上限。未傳時仍走
+    digest_reasoning_body() 的一般預設。
     """
     if DIGEST_BACKEND == "gemini":
         max_output_tokens = max(max_output_tokens, GEMINI_DIGEST_MIN_TOKENS)
+    user_content = (
+        news_text
+        if raw_user_message
+        else f'News Source Material:\n"{news_text}"'
+    )
+    if retry_context:
+        user_content = f"{user_content}\n\n{retry_context}"
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {
                 "role": "user",
-                "content": news_text
-                if raw_user_message
-                else f'News Source Material:\n"{news_text}"',
+                "content": user_content,
             },
         ],
         "response_format": {
@@ -1935,6 +1965,12 @@ def digest_completion(
     # provider 順序同樣只有 OpenRouter 吃得到，兩者共用同一個 extra_body
     # （2026-09-11 一起加進來，見 digest_provider_body）。
     reasoning = digest_reasoning_body(max_output_tokens)
+    if (
+        reasoning_max_tokens is not None
+        and DIGEST_BACKEND == "openrouter"
+        and DIGEST_REASONING_MAX_TOKENS > 0
+    ):
+        reasoning = {"reasoning": {"max_tokens": int(reasoning_max_tokens)}}
     extra_body = {**digest_provider_body(), **reasoning}
     if extra_body:
         payload["extra_body"] = extra_body
@@ -2312,6 +2348,8 @@ def generate(req: GenerateRequest):
     # 輸出上限依類型與消化程度分開給，理由見 digest_token_budget。
     max_output_tokens = digest_token_budget(type_label, req.density, req.news_text)
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
+    retry_context = ""
+    reasoning_max_tokens = None
     existing_deadline = _digest_deadline.get()
     if existing_deadline is None:
         deadline = time.monotonic() + DIGEST_DEADLINE_SECONDS
@@ -2346,6 +2384,8 @@ def generate(req: GenerateRequest):
                     schema_name="news_cg_digest",
                     schema=digest_schema(type_label),
                     site="generate",
+                    retry_context=retry_context,
+                    reasoning_max_tokens=reasoning_max_tokens,
                 )
             except AuthenticationError as exc:
                 raise HTTPException(
@@ -2364,6 +2404,12 @@ def generate(req: GenerateRequest):
                     else "AI 服務處理失敗，請確認模型權限或稍後重試"
                 )
                 print(f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} API error: {exc}", flush=True)
+                retry_context = digest_retry_note(
+                    attempt + 1,
+                    "upstream",
+                    f"{type(exc).__name__} on attempt {attempt + 1}",
+                )
+                reasoning_max_tokens = None
                 time.sleep(1.5)
                 continue
 
@@ -2388,6 +2434,14 @@ def generate(req: GenerateRequest):
                         detail="原文太長，「不消化」要模型逐字抄完整篇才做得到；"
                         "請改用「字少」／「字多」，或把原文縮短再試。",
                     )
+                retry_context = digest_retry_note(
+                    attempt + 1, "parse", "JSON 解析失敗"
+                )
+                reasoning_max_tokens = (
+                    DIGEST_REASONING_MIN_TOKENS
+                    if finish_reason == "length"
+                    else None
+                )
                 time.sleep(1.5)
                 continue
 
@@ -2413,6 +2467,15 @@ def generate(req: GenerateRequest):
                 print(
                     f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} quality check failed: {problem}",
                     flush=True,
+                )
+                truncated = finish_reason == "length" or "截斷" in problem
+                retry_context = digest_retry_note(
+                    attempt + 1,
+                    "truncated" if truncated else "quality",
+                    problem,
+                )
+                reasoning_max_tokens = (
+                    DIGEST_REASONING_MIN_TOKENS if truncated else None
                 )
                 time.sleep(1.5)
                 continue

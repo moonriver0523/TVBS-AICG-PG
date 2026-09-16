@@ -48,6 +48,42 @@ def auth_error():
     return AuthenticationError("invalid key", response=response, body=None)
 
 
+def quality_fail_response(field, finish_reason="stop"):
+    payload = dict(VALID_PAYLOAD)
+    payload[field] = ""
+    return ok_response(payload) if finish_reason == "stop" else SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=json.dumps(payload)),
+                finish_reason=finish_reason,
+            )
+        ]
+    )
+
+
+def length_truncated_response(payload=None):
+    content = json.dumps(payload if payload is not None else VALID_PAYLOAD)
+    message = SimpleNamespace(content=content)
+    return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason="length")])
+
+
+def _dump_call(call):
+    return json.dumps(call.kwargs, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _system_prompt(call):
+    return call.kwargs["messages"][0]["content"]
+
+
+def _user_message(call):
+    return call.kwargs["messages"][1]["content"]
+
+
+def _reasoning_max(call):
+    extra = call.kwargs.get("extra_body") or {}
+    return (extra.get("reasoning") or {}).get("max_tokens")
+
+
 class GenerateRetryTests(unittest.TestCase):
     def setUp(self):
         self.request = GenerateRequest(news_text="素材", type_label="資料圖表")
@@ -217,6 +253,98 @@ class GenerateRetryTests(unittest.TestCase):
         self.assertIsNone(exc)
         self.assertEqual(create.call_count, 1)
         self.assertEqual(result.chart_type, "資料圖表")
+
+
+class GenerateRetryContextTests(GenerateRetryTests):
+    """B50：每次 retry 的 request 必須帶上一輪失敗原因，length 時縮小思考預算。"""
+
+    def setUp(self):
+        super().setUp()
+        backend = patch.object(main, "DIGEST_BACKEND", "openrouter")
+        backend.start()
+        self.addCleanup(backend.stop)
+        reasoning = patch.object(main, "DIGEST_REASONING_MAX_TOKENS", 2000)
+        reasoning.start()
+        self.addCleanup(reasoning.stop)
+
+    def test_quality_retries_are_not_byte_identical_and_carry_prior_failure(self):
+        result, exc, create = self.call_with(
+            [
+                quality_fail_response("style"),
+                quality_fail_response("structure"),
+                ok_response(),
+            ]
+        )
+        self.assertIsNone(exc)
+        self.assertEqual(create.call_count, 3)
+        bodies = [_dump_call(c) for c in create.call_args_list]
+        self.assertEqual(len(set(bodies)), 3)
+        users = [_user_message(c) for c in create.call_args_list]
+        self.assertNotIn("[Retry context]", users[0])
+        self.assertIn("category=quality", users[1])
+        self.assertIn("style 為空", users[1])
+        self.assertIn("Previous attempt 1", users[1])
+        self.assertIn("category=quality", users[2])
+        self.assertIn("structure 為空", users[2])
+        self.assertIn("Previous attempt 2", users[2])
+        systems = [_system_prompt(c) for c in create.call_args_list]
+        self.assertEqual(systems[0], systems[1])
+        self.assertEqual(systems[1], systems[2])
+
+    def test_length_failure_lowers_reasoning_max_tokens_on_retry(self):
+        result, exc, create = self.call_with(
+            [length_truncated_response(), ok_response()]
+        )
+        self.assertIsNone(exc)
+        self.assertEqual(create.call_count, 2)
+        self.assertEqual(_reasoning_max(create.call_args_list[0]), 2000)
+        self.assertEqual(_reasoning_max(create.call_args_list[1]), 1024)
+        self.assertIn("category=truncated", _user_message(create.call_args_list[1]))
+
+    def test_non_length_quality_failure_does_not_lower_reasoning(self):
+        result, exc, create = self.call_with(
+            [quality_fail_response("style"), ok_response()]
+        )
+        self.assertIsNone(exc)
+        self.assertEqual(create.call_count, 2)
+        self.assertEqual(_reasoning_max(create.call_args_list[0]), 2000)
+        self.assertEqual(_reasoning_max(create.call_args_list[1]), 2000)
+        self.assertIn("category=quality", _user_message(create.call_args_list[1]))
+
+    def test_upstream_retry_carries_attempt_context(self):
+        result, exc, create = self.call_with([connection_error(), ok_response()])
+        self.assertIsNone(exc)
+        self.assertEqual(create.call_count, 2)
+        bodies = [_dump_call(c) for c in create.call_args_list]
+        self.assertNotEqual(bodies[0], bodies[1])
+        user = _user_message(create.call_args_list[1])
+        self.assertIn("category=upstream", user)
+        self.assertIn("attempt 1", user)
+        self.assertEqual(_reasoning_max(create.call_args_list[1]), 2000)
+
+    def test_system_prompt_is_unchanged_across_retries(self):
+        result, exc, create = self.call_with(
+            [connection_error(), quality_fail_response("variable"), ok_response()]
+        )
+        self.assertIsNone(exc)
+        systems = [_system_prompt(c) for c in create.call_args_list]
+        self.assertEqual(len(systems), 3)
+        self.assertEqual(systems[0], systems[1])
+        self.assertEqual(systems[1], systems[2])
+        self.assertTrue(systems[0])
+
+    def test_digest_output_budget_is_12000_and_other_caps_unchanged(self):
+        self.assertEqual(main.DIGEST_MAX_TOKENS, 12000)
+        self.assertEqual(main.DIGEST_REASONING_HEADROOM, 2500)
+        self.assertEqual(main.DIGEST_REASONING_MIN_TOKENS, 1024)
+        self.assertEqual(main.DIGEST_ATTEMPTS, 5)
+        self.assertEqual(main.DIGEST_TIMEOUT_SECONDS, 90.0)
+        self.assertEqual(main.DIGEST_DEADLINE_SECONDS, 230.0)
+        with patch.object(main, "DIGEST_BACKEND", "openrouter"), patch.object(
+            main, "DIGEST_REASONING_MAX_TOKENS", 2000
+        ):
+            body = main.digest_reasoning_body(main.DIGEST_MAX_TOKENS)
+        self.assertEqual(body["reasoning"]["max_tokens"], 2000)
 
 
 if __name__ == "__main__":

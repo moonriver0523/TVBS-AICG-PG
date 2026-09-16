@@ -54,7 +54,10 @@ class NonVerbatimUnchangedTests(unittest.TestCase):
 class VerbatimScalesWithInputTests(unittest.TestCase):
     def test_budget_grows_with_the_news_text(self):
         small = digest_token_budget("資料圖表", "verbatim", "字" * 100)
-        big = digest_token_budget("資料圖表", "verbatim", "字" * 1800)
+        # 地板已抬到 DIGEST_MAX_TOKENS（12000）。1800 字 needed=6100 仍低於
+        # 地板，大小稿會得到同一個預算。長稿必須長到 needed 超過地板
+        # （字數 * 2 + OVERHEAD > 12000 → 至少約 4750 字）。
+        big = digest_token_budget("資料圖表", "verbatim", "字" * 8000)
         self.assertGreater(big, small)
 
     def test_never_drops_below_the_general_floor(self):
