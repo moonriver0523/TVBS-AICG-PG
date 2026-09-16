@@ -162,6 +162,15 @@ class ConstantParityTests(unittest.TestCase):
         self.assertIsNotNone(js_value, "app.js 裡找不到 MAP_TYPE_LABEL")
         self.assertEqual(js_value, news_prompt.MAP_TYPE_LABEL)
 
+    def test_aiedit_reference_rules(self):
+        self.assert_same("USER_REFERENCE_AIEDIT_RULES", news_prompt.USER_REFERENCE_AIEDIT_RULES)
+
+    def test_aiedit_fusion_reference_rules(self):
+        self.assert_same(
+            "USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE",
+            news_prompt.USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE,
+        )
+
 
 class BuiltPromptShapeTests(unittest.TestCase):
     """組裝結果的關鍵骨架——區塊順序或標頭被改動時要能發現。"""

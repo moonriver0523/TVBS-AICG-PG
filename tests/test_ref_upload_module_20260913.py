@@ -188,6 +188,24 @@ class AiEditPromptTests(unittest.TestCase):
         self.assertIn("REDRAW THIS SAME PICTURE", block)
         self.assertIn("NOT a loose style reference", block)
 
+    def test_aiedit_rules_preserve_existing_text_and_control_new_text(self):
+        block = news_prompt.USER_REFERENCE_AIEDIT_RULES.lower()
+        for term in ("preserve-existing", "do-not-invent", "explicit-removal"):
+            with self.subTest(term=term):
+                self.assertIn(term, block)
+        self.assertIn("text already present in the attached reference image is requested content", block)
+
+    def test_fusion_rules_preserve_existing_text_and_block_cross_image_reuse(self):
+        block = news_prompt.USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE.lower()
+        for term in ("preserve-existing", "do-not-invent", "explicit-removal"):
+            with self.subTest(term=term):
+                self.assertIn(term, block)
+        self.assertIn("from one attached image onto an object from another attached image", block)
+
+    def test_asis_and_scene_reference_contracts_remain_separate(self):
+        self.assertIn("may remain exactly as supplied", news_prompt.USER_REFERENCE_ASIS_RULES)
+        self.assertIn("Do not copy readable text or brand marks", news_prompt.USER_REFERENCE_SCENE_RULES)
+
     def test_an_ai_edit_image_keeps_the_ai_disclaimer_label(self):
         """裁決 2：畫面是 AI 重繪的，「有使用者上傳就不標示意圖」那條豁免不適用。"""
         req = main.ImageGenerateRequest(

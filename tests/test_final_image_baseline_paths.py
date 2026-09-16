@@ -196,6 +196,45 @@ class GenerateImageRawInjectionTests(unittest.TestCase):
         self.assertIn(news_prompt.PORTRAIT_WITH_REFERENCE_RULES, captured[0])
         self.assertIn(news_prompt.USER_REFERENCE_MAP_RULES, captured[0])
 
+    def test_aiedit_and_fusion_prompts_keep_source_text_rules_with_one_baseline(self):
+        for refs, expected_rules in (
+            (
+                [main.UserReferenceImage(data_url="data:image/png;base64,A", purpose="aiedit")],
+                news_prompt.USER_REFERENCE_AIEDIT_RULES,
+            ),
+            (
+                [
+                    main.UserReferenceImage(data_url="data:image/png;base64,A", purpose="aiedit"),
+                    main.UserReferenceImage(data_url="data:image/png;base64,B", purpose="aiedit"),
+                ],
+                news_prompt.USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE.format(count=2),
+            ),
+        ):
+            with self.subTest(reference_count=len(refs)):
+                prepared = main.apply_user_references_to_image_request(
+                    main.ImageGenerateRequest(
+                        prompt="BASE",
+                        provider="gpt",
+                        reference_images=refs,
+                    )
+                )
+                captured: list[main.ImageGenerateRequest] = []
+
+                def fake_or(_model, sent):
+                    captured.append(sent)
+                    return self._raw_ok(sent)
+
+                with _openrouter_env(), patch.object(
+                    main, "generate_via_openrouter", side_effect=fake_or
+                ):
+                    main.generate_image_raw(prepared)
+
+                self.assertEqual(len(captured), 1)
+                final_prompt = captured[0].prompt
+                self.assertIn(expected_rules, final_prompt)
+                self.assertEqual(final_prompt.count(MARKER), 1)
+                self.assertIn(news_prompt.FINAL_IMAGE_BASELINE, final_prompt)
+
 
 class _TransportHarness(unittest.TestCase):
     def setUp(self):
