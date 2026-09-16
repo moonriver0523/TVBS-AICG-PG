@@ -5425,7 +5425,15 @@ def keep_subjects_with_photos(
 # 失敗（逾時、格式壞、改了字）一律退回原本的規則，封面不會因此失敗。
 # 2026-09-14 改小模型後 20 → 8 秒：mini 實測 4.6 秒，8 秒是它的近兩倍；超過就退回規則，
 # 封面不會因此失敗，只是斷句差一點。
-TITLE_BREAK_TIMEOUT_SECONDS = 8.0
+#
+# 2026-09-16 實測後 8 → 10 秒（使用者裁定）。斷句換 gemini-3.8-flash 的 156 次實測裡，
+# **6 次失敗有 4 次是撞在 8.0 這道牆上**，而中位數只有 2.2 秒、p90 5.5 秒——
+# 也就是說牆的位置卡在分布的尾巴上，多給兩秒就能把那 4 次撈回來。
+# ⚠ 順帶記一個實測發現：**這個值不是「總時長上限」**。它一路傳到 httpx 的 timeout，
+# 而 httpx 算的是「兩段資料之間的間隔」；mini 實測有兩次分別跑了 8.29／8.96 秒仍然
+# 順利回來（作廢的那批甚至有一次 33.1 秒 finish=stop）。所以放寬到 10 不代表
+# 最壞情況就是 10 秒，只代表「卡在這道牆上的機率變低」。
+TITLE_BREAK_TIMEOUT_SECONDS = 10.0
 # 小模型（gpt-5.4-mini／nano）會把送去的「1. 」清單編號原樣抄回 text 與第一個詞組，
 # 接回去就不等於原段、整段被丟掉——等於模型切了白切。送的時候不編號，回來的再剝一次。
 _LIST_NUMBER_RE = re.compile(r"^\s*\d+\s*[.、)]\s*")
@@ -5499,10 +5507,29 @@ def segment_titles_for_breaks(segments: list[str]) -> dict[str, list[str]]:
     return out
 
 
-def apply_title_break_hints(*titles: str) -> None:
-    """封面端點入口呼叫：切詞組並登記給 compose；沒有要切的段就一次模型都不打。"""
+def apply_title_break_hints(*titles: str, composite: bool = True) -> None:
+    """封面端點入口呼叫：切詞組並登記給 compose；沒有要切的段就一次模型都不打。
+
+    composite（B75，2026-09-16 使用者裁決「這個也要列入，跟 Gemini 一起修」）：
+    False ＝ AI 標題模式，**整張封面連標題都由生圖模型畫，compose 不壓字**
+    （YT 那邊是 `draw_title(s)=not ai_title`、十點是 `_cover_ai` 只補貼 Logo 與標籤）。
+    那種情況下斷句算出來的詞組邊界**一個字都不會被讀到**，打了純粹是白花錢與時間。
+
+    為什麼是新參數而不是在函式裡自己判斷：標題模式是端點層的決定（兩個端點各自
+    呼叫 `title_mode_for_creativity`），這裡看不到 req，硬要看就得把兩種 request
+    型別的知識拉進來。參數預設 True，舊呼叫端行為逐字元不變。
+
+    ⚠ 無論走哪條路都**先把 hints 清空**：ContextVar 雖然是每個請求各自一份
+    （見 compose 的 `_BREAK_HINTS` 註解），但「跳過就不設」會讓這個不變式
+    依賴外部行為，清一次的成本是零。
+    """
+    compose.set_break_hints({})
+    if not composite:
+        print("[title-break] AI 標題模式，斷句結果沒人會讀，跳過不打模型", flush=True)
+        return
     inputs = title_break_inputs(*titles)
-    compose.set_break_hints(segment_titles_for_breaks(inputs) if inputs else {})
+    if inputs:
+        compose.set_break_hints(segment_titles_for_breaks(inputs))
 
 
 def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
@@ -6450,8 +6477,13 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
             provider=req.provider,
             type_label=COVER_TYPE_LABEL_TEN,
         )
-    # 斷句交給消化模型（2026-09-14）：入口登記詞組邊界，下游所有斷行都只在邊界上切
-    apply_title_break_hints(req.title_left, req.title_right)
+    # 斷句交給消化模型（2026-09-14）：入口登記詞組邊界，下游所有斷行都只在邊界上切。
+    # B75（2026-09-16）：AI 標題模式下整張封面連標題都由生圖模型畫、compose 不壓字，
+    # 斷句結果一個字都不會被讀到——所以只有 composite 才打。resolved_mode 在上面就算好了。
+    apply_title_break_hints(
+        req.title_left, req.title_right,
+        composite=resolved_mode == editor_formats.YT_COVER_TITLE_MODE_COMPOSITE,
+    )
     if req.layout == "full":
         full_result = _editor_cover_full(req, date_text)
         notices = collected_portrait_notices()
@@ -6799,7 +6831,14 @@ def resolve_yt_cover_plan(
     """決定 (兩行標題, 畫面描述, 具名真人, 英文名)。
 
     只有真的需要才打文字模型：標題已用一個空格分好、且底圖不用生（有 asis 附圖
-    或前端帶了現成底圖）時，一次 API 都不打。
+    或前端帶了現成底圖）時，**這一支**一次 API 都不打。
+
+    ⚠ B33／B75（2026-09-16 更正）：原文寫的是「一次 API 都不打」，容易被讀成
+    「整條請求零成本」，**那是錯的**——端點入口的 `apply_title_break_hints` 排在
+    這支之前，仍然會打一次斷句。**而且那一次是必要的**：走到這裡的 composite 模式
+    正是用 Pillow 壓字的路，斷句邊界會被 `compose._split_line_near_middle` 讀走，
+    拿掉會讓斷行品質變差。所以 B33 原本提的「把斷句移到零 API 分支之後」**不採納**。
+    真正白打的是 AI 標題模式那條，已由 B75 的 `composite=` 守衛擋掉。
     """
     title = req.title.strip()
     lines = editor_formats.split_live_title(title)
@@ -7257,9 +7296,14 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     if not dual:
         # 單則整版原圖放置最多 4 張（2026-09-14），擋在下面的斷句模型之前
         reject_excess_asis(req.slot_refs(0) + req.slot_refs(1) + req.reference_images, where="單則", limit=caps.asis_max)
-    # 斷句交給消化模型（2026-09-14）：live24 單行不拆，不必打
+    # 斷句交給消化模型（2026-09-14）：live24 單行不拆，不必打。
+    # B75（2026-09-16）：AI 標題模式下 compose 不壓字（下面的 draw_title(s)=not ai_title），
+    # 斷句結果沒人讀，只有 composite 才打。
     if not live24:
-        apply_title_break_hints(req.title, req.title_second)
+        apply_title_break_hints(
+            req.title, req.title_second,
+            composite=resolved_mode == editor_formats.YT_COVER_TITLE_MODE_COMPOSITE,
+        )
     if not dual and req.uses_asis_slots():
         # 單則只有一格，附圖位裡的東西就是整版那一格的：整份清單併進共用清單，
         # 下游 1 張＝整版鋪滿那條路完全不用改。雙則不走這裡——它要保留左右格身分，
