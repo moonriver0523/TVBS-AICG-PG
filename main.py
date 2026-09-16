@@ -6505,6 +6505,16 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 if base is not None else
                 _yt_cover_full_image(req, lines, visual, subjects, english, excluded=excluded)
             )
+            # B55 YT 擴充（2026-09-16 使用者裁決）：單則、剛好 1 張原圖放置時（與十點滿版
+            # 同一個判準）鎖住照片本身，只讓標題設計層可以變。dual（雙則，兩格各自一張）
+            # 不受影響——待裁決，見 compose.restore_yt_cover_photo 的呼叫端只在這裡接。
+            # base_model == "yt-cover:asis" 是 _yt_cover_background 對「剛好 1 張」的
+            # 唯一回傳值（2 張以上是 "...asis-split{N}"），不是另外猜的判斷。
+            if base is not None and not dual and base_model == "yt-cover:asis":
+                background = compose.restore_yt_cover_photo(
+                    base, background, layout=req.layout,
+                    original_audio=original_audio, ai_translation=ai_translation, ai_note=False,
+                )
             if base_models:
                 image_model = "、".join([*base_models, image_model])
             is_ai = True
@@ -6518,6 +6528,14 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             background, bg_mime, is_ai, image_model = _yt_cover_background(
                 req, visual, subjects, english, excluded=excluded
             )
+    except compose.ComposeError as exc:
+        # B55 YT 擴充：restore_yt_cover_photo 的面積防呆丟在這個區塊裡（跟底圖取得同一段），
+        # 不在下面那個原本只包 compose_yt_*_cover 的 try/except 範圍內。這裡以前沒有任何
+        # 呼叫端會丟 ComposeError，所以原本沒特別轉——沒轉會被 FastAPI 當未知例外回泛用
+        # 500，使用者看不到清楚訊息。比照下面那段的轉法：使用者能自己修的回 400。
+        print(f"[compose] YT 直播封面失敗：{exc}", flush=True)
+        _log_failure(exc)
+        raise HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}") from exc
     except Exception as exc:
         _log_failure(exc)
         raise
