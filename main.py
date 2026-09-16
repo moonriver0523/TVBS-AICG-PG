@@ -329,6 +329,13 @@ def digest_token_budget(type_label: str, density: str, news_text: str) -> int:
 # 呼叫、單價低，多兩次重試換一次成功的成本遠低於讓使用者空手而回。
 DIGEST_ATTEMPTS = 5
 
+# B67（2026-09-16 使用者裁決）：塊數不足專用的較短上限。B57 的塊數防呆對「原文
+# 本來就只有三個點」的稿是**每一次都必定不過**，不像上游脫軌那樣重試就有機會好，
+# 所以讓它跑滿 DIGEST_ATTEMPTS 是純粹的等待——使用者原話「重試五次可能太多耗時」。
+# 這個值只管塊數；真故障（截斷／亂碼／解析失敗）仍照 DIGEST_ATTEMPTS 擋滿，
+# 那是 2026-08-01 實測出來的次數，不受這裡影響。
+DIGEST_POINT_COUNT_ATTEMPTS = 3
+
 app = FastAPI()
 
 app.add_middleware(
@@ -2503,21 +2510,30 @@ def digest_quality_problem(
         if ratio < DIGEST_MIN_UNIQUE_LINE_RATIO:
             return f"variable {len(lines)} 行中僅 {ratio:.0%} 不重複，疑似逐詞灌行失控"
 
+    return digest_point_count_problem(variable, density, format_key)
+
+
+def digest_point_count_problem(
+    variable: str, density: str | None = None, format_key: str | None = None
+) -> str:
+    """B57 的塊數防呆，單獨一支是為了讓 `generate()` 能問「這次唯一的問題是不是
+    只有塊數」——B67（2026-09-16 使用者裁決）要在最後一次嘗試放行塊數不足，
+    但截斷／型別錯／頻道洩漏那些仍然要擋到底，兩者必須分得出來。"""
     minimum, target = density_point_bounds(density, format_key)
-    if minimum is not None:
-        observed = count_density_points(variable)
-        if target is not None and minimum == target:
-            if observed != minimum:
-                return (
-                    f"variable [內文小標] 塊數不符"
-                    f"（observed={observed} required={minimum}）"
-                )
-        elif observed < minimum:
+    if minimum is None:
+        return ""
+    observed = count_density_points(variable)
+    if target is not None and minimum == target:
+        if observed != minimum:
             return (
-                f"variable [內文小標] 塊數不足"
+                f"variable [內文小標] 塊數不符"
                 f"（observed={observed} required={minimum}）"
             )
-
+    elif observed < minimum:
+        return (
+            f"variable [內文小標] 塊數不足"
+            f"（observed={observed} required={minimum}）"
+        )
     return ""
 
 
@@ -2737,6 +2753,26 @@ def generate(req: GenerateRequest):
                 density=req.density,
                 format_key=req.editor_format if req.role == "編輯" else None,
             )
+            # B67（2026-09-16 使用者裁決）：塊數不足在第 DIGEST_POINT_COUNT_ATTEMPTS
+            # 次之後不再擋。防呆分不出「模型偷懶」與「原文本來就只有三個點」——兩者
+            # 長得一模一樣，硬擋到底的結果是素材單薄的稿連撞滿次數然後整條 502，
+            # 使用者一張圖都拿不到。手上那張少一點的圖是完全可用的成品，不是壞資料。
+            # ⚠只放行塊數這一種：截斷／型別錯／頻道洩漏／亂碼仍然擋滿 DIGEST_ATTEMPTS，
+            # 所以要先確認「這次唯一的問題就是塊數」才放行（2026-08-01 實測，上游
+            # 間歇脫軌的單次成功率只有約 2/3，那些是真故障不能放水）。
+            if problem and attempt >= DIGEST_POINT_COUNT_ATTEMPTS - 1:
+                count_problem = digest_point_count_problem(
+                    data.get("variable") or "",
+                    req.density,
+                    req.editor_format if req.role == "編輯" else None,
+                )
+                if count_problem and problem == count_problem:
+                    print(
+                        f"[generate] 塊數已試滿 {DIGEST_POINT_COUNT_ATTEMPTS} 次仍不足，"
+                        f"放行（{problem}）",
+                        flush=True,
+                    )
+                    problem = ""
             # 不消化的逐字比對排在通用檢查之後：兩者都過不了時，先報通用的那個。
             # 最後一次刻意不擋——擋了就是整條 502，而這時手上的結果通常只是頭尾多了
             # 雜訊，仍比沒有圖好；改成印警告讓回查時看得到。

@@ -295,5 +295,78 @@ class B60MockConsistencyTests(unittest.TestCase):
         self.assertEqual(main.count_density_points(result.variable), 5)
 
 
+class B67ShortSourcePassthroughTests(unittest.TestCase):
+    """B67（2026-09-16 使用者裁決）：素材真的單薄、塊數怎麼試都補不滿時，
+    試滿 DIGEST_POINT_COUNT_ATTEMPTS 次就放行，不要整條 502——使用者拿到一張
+    少一點的圖，比拿不到圖好。真故障不適用，仍要擋滿 DIGEST_ATTEMPTS。"""
+
+    def _response(self, variable, finish_reason="stop"):
+        import json
+        from types import SimpleNamespace
+
+        payload = {
+            "style": "cinematic broadcast style",
+            "structure": "cards",
+            "variable": variable,
+            "chart_type": "資料圖表",
+        }
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=json.dumps(payload)),
+                    finish_reason=finish_reason,
+                )
+            ]
+        )
+
+    def test_a_genuinely_thin_story_is_released_after_the_short_cap(self):
+        from unittest.mock import patch
+
+        short = self._response(_points(3))
+        with patch.object(main.time, "sleep"), patch.object(
+            main.openai_client.chat.completions, "create",
+            side_effect=[short] * main.DIGEST_ATTEMPTS,
+        ) as create:
+            result = main.generate(
+                main.GenerateRequest(news_text="素材", type_label="資料圖表")
+            )
+        # 試滿短上限就停手，不會一路燒到 DIGEST_ATTEMPTS
+        self.assertEqual(create.call_count, main.DIGEST_POINT_COUNT_ATTEMPTS)
+        self.assertLess(main.DIGEST_POINT_COUNT_ATTEMPTS, main.DIGEST_ATTEMPTS)
+        # 放行的是模型真的生出來的那三點，不是空的或補出來的
+        self.assertEqual(main.count_density_points(result.variable), 3)
+
+    def test_a_real_failure_still_burns_every_attempt_and_raises(self):
+        from unittest.mock import patch
+        from fastapi import HTTPException
+
+        # 截斷是真故障：重試有機會好，不准套用 B67 的放行
+        truncated = self._response(_points(3), finish_reason="length")
+        with patch.object(main.time, "sleep"), patch.object(
+            main.openai_client.chat.completions, "create",
+            side_effect=[truncated] * main.DIGEST_ATTEMPTS,
+        ) as create:
+            with self.assertRaises(HTTPException):
+                main.generate(
+                    main.GenerateRequest(news_text="素材", type_label="資料圖表")
+                )
+        self.assertEqual(create.call_count, main.DIGEST_ATTEMPTS)
+
+    def test_the_passthrough_only_covers_the_point_count_problem(self):
+        # 同一次結果同時有塊數不足與簡體字污染時，報的是簡體字、不得放行
+        polluted = dict(
+            style="cinematic broadcast style",
+            structure="cards",
+            variable=_points(3) + "\n[內文小標] 这样的简体字",
+            chart_type="資料圖表",
+        )
+        problem = main.digest_quality_problem(polluted, "stop", density="standard")
+        self.assertTrue(problem)
+        count_problem = main.digest_point_count_problem(
+            polluted["variable"], "standard", None
+        )
+        self.assertNotEqual(problem, count_problem)
+
+
 if __name__ == "__main__":
     unittest.main()
