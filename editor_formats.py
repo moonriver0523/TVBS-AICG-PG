@@ -2307,6 +2307,14 @@ EDITOR_FORMATS = {
 
 EDITOR_FORMAT_KEYS = tuple(EDITOR_FORMATS)
 
+# B51（2026-09-15 全版型盤查）：會走「先生圖、後貼固定元素」這條路的封面版型——
+# 十點不一樣＋四種 YT 直播封面。這五個版型追加修改（/api/images/refine）一律不能
+# 置對位框，否則會把角標／Logo／節目標籤跟著縮放或推出版面。單一常數集中定義，
+# 白名單校驗（ImageRefineRequest.cover_kind）與呼叫端都從這裡取，不要各自複製一份。
+COVER_REFINE_KINDS = frozenset(
+    {"ten_cover", "yt_live_cover", "yt_hourly_cover", "yt_live24_cover", "yt_hot_cover"}
+)
+
 
 # 舊 key 的別名（2026-09-08 WP1 合併留下的相容層）。前端下拉不再列出這三個，但
 # LINE／WorkCord、舊的請求紀錄與既有測試仍會送過來，所以後端照舊解析得出來、行為

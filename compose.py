@@ -28,7 +28,7 @@ import random
 import re
 import unicodedata
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 import safe_area_spec
 
@@ -2995,6 +2995,297 @@ def split_canvas(images: list[bytes], size: tuple[int, int]) -> Image.Image:
     lines = lines.resize((width, height), Image.LANCZOS)
     canvas.paste(Image.new("RGB", (width, height), YT_SPLIT_LINE_FILL), (0, 0), lines)
     return canvas
+
+
+# B55 面積防呆門檻（2026-09-16 使用者裁決＋2026-09-16 擴充到 YT）：字帶／保護區以外
+# 「有差異」的像素比例超過這個值，代表模型根本沒有只加標題，而是把整張照片（或保護區
+# 以內的大半個場景）重畫了一次。**全版型共用同一個值，不准各版型自己調**——使用者要
+# 先看過一輪實拍再統一調整，數字只在這裡改一次，其他地方一律引用它。
+PHOTO_PROTECT_MAX_CHANGE_RATIO = 0.5
+
+
+def _restore_outside_protected_boxes(
+    base_img: Image.Image, ai_img: Image.Image, *,
+    protect_boxes: list[tuple[int, int, int, int]],
+    diff_threshold: int = 24,
+    max_change_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+) -> Image.Image:
+    """B55 的核心比對邏輯：protect_boxes（像素座標，聯集）以內永遠是 base；以外只在
+    模型「真的畫了東西」（逐像素與 base 有差異）的地方才用模型像素，沒被動過的仍是
+    base。可編輯區域（畫布扣掉 protect_boxes）裡有差異的像素比例超過
+    max_change_ratio 就丟 ComposeError——這是被 `restore_photo_outside_title_band`
+    （十點）與 `restore_yt_cover_photo`（YT 四版型）共用的底層函式，兩者只是給的
+    protect_boxes 來源不同（前者是一條字帶、後者是量出來的固定元素 bbox 聯集）。
+    """
+    width, height = base_img.size
+
+    # 逐通道差異取最大值（不是轉灰階平均）：某個顏色的字剛好跟底圖亮度接近時，
+    # 灰階平均會把差異洗掉，漏掉那個顏色通道其實差很多的像素。
+    diff_r, diff_g, diff_b = ImageChops.difference(base_img, ai_img).split()
+    diff_max = ImageChops.lighter(ImageChops.lighter(diff_r, diff_g), diff_b)
+    changed = diff_max.point(lambda p: 255 if p > diff_threshold else 0)
+
+    protect_mask = Image.new("L", (width, height), 0)
+    pd = ImageDraw.Draw(protect_mask)
+    for box in protect_boxes:
+        x0, y0, x1, y1 = box
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(width, x1), min(height, y1)
+        if x1 > x0 and y1 > y0:
+            pd.rectangle([x0, y0, x1, y1], fill=255)
+    editable_mask = ImageChops.invert(protect_mask)
+    editable_pixel_count = editable_mask.histogram()[255]
+    mask = ImageChops.multiply(changed, editable_mask)
+
+    if editable_pixel_count:
+        changed_in_editable = mask.histogram()[255]
+        change_ratio = changed_in_editable / editable_pixel_count
+        if change_ratio > max_change_ratio:
+            raise ComposeError(
+                "生圖模型把原圖放置的照片改動範圍過大（"
+                f"可編輯區域內 {change_ratio:.0%} 的像素被重畫，上限 {max_change_ratio:.0%}），"
+                "已擋下這次生成——原圖放置規則是照片不能被重畫，只能改標題設計，請重試或降低標題創意等級"
+            )
+
+    return Image.composite(ai_img, base_img, mask)
+
+
+def restore_photo_outside_title_band(
+    base_png: bytes, ai_png: bytes, *, band_top_ratio: float, diff_threshold: int = 24,
+    max_band_change_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+) -> bytes:
+    """B55（2026-09-16 使用者裁決）：單張「原圖放置」＋AI 標題時，照片本身一個像素都
+    不准動，只有標題設計可以變。生圖模型永遠是整張重畫，prompt 只是請求、不是保證
+    （AI_TITLE_BASE_IMAGE_NOTE 已經寫到不能再死照樣被改），保證只能來自程式回貼。
+
+    做法是「限定字帶＋差異遮罩＋面積防呆」三件事合起來，缺一都不夠：
+    - 字帶（band_top_ratio 以上）是**硬邊界**——不管模型畫了什麼，一律強制還原成
+      base，logo／人臉／示意圖那一帶不可能被模型的任何輸出污染，不靠比對結果。
+      邊界用既有的 COVER_HEADER_RATIO／COVER_TITLE_TOP_CLEARANCE_RATIO 算，
+      不手打座標數字。
+    - 字帶以內只在模型「真的畫了東西」（與 base 逐像素有差異）的地方才採用模型
+      像素，帶內沒被動過的像素仍是 base——不能整條帶都給模型的畫布替換掉，
+      否則等於放行模型把底下的照片內容也重畫一次（字帶本來就佔照片下半，
+      直接整帶採用模型輸出跟不設限沒兩樣）。
+    - 面積防呆：見 PHOTO_PROTECT_MAX_CHANGE_RATIO 與 `_restore_outside_protected_boxes`。
+
+    回傳一律是 base 尺寸的 PNG；ai_png 尺寸不同時等比縮放對齊（生圖模型偶爾會回
+    比要求略大/略小的畫布，此時仍要能比對）。
+    """
+    base_img = Image.open(io.BytesIO(base_png)).convert("RGB")
+    ai_img = Image.open(io.BytesIO(ai_png)).convert("RGB")
+    if ai_img.size != base_img.size:
+        ai_img = ai_img.resize(base_img.size, Image.LANCZOS)
+    width, height = base_img.size
+    band_top = round(height * band_top_ratio)
+    protect_boxes = [(0, 0, width, band_top)] if band_top < height else []
+
+    result = _restore_outside_protected_boxes(
+        base_img, ai_img, protect_boxes=protect_boxes,
+        diff_threshold=diff_threshold, max_change_ratio=max_band_change_ratio,
+    )
+    buffer = io.BytesIO()
+    result.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def cover_title_band_top_ratio() -> float:
+    """十點封面標題可落筆的最上緣（佔畫面高的比例），與 `_cover_title_vertical_cap`
+    用同一組常數推導，供 B55 的字帶保護取用——不要另外手打一份數字。"""
+    return COVER_HEADER_RATIO + COVER_TITLE_TOP_CLEARANCE_RATIO
+
+
+# ============================================================
+# B55 擴充到 YT 四版型（2026-09-16 使用者裁決）
+#
+# 十點的字帶是一條簡單的水平線（COVER_HEADER_RATIO 以上）；YT 四版型的固定元素
+# 幾何差異很大（news／hot 是頂端一叢＋右側 AI 標；hourly 多一塊卡在畫面中段的日期
+# 紅牌；live24 是左上角標＋右上兩層 Logo，還是斜體），硬湊一條共用的水平線不是
+# 「切到 Logo」就是「保護過頭把標題該站的位置也鎖住」。
+#
+# 做法：**直接把真正的固定元素繪製函式在一張透明畫布上跑一次，量出實際碰到的
+# 像素外框**（見 _render_fixed_elements_bbox）——不是拿比例常數湊出來的猜測，是
+# 跟成品逐像素一致的量測。四個版型各自組出「這個版型會畫哪些固定元素」，共用
+# 同一支測量器。
+# ============================================================
+
+def _render_fixed_elements_bbox(render) -> tuple[int, int, int, int]:
+    """在一張全透明畫布上跑 render()，回傳非透明像素的外框（左上到右下，像素座標）。"""
+    canvas = Image.new("RGBA", YT_CANVAS, (0, 0, 0, 0))
+    render(canvas)
+    bbox = canvas.getbbox()
+    if bbox is None:
+        raise ComposeError("B55 固定元素量測失敗：測量畫布上沒有任何像素，量測函式本身可能有誤")
+    return bbox
+
+
+def _yt_news_or_hot_fixed_boxes(
+    *, original_audio: bool, ai_translation: bool, ai_note: bool, hot_header: bool,
+) -> list[tuple[int, int, int, int]]:
+    """news（`compose_yt_cover`）與 hot（`compose_yt_hot_cover`）共用的頂端固定元素：
+    頂線／Logo 斜標籤／LIVE 章或今日熱搜標籤／日期條／原音呈現／AI即時翻譯，
+    全部量在同一個 bbox 裡（都是頂端一叢，中間沒有另外卡一塊像 hourly 那樣）。
+    AI示意圖是右側獨立一塊，另外量、另外回傳，不跟頂端叢合併——避免中間那一大段
+    「其實沒有畫任何東西」的空白也被無謂地鎖住。
+    """
+    width, height = YT_CANVAS
+    margin = round(width * YT_MARGIN_RATIO)
+
+    def render_top_cluster(canvas: Image.Image) -> None:
+        if hot_header:
+            _draw_hot_header(canvas)
+        else:
+            _draw_top_line(canvas)
+            _draw_logo_tab(canvas)
+        draw = ImageDraw.Draw(canvas)
+        top = round(height * (YT_TOP_WITH_LABEL_RATIO if original_audio else YT_TOP_RATIO))
+        if original_audio:
+            label_font = _font(round(height * YT_ORIGINAL_AUDIO_SIZE_RATIO))
+            _draw_text(
+                draw, (margin + round(width * 0.008), round(height * YT_ORIGINAL_AUDIO_BASELINE_RATIO)),
+                YT_ORIGINAL_AUDIO_LABEL, label_font, fill=YT_ORIGINAL_AUDIO_FILL,
+                stroke=YT_ORIGINAL_AUDIO_STROKE, stroke_width=max(4, round(height * 0.009)), anchor="ls",
+            )
+        if not hot_header:
+            # hot 版型沒有 LIVE 章／日期條（今日熱搜沒有播出資訊，見模組開頭註解）
+            badge_w = round(width * YT_BADGE_WIDTH_RATIO)
+            badge_h = _paste_live_badge(canvas, (margin, top), badge_w)
+            tab_w = round(width * YT_DATE_TAB_WIDTH_RATIO)
+            tab_h = round(height * YT_DATE_TAB_HEIGHT_RATIO)
+            tab_x0 = margin + (badge_w - tab_w) // 2
+            tab_y0 = top + badge_h - 4
+            tab_box = (tab_x0, tab_y0, tab_x0 + tab_w, tab_y0 + tab_h)
+            ImageDraw.Draw(canvas).rectangle(tab_box, fill=(255, 255, 255, 255))
+            if ai_translation:
+                small = _font(round(height * YT_AI_TRANSLATION_SIZE_RATIO))
+                _draw_text(
+                    draw, (tab_box[0] + 6, tab_box[3] + round(height * YT_AI_TRANSLATION_GAP_RATIO)),
+                    YT_AI_TRANSLATION_LABEL, small, stroke=YT_TITLE_STROKE, stroke_width=4, anchor="la",
+                )
+
+    boxes = [_render_fixed_elements_bbox(render_top_cluster)]
+    if ai_note:
+        def render_ai_note(canvas: Image.Image) -> None:
+            _draw_ai_note(canvas, round(height * YT_AI_NOTE_TOP_RATIO))
+        boxes.append(_render_fixed_elements_bbox(render_ai_note))
+    return boxes
+
+
+def _yt_hourly_fixed_boxes(
+    *, ai_note: bool, has_time: bool,
+) -> list[tuple[int, int, int, int]]:
+    """整點直播：左上小 Logo＋右上 LIVE 章（可能帶整點時間帶）算一叢；日期紅牌
+    （YT_HOURLY_DATE_TAB_BOX）卡在畫面中段、跟頂端那叢中間隔了一大段照片，
+    分開量、分開保護，不要為了保這塊牌把中段整條也鎖住。
+    """
+    width, height = YT_CANVAS
+    margin = round(width * YT_MARGIN_RATIO)
+
+    def render_top_cluster(canvas: Image.Image) -> None:
+        _paste_logo(canvas, (margin, round(height * YT_HOURLY_LOGO_TOP_RATIO)), round(width * YT_HOURLY_LOGO_WIDTH_RATIO))
+        badge_w = round(width * YT_HOURLY_BADGE_WIDTH_RATIO)
+        badge_x0 = width - margin - badge_w
+        badge_top = round(height * YT_HOURLY_BADGE_TOP_RATIO)
+        badge_h = _paste_live_badge(canvas, (badge_x0, badge_top), badge_w)
+        block_bottom = badge_top + badge_h
+        if has_time:
+            band_h = round(height * YT_HOURLY_TIME_BAND_HEIGHT_RATIO)
+            band_y0 = block_bottom - 6
+            inset = round(badge_w * 0.04)
+            band = (badge_x0 + inset, band_y0, badge_x0 + badge_w - inset, band_y0 + band_h)
+            ImageDraw.Draw(canvas).rounded_rectangle(band, radius=12, fill=YT_HOURLY_TIME_BAND_FILL + (255,))
+
+    boxes = [_render_fixed_elements_bbox(render_top_cluster)]
+
+    date_box = YT_HOURLY_DATE_TAB_BOX
+    boxes.append((
+        round(width * date_box[0]), round(height * date_box[1]),
+        round(width * date_box[2]), round(height * date_box[3]),
+    ))
+
+    if ai_note:
+        def render_ai_note(canvas: Image.Image) -> None:
+            _draw_ai_note(canvas, round(height * YT_HOURLY_AI_NOTE_TOP_RATIO))
+        boxes.append(_render_fixed_elements_bbox(render_ai_note))
+    return boxes
+
+
+def _yt_live24_fixed_boxes(*, ai_note: bool) -> list[tuple[int, int, int, int]]:
+    """24H LIVE：左上角標（含日期）＋右上兩層版 Logo，都貼在頂端；AI示意圖（只有
+    is_ai 底圖才有，B55 這條路是真照片所以理論上不會開，量出來備用不吃虧）貼在
+    角標正下方——跟 news/hourly 共用的右側版型不同，是 live24 自己的位置。
+    """
+    width, height = YT_CANVAS
+
+    def render(canvas: Image.Image) -> None:
+        badge_w = round(width * LIVE24_BADGE_WIDTH_RATIO)
+        badge_h = _paste_live24_badge(
+            canvas, (round(width * LIVE24_BADGE_LEFT_RATIO), round(height * LIVE24_BADGE_TOP_RATIO)),
+            badge_w, "00.00.00",  # 只是量測用的佔位日期字串，不影響外框大小（板子尺寸固定）
+        )
+        logo_w = round(width * LIVE24_LOGO_WIDTH_RATIO)
+        logo_x = round(width * LIVE24_LOGO_RIGHT_RATIO) - logo_w
+        if TVBS_LOGO_NEWS_WHITE.exists():
+            with Image.open(TVBS_LOGO_NEWS_WHITE) as logo_file:
+                logo = logo_file.convert("RGBA")
+                logo = logo.resize((logo_w, round(logo.height * logo_w / logo.width)), Image.LANCZOS)
+                canvas.alpha_composite(logo, (logo_x, round(height * LIVE24_LOGO_TOP_RATIO)))
+        if ai_note:
+            _draw_live24_ai_note(canvas, round(height * LIVE24_BADGE_TOP_RATIO) + badge_h + 16)
+
+    return [_render_fixed_elements_bbox(render)]
+
+
+def yt_cover_protect_boxes(
+    layout: str, *, original_audio: bool = False, ai_translation: bool = False, ai_note: bool = False,
+) -> list[tuple[int, int, int, int]]:
+    """B55 YT 擴充：該 YT 封面版型固定元素實際占用的像素框（聯集），供
+    `restore_yt_cover_photo` 當硬保護區。layout 用 editor_formats.YT_COVER_LAYOUT_*
+    的字面值（"news"／"hourly"／"hot"／"live24"）——compose.py 不 import
+    editor_formats（避免循環 import），所以這裡收字串、不收那個模組的常數物件。
+    """
+    if layout == "hourly":
+        return _yt_hourly_fixed_boxes(ai_note=ai_note, has_time=True)
+    if layout == "hot":
+        return _yt_news_or_hot_fixed_boxes(
+            original_audio=False, ai_translation=False, ai_note=ai_note, hot_header=True,
+        )
+    if layout == "live24":
+        return _yt_live24_fixed_boxes(ai_note=ai_note)
+    # news（YT_COVER_LAYOUT_NEWS）與任何未來新 layout 的保守預設：照 news 的頂端叢量
+    return _yt_news_or_hot_fixed_boxes(
+        original_audio=original_audio, ai_translation=ai_translation,
+        ai_note=ai_note, hot_header=False,
+    )
+
+
+def restore_yt_cover_photo(
+    base_png: bytes, ai_png: bytes, *, layout: str,
+    original_audio: bool = False, ai_translation: bool = False, ai_note: bool = False,
+    diff_threshold: int = 24, max_change_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+) -> bytes:
+    """B55 YT 擴充（2026-09-16 使用者裁決）：YT 封面單張「原圖放置」＋AI 標題時，
+    照片本身一個像素都不准動，只有標題設計可以變——與十點滿版 `restore_photo_outside_
+    title_band` 同一條規則，只是保護區換成 `yt_cover_protect_boxes()` 量出來的
+    固定元素 bbox 聯集，而不是十點那條簡單的水平字帶。
+
+    回傳一律是 base 尺寸的 PNG；ai_png 尺寸不同時等比縮放對齊。
+    """
+    base_img = Image.open(io.BytesIO(base_png)).convert("RGB")
+    ai_img = Image.open(io.BytesIO(ai_png)).convert("RGB")
+    if ai_img.size != base_img.size:
+        ai_img = ai_img.resize(base_img.size, Image.LANCZOS)
+
+    protect_boxes = yt_cover_protect_boxes(
+        layout, original_audio=original_audio, ai_translation=ai_translation, ai_note=ai_note,
+    )
+    result = _restore_outside_protected_boxes(
+        base_img, ai_img, protect_boxes=protect_boxes,
+        diff_threshold=diff_threshold, max_change_ratio=max_change_ratio,
+    )
+    buffer = io.BytesIO()
+    result.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def crop_background_16x9(image_bytes: bytes) -> bytes:

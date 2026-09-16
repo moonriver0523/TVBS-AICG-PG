@@ -3526,8 +3526,11 @@ def frame_image_response(
 
 
 def _compose_error_status(exc: Exception) -> int:
-    """合成失敗的 HTTP 狀態：使用者能自己修的（標題太長）回 400，其餘 500。"""
-    return 400 if "標題太長" in str(exc) else 500
+    """合成失敗的 HTTP 狀態：使用者能自己修的（標題太長、B55 面積防呆）回 400，其餘 500。"""
+    message = str(exc)
+    if "標題太長" in message or "改動範圍過大" in message:
+        return 400
+    return 500
 
 
 def broadcast_hole_for(req: "NewsImageGenerateRequest") -> str:
@@ -4390,6 +4393,15 @@ class ImageRefineRequest(BaseModel):
     # YT 直播封面：附圖是無文字底圖，改完仍須無文字（文字由程式疊）。
     # 見 news_prompt.TEXT_FREE_REFINE_RULES。
     text_free: bool = False
+    # B51（2026-09-16）：結構化的封面種類，白名單值見 editor_formats.COVER_REFINE_KINDS。
+    # 非空時 refine_image() 直接跳過 resolve_frame_plan()，不置對位框——封面的固定元素
+    # （Logo／節目標籤／日期）由前端 recompose 貼，置框會把整張畫面縮放/推出版面，
+    # 角標跟著跑位。刻意不依 safe_frame_profile 這個角色字串猜（編輯身分一律會被
+    # resolve_frame_plan 置框，見該函式 docstring），白名單值不對就讓 pydantic 擋掉，
+    # 不接受任意 client 拿它繞過一般編輯圖片的安全框。
+    cover_kind: Literal[
+        "", "ten_cover", "yt_live_cover", "yt_hourly_cover", "yt_live24_cover", "yt_hot_cover"
+    ] = ""
 
 
 @app.post(
@@ -4427,11 +4439,18 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             ),
         )
         prompt = image_req.prompt
-        # 追加修改也要走同一個解析點，否則編輯 OFF 改完圖會整個跳過後製，
-        # 出來一張沒置框的原始生成圖（尺寸與版面都不對，卻不會報錯）。
-        _, needs_frame, frame_profile = resolve_frame_plan(
-            req.safe_frame_profile, req.safe_frame
-        )
+        if req.cover_kind:
+            # B51：封面追加修改一律不置框——resolve_frame_plan 對編輯身分永遠回
+            # needs_frame=True（兩檔都是滿版生成＋後製，見該函式 docstring），照舊問
+            # 下去只要使用者是編輯就一定被置框，safe_frame=False 完全無效。封面的
+            # 固定元素靠前端 recompose 貼，不能讓對位框把角標／Logo 縮放推出版面。
+            needs_frame, frame_profile = False, safe_area_spec.REPORTER_PROFILE
+        else:
+            # 追加修改也要走同一個解析點，否則編輯 OFF 改完圖會整個跳過後製，
+            # 出來一張沒置框的原始生成圖（尺寸與版面都不對，卻不會報錯）。
+            _, needs_frame, frame_profile = resolve_frame_plan(
+                req.safe_frame_profile, req.safe_frame
+            )
         result = finalize_image_result(
             generate_image_raw(image_req),
             aspect_ratio=req.aspect_ratio,
@@ -4756,7 +4775,12 @@ class TenCoverRequest(BaseModel):
             return self.title_creativity
         return editor_formats.COVER_TITLE_STYLE_LEVELS.get(self.title_style or "", 0)
     # 2026-09-06：十點也收附圖。用途 asis（原圖放置）1 張＝整版鋪滿（使用者裁決，不切格）、
-    # 2 張＝左格、右格；有任何 asis 就強制 composite（真照不進生圖模型），也不再生任何底圖。
+    # 2 張＝左格、右格。
+    # 2026-09-13 使用者裁決起這段註解已過時：composite 模式才是「真照不進生圖模型」；
+    # AI 標題模式（COVER_MODE_AI）下 ai_over_base 這條路一樣把 asis 真照當唯一附圖送進
+    # 模型（見 _editor_cover_full／_cover_ai），只是原圖放置只有 1 張時，B55（2026-09-16）
+    # 起會在模型輸出後用 compose.restore_photo_outside_title_band 把字帶以外的像素強制
+    # 還原成原檔，不讓模型「重畫整張」的通病波及照片本身。
     # 其他用途（實景／肖像／地圖）當兩格 AI 底圖的生圖參考。
     reference_images: list[UserReferenceImage] = Field(
         default_factory=list, max_length=MAX_INPUT_REFERENCES
@@ -5223,12 +5247,22 @@ def _base_data_url(raw: bytes) -> str:
 
 def _cover_ai(
     req: TenCoverRequest, date_text: str, visuals: tuple[str, str], base: bytes | None = None,
+    protect_base: bool = False,
 ) -> tuple[bytes, str, bytes, str]:
     """純 prompt 版：整張封面由生圖模型畫，之後只補貼正版 Logo＋節目標籤＋AI示意圖。
 
     base（2026-09-13 使用者裁決）＝程式已拼好的無字底圖（原圖放置裁滿版／N 張切格／
     雙切兩格各自 AI改圖 後拼起來）。有 base 時它是**唯一**附圖，模型只在上面畫字；
     其他附圖與肖像參考照都不送——畫面已經定了，再送只會讓模型重新構圖。
+
+    protect_base（B55，2026-09-16 使用者裁決）＝滿版只有 1 張原圖放置時為 True：
+    「只畫標題，照片一個像素都不准動」。模型永遠是整張重畫，prompt（見
+    AI_TITLE_BASE_IMAGE_NOTE）只是請求、不是保證，保證只能靠生成後用
+    compose.restore_photo_outside_title_band 把字帶以外的像素強制還原成 base。
+    只在**這次生圖**生效——追加修改（req.background_image_base64 那條路）目前收不到
+    原始 asis，還原不了，這是已知的範圍限制，不是漏改（見呼叫端註解）。
+    ≥2 張（切格）的 base 不受影響：多圖語意本來就允許 AI 融合，使用者尚未裁決要不要
+    也鎖到逐像素不動。
 
     回 (成品 PNG, 生圖模型名, 後貼前的模型原圖, 那張圖的 MIME)。第三、四項給追加修改用：
     把貼過 Logo 的成品餵回生圖模型改圖，模型會把 Logo 一起重畫（那是播出事故），
@@ -5403,6 +5437,10 @@ def _cover_ai(
     result = generate_image_raw(image_req)
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
     raw = base64.b64decode(result.image_data_base64)
+    if protect_base and base is not None:
+        raw = compose.restore_photo_outside_title_band(
+            base, raw, band_top_ratio=compose.cover_title_band_top_ratio(),
+        )
     return _post_paste(raw), result.model, raw, result.mime_type
 
 
@@ -5862,11 +5900,15 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
     }
     try:
         if req.mode == editor_formats.COVER_MODE_AI:
-            base = _cover_full_base(ten_cover_full_asis_images(req)) if ai_over_base else None
+            asis_images = ten_cover_full_asis_images(req) if ai_over_base else []
+            base = _cover_full_base(asis_images) if ai_over_base else None
+            # B55：只有 1 張原圖放置時才鎖「照片不准動」——≥2 張是切格後交給 AI 融合，
+            # 使用者尚未裁決要不要也鎖到逐像素不動（見 _cover_ai 的 protect_base 說明）。
+            protect_base = ai_over_base and len(asis_images) == 1
             visual_arg = visual if isinstance(visual, CoverVisuals) else CoverVisuals(visual, visual)
             # 沒 base 就照舊呼叫（既有測試的假 _cover_ai 不收 base）
             cover, image_model, source_raw, source_mime = (
-                _cover_ai(req, date_text, visual_arg, base=base) if base is not None
+                _cover_ai(req, date_text, visual_arg, base=base, protect_base=protect_base) if base is not None
                 else _cover_ai(req, date_text, visual_arg)
             )
         else:
@@ -6909,6 +6951,16 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 if base is not None else
                 _yt_cover_full_image(req, lines, visual, subjects, english, excluded=excluded)
             )
+            # B55 YT 擴充（2026-09-16 使用者裁決）：單則、剛好 1 張原圖放置時（與十點滿版
+            # 同一個判準）鎖住照片本身，只讓標題設計層可以變。dual（雙則，兩格各自一張）
+            # 不受影響——待裁決，見 compose.restore_yt_cover_photo 的呼叫端只在這裡接。
+            # base_model == "yt-cover:asis" 是 _yt_cover_background 對「剛好 1 張」的
+            # 唯一回傳值（2 張以上是 "...asis-split{N}"），不是另外猜的判斷。
+            if base is not None and not dual and base_model == "yt-cover:asis":
+                background = compose.restore_yt_cover_photo(
+                    base, background, layout=req.layout,
+                    original_audio=original_audio, ai_translation=ai_translation, ai_note=False,
+                )
             if base_models:
                 image_model = "、".join([*base_models, image_model])
             is_ai = True
@@ -6922,6 +6974,14 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             background, bg_mime, is_ai, image_model = _yt_cover_background(
                 req, visual, subjects, english, excluded=excluded
             )
+    except compose.ComposeError as exc:
+        # B55 YT 擴充：restore_yt_cover_photo 的面積防呆丟在這個區塊裡（跟底圖取得同一段），
+        # 不在下面那個原本只包 compose_yt_*_cover 的 try/except 範圍內。這裡以前沒有任何
+        # 呼叫端會丟 ComposeError，所以原本沒特別轉——沒轉會被 FastAPI 當未知例外回泛用
+        # 500，使用者看不到清楚訊息。比照下面那段的轉法：使用者能自己修的回 400。
+        print(f"[compose] YT 直播封面失敗：{exc}", flush=True)
+        _log_failure(exc)
+        raise HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}") from exc
     except Exception as exc:
         _log_failure(exc)
         raise

@@ -22,10 +22,12 @@ from unittest.mock import patch
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
+import editor_formats  # noqa: E402
 import main  # noqa: E402
 import news_prompt  # noqa: E402
 import photo_lookup  # noqa: E402
 import safe_area_spec  # noqa: E402
+import pydantic  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 from PIL import Image  # noqa: E402
 
@@ -203,6 +205,76 @@ class RefineEndpointTests(unittest.TestCase):
             io.BytesIO(base64.b64decode(result.image_data_base64))
         ) as image:
             self.assertEqual(image.size, EDITOR_FRAMED_SIZE)
+
+
+class CoverRefineFrameBypassTests(unittest.TestCase):
+    """B51（2026-09-16）：五種封面追加修改一律不置對位框。
+
+    根因：resolve_frame_plan() 對編輯身分（safe_frame_profile="編輯"）永遠回
+    needs_frame=True，safe_frame=False 完全無效——這正是使用者回報「修改過後
+    出現安全框、Logo 跟著消失」的成因。cover_kind 是結構化 bypass，不依角色
+    字串猜；白名單值不對要讓 pydantic 擋掉，不能任意 client 拿它繞過一般編輯
+    圖片的安全框（那條路徑仍要維持 test_editor_off_is_still_framed_on_refine
+    的既有行為）。
+    """
+
+    def refine_request(self, **overrides):
+        payload = dict(
+            source_image_base64=EDITOR_RAW,
+            instruction="把標題改成紅色",
+            provider="gpt",
+            aspect_ratio="16:9",
+            safe_frame=False,
+            safe_frame_profile="",
+        )
+        payload.update(overrides)
+        return main.ImageRefineRequest(**payload)
+
+    def test_each_whitelisted_cover_kind_skips_framing(self):
+        for cover_kind in sorted(editor_formats.COVER_REFINE_KINDS):
+            with self.subTest(cover_kind=cover_kind):
+                with patch.object(
+                    main, "generate_image_raw", return_value=fake_raw_response(EDITOR_RAW)
+                ):
+                    result = main.refine_image(self.refine_request(cover_kind=cover_kind))
+                self.assertEqual(result.image_data_base64, EDITOR_RAW)
+                self.assertEqual(result.source_image_base64, "")
+
+    def test_cover_kind_wins_even_if_safe_frame_profile_still_says_editor(self):
+        """前端理應把 safe_frame_profile 一起清空，但後端 bypass 不能只靠這個——
+        萬一某個舊呼叫端漏改、依然送著「編輯」，cover_kind 這個結構化欄位仍要贏。
+        """
+        with patch.object(
+            main, "generate_image_raw", return_value=fake_raw_response(EDITOR_RAW)
+        ):
+            result = main.refine_image(
+                self.refine_request(
+                    cover_kind="yt_live24_cover",
+                    safe_frame=True,
+                    safe_frame_profile="編輯",
+                )
+            )
+        self.assertEqual(result.image_data_base64, EDITOR_RAW)
+        self.assertEqual(result.source_image_base64, "")
+
+    def test_empty_cover_kind_falls_back_to_existing_editor_behavior(self):
+        """cover_kind 沒填＝一般編輯圖片改圖，既有「編輯 OFF 仍置框」規則不變。"""
+        with patch.object(
+            main, "generate_image_raw", return_value=fake_raw_response(EDITOR_RAW)
+        ):
+            result = main.refine_image(
+                self.refine_request(
+                    cover_kind="", safe_frame=False, safe_frame_profile="編輯"
+                )
+            )
+        with Image.open(
+            io.BytesIO(base64.b64decode(result.image_data_base64))
+        ) as image:
+            self.assertEqual(image.size, EDITOR_FRAMED_SIZE)
+
+    def test_unknown_cover_kind_is_rejected(self):
+        with self.assertRaises(pydantic.ValidationError):
+            self.refine_request(cover_kind="some_other_format")
 
 
 class GenerateImageSourceFieldTests(unittest.TestCase):
