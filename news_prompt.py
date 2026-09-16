@@ -557,6 +557,34 @@ NO TEXT AT ALL (OVERRIDES EVERY EARLIER RULE ABOUT RENDERING WORDS)
 - The empty area where a headline would have gone is the correct result. Do not fill it with words."""
 
 
+# 全路徑最終生圖鐵律（B61／B62，2026-09-16）。ownership 只在後端：
+# generate_image_raw() 在 provider dispatch 正前方冪等注入一次。
+# 不要同步到 app.js／hybrid.js——新版型漏帶這段必須是紅燈，不是再複製一份。
+#
+# 冪等判斷只用下面這個 marker，不准拿條文裡某一句去 substring 比對。
+FINAL_IMAGE_BASELINE_MARKER = "=== FINAL IMAGE POLICY BASELINE ==="
+
+FINAL_IMAGE_BASELINE = f"""==================================================
+{FINAL_IMAGE_BASELINE_MARKER}
+==================================================
+This block is mandatory on every image this system generates. Portrait-mode blocks elsewhere in this prompt (NAMED REAL PERSON and related) still govern how an explicitly requested person is depicted; this block only forbids adding people, faces, marks or words that the rest of the prompt did not ask for. When an explicit portrait-mode fallback is present, follow that fallback.
+
+- NAMED PEOPLE: do not introduce a named real person who is not already named in this prompt.
+- FACES: do not invent an identifiable face for anyone who was not explicitly requested and who has no qualified reference image attached. If this prompt names a person and attaches a qualified reference, depict that person as the portrait-mode block directs.
+- TEXT / LOGOS / BRANDS: do not draw text, logos, wordmarks, trademarks or brand marks that this prompt did not request. If this prompt explicitly asks you to render specific words, titles, logos or brands (including an AI-title / TEXT TO RENDER block), draw those as requested and do not add extra readable lettering, logos or brands beyond that request.
+- PORTRAIT FALLBACK: back views, silhouettes, no-person scenes, illustrated likenesses and similar fallbacks are governed only by the explicit portrait-mode rules in this prompt. If none are present, do not add a named real person of your own."""
+
+
+def ensure_final_image_baseline(prompt: str) -> str:
+    """若 prompt 尚無鐵律 marker 就附加一次；已有則原樣回傳。"""
+    if FINAL_IMAGE_BASELINE_MARKER in (prompt or ""):
+        return prompt
+    stripped = (prompt or "").rstrip()
+    if not stripped:
+        return FINAL_IMAGE_BASELINE
+    return f"{stripped}\n\n{FINAL_IMAGE_BASELINE}"
+
+
 def build_prompt(
     *,
     role: str,

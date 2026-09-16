@@ -354,5 +354,21 @@ class AspectRatioParityTests(unittest.TestCase):
         self.assertIn("DEFAULT_ASPECT_RATIO", body)
 
 
+class FinalImageBaselineOwnershipTests(unittest.TestCase):
+    """B61／B62：這條鐵律的 ownership 在後端，前端不得鏡像一份。"""
+
+    def test_app_js_has_no_baseline_constant(self):
+        source = js_source()
+        self.assertNotIn("FINAL_IMAGE_BASELINE", source)
+        self.assertNotIn("=== FINAL IMAGE POLICY BASELINE ===", source)
+
+    def test_hybrid_js_has_no_baseline_and_posts_to_images_generate(self):
+        hybrid = pathlib.Path(__file__).resolve().parent.parent / "hybrid.js"
+        source = hybrid.read_text(encoding="utf-8")
+        self.assertNotIn("FINAL_IMAGE_BASELINE", source)
+        self.assertNotIn("=== FINAL IMAGE POLICY BASELINE ===", source)
+        self.assertIn("/api/images/generate", source)
+
+
 if __name__ == "__main__":
     unittest.main()

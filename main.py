@@ -75,6 +75,7 @@ from news_prompt import (
     build_prompt,
     build_refine_prompt,
     compose_variable,
+    ensure_final_image_baseline,
 )
 
 load_dotenv()
@@ -3472,6 +3473,11 @@ def assert_aspect_ratio_supported(model: str, aspect_ratio: str) -> None:
 
 
 def generate_image_raw(req: ImageGenerateRequest) -> ImageGenerateResponse:
+    # B61／B62：唯一強制層。copy 再注入，不 mutate 呼叫端物件（retry／稽核
+    # 會再讀原 prompt）。冪等靠 FINAL_IMAGE_BASELINE_MARKER，不是模糊 substring。
+    req = req.model_copy(
+        update={"prompt": ensure_final_image_baseline(req.prompt)}
+    )
     backend = os.getenv("IMAGE_BACKEND", "openrouter")
     if backend == "openrouter" and os.getenv("OPENROUTER_API_KEY"):
         if req.provider == "gpt":
