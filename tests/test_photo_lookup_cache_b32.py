@@ -149,18 +149,24 @@ class PhotoLookupCacheTests(unittest.TestCase):
                 source_page="p",
                 lang="zh",
             )
-            photo_lookup._cache_put(("old", (), ("zh",)), small)
-            photo_lookup._cache_put(("new", (), ("zh",)), huge)
+            small_outcome = photo_lookup.PortraitLookupOutcome(
+                photo=small, entry_found=True, matched_name="old", language="zh",
+            )
+            huge_outcome = photo_lookup.PortraitLookupOutcome(
+                photo=huge, entry_found=True, matched_name="new", language="zh",
+            )
+            photo_lookup._cache_put(("old", (), ("zh",)), small_outcome)
+            photo_lookup._cache_put(("new", (), ("zh",)), huge_outcome)
             self.assertIs(
                 photo_lookup._cache_get(("old", (), ("zh",))),
                 photo_lookup._CACHE_MISS,
             )
             kept = photo_lookup._cache_get(("new", (), ("zh",)))
-            self.assertEqual(kept.image_base64, huge.image_base64)
+            self.assertEqual(kept.photo.image_base64, huge.image_base64)
             total = sum(
-                len(photo.image_base64)
-                for _expires, photo in photo_lookup._CACHE.values()
-                if photo is not None
+                len(outcome.photo.image_base64)
+                for _expires, outcome in photo_lookup._CACHE.values()
+                if outcome is not None and outcome.photo is not None
             )
             self.assertLessEqual(total, 20)
             self.assertEqual(total, 15)

@@ -49,6 +49,15 @@ class DerivePromptTests(unittest.TestCase):
         for key in ("portrait_subjects_left", "portrait_subjects_left_en", "portrait_subjects_right", "portrait_subjects_right_en"):
             self.assertIn(key, editor_formats.COVER_VISUAL_SCHEMA["required"])
 
+    def test_names_are_extracted_verbatim_never_inferred(self):
+        text = editor_formats.COVER_VISUAL_DERIVE_SYSTEM
+        self.assertIn("copied VERBATIM", text)
+        self.assertIn("Never infer a name from a title", text)
+        self.assertIn("empty string when it is not", text)
+        self.assertIn("common knowledge", text)
+        self.assertNotIn("the name Wikipedia uses", text)
+        self.assertNotIn("Friedrich Merz", text)
+
 
 class PortraitWiringTests(unittest.TestCase):
     def _run(self, body, derive=MERZ, found=True):
@@ -71,8 +80,23 @@ class PortraitWiringTests(unittest.TestCase):
                 return {}, list(subjects)
             return {name: PHOTO for name in subjects}, []
 
+        def fake_outcomes(subjects, english=None):
+            # F40：這批測試沒有條目/沒照片的情境，found=False 一律當「查無此人」，
+            # 維持這批測試改動前的行為（退回 no_reference，不是 entry_only）。
+            return {
+                name: photo_lookup.PortraitLookupOutcome(
+                    photo=PHOTO, entry_found=True, matched_name=name, language="zh"
+                )
+                if found
+                else photo_lookup.PortraitLookupOutcome(
+                    photo=None, entry_found=False, matched_name=None, language=None
+                )
+                for name in subjects
+            }
+
         with patch.object(main, "digest_completion", return_value=_derive(derive)), \
              patch.object(main, "lookup_portrait_photos", side_effect=fake_lookup), \
+             patch.object(main, "lookup_portrait_outcomes", side_effect=fake_outcomes), \
              patch.object(main, "supports_reference_image", return_value=True), \
              patch.object(main, "generate_image_raw", side_effect=fake_raw):
             res = client.post("/api/editor/cover", json=body, headers=_headers())

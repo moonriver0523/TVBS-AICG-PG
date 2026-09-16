@@ -132,19 +132,26 @@ def assemble(sample: dict, density: str, role: str) -> dict:
     schema = main.digest_schema(TYPE_LABEL)
     user_msg = f'News Source Material:\n"{news_text}"'
     schema_json = json.dumps(schema, ensure_ascii=False)
-    reasoning = main.digest_reasoning_body(budget)
-    reasoning_max = (reasoning.get("reasoning") or {}).get("max_tokens") or 0
+    # 2026-09-16 D21：digest_reasoning_body() 改送 reasoning.effort，不再是
+    # reasoning.max_tokens。舊版這裡的 reasoning_max 是一個「思考最多吃掉多少
+    # token 預算」的數字，quoted_out_hi/lo 拿它去反推「扣掉思考後正文還剩多少
+    # 空間」——effort 只有 low/medium/high 三段，沒有對應的 token 數字，這個換算
+    # 在 effort 制下已經沒有意義，不要硬湊一個假數字。改成只記錄這次會送出的
+    # effort 值（供人工核對用），quoted_out_hi/lo 回到單純看內容長度的估計，
+    # 不再假設思考會吃掉輸出預算。
+    reasoning = main.digest_reasoning_body()
+    reasoning_effort = (reasoning.get("reasoning") or {}).get("effort") or "-"
     est_in = (
         estimate_tokens(system_prompt)
         + estimate_tokens(user_msg)
         + estimate_tokens(schema_json)
     )
     if density == "verbatim":
-        quoted_out_hi = min(budget, estimate_tokens(news_text) + 800 + reasoning_max)
+        quoted_out_hi = min(budget, estimate_tokens(news_text) + 800)
         quoted_out_lo = estimate_tokens(news_text) + 400
     else:
-        quoted_out_lo = HIST_CONTENT_LO + min(reasoning_max or 0, 560)
-        quoted_out_hi = HIST_CONTENT_HI + (reasoning_max or 0)
+        quoted_out_lo = HIST_CONTENT_LO
+        quoted_out_hi = HIST_CONTENT_HI
     return {
         "sample": sample_id,
         "density": density,
@@ -158,7 +165,7 @@ def assemble(sample: dict, density: str, role: str) -> dict:
         "user_est_tokens": estimate_tokens(user_msg),
         "schema_est_tokens": estimate_tokens(schema_json),
         "budget": budget,
-        "reasoning_max": reasoning_max,
+        "reasoning_effort": reasoning_effort,
         "est_input_tokens": est_in,
         "quoted_out_lo": quoted_out_lo,
         "quoted_out_hi": quoted_out_hi,
@@ -264,13 +271,13 @@ def print_dry_run(rows: list[dict]) -> None:
     print(
         f"DIGEST_BACKEND={main.DIGEST_BACKEND}  "
         f"TWO_STAGE={main.DIGEST_TWO_STAGE}（本腳本不走分類器）  "
-        f"reasoning_body={main.digest_reasoning_body(10000) or '（不送，思考不封頂）'}"
+        f"reasoning_body={main.digest_reasoning_body() or '（不送，思考不封頂）'}"
     )
     print()
     hdr = (
         f"{'sample':<6} {'dens':<12} {'role':<4} {'fmt':<10} "
         f"{'news':>5} {'sys字':>6} {'sys≈tok':>8} {'in≈':>6} "
-        f"{'budget':>7} {'reas':>5}"
+        f"{'budget':>7} {'effort':>6}"
     )
     print(hdr)
     tot_in = 0
@@ -279,7 +286,7 @@ def print_dry_run(rows: list[dict]) -> None:
             f"{r['sample']:<6} {r['density']:<12} {r['role']:<4} {r['editor_format']:<10} "
             f"{r['news_chars']:>5} {r['system_prompt_chars']:>6} "
             f"{r['system_prompt_est_tokens']:>8} {r['est_input_tokens']:>6} "
-            f"{r['budget']:>7} {r['reasoning_max']:>5}"
+            f"{r['budget']:>7} {r['reasoning_effort']:>6}"
         )
         tot_in += r["est_input_tokens"]
     print()
@@ -373,10 +380,15 @@ def main_cli() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     usable = [r for r in results if r.get("usable")]
     payload = {
-        "note": "非正式站模型；數字帶此前提。正式站是 OpenRouter anthropic/claude-sonnet-5。",
+        "note": "非正式站模型；數字帶此前提。正式站現行預設是 OpenRouter google/gemini-3.8-flash"
+        "（D21，2026-09-16）。",
         "backend": main.DIGEST_BACKEND,
         "model_requested": main.resolve_digest_model(),
-        "reasoning_capped": bool(main.digest_reasoning_body(10000)),
+        # 2026-09-16 D21：從「有沒有封頂」（bool）改記實際送出的 effort 值——
+        # effort 制沒有「封頂與否」這個二元概念，記字面值比記布林更誠實。
+        "reasoning_effort": (main.digest_reasoning_body().get("reasoning") or {}).get(
+            "effort"
+        ),
         "n": len(results),
         "usable": len(usable),
         "unusable": len(results) - len(usable),

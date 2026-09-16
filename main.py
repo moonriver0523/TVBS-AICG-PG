@@ -75,6 +75,7 @@ from news_prompt import (
     build_prompt,
     build_refine_prompt,
     compose_variable,
+    ensure_final_image_baseline,
 )
 
 load_dotenv()
@@ -122,10 +123,36 @@ elif DIGEST_BACKEND == "openrouter" and _openrouter_key:
         api_key=_openrouter_key,
         max_retries=OPENAI_MAX_RETRIES,
     )
-    DEFAULT_DIGEST_MODEL = "anthropic/claude-sonnet-5"
-    # 斷句走小模型（2026-09-14 使用者裁決）。.env 與線上都是 OpenRouter 後端，只改原生分支
-    # 等於沒改。slug 已查 GET /api/v1/models（2026-09-14）確有 openai/gpt-5.4-mini。
-    DEFAULT_TITLE_BREAK_MODEL = "openai/gpt-5.4-mini"
+    # 2026-09-16 D21 裁決：主模型從 anthropic/claude-sonnet-5 換成
+    # google/gemini-3.8-flash。四輪 ×10 次同稿實測（見
+    # docs/交辦-20260916-D21改effort換Gemini.md）：sonnet-5 現況（reasoning.max_tokens）
+    # 5/10 成功、131 秒平均、3 次截斷；sonnet-5+effort=low 7/10、18 秒；
+    # gemini-3.8-flash+effort=low 9/10、6 秒、0 截斷、0 簡體，全面勝出，
+    # 第二輪 10 則不同真實稿再驗一次（9/10、4-8 秒、耗時對稿長不敏感）泛化通過。
+    # 退路：resolve_digest_model() 讀 DIGEST_MODEL／OPENAI_DIGEST_MODEL 環境變數
+    # 覆寫，設回 anthropic/claude-sonnet-5 即可三分鐘內退回 Claude，不用改程式碼
+    # （見該函式 2026-09-13 的「帶 / 的 slug 只在走 openrouter 時才採用」防呆，
+    # 這條退路依賴它，不能破壞）。
+    DEFAULT_DIGEST_MODEL = "google/gemini-3.8-flash"
+    # 斷句原本走 openai/gpt-5.4-mini（2026-09-14 使用者裁決），2026-09-16 補做斷句
+    # 自己的實測後換成 gemini（使用者裁定「要改就改到位」）。.env 與線上都是
+    # OpenRouter 後端，只改原生分支等於沒改。
+    #
+    # 實測：19 則真實封面標題（後台 2026-09 紀錄的 news 欄）、**每則一次呼叫**
+    # （production 的 apply_title_break_hints 就是這個粒度，一次塞 17 段會把耗時
+    # 與輸出長度灌水），兩模型各 78 次、共 108 段：
+    #   mini  ：呼叫層 0 次失敗，但**段被判不採用 29/108**，最終只有 73% 拿到模型斷句
+    #   gemini：呼叫層 6 次失敗（4 逾時＋2 finish=error），**段最終 87% 拿到模型斷句**
+    #   耗時中位 mini 3.1 秒 → gemini 2.2 秒
+    # 代價說清楚：**硬失敗率從 0% 變 7.7%**，而斷句這條線沒有重試迴圈，失敗就直接
+    # 退回規則斷行。但 mini 的「回了卻被判不採用」也同樣退回規則，兩者對使用者
+    # 是同一件事，算總帳 gemini 淨勝 14 個百分點。明細
+    # D:\Downloads\AICG\後台紀錄\20260916\F_斷句模型對照*.jsonl。
+    #
+    # ⚠ 連帶待裁：gemini 的 4 次逾時全部卡在 TITLE_BREAK_TIMEOUT_SECONDS=8.0 這道牆
+    # （中位 2.2 秒、p90 5.5 秒），放寬到 10 秒應能回收大部分，但那是另一個決定，
+    # 沒有使用者裁示不動。
+    DEFAULT_TITLE_BREAK_MODEL = "google/gemini-3.8-flash"
 else:
     openai_client = OpenAI(max_retries=OPENAI_MAX_RETRIES)
     # 2026-09-13：原生預設從 gpt-5.6-terra 換成 gpt-5.5。terra 在使用者 key 上
@@ -143,10 +170,26 @@ def resolve_title_break_model() -> str:
 
     刻意**不**繼承 DIGEST_MODEL／OPENAI_DIGEST_MODEL：那兩個是主消化的覆寫，
     可能是 OpenRouter slug（見 resolve_digest_model 的 2026-09-13 真因），而且
-    使用者要的就是斷句走比主消化更快的模型。
+    這是獨立覆寫、獨立回退的一條線，不該因為主消化換模型就被連動牽著走。
+
+    2026-09-16：預設值已經跟著換成 gemini-3.8-flash（依斷句自己的 156 次實測，
+    見 DEFAULT_TITLE_BREAK_MODEL 定義處），但**刻意不改成讀 DIGEST_MODEL**——
+    兩條線要能分開回退：主消化出事時把 DIGEST_MODEL 設回 Claude，斷句不必跟著動；
+    斷句出事時設 TITLE_BREAK_MODEL=openai/gpt-5.4-mini 即可，主消化不受影響。
+
+    2026-09-16 Codex 複查抓到：這裡原本沒有 resolve_digest_model() 那道「帶 / 的
+    slug 只在真的走 openrouter 時才採用」防呆，而上面那句回退指引推薦的
+    `openai/gpt-5.4-mini` 正是一個 OpenRouter slug——在 native／Gemini 後端照單
+    全收就會把它送進 api.openai.com，**斷句必然失敗、每張封面都退回規則斷行，
+    而且因為失敗被吃掉只印一行 log，不會有人發現**。補上同一道防呆。
     """
     override = (os.getenv("TITLE_BREAK_MODEL") or "").strip()
-    return override or DEFAULT_TITLE_BREAK_MODEL
+    if not override:
+        return DEFAULT_TITLE_BREAK_MODEL
+    on_openrouter = "openrouter" in str(getattr(openai_client, "base_url", ""))
+    if "/" in override and not on_openrouter:
+        return DEFAULT_TITLE_BREAK_MODEL
+    return override
 
 
 def resolve_digest_model() -> str:
@@ -208,8 +251,18 @@ GEMINI_DIGEST_MIN_TOKENS = 6000
 # 已經超過當時的 6000 預算，所以那類稿必然偶爾整個截斷（實測 raw content 空字串、
 # 重試後 269 秒才回應）。餘裕要抓在思考上而不是正文上：思考量會隨規則增加而漲，
 # 正文不會。這裡照 total 觀測最大值再留約六成。
-DIGEST_MAX_TOKENS = 6000
-MAP_DIGEST_MAX_TOKENS = 10000
+#
+# 2026-09-16 依 D21 甲案調整：DIGEST_MAX_TOKENS 6000→12000，
+# MAP_DIGEST_MAX_TOKENS 10000→16000。思考常吃滿舊上限、正文寫不出來；
+# timeout／attempt 不動。
+# （原本這行還寫「reasoning headroom 不動」，2026-09-16 D21 已把
+# DIGEST_REASONING_HEADROOM 整組刪除、改送 reasoning.effort，該詞已無對應物。）
+# 地圖必須維持大於一般——這是 2026-09-05 一次真實回歸留下的防線
+# （見上方 2026-09-05 註解與 tests/test_digest_quality.py TokenBudgetTests）：
+# 地圖類要寫的東西本來就多，思考會先把預算吃光；一般預算拉高時地圖必須
+# 跟著拉開，不准拆這條不變式。
+DIGEST_MAX_TOKENS = 12000
+MAP_DIGEST_MAX_TOKENS = 16000
 
 # 消化的**思考**上限（2026-09-09 使用者：「播出鏡面消化的時間太長了，偶有失敗，
 # 有精簡空間嗎？這也是先前使用者回報逾時沒有生成的原因」）。
@@ -220,57 +273,112 @@ MAP_DIGEST_MAX_TOKENS = 10000
 # 一次消化最壞情況要五次 attempt（DIGEST_ATTEMPTS），Cloud Run 的請求上限是 300 秒，
 # 實測撞過「重試後 269 秒才回應」——離被硬砍只差一點。
 #
-# 與其繼續刪規則（刪掉的每一條都是使用者驗收過的行為），不如直接把思考封頂：
-# OpenRouter 的統一參數 reasoning.max_tokens，Anthropic 系走的就是這個
-# （OpenAI 系走 effort，這裡不送）。上限必須明顯低於 max_tokens，剩下的才夠寫正文；
-# 觀測到的正文最大 1361，留 DIGEST_REASONING_HEADROOM 這麼多綽綽有餘。
-# 設成 0（或非 OpenRouter 後端）＝完全不送這個欄位，行為與舊版逐字元相同。
-DIGEST_REASONING_MAX_TOKENS = int(os.getenv("DIGEST_REASONING_MAX_TOKENS", "2000"))
-# OpenRouter 文件寫 Anthropic 的思考預算最低 1024，低於這個值等於沒設定
-DIGEST_REASONING_MIN_TOKENS = 1024
-DIGEST_REASONING_HEADROOM = 2500
-
-
-def digest_reasoning_body(max_output_tokens: int) -> dict:
-    """這次呼叫要不要送 reasoning 上限，送多少。不送就回空 dict。"""
-    if DIGEST_BACKEND != "openrouter" or DIGEST_REASONING_MAX_TOKENS <= 0:
-        return {}
-    budget = min(DIGEST_REASONING_MAX_TOKENS, max_output_tokens - DIGEST_REASONING_HEADROOM)
-    if budget < DIGEST_REASONING_MIN_TOKENS:
-        return {}
-    return {"reasoning": {"max_tokens": budget}}
-
-
-# 消化的 provider 順序（2026-09-11）。使用者回報消化階段常撞上游過載，選定的
-# 對策是「同模型換 provider」——claude-sonnet-5 在 OpenRouter 上有九個端點，
-# 第一方過載時還有 AWS、Azure、Bedrock 可以接手，換 provider 不換模型，品質零風險。
+# 2026-09-16 D21：改送 reasoning.effort 而不是 reasoning.max_tokens。
+# 原本這裡的註解寫「OpenAI 系走 effort，Anthropic 系走 max_tokens，這裡不送
+# effort」——這句話是錯的，而且錯得剛好讓這條路一直沒被試過：實查
+# OpenRouter `/models/anthropic/claude-sonnet-5/endpoints`，五個端點的
+# supported_parameters 全部有 reasoning。真正的問題是：實測顯示
+# reasoning.max_tokens 對 Claude 系模型根本沒被遵守（見下方 D21 四輪實測：
+# 送了 max_tokens=2000，實測 reasoning_tokens 仍是 4005-11999，最高到所設
+# 上限的六倍。⚠沒有跑過「完全不送 max_tokens」的對照組，所以能斷言的是
+# 「設了上限但沒擋住」，不是「送與不送完全一樣」）；Codex
+# 2026-09-16 的查證回覆指出官方文件說明該參數對 Claude 系不生效，但這句
+# **未經本專案直接核對官方文件原文**，記在這裡供後續查證，不當作已證實的事實。
+# 可以確定的是實測結果：舊版這個思考封頂從上線以來從來沒真的擋下過任何一次
+# 思考爆量，DIGEST_REASONING_HEADROOM／DIGEST_REASONING_MIN_TOKENS 那套
+# 「budget 要留多少空間給正文」的算法從頭到尾是在算一個沒人理會的數字。
 #
-# 順序寫死第一方優先的理由：OpenRouter 的預設路由「以價格優先、兼顧 uptime」，
-# 實測 2026-09-11 本機連三次 attempt 都落在 claude-on-aws。各端點的延遲與思考
-# 行為不見得一樣，要診斷就得先讓「正常情況走哪一條」是確定的。
+# D21 四輪實測（各 10 次同稿同參數，明細見
+# docs/交辦-20260916-D21改effort換Gemini.md）：reasoning.effort 才是真的被遵守
+# 的欄位——sonnet-5 加上 effort=low 後 reasoning_tokens 從 4005-11999 掉到
+# 0-842，成功率 5/10 → 7/10、耗時 131 秒 → 18 秒。換成 gemini-3.8-flash 再疊加
+# effort=low 更進一步到 9/10、6 秒、0 截斷、0 簡體，第二輪 10 則不同真實稿泛化
+# 通過。effort 只有 low/medium/high 三段式（沒有數字可調），因此不再需要
+# 「留多少 token 給正文」的預算換算，DIGEST_REASONING_MAX_TOKENS／
+# DIGEST_REASONING_MIN_TOKENS／DIGEST_REASONING_HEADROOM 三個常數的角色被
+# effort 值本身取代，整組刪除，不留死碼。
 #
-# google-vertex 刻意不列：查 /models/.../endpoints 的 supported_parameters，
-# 三個 vertex 端點都**不支援 structured_outputs**，而這條線全程用 strict
-# json_schema。OpenRouter 說這種參數偏好「只路由到支援的 provider」，但那份文件
-# 同時寫明它「永遠不會把模型從候選清單移除」——也就是萬一全部不支援就照送不誤。
-# 與其賭那句話的邊界，不如明列白名單。
-# allow_fallbacks 保持 true：清單裡的都排不進去時，寧可讓 OpenRouter 自己找一條
-# 活路，也不要整個請求失敗（這正是使用者要解決的問題）。
-DIGEST_PROVIDER_ORDER = [
-    slug.strip()
-    for slug in os.getenv(
-        "DIGEST_PROVIDER_ORDER",
-        "anthropic,claude-on-aws,azure/global,amazon-bedrock/global",
-    ).split(",")
-    if slug.strip()
-]
+# 值用環境變數 DIGEST_REASONING_EFFORT 設定，預設 "low"（D21 實測勝出的檔位）。
+# 設成空字串或 "off"＝完全不送 reasoning 欄位，行為與舊版逐字元相同
+# （沿用舊版「非 OpenRouter 一律不送」的判斷）。
+#
+# 2026-09-16 Codex 複查抓到的洞：這個值原本原封不動送上游，**環境變數拼錯就會
+# 把亂碼當 effort 送出去**（例如 "lwo"）。而 digest_completion 的降級保護只在
+# 錯誤訊息含 "reasoning" 時才拔掉欄位，上游若回的是 "invalid effort" 這類字眼，
+# 整條消化就直接失敗。改成白名單擋在源頭：不認得的值退回 "low" 並印一行，
+# 寧可跑預設檔位也不要因為一個錯字讓整站消化壞掉。
+DIGEST_REASONING_EFFORT_CHOICES = ("low", "medium", "high")
+
+
+def _validated_effort(raw: str) -> str:
+    value = (raw or "").strip().lower()
+    if not value or value == "off" or value in DIGEST_REASONING_EFFORT_CHOICES:
+        return value
+    print(
+        f"[digest] reasoning effort {raw!r} 不是 "
+        f"{'／'.join(DIGEST_REASONING_EFFORT_CHOICES)}／off，退回 low",
+        flush=True,
+    )
+    return "low"
+
+
+DIGEST_REASONING_EFFORT = _validated_effort(os.getenv("DIGEST_REASONING_EFFORT", "low"))
+
+# 截斷重試時要退到的最低 effort（取代舊版 DIGEST_REASONING_MIN_TOKENS 的角色：
+# 「重試時把思考預算壓到底線，把空間讓給正文」）。effort 只有三段，"low" 已經是
+# 最低檔，沒有比它更低的量化值——但仍需要這個常數，因為 DIGEST_REASONING_EFFORT
+# 是可以被環境變數調高的（例如日後想試 medium/high 當預設），這裡要能在截斷時
+# 無條件退回最低檔，不是「退回目前預設」。
+DIGEST_REASONING_RETRY_EFFORT = "low"
+
+
+def digest_reasoning_body(effort_override: str | None = None) -> dict:
+    """這次呼叫要不要送 reasoning.effort，送什麼值。不送就回空 dict。
+
+    effort_override：可選，覆寫這一次的 effort（重試降級用）。未傳時走
+    DIGEST_REASONING_EFFORT 的一般預設。
+    """
+    if DIGEST_BACKEND != "openrouter":
+        return {}
+    effort = (
+        DIGEST_REASONING_EFFORT
+        if effort_override is None
+        else _validated_effort(effort_override)
+    )
+    if not effort or effort == "off":
+        return {}
+    return {"reasoning": {"effort": effort}}
+
+
+# 消化的 provider 選擇（2026-09-11 起，2026-09-16 D21 改法）。使用者回報消化階段
+# 常撞上游過載，選定的對策是「同模型換 provider」，換 provider 不換模型，品質零風險。
+#
+# 舊版寫死白名單 anthropic,claude-on-aws,azure/global,amazon-bedrock/global——
+# 這四個全是 Anthropic 家族的端點，D21 換主模型成 google/gemini-3.8-flash 後
+# 完全對不上，繼續沿用等於白名單一個端點都選不中。
+#
+# 改用 OpenRouter 的統一參數 provider.require_parameters：讓 OpenRouter 自己
+# 只在真正吃得下本次請求參數（reasoning、strict json_schema 等）的端點裡選，
+# 不用替每次換模型重新盤點一份端點白名單。這同時解掉帳本 B74——舊白名單裡的
+# azure/global、amazon-bedrock/global 兩個端點其實不支援 structured_outputs，
+# 過載 fallback 過去時 strict schema 會被靜默丟棄；require_parameters 會把
+# 這兩個端點直接排除在候選之外，不會再有機會被 fallback 選中。
+# 已實測：20 次呼叫送 require_parameters=true 全部順利路由，沒有出現「無
+# provider 可用」，這是它唯一的疑慮，已排除。
+# allow_fallbacks 維持 true：真的全部端點都不支援本次參數時，寧可讓
+# OpenRouter 自己找一條活路，也不要整個請求失敗（這正是 2026-09-11 要解決的
+# 問題）。
+DIGEST_PROVIDER_REQUIRE_PARAMETERS = (
+    os.getenv("DIGEST_PROVIDER_REQUIRE_PARAMETERS", "true").strip().lower()
+    not in ("", "0", "false", "off")
+)
 
 
 def digest_provider_body() -> dict:
-    """這次呼叫要不要指定 provider 順序。非 OpenRouter 後端一律不送。"""
-    if DIGEST_BACKEND != "openrouter" or not DIGEST_PROVIDER_ORDER:
+    """這次呼叫要不要限定 provider 只挑吃得下本次參數的端點。非 OpenRouter 後端一律不送。"""
+    if DIGEST_BACKEND != "openrouter" or not DIGEST_PROVIDER_REQUIRE_PARAMETERS:
         return {}
-    return {"provider": {"order": DIGEST_PROVIDER_ORDER, "allow_fallbacks": True}}
+    return {"provider": {"require_parameters": True, "allow_fallbacks": True}}
 
 
 # 整個消化迴圈的牆鐘預算（2026-09-09）。Cloud Run 的請求上限是 300 秒，超過就是
@@ -320,6 +428,13 @@ def digest_token_budget(type_label: str, density: str, news_text: str) -> int:
 # 單次成功率約 2/3，3 次重試仍整組摃摃、使用者收到 502 拿不到圖。消化是純文字
 # 呼叫、單價低，多兩次重試換一次成功的成本遠低於讓使用者空手而回。
 DIGEST_ATTEMPTS = 5
+
+# B67（2026-09-16 使用者裁決）：塊數不足專用的較短上限。B57 的塊數防呆對「原文
+# 本來就只有三個點」的稿是**每一次都必定不過**，不像上游脫軌那樣重試就有機會好，
+# 所以讓它跑滿 DIGEST_ATTEMPTS 是純粹的等待——使用者原話「重試五次可能太多耗時」。
+# 這個值只管塊數；真故障（截斷／亂碼／解析失敗）仍照 DIGEST_ATTEMPTS 擋滿，
+# 那是 2026-08-01 實測出來的次數，不受這裡影響。
+DIGEST_POINT_COUNT_ATTEMPTS = 3
 
 app = FastAPI()
 
@@ -437,23 +552,137 @@ def _recall_digest() -> dict:
     return found[1]
 
 
-def _archive_generation(**kwargs) -> None:
-    """歸檔一次生成：既有的 GCS 備份，加上帶身分的本機稽核歸檔。
+_UPSTREAM_STATUS_RE = re.compile(r"[（(](\d{3})[）)]")
 
-    包成一支的理由：三個生成端點（news-image、web-refine、hybrid）都要歸檔，
-    身分注入與原文補齊只想寫一次；日後要換／加歸檔目的地也只改這裡。
-    兩支底層函式都自己吞例外，這裡不需要再包 try。
-    """
-    gcs_archive.archive_generation(**kwargs)
 
-    # 只補「這條路徑本來就沒有」的欄位，不覆蓋呼叫端已經給值的欄位——
-    # news-image 那條路徑自己就帶著正確的原文，補寫反而可能蓋成舊的。
+def _generation_clock() -> float:
+    return time.monotonic()
+
+
+def _generation_duration_ms(started: float) -> int:
+    return max(0, int(round((time.monotonic() - started) * 1000)))
+
+
+def _reset_generation_retries() -> None:
+    _generation_retry_count.set(0)
+
+
+def _note_generation_retry() -> None:
+    _generation_retry_count.set(_generation_retry_count.get() + 1)
+
+
+def _generation_retries() -> int:
+    return _generation_retry_count.get()
+
+
+def _error_type_from_http(
+    status: int | None, summary: str, *, upstream: bool = False
+) -> str:
+    text = summary or ""
+    lowered = text.lower()
+    if (
+        "太久沒有回應" in text
+        or "timeout" in lowered
+        or "timed out" in lowered
+        or "無法連線" in text
+    ):
+        return "timeout"
+    if "無法解析" in text:
+        return "parse"
+    if "封面生成失敗" in text or "合成失敗" in text or "直標合成" in text:
+        return "compose"
+    if "金鑰" in text or "計費" in text or "credits" in lowered:
+        return "provider_4xx"
+    if status in (408, 504):
+        return "timeout"
+    if status in (400, 422) and not upstream:
+        return "input"
+    if status in (401, 402, 403, 429) or (status is not None and 400 <= status < 500):
+        return "provider_4xx"
+    if status is not None and status >= 500:
+        return "provider_5xx"
+    return "unknown"
+
+
+def classify_generation_error(exc: BaseException) -> dict:
+    """把例外收成可分組的 error_type／http_status／截短去敏摘要。"""
+    summary = str(exc)
+    http_status = None
+    error_type = "unknown"
+    if isinstance(exc, HTTPException):
+        http_status = exc.status_code
+        detail = exc.detail
+        summary = detail if isinstance(detail, str) else str(detail)
+        error_type = _error_type_from_http(http_status, summary)
+        match = _UPSTREAM_STATUS_RE.search(summary)
+        if match:
+            http_status = int(match.group(1))
+            error_type = _error_type_from_http(http_status, summary, upstream=True)
+    elif isinstance(exc, compose.ComposeError):
+        http_status = _compose_error_status(exc)
+        summary = str(exc)
+        error_type = "compose"
+    else:
+        name = type(exc).__name__
+        lowered = summary.lower()
+        if name in {"TimeoutError", "APITimeoutError"} or "timeout" in lowered:
+            error_type = "timeout"
+            http_status = 504
+        elif name in {"URLError", "APIConnectionError"}:
+            error_type = "timeout"
+            http_status = 502
+        else:
+            error_type = _error_type_from_http(None, summary)
+    return {
+        "error_type": error_type,
+        "http_status": http_status,
+        "error_summary": audit_archive.sanitize_error_summary(summary),
+    }
+
+
+def _outcome_meta(
+    started: float,
+    *,
+    provider: str = "",
+    image_model: str = "",
+    exc: BaseException | None = None,
+) -> dict:
+    """成功／失敗共用的耗時、重試、provider。request log 與 audit 都吃同一份。"""
+    meta = {
+        "status": audit_archive.STATUS_FAILED if exc is not None else audit_archive.STATUS_OK,
+        "duration_ms": _generation_duration_ms(started),
+        "retry_count": _generation_retries(),
+        "provider": provider,
+        "image_model": image_model,
+    }
+    if exc is not None:
+        meta.update(classify_generation_error(exc))
+    return meta
+
+
+def _enrich_archive_fields(kwargs: dict) -> dict:
     enriched = dict(kwargs)
     memo = _recall_digest()
     if memo:
         for key, value in memo.items():
             if not enriched.get(key):
                 enriched[key] = value
+    return enriched
+
+
+def _archive_generation(**kwargs) -> None:
+    """歸檔一次成功的生成：既有的 GCS 備份，加上帶身分的本機稽核歸檔。
+
+    包成一支的理由：三個生成端點（news-image、web-refine、hybrid）都要歸檔，
+    身分注入與原文補齊只想寫一次；日後要換／加歸檔目的地也只改這裡。
+    兩支底層函式都自己吞例外，這裡不需要再包 try。
+    """
+    kwargs.setdefault("status", audit_archive.STATUS_OK)
+    gcs_archive.archive_generation(**kwargs)
+
+    # 只補「這條路徑本來就沒有」的欄位，不覆蓋呼叫端已經給值的欄位——
+    # news-image 那條路徑自己就帶著正確的原文，補寫反而可能蓋成舊的。
+    enriched = _enrich_archive_fields(kwargs)
 
     user = current_user()
     audit_archive.archive_generation(
@@ -462,6 +691,66 @@ def _archive_generation(**kwargs) -> None:
         user_name=user.get("name", ""),
         **enriched,
     )
+
+
+def _archive_generation_failure(**kwargs) -> None:
+    """歸檔一次失敗的生成。不要求圖片，也不寫 GCS（那支要圖）。"""
+    kwargs.setdefault("status", audit_archive.STATUS_FAILED)
+    kwargs.pop("image_base64", None)
+    kwargs.pop("mime_type", None)
+    enriched = _enrich_archive_fields(kwargs)
+    user = current_user()
+    audit_archive.archive_generation(
+        user_id=user.get("user_id", ""),
+        user_email=user.get("email", ""),
+        user_name=user.get("name", ""),
+        image_base64="",
+        mime_type="",
+        **enriched,
+    )
+
+
+def _record_generation_failure(
+    request_id: str,
+    started: float,
+    exc: BaseException,
+    **fields,
+) -> None:
+    """失敗只落一筆：request log 與 audit 共用同一 request id、耗時與去敏摘要。"""
+    meta = _outcome_meta(
+        started,
+        provider=str(fields.get("provider") or ""),
+        image_model=str(fields.get("image_model") or ""),
+        exc=exc,
+    )
+    request_log.log_failure(
+        request_id=request_id,
+        source=str(fields.get("source") or ""),
+        news_text=str(fields.get("news_text") or ""),
+        error=meta["error_summary"],
+        style=str(fields.get("style") or ""),
+        structure=str(fields.get("structure") or ""),
+        variable=str(fields.get("variable") or ""),
+        prompt=str(fields.get("prompt") or ""),
+        chart_type=str(fields.get("chart_type") or ""),
+        type_label=str(fields.get("type_label") or ""),
+        role=str(fields.get("role") or ""),
+        density=str(fields.get("density") or ""),
+        provider=str(fields.get("provider") or ""),
+        client_id=str(fields.get("client_id") or ""),
+    )
+    archive_fields = dict(fields)
+    archive_fields.update(meta)
+    _archive_generation_failure(request_id=request_id, **archive_fields)
+
+
+def _abort_generation(exc: Exception, **fields) -> None:
+    """輸入 4xx 等還沒開始生圖就失敗的路徑：記一筆再把例外丟回去。"""
+    _reset_generation_retries()
+    _record_generation_failure(
+        request_log.new_request_id(), _generation_clock(), exc, **fields
+    )
+    raise exc
 
 
 @app.middleware("http")
@@ -638,6 +927,8 @@ class GenerateResponse(BaseModel):
     # 地圖類：消化端列了但實查不到座標（或被查點白名單擋掉）的地名。前端據此提示使用者，
     # 否則「只查到 1 點不做底圖」對使用者是完全安靜的失敗（2026-09-08）。
     map_missing: list[str] = Field(default_factory=list)
+    # F40 第 3 層：有維基條目但沒有合格照片時，非致命提示一路帶到前端。
+    notices: list[str] = Field(default_factory=list)
     # 這次實際採用的 seed（F0）：前端要拿它當「重新生成」的遞增起點，稽核要拿它回查。
     seed: int = 0
 
@@ -753,6 +1044,7 @@ class ImageGenerateRequest(BaseModel):
     provider: Literal["gemini", "gpt"] = "gemini"
     aspect_ratio: str = "16:9"
     image_size: str = "1K"
+    density: str = ""
     # 使用者的安全框開關。⚠️ 不等於「要不要後製」——編輯版兩檔都會後製，
     # 這個旗標只決定用哪一種（見 resolve_frame_plan）。
     safe_frame: bool = False
@@ -807,6 +1099,10 @@ class ImageGenerateResponse(BaseModel):
     model: str
     source_image_base64: str = ""
     source_mime_type: str = ""
+    # F40 第 3 層通知（2026-09-16）：查不到合格參考照但確認有維基條目時，允許模型
+    # 依新聞語境自畫具名真人，但**不**在圖上標「長相為 AI 推測」（使用者明確裁定）——
+    # 改成這裡回一則文字給前端訊息欄。空清單＝這次沒有需要通知的事。
+    notices: list[str] = Field(default_factory=list)
 
 
 # 第一頁「懶人機制」：type_label 傳這個值代表由 AI 自行判斷最適合的圖表類型
@@ -1049,17 +1345,100 @@ Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style
 # 上限可蓋，對它而言這塊是正向指示（多列幾點、每點帶得動細節）。
 #
 # 第 6 條刻意留給後面的版型區塊：播出鏡面的第 6 條寫「exactly four．．．no more and
-# no fewer」，那是版面實體限制（卡片就那幾列），不能被這塊的「最多六點」蓋掉。
+# no fewer」，那是版面實體限制（卡片就那幾列），不能被這塊的 target／下限蓋掉。
+# POINT COUNT 的數字只准從 density_point_bounds() 填進來，禁止在這段文字再寫一份。
+_DENSITY_COUNT_WORDS = {
+    1: "one",
+    2: "two",
+    3: "three",
+    4: "four",
+    5: "five",
+    6: "six",
+    7: "seven",
+    8: "eight",
+    9: "nine",
+}
+_DENSITY_COUNT_VALUES = {word: n for n, word in _DENSITY_COUNT_WORDS.items()}
+_DENSITY_POINT_LINE_RE = re.compile(r"^\s*[\[【]內文小標[\]】]")
+_DENSITY_POINT_TARGETS = {"standard": 6, "maximum": 8}
+_DENSITY_POINT_FLOOR_DELTA = 1
+
+
+def density_count_word(n: int) -> str:
+    """把塊數寫進 prompt 用的英文數字。業務數字本身不在這裡。"""
+    return _DENSITY_COUNT_WORDS[n]
+
+
+def _format_exact_point_count(format_key: str | None, density: str | None) -> int | None:
+    """版型若釘死卡片列數，回傳那個整數；否則 None。
+
+    播出鏡面的張數以 editor_formats._broadcast_point_count 為唯一來源，
+    這裡只做 three／four → 3／4 的用詞轉換，不另寫一份 3、4。
+    """
+    if not format_key:
+        return None
+    if not editor_formats.resolve_hole_side(format_key):
+        return None
+    word = editor_formats._broadcast_point_count(density)["count_word"]
+    return _DENSITY_COUNT_VALUES[word]
+
+
+def density_point_bounds(
+    density: str | None, format_key: str | None = None
+) -> tuple[int | None, int | None]:
+    """[內文小標] 的 (minimum, target)。沒有塊數契約時兩邊都是 None。
+
+    一般版型：standard target 6／下限 5，maximum target 8／下限 7。
+    特定版型若有更嚴格的 exact count，exact 優先——minimum 與 target 都等於該數。
+    只對 standard／maximum 生效；其他密度維持既有 1／1–3／逐字／無字契約。
+    """
+    if density not in _DENSITY_POINT_TARGETS:
+        return None, None
+    exact = _format_exact_point_count(format_key, density)
+    if exact is not None:
+        return exact, exact
+    target = _DENSITY_POINT_TARGETS[density]
+    return target - _DENSITY_POINT_FLOOR_DELTA, target
+
+
+def _density_bound_words(density: str) -> dict[str, str]:
+    """把 density_point_bounds 的數字編成 prompt 佔位符。不含 format_key：
+    通用密度區塊永遠寫級距本身，版型 exact 由後面的區塊覆蓋。"""
+    minimum, target = density_point_bounds(density)
+    if minimum is None or target is None:
+        raise ValueError(f"{density} 沒有塊數契約，不能編成密度規則")
+    _, standard_target = density_point_bounds("standard")
+    if standard_target is None:
+        raise ValueError("standard 必須有 target，才能寫進字超多區塊")
+    return {
+        "minimum_word": density_count_word(minimum),
+        "target_word": density_count_word(target),
+        "target_word_upper": density_count_word(target).upper(),
+        "standard_target_word": density_count_word(standard_target),
+    }
+
+
+def count_density_points(variable: str) -> int:
+    """數 variable 裡以 [內文小標]／【內文小標】開頭的塊。
+
+    只認行首標記，不數換行、不把 [標題]、<蓋章>、<底帶>、來源、備註算進去。
+    播出鏡面「短標｜細節」寫在同一行仍是一塊。
+    """
+    return sum(
+        1 for line in (variable or "").splitlines() if _DENSITY_POINT_LINE_RE.match(line)
+    )
+
+
 STANDARD_DENSITY_RULES = """
 
 字多 MODE (THE USER ASKED FOR THE DENSE VERSION) — THIS BLOCK OVERRIDES THE LENGTH AND COUNT LIMITS STATED ABOVE:
 1. This is the densest of the three digestion settings, and the user chose it because the graphic was coming back carrying too little information. Your job here is to fill the graphic, not to summarise it down.
-2. POINT COUNT: carry every distinct point the source material genuinely supports, up to six [內文小標] lines. Do not stop at three out of habit. Two facts that belong to different aspects of the story are two points, not one merged line.
+2. POINT COUNT: TARGET {target_word} [內文小標] lines. Never fewer than {minimum_word}. Carry every distinct point the source material genuinely supports up to that target. Do not stop at three out of habit. Two facts that belong to different aspects of the story are two points, not one merged line.
 3. LINE LENGTH: {line_limit_clause} Each [內文小標] line may run to about twenty-four characters, long enough to carry a figure and what that figure means in the same line.
 4. TOTAL LENGTH: {total_limit_clause} Aim for roughly two hundred and forty to three hundred and twenty characters in total.
 5. DENSITY PER POINT: a point that states only a bare fact is under-written at this setting. Give each line its figure AND its consequence, its comparison, its timing or its source — whichever the material supplies.
-6. A LATER BLOCK MAY FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT. When a format-specific block below states an exact number of [內文小標] lines, that number wins over the "up to six" in rule two: the card stack of that layout physically has that many rows. Rules three, four and five still apply inside those rows.
-7. THIS LICENSES NOTHING NEW. Every added line must come from the source material. Do not invent a figure, do not restate a point you already made in different words, and do not pad with generic background to reach a length. If the material genuinely supports only two points, write two — a padded graphic is worse than a short one.
+6. A LATER BLOCK MAY FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT. When a format-specific block below states an exact number of [內文小標] lines, that number wins over the target of {target_word} and the minimum of {minimum_word} in rule two: the card stack of that layout physically has that many rows. Rules three, four and five still apply inside those rows.
+7. THIS LICENSES NOTHING NEW. Every added line must come from the source material. Do not invent a figure, do not restate a point you already made in different words, and do not pad with generic background to reach a length. Falling short of {minimum_word} lines is a defect — do not stop at three out of habit.
 8. Design "structure" for that quantity: enough rows or cards for the points you wrote, sized so the longer lines stay legible on air rather than shrinking to fit.
 9. HEADLINE LIMIT: [標題] may contain no more than 18 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 """
@@ -1113,13 +1492,13 @@ MINIMAL_DENSITY_RULES = """
 MAXIMUM_DENSITY_RULES = """
 
 字超多 MODE — THIS BLOCK GOES BEYOND THE 字多 BLOCK ABOVE AND OVERRIDES IT WHEREVER THEY DISAGREE:
-1. POINT COUNT: carry every distinct point the material supports, up to EIGHT [內文小標] lines. The rule above stopped at six; this setting does not.
+1. POINT COUNT: TARGET {target_word_upper} [內文小標] lines. Never fewer than {minimum_word}. The rule above targeted {standard_target_word}; this setting raises both the target and the floor.
 2. LINE LENGTH AND TOTAL: each [內文小標] line may run to about thirty characters, and the whole graphic may reach roughly three hundred and sixty to four hundred and eighty characters. Every line still has to be readable on air — long is not the same as cramped.
-3. THIS STILL LICENSES NOTHING NEW. Every added line comes from the source material. Do not invent a figure, a date, a name or a cause to reach the count; do not restate an earlier point in different words; do not pad with generic background. If the material supports only three points, write three — this setting raises the ceiling, it does not set a quota.
+3. THIS STILL LICENSES NOTHING NEW. Every added line comes from the source material. Do not invent a figure, a date, a name or a cause to reach the count; do not restate an earlier point in different words; do not pad with generic background. Falling short of {minimum_word} lines is a defect — do not stop at three out of habit.
 4. YOU MAY SPLIT WHAT IS ALREADY THERE. Where the source states a compound fact in one breath — one sentence carrying two distinct figures, two places, two measures or two consequences — you may write it out as two separate points instead of one crowded entry. This is the one thing this setting unlocks that the 字多 block did not.
 5. THAT IS A LICENCE TO SPLIT, NEVER A LICENCE TO SUPPLY. The split halves must both already be present in the source, in the source's own terms. Do not add a cause, a person, a time, a figure, a place, a consequence or any background the source did not state; do not manufacture a second point by saying the same thing again in other words; and where the second half would have to be invented to make the split work, leave the fact whole as one point. After splitting, the set of facts on the graphic must be identical to the set of facts in the source — only their arrangement changed.
 6. Group the points: when you write more than five, say in "structure" that they are arranged in labelled groups or two columns rather than one long list, so the viewer can find the one that matters.
-7. A LATER BLOCK MAY STILL FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT, and that number wins over the "up to eight" here: those card stacks physically have that many rows.
+7. A LATER BLOCK MAY STILL FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT, and that number wins over the target of {target_word} and the minimum of {minimum_word} here: those card stacks physically have that many rows.
 8. HEADLINE LIMIT: [標題] may contain no more than 22 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 """
 
@@ -1474,9 +1853,9 @@ REAL-WORLD ACCURACY (governs "style" and "structure" — the pictures you commis
 2. REAL PLACES AND OBJECTS: when the story shows a verifiable real place or object — a skyline, a specific building, a highway or interchange, an airport, a facility, or a specific model of aircraft, ship, vehicle or equipment — ask for it to be depicted as faithfully to its real appearance as your knowledge allows: real shape, real layout, real proportions, real distinguishing features. Do not stylise reality away when the real look is known.
 3. LABEL WHAT IS NOT REAL: if you are not confident the depiction will match the real thing, or the scene is a generic stand-in or a reconstruction rather than a documented view, you MUST plan a clearly visible 示意圖 label — write the word 示意圖 into "variable" and tell "structure" where it sits. An unlabelled reconstruction presented as real is a defect. Do not fabricate identifying detail you do not actually know and pass it off as real.
 4. BRANDS: ONLY THOSE IN THE SOURCE. A brand the source material names MAY be shown with its real logo, wordmark or brand text, rendered as faithfully to the real mark as possible, on the objects that belong to it — its own signage, packaging, product body, vehicle livery, screen or jersey; plain typeset text is equally acceptable. Never put one brand's mark on another brand's object. Every OTHER brandable surface — signage, storefronts, banners, packaging, product bodies, vehicle liveries, screens, jerseys, badges and building facades — must be de-identified: blank surfaces or generic abstract marks, no readable brand text, no trademark, no ticker symbol, no exchange name for any brand the source material does not name, and never an invented one. Whenever the scene contains any object that would normally carry a brand, write into "structure" explicitly WHICH brands the source material names (and may therefore appear with their real mark) and that every other brandable surface stays de-identified — do not assume the renderer will infer it.
-5. NAMED REAL PEOPLE: you do NOT decide how the face is drawn. List in "portrait_subjects" EVERY specific named real person whose face the graphic would show — one entry per person, names exactly as the source material writes them, no title, no company. If the layout shows two people, list both; listing only the first is a defect. In "structure" describe only WHERE each figure sits and what it wears, never the rendering treatment (do not write "photorealistic", "faithful likeness", "back view", "silhouette", "illustration" or similar). The backend looks up reference photographs and appends the binding portrait rules itself. Leave "portrait_subjects" as an empty array for every other graphic, including crowds and unnamed or generic figures. Always plan the 示意圖 label into "variable" when a person is depicted. Never place a person in a scene, action or context the source material does not describe.
+5. NAMED REAL PEOPLE: you do NOT decide how the face is drawn. List in "portrait_subjects" EVERY specific named real person whose face the graphic would show — one entry per person. Names MUST be copied VERBATIM from the news text or from the user's explicit input; never infer a person from a job title (總統, 執行長), an event, a country, an organisation, or common knowledge. A title, office or role without a personal name is not a name — leave the array empty. Copy the name exactly as written, no title, no company. If the layout shows two people, list both; listing only the first is a defect. In "structure" describe only WHERE each figure sits and what it wears, never the rendering treatment (do not write "photorealistic", "faithful likeness", "back view", "silhouette", "illustration" or similar). You may describe a role or title in "structure", but that does not license filling "portrait_subjects". The backend looks up reference photographs and appends the binding portrait rules itself. Leave "portrait_subjects" as an empty array for every other graphic, including crowds and unnamed or generic figures. Always plan the 示意圖 label into "variable" when a person is depicted. Never place a person in a scene, action or context the source material does not describe.
 6. AT MOST THREE FACES: the layout you design may show identifiable faces for AT MOST THREE named real people. When the source material names more, choose the three most central to the story and design "structure" so that ONLY those three appear as identifiable individual figures. The other named people are NOT removed from the story — their names and what they said may still appear as TEXT (a quote panel, a caption, a list item, a label on a chart), and that text should carry their points. What they must not have is a face: do not draw them as an identifiable figure, and never place their name beside any depicted figure, because a name sitting next to a drawn face reads as that person. "portrait_subjects" must be a truthful mirror of the faces you designed: never design a layout with four faces and list only three — the unlisted face is the exact defect this rule exists to prevent.
-7. NAMES IN ENGLISH TOO: fill "portrait_subjects_en" with the same people in the same order and the same length as "portrait_subjects" — each entry being that person's name in English or its original Latin spelling (e.g. 川普 → "Donald Trump", 瓦希迪 → "Ahmad Vahidi", 巴薩尼 → "Masoud Barzani"). Take it from the source material when it gives one, otherwise from your own knowledge of the person. Use an empty string ONLY when you genuinely do not know it; never guess a spelling you are unsure of, and never translate the meaning of a Chinese name into English words. This is how the backend finds the reference photograph: Taiwanese transliterations are frequently not the title of any Chinese encyclopedia article, so without the English name the person cannot be looked up and no face can be drawn.
+7. NAMES IN ENGLISH TOO: fill "portrait_subjects_en" with the same people in the same order and the same length as "portrait_subjects" — each entry being that person's name in English or its original Latin spelling, copied VERBATIM from the news text or the user's explicit input when that spelling is present there. If the English or Latin name does not appear in the source material or the user's input, that entry MUST be an empty string. Never translate a Chinese name, never guess a spelling, and never fill the English name from common knowledge, a title, an event, a country or an organisation. Example: source writes 「川普」 only → portrait_subjects=["川普"], portrait_subjects_en=[""]; source writes 「川普 Donald Trump」 → ["川普"] / ["Donald Trump"]. This is how the backend finds the reference photograph: Taiwanese transliterations are frequently not the title of any Chinese encyclopedia article, so without an English name that actually appears in the material the person cannot be looked up and no face can be drawn.
 """
 
 
@@ -1641,6 +2020,35 @@ def map_missing_places() -> list[str]:
     return list(_map_missing_places.get())
 
 
+# F40 第 3 層通知（2026-09-16）：resolve_portraits／apply_portrait_to_image_request 決定
+# 用 entry_only 模式（維基有條目、沒有合格照片，允許模型依語境自畫）時，要讓前端訊息欄
+# 顯示一句提示——但這兩個函式呼叫端很多、簽名不想全部改成回傳 notices，所以比照
+# _map_missing_places 用 ContextVar 帶出去。端點在處理一次請求前呼叫
+# reset_portrait_notices()，結尾用 collected_portrait_notices() 取回、寫進 response。
+_portrait_notices: contextvars.ContextVar[list[str]] = contextvars.ContextVar("portrait_notices", default=[])
+
+
+def reset_portrait_notices() -> None:
+    _portrait_notices.set([])
+
+
+def collected_portrait_notices() -> list[str]:
+    return list(_portrait_notices.get())
+
+
+def _record_portrait_notice(text: str) -> None:
+    _portrait_notices.set(_portrait_notices.get() + [text])
+
+
+def portrait_entry_only_notice(names: list[str]) -> str:
+    """F40 第 3 層的訊息欄文案。⚠使用者明確裁定：不要在圖上標「長相為 AI 推測」，
+    改成這則 notice 顯示在前端既有的紅色訊息框（非致命提示，見 MASTER 列管 F40）。"""
+    return (
+        f"「{'、'.join(names)}」目前查不到可用的維基百科照片，"
+        "畫面由生圖模型依新聞語境自行繪製，並非本人的精確肖像。"
+    )
+
+
 def resolve_map_points(chart_type: str, places: list[str] | None) -> list[MapPoint]:
     """把消化端列出的地名查成真實座標。查不到就少一個，全程不丟例外。
 
@@ -1738,9 +2146,12 @@ def build_digest_instructions(
         # 與使用者自己指定非地圖類型，走的是同一條守門：兩者的前提都是「這張圖不畫地圖」。
         instructions += MAP_SCOPE_GUARD_RULES
     if density in ("standard", "maximum"):
-        instructions += STANDARD_DENSITY_RULES.format(**_STANDARD_LIMIT_CLAUSES[is_editor])
+        instructions += STANDARD_DENSITY_RULES.format(
+            **_STANDARD_LIMIT_CLAUSES[is_editor],
+            **_density_bound_words("standard"),
+        )
         if density == "maximum":
-            instructions += MAXIMUM_DENSITY_RULES
+            instructions += MAXIMUM_DENSITY_RULES.format(**_density_bound_words("maximum"))
     elif density in ("simplified", "minimal"):
         instructions += SIMPLIFIED_DENSITY_RULES
         if density == "minimal":
@@ -1814,6 +2225,8 @@ _inside_pipeline = contextvars.ContextVar("inside_pipeline", default=False)
 # apply_photo_availability 會再呼叫一次 generate()。deadline 放 contextvar，
 # 第二次沿用同一條牆鐘，單一請求不會變成 230+230（B31）。
 _digest_deadline = contextvars.ContextVar("digest_deadline", default=None)
+# 同一 request 的 digest／封面重試次數，給稽核紀錄用，不另開計時器。
+_generation_retry_count = contextvars.ContextVar("generation_retry_count", default=0)
 
 
 # 截斷監控。三個呼叫端（generate／hybrid／cover）各有各的預算，過去只有真的炸了
@@ -1879,6 +2292,16 @@ def digest_excerpt(raw: str, head: int = 600, tail: int = 300) -> str:
     )
 
 
+def digest_retry_note(attempt: int, category: str, summary: str) -> str:
+    """給下一輪 digest 的修正說明。只含分類後原因，不含 provider 原文。"""
+    clipped = audit_archive.sanitize_error_summary(summary)
+    return (
+        f"[Retry context] Previous attempt {attempt} failed "
+        f"(category={category}): {clipped}. "
+        "Correct this failure and return complete valid JSON."
+    )
+
+
 def digest_completion(
     *,
     model: str,
@@ -1890,6 +2313,8 @@ def digest_completion(
     site: str = "digest",
     raw_user_message: bool = False,
     timeout: float | None = None,
+    retry_context: str = "",
+    reasoning_effort: str | None = None,
 ):
     """呼叫 Chat Completions 取結構化消化結果。
 
@@ -1907,18 +2332,29 @@ def digest_completion(
 
     走 Gemini 時把呼叫端要求的上限拉到 GEMINI_DIGEST_MIN_TOKENS 以上——Gemini
     的隱藏思考 token 用一般上限（1200-1500）幾乎必然截斷正文（同日實測撞到）。
+
+    retry_context：可選，只附加在 user message 尾端，不改 system prompt。
+    未傳時產生的 payload 與舊版相同。
+
+    reasoning_effort：可選，覆寫這一次的 reasoning.effort（重試降級用）。
+    未傳時仍走 digest_reasoning_body() 的一般預設。
     """
     if DIGEST_BACKEND == "gemini":
         max_output_tokens = max(max_output_tokens, GEMINI_DIGEST_MIN_TOKENS)
+    user_content = (
+        news_text
+        if raw_user_message
+        else f'News Source Material:\n"{news_text}"'
+    )
+    if retry_context:
+        user_content = f"{user_content}\n\n{retry_context}"
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {
                 "role": "user",
-                "content": news_text
-                if raw_user_message
-                else f'News Source Material:\n"{news_text}"',
+                "content": user_content,
             },
         ],
         "response_format": {
@@ -1930,11 +2366,11 @@ def digest_completion(
     # 呼叫端與測試對 openai_client 的 patch 就都失效了。
     payload["timeout"] = DIGEST_TIMEOUT_SECONDS if timeout is None else timeout
     client = openai_client
-    # 思考上限只有 OpenRouter 吃得到，而且不是每個模型都支援；被明確拒絕時原樣重送
+    # effort 只有 OpenRouter 吃得到，而且不是每個模型都支援；被明確拒絕時原樣重送
     # 一次不帶這個欄位的請求，換模型不會把整條線弄壞（見 digest_reasoning_body）。
-    # provider 順序同樣只有 OpenRouter 吃得到，兩者共用同一個 extra_body
+    # provider 選擇同樣只有 OpenRouter 吃得到，兩者共用同一個 extra_body
     # （2026-09-11 一起加進來，見 digest_provider_body）。
-    reasoning = digest_reasoning_body(max_output_tokens)
+    reasoning = digest_reasoning_body(reasoning_effort)
     extra_body = {**digest_provider_body(), **reasoning}
     if extra_body:
         payload["extra_body"] = extra_body
@@ -1945,7 +2381,7 @@ def digest_completion(
     except BadRequestError as exc:
         message = str(exc)
         if reasoning and "reasoning" in message:
-            print(f"[digest] 模型不吃 reasoning 上限，改用預設思考量：{message}", flush=True)
+            print(f"[digest] 模型不吃 reasoning effort，改用預設思考量：{message}", flush=True)
             # 只拿掉 reasoning，provider 順序要留著——整包 pop 會把換 provider
             # 的能力一起丟掉，而那正是撞過載時唯一還有用的東西。
             extra_body.pop("reasoning", None)
@@ -2141,7 +2577,12 @@ def verbatim_fidelity_problem(variable: str, news_text: str) -> str:
     )
 
 
-def digest_quality_problem(data: dict, finish_reason: str, density: str | None = None) -> str:
+def digest_quality_problem(
+    data: dict,
+    finish_reason: str,
+    density: str | None = None,
+    format_key: str | None = None,
+) -> str:
     """檢查消化結果是否可用，通過回傳空字串，否則回傳給 log 用的問題描述。
 
     語法合法不等於內容可用。截斷（finish_reason=length）與字元污染都會產生
@@ -2199,6 +2640,30 @@ def digest_quality_problem(data: dict, finish_reason: str, density: str | None =
         if ratio < DIGEST_MIN_UNIQUE_LINE_RATIO:
             return f"variable {len(lines)} 行中僅 {ratio:.0%} 不重複，疑似逐詞灌行失控"
 
+    return digest_point_count_problem(variable, density, format_key)
+
+
+def digest_point_count_problem(
+    variable: str, density: str | None = None, format_key: str | None = None
+) -> str:
+    """B57 的塊數防呆，單獨一支是為了讓 `generate()` 能問「這次唯一的問題是不是
+    只有塊數」——B67（2026-09-16 使用者裁決）要在最後一次嘗試放行塊數不足，
+    但截斷／型別錯／頻道洩漏那些仍然要擋到底，兩者必須分得出來。"""
+    minimum, target = density_point_bounds(density, format_key)
+    if minimum is None:
+        return ""
+    observed = count_density_points(variable)
+    if target is not None and minimum == target:
+        if observed != minimum:
+            return (
+                f"variable [內文小標] 塊數不符"
+                f"（observed={observed} required={minimum}）"
+            )
+    elif observed < minimum:
+        return (
+            f"variable [內文小標] 塊數不足"
+            f"（observed={observed} required={minimum}）"
+        )
     return ""
 
 
@@ -2229,29 +2694,48 @@ def verify_internal_api_key(
 def apply_photo_availability(
     result: GenerateResponse, req: GenerateRequest
 ) -> GenerateResponse:
-    """網頁版：查不到參考照的人，重新消化一次把他們排出版面（2026-08-18 使用者裁決）。
+    """網頁版消化端接上 F40 四層分流。
 
-    與 LINE 那條（resolve_digest_portraits）同一個道理，差別只在網頁版的消化與生圖
-    是兩支獨立的 API，所以要在消化端就處理完——前端拿到的消化結果已經是「只剩畫得
-    出臉的人」的版面，不需要多一次來回。
+    只有第 4 層（連維基條目都查不到）才重新消化、把人排出版面；第 3 層（有條目但
+    沒有合格照片）保留在版面，並以 nonfatal notice 告知使用者。
 
     使用者上傳的肖像照視為對應**系統查不到的人**、依序對應：會自己上傳照片，通常
     正是因為那個人維基查不到（吳軒彤那個原始情境）。這是一個假設，寫在這裡是為了
     日後有人覺得對應錯了時，知道該改哪裡。
 
+    使用者上傳肖像照的數量仍依序覆蓋查不到照片的人；其餘才進四層判斷。第 4 層
     只重試一次，理由同 resolve_digest_portraits。
     """
     subjects = result.portrait_subjects
     if not subjects:
         return result
-    _, missing = lookup_portrait_photos(subjects, result.portrait_subjects_en)
+    outcomes = lookup_portrait_outcomes(subjects, result.portrait_subjects_en)
+    photos = {
+        name: outcome.photo
+        for name, outcome in outcomes.items()
+        if outcome.photo is not None
+    }
+    missing = [name for name in subjects if name not in photos]
     if req.portrait_photo_count:
         missing = missing[req.portrait_photo_count :]
-    if not missing:
+    entry_only = [name for name in missing if outcomes[name].entry_found]
+    no_entry = [name for name in missing if not outcomes[name].entry_found]
+    # B73 第二半（2026-09-16 使用者裁決）：查不到條目的人不再被排出版面。
+    # 這裡是第二個必須跟著改的地方——只改 resolve_portraits 不改這裡的話，
+    # 網頁版會**先在消化階段把人踢掉**，根本走不到那個分流（exclude_people 一下去，
+    # portrait_subjects 就空了）。兩處同一個開關，出事一起關。
+    if PORTRAIT_NO_ENTRY_FALLBACK:
+        told = entry_only + no_entry
+        if told:
+            _record_portrait_notice(portrait_entry_only_notice(told))
+        return result
+    if not no_entry:
+        if entry_only:
+            _record_portrait_notice(portrait_entry_only_notice(entry_only))
         return result
 
     print(
-        f"[portrait] 網頁版查不到參考照（{'、'.join(missing)}），"
+        f"[portrait] 網頁版連維基條目都查不到（{'、'.join(no_entry)}），"
         "重新消化一次把他們排出版面",
         flush=True,
     )
@@ -2259,9 +2743,24 @@ def apply_photo_availability(
     # 也不要重複落檔——最終結果由外層那筆記錄。
     token = _inside_pipeline.set(True)
     try:
-        return generate(
-            req.model_copy(update={"exclude_people": missing})
+        retried = generate(
+            req.model_copy(update={"exclude_people": no_entry})
         )
+        retried_outcomes = lookup_portrait_outcomes(
+            retried.portrait_subjects, retried.portrait_subjects_en
+        )
+        retried_missing = [
+            name for name in retried.portrait_subjects if name not in retried_outcomes
+            or retried_outcomes[name].photo is None
+        ]
+        if req.portrait_photo_count:
+            retried_missing = retried_missing[req.portrait_photo_count :]
+        retried_entry_only = [
+            name for name in retried_missing if retried_outcomes[name].entry_found
+        ]
+        if retried_entry_only:
+            _record_portrait_notice(portrait_entry_only_notice(retried_entry_only))
+        return retried
     finally:
         _inside_pipeline.reset(token)
 
@@ -2271,6 +2770,8 @@ def apply_photo_availability(
 # 直接呼叫這個函式，不經 HTTP。呼叫端要的是「消化完成或明確失敗」，跟外面那層
 # 用什麼格式把結果送出去無關。
 def generate(req: GenerateRequest):
+    if not _inside_pipeline.get():
+        reset_portrait_notices()
     # seed（F0）在最前面就定下來，並寫回 req：apply_photo_availability 會拿這份 req
     # 再呼叫一次 generate()，沒寫回的話第二次會再抽一顆，同一個請求的兩段消化就用了
     # 兩種長相，回應報的 seed 也重現不出成品。
@@ -2312,6 +2813,8 @@ def generate(req: GenerateRequest):
     # 輸出上限依類型與消化程度分開給，理由見 digest_token_budget。
     max_output_tokens = digest_token_budget(type_label, req.density, req.news_text)
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
+    retry_context = ""
+    reasoning_effort = None
     existing_deadline = _digest_deadline.get()
     if existing_deadline is None:
         deadline = time.monotonic() + DIGEST_DEADLINE_SECONDS
@@ -2346,6 +2849,8 @@ def generate(req: GenerateRequest):
                     schema_name="news_cg_digest",
                     schema=digest_schema(type_label),
                     site="generate",
+                    retry_context=retry_context,
+                    reasoning_effort=reasoning_effort,
                 )
             except AuthenticationError as exc:
                 raise HTTPException(
@@ -2364,6 +2869,13 @@ def generate(req: GenerateRequest):
                     else "AI 服務處理失敗，請確認模型權限或稍後重試"
                 )
                 print(f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} API error: {exc}", flush=True)
+                retry_context = digest_retry_note(
+                    attempt + 1,
+                    "upstream",
+                    f"{type(exc).__name__} on attempt {attempt + 1}",
+                )
+                reasoning_effort = None
+                _note_generation_retry()
                 time.sleep(1.5)
                 continue
 
@@ -2388,11 +2900,45 @@ def generate(req: GenerateRequest):
                         detail="原文太長，「不消化」要模型逐字抄完整篇才做得到；"
                         "請改用「字少」／「字多」，或把原文縮短再試。",
                     )
+                retry_context = digest_retry_note(
+                    attempt + 1, "parse", "JSON 解析失敗"
+                )
+                reasoning_effort = (
+                    DIGEST_REASONING_RETRY_EFFORT
+                    if finish_reason == "length"
+                    else None
+                )
+                _note_generation_retry()
                 time.sleep(1.5)
                 continue
 
             # 能解析不代表能用：截斷與字元污染都要跟解析失敗一樣重試，不能送去生圖
-            problem = digest_quality_problem(data, finish_reason, density=req.density)
+            problem = digest_quality_problem(
+                data,
+                finish_reason,
+                density=req.density,
+                format_key=req.editor_format if req.role == "編輯" else None,
+            )
+            # B67（2026-09-16 使用者裁決）：塊數不足在第 DIGEST_POINT_COUNT_ATTEMPTS
+            # 次之後不再擋。防呆分不出「模型偷懶」與「原文本來就只有三個點」——兩者
+            # 長得一模一樣，硬擋到底的結果是素材單薄的稿連撞滿次數然後整條 502，
+            # 使用者一張圖都拿不到。手上那張少一點的圖是完全可用的成品，不是壞資料。
+            # ⚠只放行塊數這一種：截斷／型別錯／頻道洩漏／亂碼仍然擋滿 DIGEST_ATTEMPTS，
+            # 所以要先確認「這次唯一的問題就是塊數」才放行（2026-08-01 實測，上游
+            # 間歇脫軌的單次成功率只有約 2/3，那些是真故障不能放水）。
+            if problem and attempt >= DIGEST_POINT_COUNT_ATTEMPTS - 1:
+                count_problem = digest_point_count_problem(
+                    data.get("variable") or "",
+                    req.density,
+                    req.editor_format if req.role == "編輯" else None,
+                )
+                if count_problem and problem == count_problem:
+                    print(
+                        f"[generate] 塊數已試滿 {DIGEST_POINT_COUNT_ATTEMPTS} 次仍不足，"
+                        f"放行（{problem}）",
+                        flush=True,
+                    )
+                    problem = ""
             # 不消化的逐字比對排在通用檢查之後：兩者都過不了時，先報通用的那個。
             # 最後一次刻意不擋——擋了就是整條 502，而這時手上的結果通常只是頭尾多了
             # 雜訊，仍比沒有圖好；改成印警告讓回查時看得到。
@@ -2414,6 +2960,16 @@ def generate(req: GenerateRequest):
                     f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} quality check failed: {problem}",
                     flush=True,
                 )
+                truncated = finish_reason == "length" or "截斷" in problem
+                retry_context = digest_retry_note(
+                    attempt + 1,
+                    "truncated" if truncated else "quality",
+                    problem,
+                )
+                reasoning_effort = (
+                    DIGEST_REASONING_RETRY_EFFORT if truncated else None
+                )
+                _note_generation_retry()
                 time.sleep(1.5)
                 continue
 
@@ -2455,6 +3011,9 @@ def generate(req: GenerateRequest):
                 # 網頁版的第二段消化在這裡做（LINE 走 generate_news_image 自己那條，
                 # 兩邊都做會白查一次圖）。落檔放在後面，記的是最終採用的那份。
                 result = apply_photo_availability(result, req)
+                notices = collected_portrait_notices()
+                if notices:
+                    result = result.model_copy(update={"notices": notices})
                 request_log.log_generation(
                     request_id=request_log.new_request_id(),
                     source="digest",
@@ -2717,12 +3276,20 @@ def generate_image(req: ImageGenerateRequest):
     網頁版可帶 portrait_subjects，在這裡查參考照並注入肖像規則。
     generate_news_image 已組好 prompt，走這支時不要重複落檔。
     """
+    own_notices = not _inside_pipeline.get()
+    if own_notices:
+        reset_portrait_notices()
     req = apply_portrait_to_image_request(req)
     # 順序有意義：自動底圖要先加進 reference_images，下一行才會替它注入
     # ATTACHED MAP REFERENCE 那段用途規則（「標點已在真實位置，不要移動」）。
     req = apply_map_reference_to_image_request(req)
     req = apply_user_references_to_image_request(req)
+    _, output_canvas = image_generation_size(req)
     request_id = request_log.new_request_id()
+    own_clock = not _inside_pipeline.get()
+    started = _generation_clock() if own_clock else 0.0
+    if own_clock:
+        _reset_generation_retries()
     try:
         # safe_frame_profile 帶的是「角色」，實際要用哪個框在這裡才決定——
         # 全系統只有這一個解析點，pipeline 與網頁版直呼都會經過。
@@ -2735,19 +3302,18 @@ def generate_image(req: ImageGenerateRequest):
             safe_frame=needs_frame,
             profile=frame_profile,
             broadcast_hole=req.broadcast_hole,
+            canvas=output_canvas,
         )
     except Exception as exc:
-        if not _inside_pipeline.get():
-            request_log.log_failure(
-                request_id=request_id,
-                source="web-image",
-                news_text="",
-                error=str(exc),
-                prompt=req.prompt,
+        if own_clock:
+            _record_generation_failure(
+                request_id, started, exc,
+                source="web-image", news_text="", prompt=req.prompt,
                 provider=req.provider,
             )
         raise
-    if not _inside_pipeline.get():
+    if own_clock:
+        meta = _outcome_meta(started, provider=req.provider, image_model=result.model)
         request_log.log_generation(
             request_id=request_id,
             source="web-image",
@@ -2762,9 +3328,12 @@ def generate_image(req: ImageGenerateRequest):
             mime_type=result.mime_type,
             source="web-image",
             prompt=req.prompt,
-            provider=req.provider,
-            image_model=result.model,
+            **meta,
         )
+    if own_notices:
+        notices = collected_portrait_notices()
+        if notices:
+            result = result.model_copy(update={"notices": notices})
     return result
 
 
@@ -3037,7 +3606,9 @@ MODEL_ASPECT_RATIOS: dict[str, frozenset[str]] = {
 }
 
 
-def _openrouter_gpt_size(model: str, aspect_ratio: str) -> str | None:
+def _openrouter_gpt_size(
+    model: str, aspect_ratio: str, resolved_size: str | None = None
+) -> str | None:
     """OpenRouter 上的 GPT Image 系列要送明確的 size，不能只靠 aspect_ratio。
 
     2026-09-10 實打：GPT Image 2.5（sunburst／flare）在 OpenRouter 上會把 aspect_ratio
@@ -3047,6 +3618,8 @@ def _openrouter_gpt_size(model: str, aspect_ratio: str) -> str | None:
     """
     if not model.startswith("openai/gpt-image"):
         return None
+    if resolved_size is not None:
+        return resolved_size
     return NATIVE_GPT_IMAGE_SIZES.get(aspect_ratio)
 
 
@@ -3081,6 +3654,11 @@ def assert_aspect_ratio_supported(model: str, aspect_ratio: str) -> None:
 
 
 def generate_image_raw(req: ImageGenerateRequest) -> ImageGenerateResponse:
+    # B61／B62：唯一強制層。copy 再注入，不 mutate 呼叫端物件（retry／稽核
+    # 會再讀原 prompt）。冪等靠 FINAL_IMAGE_BASELINE_MARKER，不是模糊 substring。
+    req = req.model_copy(
+        update={"prompt": ensure_final_image_baseline(req.prompt)}
+    )
     backend = os.getenv("IMAGE_BACKEND", "openrouter")
     if backend == "openrouter" and os.getenv("OPENROUTER_API_KEY"):
         if req.provider == "gpt":
@@ -3096,7 +3674,10 @@ def generate_image_raw(req: ImageGenerateRequest) -> ImageGenerateResponse:
 
 
 def frame_image_response(
-    result: ImageGenerateResponse, profile: str = "記者"
+    result: ImageGenerateResponse,
+    profile: str = "記者",
+    *,
+    canvas: tuple[int, int] = safe_area_spec.BASE_CANVAS,
 ) -> ImageGenerateResponse:
     """把回傳圖置入安全框。
 
@@ -3119,6 +3700,7 @@ def frame_image_response(
             base64.b64decode(result.image_data_base64),
             background=background,
             profile=profile,
+            canvas=canvas,
         )
     except Exception as exc:  # noqa: BLE001 — 任何影像處理失敗都必須讓呼叫端知道
         print(f"[safe_frame] 置框失敗：{type(exc).__name__}: {exc}", flush=True)
@@ -3135,8 +3717,11 @@ def frame_image_response(
 
 
 def _compose_error_status(exc: Exception) -> int:
-    """合成失敗的 HTTP 狀態：使用者能自己修的（標題太長）回 400，其餘 500。"""
-    return 400 if "標題太長" in str(exc) else 500
+    """合成失敗的 HTTP 狀態：使用者能自己修的（標題太長、B55 面積防呆）回 400，其餘 500。"""
+    message = str(exc)
+    if "標題太長" in message or "改動範圍過大" in message:
+        return 400
+    return 500
 
 
 def broadcast_hole_for(req: "NewsImageGenerateRequest") -> str:
@@ -3147,7 +3732,11 @@ def broadcast_hole_for(req: "NewsImageGenerateRequest") -> str:
 
 
 def apply_broadcast_hole_response(
-    result: ImageGenerateResponse, side: str, profile: str
+    result: ImageGenerateResponse,
+    side: str,
+    profile: str,
+    *,
+    canvas: tuple[int, int] = safe_area_spec.BASE_CANVAS,
 ) -> ImageGenerateResponse:
     """在置框後的成品上貼出播出鏡面的挖空框。
 
@@ -3156,7 +3745,10 @@ def apply_broadcast_hole_response(
     """
     try:
         holed = compose.apply_broadcast_hole(
-            base64.b64decode(result.image_data_base64), side, profile=profile
+            base64.b64decode(result.image_data_base64),
+            side,
+            canvas=canvas,
+            profile=profile,
         )
     except Exception as exc:  # noqa: BLE001 — 影像處理失敗必須讓呼叫端知道
         print(f"[compose] 挖空框失敗：{type(exc).__name__}: {exc}", flush=True)
@@ -3176,6 +3768,7 @@ def finalize_image_result(
     safe_frame: bool,
     profile: str,
     broadcast_hole: str = "",
+    canvas: tuple[int, int] = safe_area_spec.BASE_CANVAS,
 ) -> ImageGenerateResponse:
     """生成後的共同收尾：驗比例，需要時置框並保留置框前原圖。
 
@@ -3190,9 +3783,11 @@ def finalize_image_result(
         if broadcast_hole:
             print("[compose] safe_frame=False，跳過播出鏡面挖空框", flush=True)
         return result
-    framed = frame_image_response(result, profile)
+    framed = frame_image_response(result, profile, canvas=canvas)
     if broadcast_hole:
-        framed = apply_broadcast_hole_response(framed, broadcast_hole, profile)
+        framed = apply_broadcast_hole_response(
+            framed, broadcast_hole, profile, canvas=canvas
+        )
     return framed.model_copy(
         update={
             # 追加修改要餵**置框前**原圖回去，不是挖過洞的成品（見欄位說明）
@@ -3202,8 +3797,17 @@ def finalize_image_result(
     )
 
 
-def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGenerateResponse:
+def generate_via_openrouter(
+    model: str,
+    req: ImageGenerateRequest,
+    *,
+    resolved_size: str | None = None,
+) -> ImageGenerateResponse:
     """透過 OpenRouter 統一圖片端點生成，一把 OPENROUTER_API_KEY 涵蓋多家模型。"""
+    if resolved_size is None and model.startswith("openai/gpt-image"):
+        resolved_size, _ = image_generation_size(
+            req.model_copy(update={"provider": "gpt"})
+        )
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         raise HTTPException(
@@ -3225,7 +3829,7 @@ def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGener
     # GPT Image 系列額外送明確的 size（2026-09-10 熱修，根因見 OPENROUTER_GPT_IMAGE_MODEL
     # 上面那段）：2.5 系列的 aspect_ratio 會被整個丟掉，size 才吃得到。aspect_ratio 一併
     # 留著，對 2 與其他模型仍然有效；兩者並存時以 size 為準（實打確認）。
-    gpt_size = _openrouter_gpt_size(model, req.aspect_ratio)
+    gpt_size = _openrouter_gpt_size(model, req.aspect_ratio, resolved_size)
     if gpt_size:
         payload["size"] = gpt_size
     # 參考圖兩個來源合併送出：肖像參考照（自動查圖）在前、使用者上傳在後。
@@ -3318,6 +3922,47 @@ NATIVE_GPT_IMAGE_SIZES = {
     "21:9": "1680x720",
 }
 
+# F38 stays deliberately disabled until the pricing checkpoint is approved.
+HIGH_RES_EDITOR_ENABLED = False
+HIGH_RES_EDITOR_DENSITIES = frozenset({"standard", "maximum"})
+HIGH_RES_GPT_IMAGE_SIZES = {
+    "16:9": "2560x1440",
+    "21:9": "3360x1440",
+}
+HIGH_RES_OUTPUT_CANVASES = {
+    "16:9": (2560, 1440),
+    "21:9": (3360, 1440),
+}
+
+
+def image_generation_size(
+    req: ImageGenerateRequest,
+) -> tuple[str | None, tuple[int, int]]:
+    """Resolve provider size and local framing canvas from one request.
+
+    The high-resolution path is intentionally gated by the module flag and is
+    limited to the editor role plus the two approved high-density values.
+    Other aspect ratios retain the existing base framing canvas.
+    """
+    high_res = (
+        HIGH_RES_EDITOR_ENABLED
+        and req.safe_frame_profile == safe_area_spec.EDITOR_PROFILE
+        and req.density in HIGH_RES_EDITOR_DENSITIES
+        and req.aspect_ratio in HIGH_RES_OUTPUT_CANVASES
+    )
+    output_canvas = (
+        HIGH_RES_OUTPUT_CANVASES[req.aspect_ratio]
+        if high_res
+        else safe_area_spec.BASE_CANVAS
+    )
+    if req.provider == "gpt":
+        size_map = HIGH_RES_GPT_IMAGE_SIZES if high_res else NATIVE_GPT_IMAGE_SIZES
+        provider_size = size_map.get(req.aspect_ratio)
+    else:
+        # Gemini's existing image_size enum is intentionally unchanged in F38.
+        provider_size = req.image_size
+    return provider_size, output_canvas
+
 
 def _native_reference_files(req: ImageGenerateRequest) -> list[tuple[str, io.BytesIO, str]]:
     """把這次請求的參考圖轉成 images.edit 收得下的檔案清單（順序：肖像照、使用者上傳）。
@@ -3344,11 +3989,17 @@ def _native_reference_files(req: ImageGenerateRequest) -> list[tuple[str, io.Byt
     return files
 
 
-def generate_gpt_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
+def generate_gpt_image(
+    req: ImageGenerateRequest, *, resolved_size: str | None = None
+) -> ImageGenerateResponse:
     model = os.getenv("OPENAI_IMAGE_MODEL", NATIVE_GPT_IMAGE_MODEL)
     quality = os.getenv("OPENAI_IMAGE_QUALITY", "medium")
 
-    size = NATIVE_GPT_IMAGE_SIZES.get(req.aspect_ratio)
+    if resolved_size is None:
+        resolved_size, _ = image_generation_size(
+            req.model_copy(update={"provider": "gpt"})
+        )
+    size = resolved_size
     if size is None:
         raise HTTPException(
             status_code=400,
@@ -3432,6 +4083,14 @@ def generate_gemini_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
     content: list[dict[str, object]] = [{"type": "text", "text": req.prompt}]
     if req.reference_image_data_url:
         mime_type, _, encoded = _split_data_url(req.reference_image_data_url)
+        if encoded:
+            content.append({"type": "image", "mime_type": mime_type, "data": encoded})
+    # B63：具名換臉同時需要原圖與目標肖像。原生 Gemini 的一般多圖路徑仍維持
+    # 原有能力界線；這裡只補送 refine 明確標成 portrait 的第二張參考圖。
+    for ref in req.reference_images:
+        if ref.purpose != "portrait":
+            continue
+        mime_type, _, encoded = _split_data_url(ref.data_url)
         if encoded:
             content.append({"type": "image", "mime_type": mime_type, "data": encoded})
     payload = {
@@ -3550,6 +4209,8 @@ class NewsImageGenerateResponse(BaseModel):
     source_mime_type: str = ""
     # 這次實際採用的 seed（F0），語意同 GenerateResponse.seed。
     seed: int = 0
+    # F40 第 3 層的 nonfatal notice；只走訊息欄，不畫進圖。
+    notices: list[str] = Field(default_factory=list)
 
 
 def _extract_title(variable: str) -> str:
@@ -3658,6 +4319,11 @@ def lookup_portrait_photos(
 
     `english_names` 與 subjects 同順序（消化端的 portrait_subjects_en），中文譯名
     查不到時用它再查一次——臺灣譯名常常不是中文維基的條目名（2026-08-18）。
+
+    只回得出「有沒有照片」，分不出「查無此人」與「有條目沒照片」——F40 四層分流
+    要分這兩種的呼叫端請用 `lookup_portrait_outcomes()`。這支保留給還沒接上 F40
+    的既有呼叫端（`apply_photo_availability`、`resolve_digest_portraits`、
+    `apply_portrait_to_image_request` 的使用者上傳分支），行為與改動前逐字相同。
     """
     found: dict[str, photo_lookup.ReferencePhoto] = {}
     missing: list[str] = []
@@ -3676,29 +4342,84 @@ def lookup_portrait_photos(
     return found, missing
 
 
+def lookup_portrait_outcomes(
+    subjects: list[str],
+    english_names: list[str] | None = None,
+) -> dict[str, photo_lookup.PortraitLookupOutcome]:
+    """逐位查完整 outcome（含 entry_found），F40 四層分流判斷用。
+
+    與 `lookup_portrait_photos` 平行存在，不是取代它：查圖失敗一樣不讓整條請求
+    失敗，失敗就當「查無此人」（entry_found=False）。
+    """
+    outcomes: dict[str, photo_lookup.PortraitLookupOutcome] = {}
+    english_names = english_names or []
+    for index, subject in enumerate(subjects):
+        alt = english_names[index : index + 1] if index < len(english_names) else []
+        try:
+            outcome = photo_lookup.find_portrait_outcome(subject, alt_names=alt)
+        except Exception as exc:  # noqa: BLE001 — 查圖是加分項，不該拖垮生圖
+            print(f"[portrait] 查參考照片失敗（{subject}）：{exc}", flush=True)
+            outcome = photo_lookup.PortraitLookupOutcome(
+                photo=None, entry_found=False, matched_name=None, language=None
+            )
+        outcomes[subject] = outcome
+    return outcomes
+
+
+# B73（2026-09-16 使用者裁決）：連維基條目都查不到時，是否仍交給生圖模型依語境
+# 自畫具名真人的臉。使用者在知悉 B45 風險後仍裁定要開。
+#
+# ⚠**預設暫時是關的，而使用者裁定的是開**——這個落差是刻意的，要說清楚：
+# 打開之後**有 20 道既有測試轉紅**，而且不是雜項，包含
+#   tests/test_plan_three_features.py::test_scene_upload_does_not_lift_iron_rule（「鐵律」）
+#   tests/test_portrait_rules.py::test_one_missing_photo_blocks_every_face（「全有或全無」）
+# 這一類**安全不變式的守門測試**——它們釘的正是 2026-08-18 那次實驗的結論：
+# 「有照片的畫、沒照片的畫剪影」生圖模型辦不到，沒照片的那位會被憑空捏臉還掛真名。
+# 換句話說，這 20 題不是過期的測試，是**這條裁定真正要推翻的東西**。
+# 逐題檢視、判斷哪些該改哪些是真的防線，是一件要清醒著做的事，
+# 不能在收工前趕著改掉 20 道安全測試。**列為下一個工作階段的第一件事。**
+#
+# 現況：程式路徑已經寫好且測試涵蓋（tests/test_b73_name_alias_20260916.py 兩條路都釘），
+# 要啟用只需 `PORTRAIT_NO_ENTRY_FALLBACK=true`，不必改程式碼。
+# B73 的另一半（譯名對照表，13 人從第 4 層救回第 2 層）**已經生效**，不受這個開關影響。
+PORTRAIT_NO_ENTRY_FALLBACK = (
+    os.getenv("PORTRAIT_NO_ENTRY_FALLBACK", "false").strip().lower()
+    not in ("", "0", "false", "off")
+)
+
+
 def resolve_portraits(
     portrait_subjects: list[str],
     provider: str,
     *,
     photos: dict[str, photo_lookup.ReferencePhoto] | None = None,
     english_names: list[str] | None = None,
+    outcomes: dict[str, photo_lookup.PortraitLookupOutcome] | None = None,
 ) -> tuple[str, list[photo_lookup.ReferencePhoto]]:
     """決定這次的肖像處理方式，回傳 (portrait_mode, 參考照片清單)。
 
-    四種結果：
+    F40 四層分流（2026-09-16 使用者裁決，優先序固定）：
     - 不是真人肖像題 → ("none", [])，沿用一般規則
-    - 1 位且查到照片 → ("reference", [照片])，措辭與行為與放寬前逐字相同
+    - 1 位且查到照片 → ("reference", [照片])
     - 2-3 位且**每一位都查到照片** → ("reference_multi", [照片…])
-    - 其餘（有人查不到、超過 3 位、後端送不出參考圖）→ ("no_reference", [])
+    - 沒照片但**每一位都確認查得到維基條目** → ("entry_only", [])：允許模型依新聞
+      語境自畫具名人物，呼叫端要用 `portrait_entry_only_notice()` 記一則 notice
+      （見 apply_portrait_to_image_request）——⚠使用者裁定不在圖上標「長相為 AI
+      推測」，通知走 response 的 notices，不畫進圖裡。
+    - 其餘（有人連條目都查不到、超過 3 位、後端送不出參考圖）→ ("no_reference", [])：
+      畫面不安排這個人（PORTRAIT_NO_REFERENCE_RULES 已改寫成無人場景，不是背影／剪影）。
 
-    **全有或全無，後端絕不自行截斷**（2026-08-18 實驗結論）：只要有一位沒有照片，
-    整張退回不畫臉。理由是實測 2/2 證明「有照片的畫、沒照片的畫剪影」這種逐人區分
-    生圖模型辦不到，沒照片的那位會被憑空捏臉還掛真名。也不能把 4 人截成 3 人——
-    版面是照 4 個人設計的，砍掉一個會留下一個沒人的空位。超過 3 人要在**消化階段**
-    就壓下來（見 REAL_WORLD_FIDELITY_RULES 第 6 條與 EXCLUDED_PEOPLE_RULES_TEMPLATE）。
+    **全有或全無，後端絕不自行截斷**（2026-08-18 實驗結論，entry_only 沿用同一原則）：
+    只要有一位沒有照片，整張退回「不逐人區分」的安全值。理由是實測 2/2 證明「有照片
+    的畫、沒照片的畫剪影」這種逐人區分生圖模型辦不到，沒照片的那位會被憑空捏臉還掛
+    真名。也不能把 4 人截成 3 人——版面是照 4 個人設計的，砍掉一個會留下一個沒人的
+    空位。超過 3 人要在**消化階段**就壓下來（見 REAL_WORLD_FIDELITY_RULES 第 6 條）。
+    這也是為什麼「一人有照片、另一人只有條目」混合時整組退到 entry_only、放棄那張
+    已查到的照片——同一個全有或全無的理由，屬於本輪判斷但計畫沒寫死的地方，
+    細節見任務回報。
 
-    `photos` 可由呼叫端先查好傳進來（兩段式消化流程會重複用到同一批查詢結果），
-    沒傳就自己查。
+    `photos`／`outcomes` 可由呼叫端先查好傳進來（兩段式消化流程會重複用到同一批
+    查詢結果），沒傳就自己查。
     """
     if not portrait_subjects:
         return "none", []
@@ -3715,18 +4436,54 @@ def resolve_portraits(
     if len(portrait_subjects) > 1 and not supports_multiple_reference_images(provider):
         print("[portrait] 目前後端送不出多張參考圖，多人肖像退回不生成臉孔", flush=True)
         return "no_reference", []
+    if outcomes is not None and photos is None:
+        photos = {name: o.photo for name, o in outcomes.items() if o.photo is not None}
     if photos is None:
         photos, _ = lookup_portrait_photos(portrait_subjects, english_names)
     missing = [name for name in portrait_subjects if name not in photos]
-    if missing:
+    if not missing:
+        ordered = [photos[name] for name in portrait_subjects]
+        mode = "reference" if len(ordered) == 1 else "reference_multi"
+        return mode, ordered
+    if outcomes is None:
+        outcomes = lookup_portrait_outcomes(portrait_subjects, english_names)
+    all_have_entries = all(
+        (outcomes.get(name) is not None and outcomes[name].entry_found)
+        for name in portrait_subjects
+    )
+    if all_have_entries:
         print(
-            f"[portrait] 查不到參考照（{'、'.join(missing)}），整張退回不生成臉孔",
+            f"[portrait] 沒有合格參考照但查得到條目（{'、'.join(missing)}），"
+            "允許模型依語境自畫並通知使用者",
             flush=True,
         )
-        return "no_reference", []
-    ordered = [photos[name] for name in portrait_subjects]
-    mode = "reference" if len(ordered) == 1 else "reference_multi"
-    return mode, ordered
+        return "entry_only", []
+    # B73 第二半（2026-09-16 使用者裁決：「就算維基查不到還是走第三層，讓生圖 AI
+    # 自己判斷」）。原本這裡一律退回 no_reference（整張畫成無人場景）。
+    #
+    # 為什麼這是一個比字面更大的改動——監督已把實測攤給使用者看過，使用者仍維持原裁：
+    # 實測 32 個人名（17 位臺灣政要＋15 位外國領袖），**第 3 層命中 0 次**，
+    # 全部落在第 2 層（有條目有照片）或第 4 層（連條目都沒有）。也就是說
+    # `entry_only` 這條路在實務上幾乎不會自然觸發，**把第 4 層導到第 3 層，
+    # 等於是替「完全查不到的人」開放讓生圖模型自己捏一張臉**，而那正是帳本
+    # [B45] 登記的事故（YT 整點直播把真實具名人物配上 AI 捏造的臉）。
+    #
+    # 留下的防線：①notice 一定會送到前端（呼叫端用 portrait_entry_only_notice），
+    # 使用者看得到「這張臉是 AI 推測的」；②B73 的譯名對照表已先把 13 位常見人物
+    # 從第 4 層救回第 2 層，真正落到這條路的人比修之前少很多。
+    # 可退：環境變數 PORTRAIT_NO_ENTRY_FALLBACK=off 立刻回到舊行為（畫成無人場景）。
+    if PORTRAIT_NO_ENTRY_FALLBACK:
+        print(
+            f"[portrait] 連維基條目都查不到（{'、'.join(missing)}），"
+            "依 B73 裁決仍交給生圖模型依語境自畫，並通知使用者",
+            flush=True,
+        )
+        return "entry_only", []
+    print(
+        f"[portrait] 查不到參考照（{'、'.join(missing)}），整張退回「無人場景」",
+        flush=True,
+    )
+    return "no_reference", []
 
 
 def resolve_portrait(
@@ -3762,6 +4519,8 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
         mode, photos = resolve_portraits(
             subjects, req.provider, english_names=english
         )
+        if mode == "entry_only":
+            _record_portrait_notice(portrait_entry_only_notice(subjects))
         block = PORTRAIT_MODES.get(mode, "")
         prompt = req.prompt
         if block and block not in prompt:
@@ -3999,6 +4758,21 @@ class ImageRefineRequest(BaseModel):
     # YT 直播封面：附圖是無文字底圖，改完仍須無文字（文字由程式疊）。
     # 見 news_prompt.TEXT_FREE_REFINE_RULES。
     text_free: bool = False
+    # B63：具名換臉只接受這個結構化欄位，不從 instruction 猜姓名。
+    replacement_person: str = ""
+    # B63：有提供時，purpose="portrait" 的第一張使用者上傳肖像優先於自動查圖。
+    reference_images: list[UserReferenceImage] = Field(
+        default_factory=list, max_length=MAX_INPUT_REFERENCES
+    )
+    # B51（2026-09-16）：結構化的封面種類，白名單值見 editor_formats.COVER_REFINE_KINDS。
+    # 非空時 refine_image() 直接跳過 resolve_frame_plan()，不置對位框——封面的固定元素
+    # （Logo／節目標籤／日期）由前端 recompose 貼，置框會把整張畫面縮放/推出版面，
+    # 角標跟著跑位。刻意不依 safe_frame_profile 這個角色字串猜（編輯身分一律會被
+    # resolve_frame_plan 置框，見該函式 docstring），白名單值不對就讓 pydantic 擋掉，
+    # 不接受任意 client 拿它繞過一般編輯圖片的安全框。
+    cover_kind: Literal[
+        "", "ten_cover", "yt_live_cover", "yt_hourly_cover", "yt_live24_cover", "yt_hot_cover"
+    ] = ""
 
 
 @app.post(
@@ -4013,47 +4787,90 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
     語意是「以附圖為基礎改圖」，混在同一個函式裡兩種行為會打架。
     這條**不呼叫消化端**（省錢也省時間）——指令直接組進 refine prompt。
     """
-    if not supports_reference_image(req.provider):
-        raise HTTPException(
-            status_code=400,
-            detail="目前的生圖後端無法附上參考圖，無法以圖改圖；請整張重新生成",
-        )
-    image_req = ImageGenerateRequest(
-        prompt=build_refine_prompt(req.instruction, text_free=req.text_free),
-        provider=req.provider,
-        aspect_ratio=req.aspect_ratio,
-        image_size=req.image_size,
-        safe_frame=req.safe_frame,
-        safe_frame_profile=req.safe_frame_profile,
-        broadcast_hole=req.broadcast_hole,
-        reference_image_data_url=(
-            f"data:{req.source_mime_type};base64,{req.source_image_base64}"
-        ),
-    )
     request_id = request_log.new_request_id()
+    started = _generation_clock()
+    _reset_generation_retries()
+    reset_portrait_notices()
+    prompt = ""
     try:
-        # 追加修改也要走同一個解析點，否則編輯 OFF 改完圖會整個跳過後製，
-        # 出來一張沒置框的原始生成圖（尺寸與版面都不對，卻不會報錯）。
-        _, needs_frame, frame_profile = resolve_frame_plan(
-            req.safe_frame_profile, req.safe_frame
+        if not supports_reference_image(req.provider):
+            raise HTTPException(
+                status_code=400,
+                detail="目前的生圖後端無法附上參考圖，無法以圖改圖；請整張重新生成",
+            )
+        replacement_person = req.replacement_person.strip()
+        replacement_mode = ""
+        replacement_reference = ""
+        replacement_images = [
+            ref for ref in req.reference_images if ref.purpose == "portrait"
+        ][:1]
+        if replacement_person and replacement_images:
+            replacement_mode = "user_uploaded"
+        elif replacement_person:
+            outcome = lookup_portrait_outcomes([replacement_person]).get(replacement_person)
+            if outcome is not None and outcome.photo is not None:
+                replacement_mode = "wikipedia_photo"
+                replacement_reference = outcome.photo.data_url()
+                replacement_images = [
+                    UserReferenceImage(data_url=replacement_reference, purpose="portrait")
+                ]
+            elif outcome is not None and outcome.entry_found:
+                replacement_mode = "entry_only"
+                _record_portrait_notice(portrait_entry_only_notice([replacement_person]))
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"無法完成具名換臉：「{replacement_person}」：查不到對應的 Wikipedia "
+                        "人物條目，不能讓模型自行捏造一張臉。請改走「原圖放置」並自行上傳照片。"
+                    ),
+                )
+        image_req = ImageGenerateRequest(
+            prompt=build_refine_prompt(
+                req.instruction,
+                text_free=req.text_free,
+                replacement_person=replacement_person,
+                replacement_mode=replacement_mode,
+            ),
+            provider=req.provider,
+            aspect_ratio=req.aspect_ratio,
+            image_size=req.image_size,
+            safe_frame=req.safe_frame,
+            safe_frame_profile=req.safe_frame_profile,
+            broadcast_hole=req.broadcast_hole,
+            reference_image_data_url=(
+                f"data:{req.source_mime_type};base64,{req.source_image_base64}"
+            ),
+            reference_images=replacement_images if replacement_person else [],
         )
+        prompt = image_req.prompt
+        if req.cover_kind:
+            # B51：封面追加修改一律不置框——resolve_frame_plan 對編輯身分永遠回
+            # needs_frame=True（兩檔都是滿版生成＋後製，見該函式 docstring），照舊問
+            # 下去只要使用者是編輯就一定被置框，safe_frame=False 完全無效。封面的
+            # 固定元素靠前端 recompose 貼，不能讓對位框把角標／Logo 縮放推出版面。
+            needs_frame, frame_profile = False, safe_area_spec.REPORTER_PROFILE
+        else:
+            # 追加修改也要走同一個解析點，否則編輯 OFF 改完圖會整個跳過後製，
+            # 出來一張沒置框的原始生成圖（尺寸與版面都不對，卻不會報錯）。
+            _, needs_frame, frame_profile = resolve_frame_plan(
+                req.safe_frame_profile, req.safe_frame
+            )
         result = finalize_image_result(
             generate_image_raw(image_req),
             aspect_ratio=req.aspect_ratio,
             safe_frame=needs_frame,
             profile=frame_profile,
             broadcast_hole=req.broadcast_hole,
+            canvas=image_generation_size(image_req)[1],
         )
     except Exception as exc:
-        request_log.log_failure(
-            request_id=request_id,
-            source="web-refine",
-            news_text="",
-            error=str(exc),
-            prompt=image_req.prompt,
-            provider=req.provider,
+        _record_generation_failure(
+            request_id, started, exc,
+            source="web-refine", news_text="", prompt=prompt, provider=req.provider,
         )
         raise
+    meta = _outcome_meta(started, provider=req.provider, image_model=result.model)
     request_log.log_generation(
         request_id=request_id,
         source="web-refine",
@@ -4068,16 +4885,18 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
         mime_type=result.mime_type,
         source="web-refine",
         prompt=image_req.prompt,
-        provider=req.provider,
-        image_model=result.model,
+        **meta,
     )
+    notices = collected_portrait_notices()
+    if notices:
+        result = result.model_copy(update={"notices": notices})
     return result
 
 
 def resolve_digest_portraits(
     digest: GenerateResponse, req: NewsImageGenerateRequest, provider: str
 ) -> tuple[GenerateResponse, dict[str, photo_lookup.ReferencePhoto]]:
-    """查參考照；有人查不到就重新消化一次，把那些人排出版面。
+    """查參考照；只有連維基條目都查不到的人才重新消化排出版面。
 
     回傳 (最終採用的消化結果, 已查到的照片)。
 
@@ -4095,12 +4914,22 @@ def resolve_digest_portraits(
     if not subjects or not supports_reference_image(provider):
         return digest, {}
 
-    photos, missing = lookup_portrait_photos(subjects, digest.portrait_subjects_en)
-    if not missing:
+    outcomes = lookup_portrait_outcomes(subjects, digest.portrait_subjects_en)
+    photos = {
+        name: outcome.photo
+        for name, outcome in outcomes.items()
+        if outcome.photo is not None
+    }
+    missing = [name for name in subjects if name not in photos]
+    entry_only = [name for name in missing if outcomes[name].entry_found]
+    no_entry = [name for name in missing if not outcomes[name].entry_found]
+    if not no_entry:
+        if entry_only:
+            _record_portrait_notice(portrait_entry_only_notice(entry_only))
         return digest, photos
 
     print(
-        f"[portrait] 查不到參考照（{'、'.join(missing)}），重新消化一次把他們排出版面",
+        f"[portrait] 連維基條目都查不到（{'、'.join(no_entry)}），重新消化一次把他們排出版面",
         flush=True,
     )
     retried = generate(
@@ -4115,17 +4944,31 @@ def resolve_digest_portraits(
             tone=req.tone,
             editor_format=req.editor_format,
             hole_side=req.hole_side,
-            exclude_people=missing,
+            exclude_people=no_entry,
         )
     )
     if not retried.portrait_subjects:
         return retried, {}
-    photos, missing = lookup_portrait_photos(
+    retried_outcomes = lookup_portrait_outcomes(
         retried.portrait_subjects, retried.portrait_subjects_en
     )
-    if missing:
+    photos = {
+        name: outcome.photo
+        for name, outcome in retried_outcomes.items()
+        if outcome.photo
+    }
+    retried_missing = [name for name in retried.portrait_subjects if name not in photos]
+    retried_entry_only = [
+        name for name in retried_missing if retried_outcomes[name].entry_found
+    ]
+    retried_no_entry = [
+        name for name in retried_missing if not retried_outcomes[name].entry_found
+    ]
+    if retried_entry_only:
+        _record_portrait_notice(portrait_entry_only_notice(retried_entry_only))
+    if retried_no_entry:
         print(
-            f"[portrait] 重新消化後仍有人查不到照片（{'、'.join(missing)}），不再重試",
+            f"[portrait] 重新消化後仍有人連維基條目都查不到（{'、'.join(retried_no_entry)}），不再重試",
             flush=True,
         )
     return retried, photos
@@ -4135,17 +4978,22 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
     # 前置過濾（縱深防禦）：擋垃圾／亂碼／注入輸入，避免燒掉付費呼叫。
     # LINE 路徑在 line_bot 已含頻率限制地查過一次，這裡 client_id 為空時
     # 只做內容檢查、不重複觸發頻率限制。
-    verdict = check_input(req.news_text, client_id=req.client_id)
-    if not verdict.accepted:
-        raise HTTPException(status_code=400, detail=verdict.user_message)
-    if req.client_id:
-        note_accepted(req.news_text, client_id=req.client_id)
+    reset_portrait_notices()
     request_id = request_log.new_request_id()
+    started = _generation_clock()
+    _reset_generation_retries()
     # 編輯固定 GPT＋16:9＋對位框；記者維持呼叫端 provider、safe_frame 時 21:9
     provider = "gpt" if req.role == "編輯" else req.provider
     aspect_ratio = resolve_aspect_ratio(req.aspect_ratio, req.safe_frame, req.role)
+    digest = None
+    prompt = ""
     token = _inside_pipeline.set(True)
     try:
+        verdict = check_input(req.news_text, client_id=req.client_id)
+        if not verdict.accepted:
+            raise HTTPException(status_code=400, detail=verdict.user_message)
+        if req.client_id:
+            note_accepted(req.news_text, client_id=req.client_id)
         digest = generate(
             GenerateRequest(
                 news_text=req.news_text,
@@ -4182,53 +5030,36 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             # 明文覆蓋才壓得住前面那些「把 VARIABLE FIELDS 畫上去」的條款。
             no_text=(req.density == "no_text"),
         )
-        try:
-            image = generate_image(
-                ImageGenerateRequest(
-                    prompt=prompt,
-                    provider=provider,
-                    broadcast_hole=broadcast_hole_for(req),
-                    aspect_ratio=aspect_ratio,
-                    image_size=req.image_size,
-                    safe_frame=req.safe_frame,
-                    # 傳角色而非解析後的 profile：generate_image 會解析一次，
-                    # 這裡先解析會讓它拿「編輯安全框」當角色再解析一次而解錯。
-                    safe_frame_profile=req.role,
-                    # 地圖類的真實座標。generate_image 會據此拼底圖並附上去；
-                    # 送不出參考圖的後端會安靜略過（見 apply_map_reference_to_image_request）。
-                    map_points=digest.map_points,
-                    # 單人走既有的單張欄位（措辭與行為與放寬前逐字相同），
-                    # 2-3 人才走多張通道
-                    reference_image_data_url=(
-                        reference_photos[0].data_url()
-                        if len(reference_photos) == 1
-                        else ""
-                    ),
-                    portrait_reference_data_urls=(
-                        [photo.data_url() for photo in reference_photos]
-                        if len(reference_photos) > 1
-                        else []
-                    ),
-                )
-            )
-        except Exception as exc:
-            request_log.log_failure(
-                request_id=request_id,
-                source=req.source or "news-image",
-                client_id=req.client_id,
-                news_text=req.news_text,
-                error=str(exc),
-                style=digest.style,
-                structure=digest.structure,
-                variable=digest.variable,
+        image = generate_image(
+            ImageGenerateRequest(
                 prompt=prompt,
-                chart_type=digest.chart_type,
-                type_label=req.type_label,
-                role=req.role,
-                density=req.density,
                 provider=provider,
+                broadcast_hole=broadcast_hole_for(req),
+                aspect_ratio=aspect_ratio,
+                image_size=req.image_size,
+                density=req.density,
+                safe_frame=req.safe_frame,
+                # 傳角色而非解析後的 profile：generate_image 會解析一次，
+                # 這裡先解析會讓它拿「編輯安全框」當角色再解析一次而解錯。
+                safe_frame_profile=req.role,
+                # 地圖類的真實座標。generate_image 會據此拼底圖並附上去；
+                # 送不出參考圖的後端會安靜略過（見 apply_map_reference_to_image_request）。
+                map_points=digest.map_points,
+                # 單人走既有的單張欄位（措辭與行為與放寬前逐字相同），
+                # 2-3 人才走多張通道
+                reference_image_data_url=(
+                    reference_photos[0].data_url()
+                    if len(reference_photos) == 1
+                    else ""
+                ),
+                portrait_reference_data_urls=(
+                    [photo.data_url() for photo in reference_photos]
+                    if len(reference_photos) > 1
+                    else []
+                ),
             )
-            raise
+        )
+        meta = _outcome_meta(started, provider=provider, image_model=image.model)
         request_log.log_generation(
             request_id=request_id,
             source=req.source or "news-image",
@@ -4271,10 +5102,9 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 type_label=req.type_label,
                 role=req.role,
                 density=req.density,
-                provider=provider,
-                image_model=image.model,
                 portrait_subject="、".join(digest.portrait_subjects),
                 seed=digest.seed,
+                **meta,
             )
         return NewsImageGenerateResponse(
             image_data_base64=image.image_data_base64,
@@ -4286,7 +5116,28 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             source_mime_type=image.source_mime_type,
             # 回報實際用的那顆（沒帶 seed 時是消化階段現抽的）
             seed=digest.seed,
+            notices=collected_portrait_notices(),
         )
+    except Exception as exc:
+        fields = {
+            "source": req.source or "news-image",
+            "client_id": req.client_id,
+            "news_text": req.news_text,
+            "prompt": prompt,
+            "type_label": req.type_label,
+            "role": req.role,
+            "density": req.density,
+            "provider": provider,
+        }
+        if digest is not None:
+            fields.update(
+                style=digest.style,
+                structure=digest.structure,
+                variable=digest.variable,
+                chart_type=digest.chart_type,
+            )
+        _record_generation_failure(request_id, started, exc, **fields)
+        raise
     finally:
         _inside_pipeline.reset(token)
 
@@ -4329,6 +5180,10 @@ class TenCoverRequest(BaseModel):
     # resolve_cover_visuals 的推導步驟當畫面提示，兩格共用——不直接拼進生圖 prompt，
     # 那條線的規則明令底圖不得出現任何文字，指令裡的字會被模型畫上去。
     instruction: str = Field(default="", max_length=500)
+    # 新聞原文（B53，2026-09-16）：選填，有預設值不影響舊呼叫端。畫面描述只餵標題
+    # 時模型會認錯同名人物、拼錯英文名（見 MASTER 列管 B53）。有這欄時
+    # resolve_cover_visuals 會把它和標題一起當補畫面描述的來源材料。
+    news_text: str = Field(default="", max_length=20_000)
     date_text: str = Field(default="", max_length=20)
     badge: str = compose.COVER_DEFAULT_BADGE
     provider: Literal["gemini", "gpt"] = "gpt"
@@ -4360,7 +5215,12 @@ class TenCoverRequest(BaseModel):
             return self.title_creativity
         return editor_formats.COVER_TITLE_STYLE_LEVELS.get(self.title_style or "", 0)
     # 2026-09-06：十點也收附圖。用途 asis（原圖放置）1 張＝整版鋪滿（使用者裁決，不切格）、
-    # 2 張＝左格、右格；有任何 asis 就強制 composite（真照不進生圖模型），也不再生任何底圖。
+    # 2 張＝左格、右格。
+    # 2026-09-13 使用者裁決起這段註解已過時：composite 模式才是「真照不進生圖模型」；
+    # AI 標題模式（COVER_MODE_AI）下 ai_over_base 這條路一樣把 asis 真照當唯一附圖送進
+    # 模型（見 _editor_cover_full／_cover_ai），只是原圖放置只有 1 張時，B55（2026-09-16）
+    # 起會在模型輸出後用 compose.restore_photo_outside_title_band 把字帶以外的像素強制
+    # 還原成原檔，不讓模型「重畫整張」的通病波及照片本身。
     # 其他用途（實景／肖像／地圖）當兩格 AI 底圖的生圖參考。
     reference_images: list[UserReferenceImage] = Field(
         default_factory=list, max_length=MAX_INPUT_REFERENCES
@@ -4528,14 +5388,14 @@ def cover_portrait_photos(visuals, side: int) -> dict:
 
 COVER_EXCLUDED_PEOPLE_BLOCK = """
 
-PEOPLE WHO MUST NOT BE DRAWN (OVERRIDES EVERYTHING ABOVE ABOUT THEM):
-No usable reference photograph exists for: {names}.
-- Do not draw any of them with a recognisable face. If the scene description mentions them, show them only as a back view or a plain silhouette, or leave them out of the frame entirely.
-- Never invent, guess or approximate their facial features, and never place any of their names beside a drawn face."""
+PEOPLE WHO MUST NOT APPEAR AS A FIGURE (OVERRIDES EVERYTHING ABOVE ABOUT THEM):
+No Wikipedia entry could be confirmed for: {names}.
+- Do not depict any of them as a human figure of any kind — not facing the camera, not turned away, not a faceless stand-in body. If the scene description mentions them, redesign the scene around non-person elements instead (buildings, venues, logos, signage, objects, documents) and leave them out as a figure entirely.
+- Never invent, guess or approximate their facial features, and never place any of their names beside a drawn figure."""
 
 
 def excluded_people_block(names: list[str]) -> str:
-    """被剔除（查不到參考照）的人：接在生圖 prompt 後的禁畫條款；沒有人就回空字串。"""
+    """被剔除（連維基條目都查不到）的人：接在生圖 prompt 後的禁畫條款；沒有人就回空字串。"""
     names = [n for n in names if n]
     if not names:
         return ""
@@ -4549,7 +5409,14 @@ def keep_subjects_with_photos(
     uploaded_portraits: int = 0,
     tag: str,
 ) -> tuple[list[str], list[str], dict, list[str]]:
-    """把查不到參考照的人從名單移除，回 (剩下的人, 對應英文名, 查到的照片, 被移除的人)。
+    """依 F40 四層分流整理封面／YT 封面的肖像名單。
+
+    回傳 (留在版面的人, 對應英文名, 查到的照片, **連條目都查不到**而被移除的人)。
+    「留在版面的人」包含有照片的（第 1／2 層）與查得到條目但沒照片的（第 3 層，
+    entry_only）——這些人下游 `apply_portrait_to_image_request`／`resolve_portraits`
+    會依同一批查詢結果（有快取，重查很便宜）自己再判一次該用哪種肖像規則、
+    要不要回 notice，這裡不用先分流出「entry_only」清單。只有第 4 層（連條目都
+    查不到）才會被真正移出名單，交給呼叫端用 `excluded_people_block` 寫進 prompt。
 
     被移除的人**必須**由呼叫端接進 `excluded_people_block` 寫進生圖 prompt（2026-09-08 審查
     必修）：畫面描述仍寫著「兩人同框」，剩一人時走的單人肖像規則沒有「其他人不畫臉」條款，
@@ -4560,7 +5427,7 @@ def keep_subjects_with_photos(
     所以在同一個地方做。
 
     不做這件事會怎樣：`resolve_portraits` 是全有或全無——兩個人裡有一個查不到，
-    整張退回不畫臉，連查得到的那位也變成背影。使用者看到的是「明明有照片還是畫背影」。
+    整張退回不畫臉。使用者看到的是「明明有照片還是不見了」。
 
     使用者上傳的肖像照視為對應**系統查不到的人**、依序對應（假設與理由完整寫在
     `apply_photo_availability`）：`uploaded_portraits` 張就保留前幾位查不到的人，
@@ -4572,31 +5439,35 @@ def keep_subjects_with_photos(
     """
     if not subjects:
         return [], [], {}, []
-    photos, missing = lookup_portrait_photos(subjects, english)
+    outcomes = lookup_portrait_outcomes(subjects, english)
+    photos = {name: o.photo for name, o in outcomes.items() if o.photo is not None}
+    missing = [name for name in subjects if name not in photos]
     if uploaded_portraits:
         missing = missing[uploaded_portraits:]
     if not missing:
         return list(subjects), list(english), photos, []
-    kept = [(name, en) for name, en in zip(subjects, english) if name not in missing]
+    no_entry = [name for name in missing if not outcomes[name].entry_found]
+    kept = [(name, en) for name, en in zip(subjects, english) if name not in no_entry]
     if not kept:
-        # 全部都查不到時**不清空名單**（刻意與 apply_photo_availability 不同）：
+        # 全部都查無條目時**不清空名單**（刻意與 apply_photo_availability 不同）：
         # 主流程清掉之後會重新消化一次，版面描述也跟著不提那個人；封面這條線
         # 沒有第二次消化，畫面描述仍寫著「梅爾茨站在講台前正面半身」。名單一空，
         # apply_portrait_to_image_request 就不注入任何肖像規則，模型會替一個真名
         # 憑空捏一張臉——這個專案定義最糟的組合。保留名單才會走 no_reference
-        # （明文禁止畫臉、改背影），那仍是可播的結果。
+        # （現在是「無人場景」，不是背影／剪影），那仍是可播的結果。
         print(
-            f"[{tag}] 查不到任何一位的參考照（{'、'.join(missing)}），"
-            "保留名單走「不生成臉孔」規則",
+            f"[{tag}] 查不到任何一位的照片或條目（{'、'.join(no_entry)}），"
+            "保留名單走「無人場景」規則",
             flush=True,
         )
         return list(subjects), list(english), photos, []
-    print(
-        f"[{tag}] 查不到參考照（{'、'.join(missing)}），把他們從肖像名單移除，"
-        "剩下的人照樣畫臉",
-        flush=True,
-    )
-    return [name for name, _ in kept], [en for _, en in kept], photos, missing
+    if no_entry:
+        print(
+            f"[{tag}] 查無條目（{'、'.join(no_entry)}），從肖像名單移除，"
+            "剩下的人照樣處理",
+            flush=True,
+        )
+    return [name for name, _ in kept], [en for _, en in kept], photos, no_entry
 
 
 # ---- 標題斷句交給消化模型（2026-09-14 使用者裁決）----
@@ -4606,7 +5477,15 @@ def keep_subjects_with_photos(
 # 失敗（逾時、格式壞、改了字）一律退回原本的規則，封面不會因此失敗。
 # 2026-09-14 改小模型後 20 → 8 秒：mini 實測 4.6 秒，8 秒是它的近兩倍；超過就退回規則，
 # 封面不會因此失敗，只是斷句差一點。
-TITLE_BREAK_TIMEOUT_SECONDS = 8.0
+#
+# 2026-09-16 實測後 8 → 10 秒（使用者裁定）。斷句換 gemini-3.8-flash 的 156 次實測裡，
+# **6 次失敗有 4 次是撞在 8.0 這道牆上**，而中位數只有 2.2 秒、p90 5.5 秒——
+# 也就是說牆的位置卡在分布的尾巴上，多給兩秒就能把那 4 次撈回來。
+# ⚠ 順帶記一個實測發現：**這個值不是「總時長上限」**。它一路傳到 httpx 的 timeout，
+# 而 httpx 算的是「兩段資料之間的間隔」；mini 實測有兩次分別跑了 8.29／8.96 秒仍然
+# 順利回來（作廢的那批甚至有一次 33.1 秒 finish=stop）。所以放寬到 10 不代表
+# 最壞情況就是 10 秒，只代表「卡在這道牆上的機率變低」。
+TITLE_BREAK_TIMEOUT_SECONDS = 10.0
 # 小模型（gpt-5.4-mini／nano）會把送去的「1. 」清單編號原樣抄回 text 與第一個詞組，
 # 接回去就不等於原段、整段被丟掉——等於模型切了白切。送的時候不編號，回來的再剝一次。
 _LIST_NUMBER_RE = re.compile(r"^\s*\d+\s*[.、)]\s*")
@@ -4680,10 +5559,29 @@ def segment_titles_for_breaks(segments: list[str]) -> dict[str, list[str]]:
     return out
 
 
-def apply_title_break_hints(*titles: str) -> None:
-    """封面端點入口呼叫：切詞組並登記給 compose；沒有要切的段就一次模型都不打。"""
+def apply_title_break_hints(*titles: str, composite: bool = True) -> None:
+    """封面端點入口呼叫：切詞組並登記給 compose；沒有要切的段就一次模型都不打。
+
+    composite（B75，2026-09-16 使用者裁決「這個也要列入，跟 Gemini 一起修」）：
+    False ＝ AI 標題模式，**整張封面連標題都由生圖模型畫，compose 不壓字**
+    （YT 那邊是 `draw_title(s)=not ai_title`、十點是 `_cover_ai` 只補貼 Logo 與標籤）。
+    那種情況下斷句算出來的詞組邊界**一個字都不會被讀到**，打了純粹是白花錢與時間。
+
+    為什麼是新參數而不是在函式裡自己判斷：標題模式是端點層的決定（兩個端點各自
+    呼叫 `title_mode_for_creativity`），這裡看不到 req，硬要看就得把兩種 request
+    型別的知識拉進來。參數預設 True，舊呼叫端行為逐字元不變。
+
+    ⚠ 無論走哪條路都**先把 hints 清空**：ContextVar 雖然是每個請求各自一份
+    （見 compose 的 `_BREAK_HINTS` 註解），但「跳過就不設」會讓這個不變式
+    依賴外部行為，清一次的成本是零。
+    """
+    compose.set_break_hints({})
+    if not composite:
+        print("[title-break] AI 標題模式，斷句結果沒人會讀，跳過不打模型", flush=True)
+        return
     inputs = title_break_inputs(*titles)
-    compose.set_break_hints(segment_titles_for_breaks(inputs) if inputs else {})
+    if inputs:
+        compose.set_break_hints(segment_titles_for_breaks(inputs))
 
 
 def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
@@ -4701,6 +5599,18 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
         req.title_right.strip(),
         right or "(none — write one)",
     )
+    # 新聞原文（B53，2026-09-16）：選填，只有帶了才附加，留空時 material 與改動前
+    # 逐字相同（rng_pins fixture 不受影響）。標題與原文都只是**來源素材**，明講
+    # 不得逐字畫上圖——這段只餵給推導步驟當認人與畫面依據，畫面文字仍只能來自
+    # portrait_subjects／視覺描述本身，不能把原文字句抄進 visual_left／visual_right。
+    news_text = (getattr(req, "news_text", "") or "").strip()
+    if news_text:
+        material += (
+            "\\n\\nNews article source material (background only, for identifying the correct "
+            "named people and an accurate scene — do not copy its wording verbatim into your "
+            "output, and the headline above is source material under the same rule): "
+            + news_text
+        )
     # 使用者的指令欄（2026-09-08 WP1）：兩格共用，只當畫面提示。放在最後、明講它
     # 管的是「畫面長什麼樣」——不然模型會把它讀成「標題要改成這樣」。
     instruction = (getattr(req, "instruction", "") or "").strip()
@@ -4827,12 +5737,22 @@ def _base_data_url(raw: bytes) -> str:
 
 def _cover_ai(
     req: TenCoverRequest, date_text: str, visuals: tuple[str, str], base: bytes | None = None,
+    protect_base: bool = False,
 ) -> tuple[bytes, str, bytes, str]:
     """純 prompt 版：整張封面由生圖模型畫，之後只補貼正版 Logo＋節目標籤＋AI示意圖。
 
     base（2026-09-13 使用者裁決）＝程式已拼好的無字底圖（原圖放置裁滿版／N 張切格／
     雙切兩格各自 AI改圖 後拼起來）。有 base 時它是**唯一**附圖，模型只在上面畫字；
     其他附圖與肖像參考照都不送——畫面已經定了，再送只會讓模型重新構圖。
+
+    protect_base（B55，2026-09-16 使用者裁決）＝滿版只有 1 張原圖放置時為 True：
+    「只畫標題，照片一個像素都不准動」。模型永遠是整張重畫，prompt（見
+    AI_TITLE_BASE_IMAGE_NOTE）只是請求、不是保證，保證只能靠生成後用
+    compose.restore_photo_outside_title_band 把字帶以外的像素強制還原成 base。
+    只在**這次生圖**生效——追加修改（req.background_image_base64 那條路）目前收不到
+    原始 asis，還原不了，這是已知的範圍限制，不是漏改（見呼叫端註解）。
+    ≥2 張（切格）的 base 不受影響：多圖語意本來就允許 AI 融合，使用者尚未裁決要不要
+    也鎖到逐像素不動。
 
     回 (成品 PNG, 生圖模型名, 後貼前的模型原圖, 那張圖的 MIME)。第三、四項給追加修改用：
     把貼過 Logo 的成品餵回生圖模型改圖，模型會把 Logo 一起重畫（那是播出事故），
@@ -5007,6 +5927,10 @@ def _cover_ai(
     result = generate_image_raw(image_req)
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
     raw = base64.b64decode(result.image_data_base64)
+    if protect_base and base is not None:
+        raw = compose.restore_photo_outside_title_band(
+            base, raw, band_top_ratio=compose.cover_title_band_top_ratio(),
+        )
     return _post_paste(raw), result.model, raw, result.mime_type
 
 
@@ -5241,8 +6165,11 @@ TEN_DIGEST_MAX_ATTEMPTS = 2   # 十點三段字數不合格時最多問幾次（
 # 四十幾個 token，稍長一點的通稿就吐空字串 → JSONDecodeError → 502。
 # 理由與主消化的 DIGEST_MAX_TOKENS 完全相同（見該常數上方的長註解）：正文很短很穩，
 # 爆的是思考，而上限是天花板不是用量，只有真的寫出來的 token 才計費。
-# 拉到與主消化同一個量級，順便讓 digest_reasoning_body 的思考封頂在這條線上也生效
-# （2000 的預算扣掉正文保留額之後低於 1024，等於封不到）。
+# 拉到與主消化同一個量級。
+# （原本這裡還寫「順便讓 digest_reasoning_body 的思考封頂在這條線上也生效——
+# 2000 的預算扣掉正文保留額之後低於 1024，等於封不到」。2026-09-16 D21 之後
+# 封頂改成 reasoning.effort，不再從輸出上限反推思考預算，那段換算已無對應物；
+# 拉高上限的理由只剩下前面那個——爆的是思考，上限是天花板不是用量。）
 COVER_TITLE_DIGEST_MAX_TOKENS = DIGEST_MAX_TOKENS
 
 
@@ -5453,33 +6380,43 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
     source_raw, source_mime = b"", ""
     background_raw, background_mime = b"", ""
     request_id = request_log.new_request_id()
+    started = _generation_clock()
+    _reset_generation_retries()
     portrait_fields = cover_portrait_log_fields(visual)
+    fail_fields = {
+        "source": "editor-cover-full",
+        "news_text": req.title_left,
+        "prompt": f"FULL: {visual}",
+        "role": "編輯",
+        "provider": req.provider,
+        "type_label": f"{COVER_TYPE_LABEL_TEN}（滿版）",
+    }
     try:
         if req.mode == editor_formats.COVER_MODE_AI:
-            base = _cover_full_base(ten_cover_full_asis_images(req)) if ai_over_base else None
+            asis_images = ten_cover_full_asis_images(req) if ai_over_base else []
+            base = _cover_full_base(asis_images) if ai_over_base else None
+            # B55：只有 1 張原圖放置時才鎖「照片不准動」——≥2 張是切格後交給 AI 融合，
+            # 使用者尚未裁決要不要也鎖到逐像素不動（見 _cover_ai 的 protect_base 說明）。
+            protect_base = ai_over_base and len(asis_images) == 1
             visual_arg = visual if isinstance(visual, CoverVisuals) else CoverVisuals(visual, visual)
             # 沒 base 就照舊呼叫（既有測試的假 _cover_ai 不收 base）
             cover, image_model, source_raw, source_mime = (
-                _cover_ai(req, date_text, visual_arg, base=base) if base is not None
+                _cover_ai(req, date_text, visual_arg, base=base, protect_base=protect_base) if base is not None
                 else _cover_ai(req, date_text, visual_arg)
             )
         else:
             cover, is_ai, image_model, background_raw, background_mime = _cover_full_composite(req, date_text, visual)
     except compose.ComposeError as exc:
         print(f"[compose] 封面失敗：{exc}", flush=True)
-        request_log.log_failure(
-            request_id=request_id, source="editor-cover-full", news_text=req.title_left,
-            error=str(exc), prompt=f"FULL: {visual}", role="編輯", provider=req.provider,
-        )
-        raise HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}") from exc
+        http_exc = HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}")
+        _record_generation_failure(request_id, started, http_exc, **fail_fields)
+        raise http_exc from exc
     except Exception as exc:
         # 生圖端的失敗（安全過濾、比例降級、逾時）以前只會 print，事後查不到是哪一則
         # 標題觸發的。比照 /api/images/generate：記一筆再原樣往外丟。
-        request_log.log_failure(
-            request_id=request_id, source="editor-cover-full", news_text=req.title_left,
-            error=str(exc), prompt=f"FULL: {visual}", role="編輯", provider=req.provider,
-        )
+        _record_generation_failure(request_id, started, exc, **fail_fields)
         raise
+    meta = _outcome_meta(started, provider=req.provider, image_model=image_model)
     request_log.log_generation(
         request_id=request_id,
         source="editor-cover-full",
@@ -5502,9 +6439,8 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         variable=req.title_left,
         prompt=f"FULL: {visual}",
         role="編輯",
-        provider=req.provider,
-        image_model=image_model,
         **portrait_fields,
+        **meta,
     )
     return TenCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
@@ -5524,6 +6460,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         right_is_ai=False,
         mode=req.mode,
         seed=req.seed,
+        notices=collected_portrait_notices(),
     )
 
 
@@ -5533,10 +6470,18 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
     dependencies=[Depends(verify_internal_api_key)],
 )
 def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
+    reset_portrait_notices()
     if req.badge not in compose.COVER_BADGES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"未知的標籤：{req.badge}（可用：{list(compose.COVER_BADGES)}）",
+        _abort_generation(
+            HTTPException(
+                status_code=400,
+                detail=f"未知的標籤：{req.badge}（可用：{list(compose.COVER_BADGES)}）",
+            ),
+            source="editor-cover",
+            news_text=req.title_left,
+            role="編輯",
+            provider=req.provider,
+            type_label=COVER_TYPE_LABEL_TEN,
         )
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
     # F0：seed 在入口定一次，滿版／雙切／只改文字每條路徑共用同一顆，回應才報得出
@@ -5562,17 +6507,50 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         req = req.model_copy(update={"mode": resolved_mode})
     if req.layout == "full":
         # 滿版原圖放置最多 N 張（2026-09-14；N 看能力矩陣），擋在下面的斷句模型之前
-        reject_excess_asis(req.slot_refs(0) or req.reference_images, where="滿版", limit=caps.asis_max)
+        try:
+            reject_excess_asis(req.slot_refs(0) or req.reference_images, where="滿版", limit=caps.asis_max)
+        except HTTPException as exc:
+            _abort_generation(
+                exc,
+                source="editor-cover",
+                news_text=req.title_left,
+                role="編輯",
+                provider=req.provider,
+                type_label=f"{COVER_TYPE_LABEL_TEN}（滿版）",
+            )
     if req.background_image_base64 and req.background_layout and req.background_layout != req.layout:
         # 滿版底圖是一張整圖、雙切底圖是拼好的兩格，bytes 分不出來；改了第二標題版面就換了，
         # 明講回 400 比默默把雙切標題壓在整圖上（或反過來）好（2026-09-14）。
-        raise HTTPException(status_code=400, detail="版面變了（滿版↔雙切），上一次的底圖對不上，請重新生成")
-    # 斷句交給消化模型（2026-09-14）：入口登記詞組邊界，下游所有斷行都只在邊界上切
-    apply_title_break_hints(req.title_left, req.title_right)
+        _abort_generation(
+            HTTPException(status_code=400, detail="版面變了（滿版↔雙切），上一次的底圖對不上，請重新生成"),
+            source="editor-cover",
+            news_text=req.title_left,
+            role="編輯",
+            provider=req.provider,
+            type_label=COVER_TYPE_LABEL_TEN,
+        )
+    # 斷句交給消化模型（2026-09-14）：入口登記詞組邊界，下游所有斷行都只在邊界上切。
+    # B75（2026-09-16）：AI 標題模式下整張封面連標題都由生圖模型畫、compose 不壓字，
+    # 斷句結果一個字都不會被讀到——所以只有 composite 才打。resolved_mode 在上面就算好了。
+    apply_title_break_hints(
+        req.title_left, req.title_right,
+        composite=resolved_mode == editor_formats.YT_COVER_TITLE_MODE_COMPOSITE,
+    )
     if req.layout == "full":
-        return _editor_cover_full(req, date_text)
+        full_result = _editor_cover_full(req, date_text)
+        notices = collected_portrait_notices()
+        if notices:
+            full_result = full_result.model_copy(update={"notices": notices})
+        return full_result
     if not req.title_right.strip():
-        raise HTTPException(status_code=400, detail="雙切版型左右標題都要填")
+        _abort_generation(
+            HTTPException(status_code=400, detail="雙切版型左右標題都要填"),
+            source="editor-cover",
+            news_text=req.title_left,
+            role="編輯",
+            provider=req.provider,
+            type_label=f"{COVER_TYPE_LABEL_TEN}（雙切）",
+        )
 
     # slots＝哪一格有「直接上版」的圖。只放了 AI改圖／參考的格子不算數：那格照樣生底圖，
     # 也就不該把整個封面拉去強制合成版（2026-09-13 使用者裁決之三）。
@@ -5615,8 +6593,18 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     source_raw, source_mime = b"", ""
     background_raw = b""
     request_id = request_log.new_request_id()
+    started = _generation_clock()
+    _reset_generation_retries()
     log_prompt = f"L: {visuals[0]}\nR: {visuals[1]}"
     portrait_fields = cover_portrait_log_fields(visuals)
+    fail_fields = {
+        "source": "editor-cover",
+        "news_text": f"{req.title_left} ｜ {req.title_right}",
+        "prompt": log_prompt,
+        "role": "編輯",
+        "provider": req.provider,
+        "type_label": f"{COVER_TYPE_LABEL_TEN}（雙切）",
+    }
     try:
         if req.mode == editor_formats.COVER_MODE_AI:
             base, base_models = (_cover_split_base(req, visuals) if ai_over_base else (None, []))
@@ -5630,21 +6618,15 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
             cover, panel_is_ai, image_model, background_raw = _cover_composite(req, date_text, visuals)
     except compose.ComposeError as exc:
         print(f"[compose] 封面失敗：{exc}", flush=True)
-        request_log.log_failure(
-            request_id=request_id, source="editor-cover",
-            news_text=f"{req.title_left} ｜ {req.title_right}",
-            error=str(exc), prompt=log_prompt, role="編輯", provider=req.provider,
-        )
-        raise HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}") from exc
+        http_exc = HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}")
+        _record_generation_failure(request_id, started, http_exc, **fail_fields)
+        raise http_exc from exc
     except Exception as exc:
         # 生圖端的失敗（安全過濾、比例降級、逾時）比照 /api/images/generate 記一筆再原樣往外丟
-        request_log.log_failure(
-            request_id=request_id, source="editor-cover",
-            news_text=f"{req.title_left} ｜ {req.title_right}",
-            error=str(exc), prompt=log_prompt, role="編輯", provider=req.provider,
-        )
+        _record_generation_failure(request_id, started, exc, **fail_fields)
         raise
 
+    meta = _outcome_meta(started, provider=req.provider, image_model=image_model)
     request_log.log_generation(
         request_id=request_id,
         source="editor-cover",
@@ -5667,9 +6649,8 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         variable=f"{req.title_left}\n{req.title_right}",
         prompt=log_prompt,
         role="編輯",
-        provider=req.provider,
-        image_model=image_model,
         **portrait_fields,
+        **meta,
     )
     return TenCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
@@ -5688,6 +6669,7 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         right_is_ai=panel_is_ai[1],
         mode=req.mode,
         seed=req.seed,
+        notices=collected_portrait_notices(),
     )
 
 
@@ -5745,6 +6727,8 @@ class YtCoverRequest(BaseModel):
     # 不直接拼進生圖 prompt：那條線一個字都不准畫，指令會被模型畫上去。
     # 有 asis 附圖或帶了現成底圖時根本不打推導，指令自然不生效。
     instruction: str = Field(default="", max_length=500)
+    # 新聞原文（B53，2026-09-16）：選填，有預設值不影響舊呼叫端。理由同 TenCoverRequest。
+    news_text: str = Field(default="", max_length=20_000)
     provider: Literal["gemini", "gpt"] = "gpt"
     image_size: str = "1K"
     # 與主流程共用同一組附圖欄位與用途：asis＝直接當底圖（不生圖）；
@@ -5820,12 +6804,19 @@ class YtCoverResponse(ImageGenerateResponse):
 
 
 def derive_yt_cover_plan(
-    title: str, preset_lines: tuple[str, str] | None, instruction: str = ""
+    title: str,
+    preset_lines: tuple[str, str] | None,
+    instruction: str = "",
+    news_text: str = "",
 ) -> dict:
     """請文字模型補畫面描述（＋分段、＋具名真人）。失敗回空 dict，呼叫端自己退路。
 
     instruction＝使用者指令欄（2026-09-08 WP1），只當畫面提示：底圖 prompt 用的是
     這一步推導出來的 visual，所以指令走這裡才不會變成畫在圖上的字。
+
+    news_text＝新聞原文（B53，2026-09-16），選填。只有帶了才附加，留空時 material
+    與改動前逐字相同。理由與用法同 resolve_cover_visuals：標題與原文都只是
+    **來源素材**，只餵給推導步驟認人與畫面依據，不得逐字畫上圖。
     """
     if preset_lines:
         split_note = (
@@ -5835,6 +6826,13 @@ def derive_yt_cover_plan(
     else:
         split_note = "The split is NOT decided — split the headline into two lines yourself."
     material = f"Headline: {title.strip()}\n\n{split_note}"
+    if news_text.strip():
+        material += (
+            "\n\nNews article source material (background only, for identifying the correct "
+            "named people and an accurate scene — do not copy its wording verbatim into your "
+            "output, and the headline above is source material under the same rule): "
+            + news_text.strip()
+        )
     if instruction.strip():
         material += (
             "\n\nExtra instruction from the editor about how the photograph should look "
@@ -5885,7 +6883,14 @@ def resolve_yt_cover_plan(
     """決定 (兩行標題, 畫面描述, 具名真人, 英文名)。
 
     只有真的需要才打文字模型：標題已用一個空格分好、且底圖不用生（有 asis 附圖
-    或前端帶了現成底圖）時，一次 API 都不打。
+    或前端帶了現成底圖）時，**這一支**一次 API 都不打。
+
+    ⚠ B33／B75（2026-09-16 更正）：原文寫的是「一次 API 都不打」，容易被讀成
+    「整條請求零成本」，**那是錯的**——端點入口的 `apply_title_break_hints` 排在
+    這支之前，仍然會打一次斷句。**而且那一次是必要的**：走到這裡的 composite 模式
+    正是用 Pillow 壓字的路，斷句邊界會被 `compose._split_line_near_middle` 讀走，
+    拿掉會讓斷行品質變差。所以 B33 原本提的「把斷句移到零 API 分支之後」**不採納**。
+    真正白打的是 AI 標題模式那條，已由 B75 的 `composite=` 守衛擋掉。
     """
     title = req.title.strip()
     lines = editor_formats.split_live_title(title)
@@ -5897,7 +6902,7 @@ def resolve_yt_cover_plan(
     if lines and not need_visual:
         return lines, "", [], []
 
-    data = derive_yt_cover_plan(title, lines, req.instruction)
+    data = derive_yt_cover_plan(title, lines, req.instruction, req.news_text)
     if not lines:
         line1 = str(data.get("line1") or "").strip()
         line2 = str(data.get("line2") or "").strip()
@@ -6244,7 +7249,7 @@ def yt_dual_panel_plan(panel_req: "YtCoverRequest") -> "YtCoverPlan":
     if any(ref.purpose == "asis" for ref in panel_req.reference_images):
         return YtCoverPlan(("", ""), "", [], [])
     title = panel_req.title.strip()
-    data = derive_yt_cover_plan(title, None, panel_req.instruction)
+    data = derive_yt_cover_plan(title, None, panel_req.instruction, panel_req.news_text)
     visual = str(data.get("visual") or "").strip() or title
     subjects = clean_portrait_subjects(data.get("portrait_subjects"))
     english = align_english_names(
@@ -6316,6 +7321,7 @@ def yt_dual_background(
     dependencies=[Depends(verify_internal_api_key)],
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
+    reset_portrait_notices()
     # F0：seed 在入口定一次。取代舊的 seed=f"{title}|{date}"——那種 seed 綁在內容上，
     # 標題與日期沒改就永遠同一種長相，使用者按「重新生成」拿到的是同一張。
     if req.seed is None:
@@ -6342,9 +7348,14 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     if not dual:
         # 單則整版原圖放置最多 4 張（2026-09-14），擋在下面的斷句模型之前
         reject_excess_asis(req.slot_refs(0) + req.slot_refs(1) + req.reference_images, where="單則", limit=caps.asis_max)
-    # 斷句交給消化模型（2026-09-14）：live24 單行不拆，不必打
+    # 斷句交給消化模型（2026-09-14）：live24 單行不拆，不必打。
+    # B75（2026-09-16）：AI 標題模式下 compose 不壓字（下面的 draw_title(s)=not ai_title），
+    # 斷句結果沒人讀，只有 composite 才打。
     if not live24:
-        apply_title_break_hints(req.title, req.title_second)
+        apply_title_break_hints(
+            req.title, req.title_second,
+            composite=resolved_mode == editor_formats.YT_COVER_TITLE_MODE_COMPOSITE,
+        )
     if not dual and req.uses_asis_slots():
         # 單則只有一格，附圖位裡的東西就是整版那一格的：整份清單併進共用清單，
         # 下游 1 張＝整版鋪滿那條路完全不用改。雙則不走這裡——它要保留左右格身分，
@@ -6386,9 +7397,16 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         # 放到 compose 才擋，等於燒完兩次生圖才回錯。AI 整張版不套字數擋（字是模型畫的）。
         for label, text in (("第一標題", req.title), ("第二標題", req.title_second)):
             if compose.title_display_width(text.strip()) > compose.YT_HOURLY_LINE_MAX_CHARS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"{label}超過 {compose.YT_HOURLY_LINE_MAX_CHARS} 字：「{text.strip()}」（請縮短這一行）",
+                _abort_generation(
+                    HTTPException(
+                        status_code=400,
+                        detail=f"{label}超過 {compose.YT_HOURLY_LINE_MAX_CHARS} 字：「{text.strip()}」（請縮短這一行）",
+                    ),
+                    source="editor-yt-cover",
+                    news_text=req.title,
+                    role="編輯",
+                    provider=req.provider,
+                    type_label=COVER_TYPE_LABEL_YT.get(req.layout, "YT封面"),
                 )
     # 整點直播與今日熱搜沒有原音呈現／AI即時翻譯（2026-09-06 使用者裁決），後端直接忽略
     original_audio = bool(req.original_audio) and not (hourly or hot or live24)
@@ -6423,17 +7441,21 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         photos = yt_cover_plan_photos(plan)
         excluded = list(getattr(plan, "excluded", []))
     request_id = request_log.new_request_id()
+    started = _generation_clock()
+    _reset_generation_retries()
     log_source = f"editor-yt-cover-{req.layout}{'-dual' if dual else ''}-{req.title_mode}"
     log_prompt = visual or "（附圖／既有底圖）"
     # 雙則的兩則標題都要記，只記第一則的話事後查不出是哪一組組合出的問題
     log_title = f"{req.title.strip()}／{req.title_second.strip()}" if dual else req.title
+    type_label = COVER_TYPE_LABEL_YT.get(req.layout, "YT封面") + ("（雙則）" if dual else "")
 
     def _log_failure(exc: Exception) -> None:
         # 生圖與合成的失敗以前只會 print，事後查不到是哪一則標題觸發的。
         # 比照 /api/images/generate：記一筆再原樣往外丟。
-        request_log.log_failure(
-            request_id=request_id, source=log_source, news_text=log_title,
-            error=str(exc), prompt=log_prompt, role="編輯", provider=req.provider,
+        _record_generation_failure(
+            request_id, started, exc,
+            source=log_source, news_text=log_title, prompt=log_prompt,
+            role="編輯", provider=req.provider, type_label=type_label,
         )
 
     ai_title = req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI
@@ -6463,6 +7485,16 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 if base is not None else
                 _yt_cover_full_image(req, lines, visual, subjects, english, excluded=excluded)
             )
+            # B55 YT 擴充（2026-09-16 使用者裁決）：單則、剛好 1 張原圖放置時（與十點滿版
+            # 同一個判準）鎖住照片本身，只讓標題設計層可以變。dual（雙則，兩格各自一張）
+            # 不受影響——待裁決，見 compose.restore_yt_cover_photo 的呼叫端只在這裡接。
+            # base_model == "yt-cover:asis" 是 _yt_cover_background 對「剛好 1 張」的
+            # 唯一回傳值（2 張以上是 "...asis-split{N}"），不是另外猜的判斷。
+            if base is not None and not dual and base_model == "yt-cover:asis":
+                background = compose.restore_yt_cover_photo(
+                    base, background, layout=req.layout,
+                    original_audio=original_audio, ai_translation=ai_translation, ai_note=False,
+                )
             if base_models:
                 image_model = "、".join([*base_models, image_model])
             is_ai = True
@@ -6476,6 +7508,14 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             background, bg_mime, is_ai, image_model = _yt_cover_background(
                 req, visual, subjects, english, excluded=excluded
             )
+    except compose.ComposeError as exc:
+        # B55 YT 擴充：restore_yt_cover_photo 的面積防呆丟在這個區塊裡（跟底圖取得同一段），
+        # 不在下面那個原本只包 compose_yt_*_cover 的 try/except 範圍內。這裡以前沒有任何
+        # 呼叫端會丟 ComposeError，所以原本沒特別轉——沒轉會被 FastAPI 當未知例外回泛用
+        # 500，使用者看不到清楚訊息。比照下面那段的轉法：使用者能自己修的回 400。
+        print(f"[compose] YT 直播封面失敗：{exc}", flush=True)
+        _log_failure(exc)
+        raise HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}") from exc
     except Exception as exc:
         _log_failure(exc)
         raise
@@ -6530,6 +7570,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         # 2026-09-14 抓 bug 輪：標題太長是使用者改得掉的輸入問題，比照十點回 400，不是 500
         raise HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}") from exc
 
+    meta = _outcome_meta(started, provider=req.provider, image_model=image_model)
     request_log.log_generation(
         request_id=request_id,
         source=log_source,
@@ -6556,15 +7597,13 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         mime_type="image/png",
         source=log_source,
         seed=req.seed,
-        type_label=COVER_TYPE_LABEL_YT.get(req.layout, "YT封面")
-                   + ("（雙則）" if dual else ""),
+        type_label=type_label,
         news_text=log_title,
         variable="\n".join(filter(None, [lines[0], lines[1]])),
         prompt=log_prompt,
         role="編輯",
-        provider=req.provider,
-        image_model=image_model,
         portrait_subject="、".join(subjects),
+        **meta,
     )
     return YtCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
@@ -6579,6 +7618,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         title_mode=req.title_mode,
         dual=dual,
         seed=req.seed,
+        notices=collected_portrait_notices(),
     )
 
 
@@ -6655,6 +7695,8 @@ def _yt_overlay_layout_payload(layout: dict) -> dict:
 )
 def editor_yt_overlay(req: YtOverlayRequest) -> YtOverlayResponse:
     request_id = request_log.new_request_id()
+    started = _generation_clock()
+    _reset_generation_retries()
     title = req.title.strip()
     second = req.title_second.strip()
     try:
@@ -6685,12 +7727,16 @@ def editor_yt_overlay(req: YtOverlayRequest) -> YtOverlayResponse:
         # 直標的失敗全部是使用者自己改得掉的（字太多、Logo 放錯邊），一律 400，
         # 並把 compose 的訊息原樣往前端送——它已經寫明是哪一個標題、幾格。
         print(f"[yt-overlay] 直標合成失敗：{exc}", flush=True)
-        request_log.log_failure(
-            request_id=request_id, source="editor-yt-overlay", news_text=title,
-            error=str(exc), prompt="（直標，不生圖）", role="編輯", provider="",
+        http_exc = HTTPException(status_code=400, detail=str(exc))
+        _record_generation_failure(
+            request_id, started, http_exc,
+            source="editor-yt-overlay", news_text=title,
+            prompt="（直標，不生圖）", role="編輯", provider="",
+            type_label=COVER_TYPE_LABEL_VSTRIP,
         )
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise http_exc from exc
 
+    meta = _outcome_meta(started, image_model="yt-overlay:compose")
     request_log.log_generation(
         request_id=request_id,
         source=f"editor-yt-overlay-{req.variant}-{req.title_side}",
@@ -6711,7 +7757,7 @@ def editor_yt_overlay(req: YtOverlayRequest) -> YtOverlayResponse:
         variable="｜".join(filter(None, [second, req.source_text.strip()])),
         prompt="（直標，不生圖）",
         role="編輯",
-        image_model="yt-overlay:compose",
+        **meta,
     )
     width, height = compose.YT_CANVAS
     return YtOverlayResponse(

@@ -10,7 +10,7 @@ LINE Bot 是純後端流程、沒有瀏覽器，因此在這裡有一份對應�
 
 # 供外部整合（如 /api/news-image/generate 的呼叫端）追蹤這批規則的版本；
 # 這裡或對應的 app.js 常數只要有實質修改，就手動遞增這個字串。
-PROMPT_VERSION = "v6-2026-08-17"
+PROMPT_VERSION = "v7-2026-09-16"
 
 # 地圖類型的標籤字面值。定義在本模組（而非 main.py）是因為匯入方向是
 # main → news_prompt：build_prompt() 要用它決定是否注入地圖規則，
@@ -205,15 +205,18 @@ DIRECTIONAL COLOUR CONVENTION (TAIWAN)
 - An up arrow means up and a down arrow means down: match every arrow to the direction stated in VARIABLE FIELDS.
 - Do not use red and green decoratively for unrelated purposes in a graphic that shows a rise or a fall."""
 
-# 真人肖像的處理方式不交給模型判斷：後端查得到參考照片就走插畫化肖像，
-# 查不到就退回不生成臉孔。兩種情況各有一個區塊，由 build_prompt 依
-# portrait_mode 注入；兩者都沒注入時，REAL_WORLD_RENDERING_RULES 的預設
-# 條款仍然擋著（不畫臉），所以漏傳參數不會變成「放行寫實肖像」。
+# 真人肖像的處理方式不交給模型判斷：後端查得到參考照片就走肖像規則，查不到
+# 再分「有維基條目」「連條目都沒有」兩種（F40，2026-09-16 四層分流）。四種情況
+# 各有一個區塊，由 build_prompt 依 portrait_mode 注入；都沒注入時，
+# REAL_WORLD_RENDERING_RULES 的預設條款仍然擋著（不畫臉），所以漏傳參數不會
+# 變成「放行寫實肖像」。
 #
-# 措辭沿用 2026-08-01 實驗的 v1：加強版（v2，明列筆觸／禁照片特徵）實測筆觸
-# 過度刻意、顯得造作，v1 已足以讓觀眾辨識為插畫，使用者拍板採 v1。
+# 措辭沿用 2026-08-01 實驗的 v1，2026-09-16（B66）改寫成「寫實為主、帶一點點
+# 插畫筆觸感」——使用者實拍發現 v1「插畫化」措辭畫出來其實是寫實照片感，
+# 裁定與其再加強插畫化措辭把畫面拉醜，不如承認寫實化就是想要的結果，
+# 把條文改成與行為一致，並靠加強「AI示意圖」標示合規。
 #
-# ⚠️ 這三個常數**刻意不同步到 app.js**，是本檔頂端「兩份來源」規則的明列例外。
+# ⚠️ 這幾個常數**刻意不同步到 app.js**，是本檔頂端「兩份來源」規則的明列例外。
 # 網頁版自己組 prompt 直打 /api/images/generate，沒有消化端填的 portrait_subjects、
 # 也沒有後端的參考照查圖，同步過去只會得到一個永遠注入不了的區塊。網頁版因此
 # 停在 REAL_WORLD_RENDERING_RULES 的預設（不畫臉），那也是尚未裁決前的安全值。
@@ -223,20 +226,34 @@ PORTRAIT_WITH_REFERENCE_RULES = """=============================================
 NAMED REAL PERSON — PORTRAIT TREATMENT (CRITICAL)
 ==================================================
 - A reference photograph of the named real person is attached to this request. Base the portrait on that photograph.
-- Render the portrait as a hand-painted editorial portrait illustration rather than a photograph, while preserving the recognisable likeness of the reference photograph: the same facial structure, hairstyle, glasses and build, so that viewers identify the same individual.
-- The illustration must be readable as an illustration. Do not aim for a photographic reproduction of the reference image.
+- Render the portrait as a realistic editorial news portrait: the primary impression is a faithful likeness of the reference photograph — the same facial structure, hairstyle, glasses and build, so that viewers recognise the same individual at a glance. Keep only a light illustrative touch on top of that realism, such as a subtle painterly texture or brushwork in the finish.
+- Do not aim for a flat photographic reproduction of the reference image, and do not push the treatment into an overtly hand-drawn or cartoon style either — realism must dominate, the illustrative touch stays understated.
 - Take only the person's likeness from the reference photograph. Pose, attire, framing and surroundings follow STRUCTURE, not the photograph's own background or occasion.
-- The 示意圖 label supplied in VARIABLE FIELDS sits beside the portrait and must stay clearly visible: this is an illustrated depiction, not a photograph of the person. If VARIABLE FIELDS supplies no such label, do not add one yourself.
+- The 示意圖 label supplied in VARIABLE FIELDS sits beside the portrait and must stay clearly visible: this is a depiction, not an actual photograph of the person. If VARIABLE FIELDS supplies no such label, do not add one yourself.
 - Never place the person in a scene, action or context that STRUCTURE does not describe."""
 
 PORTRAIT_NO_REFERENCE_RULES = """==================================================
-NAMED REAL PEOPLE — NO REFERENCE AVAILABLE (CRITICAL)
+NAMED REAL PEOPLE — NO PERSON IN THIS SCENE (CRITICAL)
 ==================================================
-- No reference photograph is available, so you MUST NOT draw the face of ANY named real person in this graphic. This applies to every such figure, including when the layout calls for two or more portraits side by side.
-- Depict each figure as a back view or a plain silhouette wearing the attire STRUCTURE describes. Never invent, guess or approximate anyone's facial features, and never substitute a generic face in their place — a fabricated face sitting under a real person's name label is the single most serious failure this rule exists to prevent.
-- Name labels may stay, but each must sit beside a faceless figure, never beside an invented face.
-- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible. If VARIABLE FIELDS supplies no such label, do not add one yourself.
+- No named real person in this graphic can be safely depicted, so the scene must be designed WITHOUT that person as a figure at all. This applies to every such person, including when the source material would suggest two or more of them side by side.
+- Do not draw ANY human figure to stand in for them — not facing the camera, not turned away, not a plain shape wearing their attire, not a faceless placeholder body. A drawn figure of any kind sitting where a real person's name is mentioned is the exact failure this rule exists to prevent.
+- Redesign the scene around buildings, venues, logos, signage, objects, documents, charts, maps or other non-person elements that the source material supports. Their name may still appear as plain text (a caption, a label, a quote panel) if VARIABLE FIELDS supplies it, but no figure of any kind represents them visually.
+- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible when the scene is a generic stand-in rather than a real, verifiable place or object. If VARIABLE FIELDS supplies no such label, do not add one yourself.
 - Never place a person in a scene, action or context that STRUCTURE does not describe."""
+
+# F40 第 3 層（2026-09-16 使用者裁決）：維基查得到這個人的條目、但條目沒有合格
+# 首圖時，允許模型依新聞語境自畫，不強制退回無人場景。⚠使用者明確裁定「不要
+# 在圖上標『長相為 AI 推測』」——那句免責文字改成不畫進圖裡，由後端在 API
+# response 另外回一則 notice 給前端訊息欄（main.ENTRY_ONLY_PORTRAIT_NOTICE）。
+# 這裡的措辭因此只管「怎麼畫」，不提免責聲明；示意圖標籤仍照一般規則保留。
+PORTRAIT_ENTRY_ONLY_RULES = """==================================================
+NAMED REAL PERSON — NO VERIFIED PHOTOGRAPH, DRAW FROM CONTEXT (CRITICAL)
+==================================================
+- No reference photograph is attached for this named real person, but the news context (their role, nationality, age, setting and any description the source material gives) is enough to depict them as a specific identifiable individual rather than a generic figure.
+- Draw a plausible likeness consistent with that context. Do not claim or imply pinpoint accuracy of their actual face — this is a contextual depiction, not a verified portrait.
+- Render it in the same realistic-editorial-with-a-light-illustrative-touch treatment as a reference-photo portrait: realism dominates, any illustrative texture stays understated.
+- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible. If VARIABLE FIELDS supplies no such label, do not add one yourself.
+- Never place the person in a scene, action or context that STRUCTURE does not describe."""
 
 # 2-3 位具名真人、且**每一位都查到參考照**時用這段（2026-08-18 使用者裁定放寬）。
 #
@@ -254,7 +271,7 @@ NAMED REAL PEOPLE — MULTIPLE PORTRAITS (CRITICAL)
 ==================================================
 - A reference photograph is attached for EVERY named real person whose face this graphic shows. Base each portrait on its own attached photograph.
 - Match each face to the correct person: use the resemblance between the attached photographs and the name labels, and NEVER swap likenesses between people. A face sitting under the wrong person's name is the single most serious failure this rule exists to prevent.
-- Render each portrait as a hand-painted editorial portrait illustration rather than a photograph, while preserving the recognisable likeness of its reference photograph: the same facial structure, hairstyle, glasses and build, so that viewers identify the same individual.
+- Render each portrait as a realistic editorial news portrait: the primary impression is a faithful likeness of its reference photograph — the same facial structure, hairstyle, glasses and build, so that viewers recognise the same individual at a glance. Keep only a light illustrative touch on top of that realism, such as a subtle painterly texture or brushwork in the finish; do not push any portrait into an overtly hand-drawn or cartoon style.
 - Take only each person's likeness from the photographs. Pose, attire, framing and surroundings follow STRUCTURE, not the photographs' own backgrounds or occasions.
 - An attached photograph may happen to show more than one person. Use only the person the name label refers to; never carry a bystander from a photograph into the graphic.
 - Other real people may be named in the text of this graphic without a photograph. That is intended: render their names as text only, never as a face, and never place such a name beside a depicted figure.
@@ -264,6 +281,7 @@ NAMED REAL PEOPLE — MULTIPLE PORTRAITS (CRITICAL)
 PORTRAIT_MODES = {
     "reference": PORTRAIT_WITH_REFERENCE_RULES,
     "reference_multi": PORTRAIT_MULTI_WITH_REFERENCE_RULES,
+    "entry_only": PORTRAIT_ENTRY_ONLY_RULES,
     "no_reference": PORTRAIT_NO_REFERENCE_RULES,
     "none": "",
 }
@@ -311,7 +329,7 @@ USER_REFERENCE_PORTRAIT_RULES = """=============================================
 NAMED REAL PERSON — USER-SUPPLIED PORTRAIT REFERENCE (CRITICAL)
 ==================================================
 - The user has attached portrait photograph(s) of the named real person(s) in this graphic. Base each portrait on its attached photograph.
-- Render each portrait as a hand-painted editorial portrait illustration rather than a photograph, while preserving the recognisable likeness of its reference photograph: the same facial structure, hairstyle, glasses and build, so that viewers identify the same individual.
+- Render each portrait as a realistic editorial news portrait: the primary impression is a faithful likeness of its attached photograph — the same facial structure, hairstyle, glasses and build, so that viewers recognise the same individual at a glance. Keep only a light illustrative touch on top of that realism, such as a subtle painterly texture or brushwork in the finish; do not push any portrait into an overtly hand-drawn or cartoon style.
 - When the layout shows more than one named person, match each face to the correct person: use the resemblance between the attached photographs and the name labels, and never swap likenesses between people.
 - Draw a recognisable face ONLY for a person whose photograph is attached. Any named real person WITHOUT an attached photograph must still be shown as a back view or a plain silhouette — never invent or approximate a face for them.
 - Take only each person's likeness from the photographs. Pose, attire, framing and surroundings follow STRUCTURE, not the photographs' own backgrounds or occasions.
@@ -338,7 +356,9 @@ ATTACHED IMAGE — REDRAW THIS SAME PICTURE (CRITICAL)
 - One of the attached images is the picture this graphic's main visual is to BE. Re-draw that same picture in the graphic's own visual style: the same subject, the same framing, the same camera angle, the same arrangement of what is near and far.
 - This is NOT a loose style reference. Someone who saw the attached image must recognise your output as the same moment redrawn, not as a different picture of a similar topic. Except where an editor's instruction below asks for a change, do not substitute another scene, another angle, another action or another setting for it.
 - Do redraw it: repaint, restyle and colour-grade it into this graphic's illustration style, and extend or crop the edges as the layout needs. Apart from whatever an editor's instruction below asks you to change, the treatment changes and the content does not.
-- Do not copy readable text or brand marks visible inside the attached image, except a brand the source material names — that one may be reproduced on its own objects; the BRANDS rule above still applies in full.
+- PRESERVE-EXISTING: Text already present in the attached reference image is requested content — keep it as supplied. Preserve every readable word, number and existing brand mark already present in the image; do not erase it, rewrite it, replace it with fake text, garbled text or altered branding.
+- DO-NOT-INVENT OR REUSE: Do not add any text or brand that is not already present in the attached reference image or explicitly requested elsewhere in this prompt. Do not move, copy or reuse text or brand marks from the attached reference image onto a different object.
+- EXPLICIT-REMOVAL ONLY: Remove existing text or brand marks only when the editor's instruction explicitly asks for that specific text or mark to be removed; otherwise preserve them.
 - People in the attached image stay who they are: reproduce every face in it as it appears, recognisable, in the redrawn style. The NAMED REAL PERSON rules below govern only people who are NOT in the attached image — they do not restrict, blur, hide or replace a face that the editor supplied here.
 - If an attached image already contains on-air chrome (a date stamp, LIVE or 24H LIVE badge, channel logo, or a 示意圖 / AI示意圖 label), do not draw another copy of those marks."""
 
@@ -353,7 +373,9 @@ ATTACHED IMAGES — FUSE ALL {count} OF THEM INTO ONE PICTURE (CRITICAL)
 - {count} attached images together ARE the picture this graphic's main visual is to BE. Compose them into ONE coherent scene redrawn in the graphic's own visual style. Every one of the {count} images must be recognisably present in the output — its subject, its key objects and its people — none may be dropped, merged away or reduced to a vague background hint. Someone who saw all {count} images must be able to point to each of them inside your output.
 - Give each image its own clear share of the frame — side by side, foreground and background, or a natural blend — keeping each image's subject, framing and camera angle recognisable. Do not pick one image and discard the rest; a picture that shows only some of the {count} images is wrong.
 - Do redraw them: repaint, restyle and colour-grade them into this graphic's illustration style, and extend or crop the edges as the layout needs. Apart from whatever an editor's instruction below asks you to change, the treatment changes and the content does not.
-- Do not copy readable text or brand marks visible inside the attached images, except a brand the source material names — that one may be reproduced on its own objects; the BRANDS rule above still applies in full.
+- PRESERVE-EXISTING: Text already present in any attached reference image is requested content for that image — keep it as supplied. Preserve every readable word, number and existing brand mark already present in each image; do not erase it, rewrite it, replace it with fake text, garbled text or altered branding.
+- DO-NOT-INVENT OR REUSE: Do not add any text or brand that is not already present in an attached reference image or explicitly requested elsewhere in this prompt. In a fusion, do not move, copy or reuse text or brand marks from one attached image onto an object from another attached image.
+- EXPLICIT-REMOVAL ONLY: Remove existing text or brand marks only when the editor's instruction explicitly asks for that specific text or mark to be removed; otherwise preserve them.
 - People in the attached images stay who they are: reproduce every face in every attached image as it appears, recognisable, in the redrawn style. The NAMED REAL PERSON rules below govern only people who are NOT in the attached images — they do not restrict, blur, hide or replace a face that the editor supplied here.
 - If an attached image already contains on-air chrome (a date stamp, LIVE or 24H LIVE badge, channel logo, or a 示意圖 / AI示意圖 label), do not draw another copy of those marks."""
 
@@ -486,18 +508,71 @@ REFINE_REAL_WORLD_RULES = (
 )
 
 
-def build_refine_prompt(instruction: str, *, text_free: bool = False) -> str:
+REFINE_REPLACEMENT_COMMON_RULES = """==================================================
+NAMED FACE REPLACEMENT SCOPE (CRITICAL)
+==================================================
+- The named replacement target is: {person}.
+- Replace ONLY the face of that one target person. The replacement scope is exactly that one face.
+- Keep every other person's face exactly as it is. Do not restyle, replace, age, beautify, complete or re-render any other face.
+- Preserve the existing composition, framing, layout, colours, lighting, typography, every existing word, every logo and badge, and every other image element exactly as they are.
+- Do not add, remove or move any person, object, text or logo. Do not change the target's body, pose, clothing or position except for the target face itself."""
+
+REFINE_REPLACEMENT_USER_PHOTO_RULES = (
+    SOURCE_BRANDS_RULE
+    + "\n"
+    + REFINE_REPLACEMENT_COMMON_RULES
+    + "\n- A qualifying portrait photograph supplied by the user for the target is attached. Use that photograph as the target face reference; do not invent a different identity."
+)
+
+REFINE_REPLACEMENT_WIKIPEDIA_PHOTO_RULES = (
+    SOURCE_BRANDS_RULE
+    + "\n"
+    + REFINE_REPLACEMENT_COMMON_RULES
+    + "\n- A qualifying Wikipedia portrait photograph of the target is attached. Use that photograph as the target face reference; do not invent a different identity."
+)
+
+REFINE_REPLACEMENT_ENTRY_ONLY_RULES = (
+    SOURCE_BRANDS_RULE
+    + "\n"
+    + REFINE_REPLACEMENT_COMMON_RULES
+    + "\n- A Wikipedia entry exists for the target, but no qualifying portrait photograph is attached. You may draw a plausible face for the target from the news context, but do not claim or imply that the result is a verified or pinpoint-accurate likeness."
+)
+
+# 「查無維基條目」刻意**沒有**對應的 rules 常數：那一種結果在 `refine_image()` 就直接
+# 回 400 擋掉，根本走不到組 prompt 這一步。寫一條規則請模型「不要捏臉」是錯的防線——
+# 0916 王結玲那次換出第三張誰都不是的臉，正是因為把這件事交給模型自律（見 MASTER B63）。
+# 唯一可靠的擋法是程式端不把它送出去。
+
+
+def build_refine_prompt(
+    instruction: str,
+    *,
+    text_free: bool = False,
+    replacement_person: str = "",
+    replacement_mode: str = "",
+) -> str:
     """組追加修改（refine）的生圖 prompt。附圖＝上次置框前原圖，經 input_references 送出。
 
     text_free：附圖是無文字底圖（YT 直播封面那條線），改用 TEXT_FREE_REFINE_RULES。
     兩條線都帶 REFINE_REAL_WORLD_RULES（禁品牌＋具名真人），理由見該常數。
     """
+    if replacement_person and replacement_mode:
+        replacement_rules = {
+            "user_uploaded": REFINE_REPLACEMENT_USER_PHOTO_RULES,
+            "wikipedia_photo": REFINE_REPLACEMENT_WIKIPEDIA_PHOTO_RULES,
+            "entry_only": REFINE_REPLACEMENT_ENTRY_ONLY_RULES,
+        }.get(replacement_mode)
+        if replacement_rules is None:
+            raise ValueError(f"unknown replacement mode: {replacement_mode}")
+        base_rules = replacement_rules.format(person=replacement_person)
+    else:
+        base_rules = REFINE_REAL_WORLD_RULES
     if text_free:
         return (
             "Modify the attached text-free background photograph according to the change "
             "request below. This is an edit of an existing image, not a new design.\n\n"
             f"{TEXT_FREE_REFINE_RULES}\n"
-            f"{REFINE_REAL_WORLD_RULES}\n\n"
+            f"{base_rules}\n\n"
             "==================================================\n"
             "USER CHANGE REQUEST\n"
             "==================================================\n"
@@ -507,7 +582,7 @@ def build_refine_prompt(instruction: str, *, text_free: bool = False) -> str:
         "Modify the attached news infographic image according to the change "
         "request below. This is an edit of an existing image, not a new design.\n\n"
         f"{IMAGE_REFINE_RULES}\n"
-        f"{REFINE_REAL_WORLD_RULES}\n\n"
+        f"{base_rules}\n\n"
         "==================================================\n"
         "USER CHANGE REQUEST\n"
         "==================================================\n"
@@ -555,6 +630,34 @@ NO TEXT AT ALL (OVERRIDES EVERY EARLIER RULE ABOUT RENDERING WORDS)
 - VARIABLE FIELDS is empty on purpose. Every earlier instruction about rendering the words, figures or markers supplied there does not apply, and any placeholder standing in for those fields is not something to draw.
 - Everything else still binds in full: the reserved margin, likeness and scene fidelity, the use of any attached references, and the ban on inventing content.
 - The empty area where a headline would have gone is the correct result. Do not fill it with words."""
+
+
+# 全路徑最終生圖鐵律（B61／B62，2026-09-16）。ownership 只在後端：
+# generate_image_raw() 在 provider dispatch 正前方冪等注入一次。
+# 不要同步到 app.js／hybrid.js——新版型漏帶這段必須是紅燈，不是再複製一份。
+#
+# 冪等判斷只用下面這個 marker，不准拿條文裡某一句去 substring 比對。
+FINAL_IMAGE_BASELINE_MARKER = "=== FINAL IMAGE POLICY BASELINE ==="
+
+FINAL_IMAGE_BASELINE = f"""==================================================
+{FINAL_IMAGE_BASELINE_MARKER}
+==================================================
+This block is mandatory on every image this system generates. Portrait-mode blocks elsewhere in this prompt (NAMED REAL PERSON and related) still govern how an explicitly requested person is depicted; this block only forbids adding people, faces, marks or words that the rest of the prompt did not ask for. When an explicit portrait-mode fallback is present, follow that fallback.
+
+- NAMED PEOPLE: do not introduce a named real person who is not already named in this prompt.
+- FACES: do not invent an identifiable face for anyone who was not explicitly requested and who has no qualified reference image attached. If this prompt names a person and attaches a qualified reference, depict that person as the portrait-mode block directs.
+- TEXT / LOGOS / BRANDS: do not draw text, logos, wordmarks, trademarks or brand marks that this prompt did not request. If this prompt explicitly asks you to render specific words, titles, logos or brands (including an AI-title / TEXT TO RENDER block), draw those as requested and do not add extra readable lettering, logos or brands beyond that request.
+- PORTRAIT FALLBACK: back views, silhouettes, no-person scenes, illustrated likenesses and similar fallbacks are governed only by the explicit portrait-mode rules in this prompt. If none are present, do not add a named real person of your own."""
+
+
+def ensure_final_image_baseline(prompt: str) -> str:
+    """若 prompt 尚無鐵律 marker 就附加一次；已有則原樣回傳。"""
+    if FINAL_IMAGE_BASELINE_MARKER in (prompt or ""):
+        return prompt
+    stripped = (prompt or "").rstrip()
+    if not stripped:
+        return FINAL_IMAGE_BASELINE
+    return f"{stripped}\n\n{FINAL_IMAGE_BASELINE}"
 
 
 def build_prompt(

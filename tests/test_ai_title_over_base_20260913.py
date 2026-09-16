@@ -18,7 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
@@ -92,8 +92,35 @@ class NoteInjection(unittest.TestCase):
 class TenCoverOverBase(_Harness):
     BASE = {"title_left": "川普發布「擴張版」美國地圖", "provider": "gpt", "date_text": "2026/09/13"}
 
+    def _run_localized_single_asis(self, url, body):
+        """B55（2026-09-16）：滿版剛好 1 張原圖放置＋AI 標題會套 protect_base 防呆
+        （見 compose.restore_photo_outside_title_band），共用 harness 的 fake_raw
+        整張塗成 GREEN 會被判定為「整張重畫」而擋下（400）——這裡才是它原本要測的
+        request 組裝邏輯，不是 B55 的行為，改用「幾乎照抄底圖、只在字帶裡加一小塊」
+        的 fake_raw，行為與細節見 tests/test_b55_photo_placement_protection.py。
+        """
+        calls = []
+
+        def fake_raw(req):
+            calls.append(req)
+            img = Image.open(io.BytesIO(_png_bytes(size=compose.COVER_CANVAS, colour=RED)))
+            band_top = round(compose.COVER_CANVAS[1] * compose.cover_title_band_top_ratio())
+            ImageDraw.Draw(img).rectangle([200, band_top + 80, 700, band_top + 160], fill=GREEN)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return SimpleNamespace(
+                image_data_base64=base64.b64encode(buf.getvalue()).decode(), model="fake", mime_type="image/png",
+            )
+
+        with patch.object(main, "generate_image_raw", side_effect=fake_raw), \
+                patch.object(main, "resolve_cover_visuals", return_value=("左景", "右景")), \
+                patch.object(main, "_archive_generation", lambda **k: None):
+            res = client.post(url, json=body, headers=_headers())
+        self.assertEqual(res.status_code, 200, res.text[:300])
+        return res.json(), calls
+
     def test_full_single_asis_ai_title_one_call_with_only_the_photo(self):
-        data, calls = self._run("/api/editor/cover", {
+        data, calls = self._run_localized_single_asis("/api/editor/cover", {
             **self.BASE, "title_right": "", "layout": "full", "mode": "ai", "title_creativity": 1,
             "slot_left": [_ref(RED, "asis")],
         })

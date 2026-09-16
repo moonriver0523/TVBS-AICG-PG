@@ -121,6 +121,7 @@ class EndpointCoverageTests(unittest.TestCase):
             # 滿版那支要另外確認（下一個測試負責）。
             with self.subTest(path=sorted(hit)):
                 self.assertIn("_archive_generation", body)
+                self.assertIn("_archive_generation_failure", body)
 
     def test_the_full_layout_branch_archives_too(self):
         """十點滿版走 _editor_cover_full，是另一個函式——漏掉它等於滿版全部查無紀錄。"""
@@ -128,6 +129,7 @@ class EndpointCoverageTests(unittest.TestCase):
             if isinstance(node, ast.FunctionDef) and node.name == "_editor_cover_full":
                 body = ast.get_source_segment(MAIN_SRC, node) or ""
                 self.assertIn("_archive_generation", body)
+                self.assertIn("_record_generation_failure", body)
                 self.assertIn("（滿版）", body)
                 return
         self.fail("找不到 _editor_cover_full")
@@ -256,6 +258,90 @@ class PromptTruncationTests(unittest.TestCase):
             request_log.MAX_PROMPT_CHARS, longest,
             f"最壞情況 prompt 已經 {longest} 字，超過上限就會再次切掉 VARIABLE FIELDS",
         )
+
+
+class ConsoleOutcomeDisplayTests(unittest.TestCase):
+    """後台要看得出成功／失敗、耗時、provider、重試與完整分母（F30／F31）。"""
+
+    def test_failed_row_uses_red_semantics_and_shows_error_fields(self):
+        row = admin_console._row({
+            "status": "failed",
+            "ts": "2026-09-16T10:00:00",
+            "provider": "gpt",
+            "image_model": "fake-model",
+            "duration_ms": 140000,
+            "retry_count": 2,
+            "error_type": "timeout",
+            "http_status": 504,
+            "error_summary": "太久沒有回應",
+            "request_id": "abc",
+        })
+        self.assertIn('class="failed"', row)
+        self.assertIn("失敗", row)
+        self.assertIn("timeout", row)
+        self.assertIn("HTTP 504", row)
+        self.assertIn("140000 ms", row)
+        self.assertIn("重試: 2", row)
+        self.assertIn("無圖", row)
+        self.assertIn("太久沒有回應", row)
+
+    def test_success_row_keeps_thumbnail_and_download_link(self):
+        row = admin_console._row({
+            "status": "ok",
+            "ts": "2026-09-16T10:00:00",
+            "_month": "2026-09",
+            "image_file": "shot.png",
+            "provider": "gemini",
+            "duration_ms": 800,
+            "retry_count": 0,
+        })
+        self.assertNotIn('class="failed"', row)
+        self.assertIn("成功", row)
+        self.assertIn("/admin/image/2026-09/shot.png", row)
+        self.assertIn("耗時: 800 ms", row)
+
+    def test_old_record_without_new_fields_still_renders(self):
+        row = admin_console._row({"ts": "2026-09-07T00:00:00", "prompt": "P"})
+        self.assertIn("成功", row)
+        self.assertIn("耗時: －", row)
+        self.assertIn("重試: －", row)
+
+    def test_summary_shows_success_over_total_not_page_size(self):
+        page = admin_console._page(
+            records=[{"status": "ok"}] * 2,
+            months=["2026-09"], month="", user="",
+            types=["web-image"], type_label="",
+            offset=0, limit=2,
+            summary={"total": 450, "ok": 180, "failed": 270, "types": ["web-image"]},
+        )
+        self.assertIn("成功 180 / 全部 450（失敗 270）", page)
+        self.assertIn("本頁 2 筆", page)
+        self.assertNotIn("上限 200 筆", page)
+
+    def test_pagination_links_cover_the_rest_of_the_denominator(self):
+        page = admin_console._page(
+            records=[{"status": "ok"}] * 200,
+            months=["2026-09"], month="2026-09", user="ada",
+            types=["web-image"], type_label="web-image",
+            offset=0, limit=200,
+            summary={"total": 450, "ok": 180, "failed": 270, "types": ["web-image"]},
+        )
+        self.assertIn("下一頁", page)
+        self.assertIn("offset=200", page)
+        self.assertIn("month=2026-09", page)
+        self.assertIn("type=web-image", page)
+        self.assertIn("user=ada", page)
+        self.assertNotIn("上一頁", page)
+        later = admin_console._page(
+            records=[{"status": "failed"}] * 50,
+            months=["2026-09"], month="", user="",
+            types=[], type_label="",
+            offset=400, limit=200,
+            summary={"total": 450, "ok": 180, "failed": 270},
+        )
+        self.assertIn("上一頁", later)
+        self.assertIn("offset=200", later)
+        self.assertNotIn("下一頁", later)
 
 
 if __name__ == "__main__":

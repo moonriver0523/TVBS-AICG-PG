@@ -62,8 +62,35 @@ def _only_merz(subjects, english=None):
     return found, [name for name in subjects if name not in found]
 
 
+def _outcomes_from_lookup(lookup_fn, *, missing_entry_found=False):
+    """把 (found, missing) 形狀的假查詢轉成 F40 outcome 形狀。
+
+    `missing_entry_found` 預設 False：維持這批既有測試改動前的假設——沒照片
+    的人也查無條目，一律退回「無人場景」，不是新的 entry_only（那個由本檔另外
+    新增的測試覆蓋）。
+    """
+    def outcomes(subjects, english=None):
+        found, missing = lookup_fn(subjects, english)
+        result = {
+            name: photo_lookup.PortraitLookupOutcome(
+                photo=photo, entry_found=True, matched_name=name, language="zh"
+            )
+            for name, photo in found.items()
+        }
+        for name in missing:
+            result[name] = photo_lookup.PortraitLookupOutcome(
+                photo=None,
+                entry_found=missing_entry_found,
+                matched_name=name if missing_entry_found else None,
+                language="zh" if missing_entry_found else None,
+            )
+        return result
+
+    return outcomes
+
+
 class CoverPhotoAvailabilityTests(unittest.TestCase):
-    def _run(self, body, derive=TWO_PEOPLE, lookup=_only_merz):
+    def _run(self, body, derive=TWO_PEOPLE, lookup=_only_merz, missing_entry_found=False):
         seen = []
 
         def fake_raw(image_req):
@@ -75,6 +102,10 @@ class CoverPhotoAvailabilityTests(unittest.TestCase):
 
         with patch.object(main, "digest_completion", return_value=_completion(derive)), \
              patch.object(main, "lookup_portrait_photos", side_effect=lookup), \
+             patch.object(
+                 main, "lookup_portrait_outcomes",
+                 side_effect=_outcomes_from_lookup(lookup, missing_entry_found=missing_entry_found),
+             ), \
              patch.object(main, "supports_reference_image", return_value=True), \
              patch.object(main, "generate_image_raw", side_effect=fake_raw):
             res = client.post("/api/editor/cover", json=body, headers=_headers())
@@ -119,10 +150,170 @@ class YtCoverPhotoAvailabilityTests(unittest.TestCase):
         }
         req = main.YtCoverRequest(title="梅爾茨蕭茲 同框會談", title_mode="composite")
         with patch.object(main, "digest_completion", return_value=_completion(derived)), \
-             patch.object(main, "lookup_portrait_photos", side_effect=_only_merz):
+             patch.object(main, "lookup_portrait_photos", side_effect=_only_merz), \
+             patch.object(main, "lookup_portrait_outcomes", side_effect=_outcomes_from_lookup(_only_merz)):
             _, _, subjects, english = main.resolve_yt_cover_plan(req)
         self.assertEqual(subjects, ["梅爾茨"])
         self.assertEqual(english, ["Friedrich Merz"])
+
+
+ENTRY_ONLY_OUTCOME = photo_lookup.PortraitLookupOutcome(
+    photo=None, entry_found=True, matched_name="蕭茲", language="zh"
+)
+NO_ENTRY_OUTCOME = photo_lookup.PortraitLookupOutcome(
+    photo=None, entry_found=False, matched_name=None, language=None
+)
+
+
+class CoverF40FourTierTests(unittest.TestCase):
+    """F40 四層分流在封面線的整合：條目無照片（entry_only）、完全無條目（no_entry）。"""
+
+    def _run(self, body, derive=TWO_PEOPLE, outcomes=None):
+        seen = []
+
+        def fake_raw(image_req):
+            seen.append(image_req)
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(_png_for(image_req.aspect_ratio)).decode("ascii"),
+                mime_type="image/png", model="fake",
+            )
+
+        outcomes = outcomes or {}
+        with patch.object(main, "digest_completion", return_value=_completion(derive)), \
+             patch.object(main, "lookup_portrait_outcomes", return_value=outcomes), \
+             patch.object(
+                 main, "lookup_portrait_photos",
+                 side_effect=lambda subjects, english=None: (
+                     {n: outcomes[n].photo for n in subjects if outcomes.get(n) and outcomes[n].photo},
+                     [n for n in subjects if not (outcomes.get(n) and outcomes[n].photo)],
+                 ),
+             ), \
+             patch.object(main, "supports_reference_image", return_value=True), \
+             patch.object(main, "generate_image_raw", side_effect=fake_raw):
+            res = client.post("/api/editor/cover", json=body, headers=_headers())
+        self.assertEqual(res.status_code, 200, res.text)
+        return res.json(), seen
+
+    def test_entry_only_person_stays_in_layout_and_response_carries_notice(self):
+        """蕭茲查無照片但確認有條目：不剔除、生圖端改用 entry_only、response 帶 notice。"""
+        data, seen = self._run(
+            {"title_left": "梅爾茨 蕭茲 同框", "layout": "full", "mode": "composite"},
+            outcomes={
+                "梅爾茨": photo_lookup.PortraitLookupOutcome(
+                    photo=MERZ_PHOTO, entry_found=True, matched_name="梅爾茨", language="zh"
+                ),
+                "蕭茲": ENTRY_ONLY_OUTCOME,
+            },
+        )
+        req = seen[0]
+        # entry_only 全有或全無：兩人都留在版面，但整組改走 entry_only（不附任何照片）
+        self.assertEqual(req.portrait_subjects, ["梅爾茨", "蕭茲"])
+        self.assertEqual(req.reference_image_data_url, "")
+        self.assertIn("NO VERIFIED PHOTOGRAPH, DRAW FROM CONTEXT", req.prompt)
+        self.assertEqual(len(data["notices"]), 1)
+        self.assertIn("並非本人的精確肖像", data["notices"][0])
+
+    def test_no_entry_person_is_dropped_and_no_notice(self):
+        """兩人都連條目都查不到：從版面移除、走無人場景、不回 notice。"""
+        data, seen = self._run(
+            {"title_left": "梅爾茨 蕭茲 同框", "layout": "full", "mode": "composite"},
+            outcomes={"梅爾茨": NO_ENTRY_OUTCOME, "蕭茲": NO_ENTRY_OUTCOME},
+        )
+        req = seen[0]
+        self.assertEqual(req.portrait_subjects, ["梅爾茨", "蕭茲"])
+        self.assertIn("NAMED REAL PEOPLE — NO PERSON IN THIS SCENE", req.prompt)
+        self.assertEqual(data.get("notices", []), [])
+
+
+class CoverNewsTextMaterialTests(unittest.TestCase):
+    """B53：news_text 有值時要跟標題一起餵給補畫面描述，留空時 material 逐字不變。"""
+
+    def test_news_text_is_appended_as_source_material(self):
+        req = main.TenCoverRequest(
+            title_left="德國總理深感震驚",
+            news_text="梅爾茨在柏林表示對選舉結果深感震驚，誓言推動改革。",
+        )
+        with patch.object(main, "digest_completion", return_value=_completion(TWO_PEOPLE)) as digest:
+            main.resolve_cover_visuals(req)
+        material = digest.call_args.kwargs["news_text"]
+        self.assertIn("News article source material", material)
+        self.assertIn("do not copy its wording verbatim", material)
+        self.assertIn("梅爾茨在柏林表示對選舉結果深感震驚", material)
+
+    def test_empty_news_text_leaves_material_byte_identical(self):
+        with_news_text = main.TenCoverRequest(title_left="德國總理深感震驚", news_text="")
+        without_field = main.TenCoverRequest(title_left="德國總理深感震驚")
+        captured = []
+        with patch.object(main, "digest_completion", return_value=_completion(TWO_PEOPLE)) as digest:
+            main.resolve_cover_visuals(with_news_text)
+            captured.append(digest.call_args.kwargs["news_text"])
+            main.resolve_cover_visuals(without_field)
+            captured.append(digest.call_args.kwargs["news_text"])
+        self.assertEqual(captured[0], captured[1])
+        self.assertNotIn("News article source material", captured[0])
+
+
+class YtCoverNewsTextMaterialTests(unittest.TestCase):
+    """B53：YT 封面（derive_yt_cover_plan）與十點共用同一套 news_text 附加規則。"""
+
+    def test_news_text_is_appended_as_source_material(self):
+        with patch.object(main, "digest_completion", return_value=_completion(TWO_PEOPLE)) as digest:
+            main.derive_yt_cover_plan(
+                "梅爾茨深感震驚", None, "",
+                "梅爾茨在柏林表示對選舉結果深感震驚，誓言推動改革。",
+            )
+        material = digest.call_args.kwargs["news_text"]
+        self.assertIn("News article source material", material)
+        self.assertIn("梅爾茨在柏林表示對選舉結果深感震驚", material)
+
+    def test_empty_news_text_leaves_material_byte_identical(self):
+        captured = []
+        with patch.object(main, "digest_completion", return_value=_completion(TWO_PEOPLE)) as digest:
+            main.derive_yt_cover_plan("梅爾茨深感震驚", None, "")
+            captured.append(digest.call_args.kwargs["news_text"])
+            main.derive_yt_cover_plan("梅爾茨深感震驚", None, "", "")
+            captured.append(digest.call_args.kwargs["news_text"])
+        self.assertEqual(captured[0], captured[1])
+        self.assertNotIn("News article source material", captured[0])
+
+
+class CoverSecondDeriveSanitizerTests(unittest.TestCase):
+    """F40：查無條目的人不交給模型自己決定要不要畫，deterministic sanitizer 擋在程式端。
+
+    這裡不是「重新 derive 一次」的重試迴圈——查無條目時直接把人從名單移除
+    （keep_subjects_with_photos／resolve_portraits 的 no_reference 分支），所以就算
+    補畫面描述只打了一次文字模型，被排除的人名也不會漏進「會被畫出臉」的肖像規則
+    區塊。用一次呼叫就驗證「不會無限重入」。
+    """
+
+    def test_excluded_name_never_leaks_as_a_drawn_face_and_derive_runs_once(self):
+        seen = []
+
+        def fake_raw(image_req):
+            seen.append(image_req)
+            return main.ImageGenerateResponse(
+                image_data_base64=base64.b64encode(_png_for(image_req.aspect_ratio)).decode("ascii"),
+                mime_type="image/png", model="fake",
+            )
+
+        with patch.object(main, "digest_completion", return_value=_completion(TWO_PEOPLE)) as digest, \
+             patch.object(main, "lookup_portrait_outcomes", return_value={"梅爾茨": NO_ENTRY_OUTCOME, "蕭茲": NO_ENTRY_OUTCOME}), \
+             patch.object(main, "lookup_portrait_photos", return_value=({}, ["梅爾茨", "蕭茲"])), \
+             patch.object(main, "supports_reference_image", return_value=True), \
+             patch.object(main, "generate_image_raw", side_effect=fake_raw):
+            res = client.post(
+                "/api/editor/cover",
+                json={"title_left": "梅爾茨 蕭茲 同框", "layout": "full", "mode": "composite"},
+                headers=_headers(),
+            )
+        self.assertEqual(res.status_code, 200, res.text)
+        # 全部都查無條目時只打一次文字模型——沒有第二次 derive 可以無限重入
+        self.assertEqual(digest.call_count, 1)
+        # 兩人都連條目都查不到：整組退回無人場景，肖像規則區塊不會出現
+        # 「查到照片才有的」reference／reference_multi／entry_only 措辭
+        self.assertIn("NAMED REAL PEOPLE — NO PERSON IN THIS SCENE", seen[0].prompt)
+        self.assertNotIn("MULTIPLE PORTRAITS", seen[0].prompt)
+        self.assertNotIn("DRAW FROM CONTEXT", seen[0].prompt)
 
 
 if __name__ == "__main__":

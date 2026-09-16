@@ -162,6 +162,15 @@ class ConstantParityTests(unittest.TestCase):
         self.assertIsNotNone(js_value, "app.js 裡找不到 MAP_TYPE_LABEL")
         self.assertEqual(js_value, news_prompt.MAP_TYPE_LABEL)
 
+    def test_aiedit_reference_rules(self):
+        self.assert_same("USER_REFERENCE_AIEDIT_RULES", news_prompt.USER_REFERENCE_AIEDIT_RULES)
+
+    def test_aiedit_fusion_reference_rules(self):
+        self.assert_same(
+            "USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE",
+            news_prompt.USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE,
+        )
+
 
 class BuiltPromptShapeTests(unittest.TestCase):
     """組裝結果的關鍵骨架——區塊順序或標頭被改動時要能發現。"""
@@ -352,6 +361,22 @@ class AspectRatioParityTests(unittest.TestCase):
         self.assertIn("state.safeFrame", body)
         self.assertIn("SAFE_FRAME_ASPECT_RATIO", body)
         self.assertIn("DEFAULT_ASPECT_RATIO", body)
+
+
+class FinalImageBaselineOwnershipTests(unittest.TestCase):
+    """B61／B62：這條鐵律的 ownership 在後端，前端不得鏡像一份。"""
+
+    def test_app_js_has_no_baseline_constant(self):
+        source = js_source()
+        self.assertNotIn("FINAL_IMAGE_BASELINE", source)
+        self.assertNotIn("=== FINAL IMAGE POLICY BASELINE ===", source)
+
+    def test_hybrid_js_has_no_baseline_and_posts_to_images_generate(self):
+        hybrid = pathlib.Path(__file__).resolve().parent.parent / "hybrid.js"
+        source = hybrid.read_text(encoding="utf-8")
+        self.assertNotIn("FINAL_IMAGE_BASELINE", source)
+        self.assertNotIn("=== FINAL IMAGE POLICY BASELINE ===", source)
+        self.assertIn("/api/images/generate", source)
 
 
 if __name__ == "__main__":

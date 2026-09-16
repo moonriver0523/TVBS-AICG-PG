@@ -939,12 +939,12 @@ Rules for every description:
 - NEVER mention text, captions, headlines, numbers or charts — the photograph carries no caption and no graphics.
 - BRANDS: ONLY THOSE THE HEADLINE OR THE SUPPLIED DESCRIPTION NAMES. When the story is about a named brand, company or product, say so in the description and let it appear with its real mark on the objects that belong to it — its own signage, packaging, product body, vehicle livery, screen or jersey. Every OTHER brandable surface in the scene stays de-identified: blank surfaces or generic abstract marks, never a readable brand name the story does not name, and never an invented one. Never put one brand's mark on another brand's object.
 - Do not restate the headline. Turn its meaning into a scene.
-- If a headline is about a specific named real person (a head of state, a politician, a celebrity), the photograph should be a portrait-style shot of that person as its subject, face towards the camera. Otherwise use anonymous figures, back views, crowds, objects or places.
+- If a headline or the supplied description writes a specific personal name, the photograph should be a portrait-style shot of that person as its subject, face towards the camera. A job title, office, country or organisation without a personal name is not a named person — use anonymous figures, back views, crowds, objects or places. You may describe a role or title in the shot, but that does not license filling a named-person field.
 - If a headline is about data, money or policy, choose a real-world scene that stands for it (a building, a counter, hands, equipment), never a graph.
-- If a side's description is already supplied, repeat it back unchanged — but still list the named real people it shows.
+- If a side's description is already supplied, repeat it back unchanged — but still list the named real people it shows, and only those whose personal names appear verbatim in the headline, the supplied description, or the user's explicit input.
 - END EVERY DESCRIPTION YOU WRITE with one short clause naming the light and the palette, chosen by what the story is: disaster, crime, war and accidents get dark, desaturated, high-contrast light; health, family, education and human-interest stories get warm, soft, low-contrast light; weather, sea, cold and environment stories get cool blue-grey light; money, technology and industry get clean, hard, slightly cold light. Never write the same clause for both sides when the two stories differ in kind.
 
-Also return, per side, "portrait_subjects_left" / "portrait_subjects_right": every specific named real person whose face that side's photograph would show, names exactly as the headline writes them (no title, no organisation), at most three per side; an empty array when the scene shows no named real person. "portrait_subjects_left_en" / "portrait_subjects_right_en": the same people, same order, as the name Wikipedia uses in English (e.g. 梅爾茨 → "Friedrich Merz"); empty string when unsure.
+Also return, per side, "portrait_subjects_left" / "portrait_subjects_right": every specific named real person whose face that side's photograph would show, names copied VERBATIM from the headline, the supplied description, or the user's explicit input (no title, no organisation), at most three per side; an empty array when no personal name appears in that material. Never infer a name from a title, event, country, organisation or common knowledge. "portrait_subjects_left_en" / "portrait_subjects_right_en": the same people, same order, same length, each copied VERBATIM from that material when an English or original-Latin spelling is present; empty string when it is not. Never fill an English name from Wikipedia, translation or common knowledge.
 """
 
 # ---- 標題斷句（2026-09-14 使用者裁決：斷句交給消化模型，規則只當退路）----
@@ -2208,10 +2208,10 @@ You are given the headline, and told whether it is already split into two lines.
    - Traditional Chinese (Taiwan), one sentence, roughly twenty to forty characters. No bullet points.
    - NEVER mention text, captions, headlines, numbers, charts, logos or watermarks — the photograph carries no writing at all.
    - Do not restate the headline. Turn its meaning into a scene.
-   - If the headline is about a specific named real person (a head of state, a politician, a celebrity), the photograph should be a portrait-style shot of that person as its subject. Otherwise use anonymous figures, back views, crowds, objects or places.
+   - If the headline writes a specific personal name, the photograph should be a portrait-style shot of that person as its subject. A job title, office, country or organisation without a personal name is not a named person — use anonymous figures, back views, crowds, objects or places. You may describe a role or title in the shot, but that does not license filling a named-person field.
    - If the headline is about data, money or policy, choose a real-world scene that stands for it, never a graph.
 
-3. "portrait_subjects" — every specific named real person whose face the photograph would show, names exactly as the headline writes them (no title, no organisation), at most three. Empty array when the scene shows no named real person. "portrait_subjects_en" — the same people, same order, same length, each as the person's English or original-Latin-alphabet name (e.g. 川普 → "Donald Trump"); empty string only when you genuinely do not know it.
+3. "portrait_subjects" — every specific named real person whose face the photograph would show, names copied VERBATIM from the headline or the user's explicit input (no title, no organisation), at most three. Empty array when no personal name appears in that material. Never infer a name from a title, event, country, organisation or common knowledge. "portrait_subjects_en" — the same people, same order, same length, each copied VERBATIM from that material when an English or original-Latin spelling is present; empty string when it is not. Never fill an English name from Wikipedia, translation or common knowledge.
 """
 
 YT_COVER_DERIVE_SCHEMA = {
@@ -2306,6 +2306,14 @@ EDITOR_FORMATS = {
 }
 
 EDITOR_FORMAT_KEYS = tuple(EDITOR_FORMATS)
+
+# B51（2026-09-15 全版型盤查）：會走「先生圖、後貼固定元素」這條路的封面版型——
+# 十點不一樣＋四種 YT 直播封面。這五個版型追加修改（/api/images/refine）一律不能
+# 置對位框，否則會把角標／Logo／節目標籤跟著縮放或推出版面。單一常數集中定義，
+# 白名單校驗（ImageRefineRequest.cover_kind）與呼叫端都從這裡取，不要各自複製一份。
+COVER_REFINE_KINDS = frozenset(
+    {"ten_cover", "yt_live_cover", "yt_hourly_cover", "yt_live24_cover", "yt_hot_cover"}
+)
 
 
 # 舊 key 的別名（2026-09-08 WP1 合併留下的相容層）。前端下拉不再列出這三個，但

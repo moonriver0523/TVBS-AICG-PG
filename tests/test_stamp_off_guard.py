@@ -25,6 +25,22 @@ PAYLOAD = {
 }
 
 
+def _variable(n: int, *, stamp: bool = True, bottom: str = "") -> str:
+    """組出剛好 n 條 [內文小標]、最後一條固定是停班課，方便既有斷言對得上。"""
+    labels = ["明晨<陸警>", "北部<豪雨>", "中部警戒", "南部警戒", "停班課<晚間>宣布"]
+    chosen = labels[: n - 1] + [labels[-1]]
+    lines = ["[標題] 颱風逼近"] + [f"[內文小標] {item}" for item in chosen]
+    if stamp:
+        lines.append("<蓋章> 嚴防豪雨成災")
+    if bottom:
+        lines.append(f"<底帶> {bottom}")
+    return "\n".join(lines)
+
+
+def _payload(variable: str) -> dict:
+    return {**PAYLOAD, "variable": variable}
+
+
 def response(payload):
     message = SimpleNamespace(content=json.dumps(payload, ensure_ascii=False))
     return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason="stop")])
@@ -50,15 +66,17 @@ class GenerateGuardTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def _run(self, **req):
+    def _run(self, *, n_points: int, **req):
         request = GenerateRequest(news_text="素材", type_label="資料圖表", **req)
-        with patch.object(main.openai_client.chat.completions, "create", return_value=response(PAYLOAD)):
+        payload = _payload(_variable(n_points))
+        with patch.object(main.openai_client.chat.completions, "create", return_value=response(payload)):
             return generate(request)
 
     def test_stamp_off_strips_stamp_line_for_every_format(self):
         for fmt in ("default", "broadcast_left", "broadcast_right"):
             with self.subTest(fmt=fmt):
-                result = self._run(stamp=False, role="編輯", editor_format=fmt)
+                n_points = 4 if fmt != "default" else 5
+                result = self._run(n_points=n_points, stamp=False, role="編輯", editor_format=fmt)
                 self.assertNotIn("蓋章", result.variable)
                 if fmt == "default":
                     self.assertIn("[內文小標] 停班課<晚間>宣布", result.variable)
@@ -68,8 +86,7 @@ class GenerateGuardTests(unittest.TestCase):
                     self.assertIn("<底帶> 停班課<晚間>宣布", result.variable)
 
     def test_stamp_off_on_broadcast_leaves_a_compliant_bottom_band_alone(self):
-        payload = dict(PAYLOAD)
-        payload["variable"] = "[標題] 颱風逼近\n[內文小標] 明晨<陸警>\n<底帶> 停班課<晚間>宣布"
+        payload = _payload(_variable(4, stamp=False, bottom="停班課<晚間>宣布"))
         request = GenerateRequest(
             news_text="素材", type_label="資料圖表", stamp=False,
             role="編輯", editor_format="broadcast_left",
@@ -81,7 +98,7 @@ class GenerateGuardTests(unittest.TestCase):
     def test_stamp_on_and_unset_keep_the_line(self):
         for stamp in (True, None):
             with self.subTest(stamp=stamp):
-                result = self._run(stamp=stamp, role="編輯")
+                result = self._run(n_points=5, stamp=stamp, role="編輯")
                 self.assertIn("<蓋章> 嚴防豪雨成災", result.variable)
 
 

@@ -143,6 +143,7 @@ class DualSourceParityTests(unittest.TestCase):
         "v2-2026-07-30",
         "v3-2026-07-31",
         "v4-2026-08-01",
+        "v6-2026-08-17",
     }
 
     def test_prompt_version_was_bumped(self):

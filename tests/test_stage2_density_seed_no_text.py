@@ -421,8 +421,16 @@ class F1DensityLadderTests(unittest.TestCase):
     def test_the_point_ceilings_are_monotonic_too(self):
         self.assertIn("ONE point", main.MINIMAL_DENSITY_RULES)
         self.assertIn("1 to 3 key points", main.SIMPLIFIED_DENSITY_RULES)
-        self.assertIn("up to six", main.STANDARD_DENSITY_RULES)
-        self.assertIn("up to EIGHT", main.MAXIMUM_DENSITY_RULES)
+        std_min, std_target = main.density_point_bounds("standard")
+        max_min, max_target = main.density_point_bounds("maximum")
+        self.assertLess(std_target, max_target)
+        self.assertLess(std_min, max_min)
+        prompt_std = main.build_digest_instructions("記者", "standard", "資料圖表")
+        prompt_max = main.build_digest_instructions("記者", "maximum", "資料圖表")
+        self.assertIn(f"TARGET {main.density_count_word(std_target)}", prompt_std)
+        self.assertIn(
+            f"TARGET {main.density_count_word(max_target).upper()}", prompt_max
+        )
 
     def test_the_broadcast_card_count_is_a_layout_limit_not_a_density_one(self):
         """版面實體限制不隨拉桿長：F1 不動 _broadcast_point_count 的既定差異。"""
@@ -569,6 +577,47 @@ class D14F20NoTextTests(SourceAssertions, unittest.TestCase):
             index_html,
             'id="digestDensityRange" type="range" min="0" max="5" step="1" value="3"',
         )
+
+
+class ImageRequestDensityWiringTests(unittest.TestCase):
+    def test_news_pipeline_forwards_density_into_image_request(self):
+        import types
+        from unittest import mock
+
+        captured = {}
+        digest = main.GenerateResponse(
+            style="style",
+            structure="structure",
+            variable="[標題] title",
+            chart_type="資料圖表",
+            seed=0,
+        )
+        generated = main.ImageGenerateResponse(
+            image_data_base64="a", mime_type="image/png", model="fake"
+        )
+
+        def fake_image(request):
+            captured["request"] = request
+            return generated
+
+        with mock.patch.object(
+            main, "check_input", return_value=types.SimpleNamespace(accepted=True, user_message="")
+        ), mock.patch.object(main, "generate", return_value=digest), mock.patch.object(
+            main, "resolve_digest_portraits", return_value=(digest, {})
+        ), mock.patch.object(main, "resolve_portraits", return_value=("", [])), mock.patch.object(
+            main, "build_prompt", return_value="prompt"
+        ), mock.patch.object(main, "generate_image", side_effect=fake_image), mock.patch.object(
+            main, "_archive_generation", return_value=None
+        ), mock.patch.object(main.request_log, "log_generation", return_value=None):
+            main.generate_news_image(
+                main.NewsImageGenerateRequest(
+                    news_text="測試新聞內容", role="編輯", density="maximum"
+                )
+            )
+
+        self.assertEqual(captured["request"].density, "maximum")
+        self.assertEqual(captured["request"].safe_frame_profile, "編輯")
+        self.assertEqual(captured["request"].provider, "gpt")
 
 
 if __name__ == "__main__":

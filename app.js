@@ -304,6 +304,7 @@ let state = {
     currentRole: '記者',
     // 2026-09-03：三檔（verbatim=不消化／simplified=字少／standard=字多），預設字少
     digestDensity: 'simplified',
+    density: 'simplified',
     // CG 美術創意 0–4（2026-09-10）。記者版與編輯各版型共用；封面那兩條拉桿是別的欄位。
     cgCreativity: 0,
     // 蓋章由使用者決定（2026-09-03）。以前是消化階段自己決定，同一個產品三種行為。
@@ -356,6 +357,12 @@ let state = {
     coverAsis: { left: [], right: [] },
     // 整點直播的一標一附圖（2026-09-10，對齊十點）。單則只用 left。
     ytAsis: { left: [], right: [] },
+    // A8（2026-09-16）：切進封面版型把隱藏的安全框／蓋章開關歸零時，暫存原值，
+    // 切回一般編輯版（該欄位不再隱藏）才恢復，不讓使用者的既有偏好被封面模式吃掉。
+    // 只有在被歸零那一刻才會非 null（值恆為 true，因為只在原值是 true 時才會暫存），
+    // 離開封面且沒有 preset 接手時用它復原，之後清空。
+    coverSafeFrameStash: null,
+    coverStampStash: null,
     // ③ 追加修改用：**置框前**原圖（不是顯示中的成品——成品餵回去會二次拉伸）
     // refineSource = {base64, mimeType}；refineDisplay = 顯示中成品的原始回傳；
     // refineStack 供「退回上一版」
@@ -470,7 +477,7 @@ const EDITOR_FORMATS = {
     // （coverLayout: 'auto'，實際值一律問 coverLayoutNow()）。
     ten_cover: {
         label: '十點不一樣',
-        hint: '只填第一標題＝滿版一張圖；再填第二標題＝左右雙切、兩格各一個標題與附圖位。每格可放多張、每張自選用途：「原圖放置」直接上版，「AI改圖」交給 AI 照這張圖重畫一次，其餘當生圖參考；那格沒有原圖放置就由 AI 生底圖。標題創意 0（預設）所有文字由程式壓字、零錯字、原圖不動，生成後可按「只改文字」換標題不重生底圖（滿版、雙切都可）；拉到 1 以上才整張交給生圖模型設計。標頭帶整條由程式貼：Logo、節目標籤、日期與 ON AIR／精華都是正版檔，AI 只負責底圖與標題。',
+        hint: '只填第一標題＝滿版一張圖；再填第二標題＝左右雙切、兩格各一個標題與附圖位。每格可放多張、每張自選用途：「原圖放置」直接上版，「AI改圖」交給 AI 照這張圖重畫一次；附圖原有可讀文字與品牌保留，不自行新增或挪用，只有編輯指令明確要求才移除；其餘當生圖參考。那格沒有原圖放置就由 AI 生底圖。標題創意 0（預設）所有文字由程式壓字、零錯字、原圖不動，生成後可按「只改文字」換標題不重生底圖（滿版、雙切都可）；拉到 1 以上才整張交給生圖模型設計。標頭帶整條由程式貼：Logo、節目標籤、日期與 ON AIR／精華都是正版檔，AI 只負責底圖與標題。',
         coverLayout: 'auto',
         inputs: 'cover',
         slots: true,   // 一標一附圖位（與 editor_formats.FORMAT_CAPABILITIES.slots 對齊，parity 測試釘住）
@@ -489,7 +496,7 @@ const EDITOR_FORMATS = {
     // 沿用主流程的附圖上傳區（用途：原圖放置＝直接當底圖；其他＝生圖參考）。
     yt_live_cover: {
         label: 'YT國內外新聞直播',
-        hint: '標題用半形空格分兩段（分不出來時由 AI 判斷）。附圖位在標題底下，一格可放多張、每張自選用途：「原圖放置」1 張整版／2 張左右雙切／3 張三切，「AI改圖」由 AI 照這張圖重畫、其餘當參考；沒有原圖放置就 AI 生底圖並標示 AI示意圖。原音呈現／AI即時翻譯可勾可並存。創意 0（預設）文字與 Logo 全由程式疊、零錯字；1 以上才交 AI 畫標題。',
+        hint: '標題用半形空格分兩段（分不出來時由 AI 判斷）。附圖位在標題底下，一格可放多張、每張自選用途：「原圖放置」1 張整版／2 張左右雙切／3 張三切，「AI改圖」由 AI 照這張圖重畫；附圖原有可讀文字與品牌保留，不自行新增或挪用，只有編輯指令明確要求才移除；其餘當參考。沒有原圖放置就 AI 生底圖並標示 AI示意圖。原音呈現／AI即時翻譯可勾可並存。創意 0（預設）文字與 Logo 全由程式疊、零錯字；1 以上才交 AI 畫標題。',
         inputs: 'yt_cover',
         ytLayout: 'news',
         slots: true,   // 2026-09-14 對齊整點：一標一附圖位，共用「附參考圖」區收起來
@@ -513,7 +520,7 @@ const EDITOR_FORMATS = {
     // 紅底日期、沒有副標）。
     yt_hourly_cover: {
         label: 'YT整點直播',
-        hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。第二標題填了就是「雙則」：上白＝第一則、下黃＝第二則，每行一整句不拆、最多 18 字，底圖左右兩張羽化拼成一張。附圖跟十點一樣一標一格：每個標題底下各有自己的附圖位，一格可放多張、每張自選用途（原圖放置直接上版、AI改圖由 AI 照這張圖重畫、其餘當參考）；那格沒有原圖放置就由 AI 生底圖。',
+        hint: '整點直播封面：標題半形空格分兩段，整點時間（如 20:00）選填、有填才出現。第二標題填了就是「雙則」：上白＝第一則、下黃＝第二則，每行一整句不拆、最多 18 字，底圖左右兩張羽化拼成一張。附圖跟十點一樣一標一格：每個標題底下各有自己的附圖位，一格可放多張、每張自選用途（原圖放置直接上版、AI改圖由 AI 照這張圖重畫；附圖原有可讀文字與品牌保留，不自行新增或挪用，只有編輯指令明確要求才移除；其餘當參考）；那格沒有原圖放置就由 AI 生底圖。',
         inputs: 'yt_cover',
         ytLayout: 'hourly',
         slots: true,   // 一標一附圖位（與後端能力矩陣對齊）
@@ -541,7 +548,7 @@ const EDITOR_FORMATS = {
     // 議題型版面，沒有日期、沒有 LIVE。底圖與標題規則同國內外新聞直播。
     yt_hot_cover: {
         label: 'YT今日熱搜',
-        hint: '今日熱搜封面：標題半形空格分兩段，沒有日期與 LIVE。附圖位與底圖規則同國內外新聞直播（一格可放多張：原圖放置 1 整版／2 雙切／3 三切，AI改圖 重畫，其餘當參考）。',
+        hint: '今日熱搜封面：標題半形空格分兩段，沒有日期與 LIVE。附圖位與底圖規則同國內外新聞直播（一格可放多張：原圖放置 1 整版／2 雙切／3 三切，AI改圖 重畫；附圖原有可讀文字與品牌保留，不自行新增或挪用，只有編輯指令明確要求才移除；其餘當參考）。',
         inputs: 'yt_cover',
         ytLayout: 'hot',
         slots: true,   // 2026-09-14 對齊整點：一標一附圖位
@@ -1027,6 +1034,30 @@ function applyEditorFormatLocks() {
     if (typeof presets.stamp === 'boolean' && state.stamp !== presets.stamp) toggleStamp();
     if (presets.density && state.digestDensity !== presets.density) switchDigestDensity(presets.density);
 
+    // A8（2026-09-16 使用者裁決）：五個封面版型把安全框／蓋章開關藏起來，但殘值
+    // 不會因為切版型而消失——之前留在 state 裡的值會被 handleRefine／
+    // handleImageGeneration 當成使用者「現在」的選擇偷渡進請求。開關看不見就必須
+    // 一起歸零，不能讓使用者無從得知也無從更正的殘值送進後端；切回非封面（該欄位
+    // 重新可見）才恢復使用者原本的偏好，presets 明確指定該版型值時 presets 優先。
+    if (hides.safeFrame) {
+        if (state.safeFrame) {
+            state.coverSafeFrameStash = true;
+            toggleSafeFrame();
+        }
+    } else if (state.coverSafeFrameStash) {
+        state.coverSafeFrameStash = null;
+        if (typeof presets.safeFrame !== 'boolean' && !state.safeFrame) toggleSafeFrame();
+    }
+    if (hides.stamp) {
+        if (state.stamp) {
+            state.coverStampStash = true;
+            toggleStamp();
+        }
+    } else if (state.coverStampStash) {
+        state.coverStampStash = null;
+        if (typeof presets.stamp !== 'boolean' && !state.stamp) toggleStamp();
+    }
+
     _hide(document.getElementById('digestControlsRow'), !!hides.digestControls);
     // 指令欄全版型都顯示（2026-09-08 下午裁決，推翻同日早上的隱藏）：封面／YT 的
     // 端點現在收 instruction，內容當畫面提示餵給推導步驟。畫面描述欄同時被移除，
@@ -1261,6 +1292,7 @@ function setDigestDensityLevel(value) {
 
 function switchDigestDensity(density) {
     state.digestDensity = density;
+    state.density = density;
     updateDigestDensityBar();
     updateAIBtnRoleHint();
     const label = DENSITY_LABELS[density] || density;
@@ -2016,6 +2048,34 @@ REAL-WORLD ACCURACY (CRITICAL)
 - A STATED QUANTITY IS A NUMBER, NOT A HEADCOUNT TO DRAW. Where you do draw the individual items, the count on the canvas must equal the stated figure exactly, background and secondary items included — a graphic saying 4車追撞 with five vehicles in it is wrong. Only draw them individually while the figure is small enough to take in at a glance, up to about four. Beyond that do not attempt the instances at all: 12箱走私菸 is one representative crate with the figure 12 set beside it, never a heap the viewer would count as twenty, and 10部機組 is a figure rather than a row you would miscount.
 - SELF-CHECK before finalizing: look at every surface in the image for text or marks you added yourself. If any sign, screen, package or vehicle carries readable branding for a brand the source material does not name, blank it.`;
 
+/* AI-edit reference rules are injected by the backend when aiedit references
+   reach /api/images/generate. Keep these frontend mirrors in lockstep so the
+   web prompt vocabulary and backend prompt vocabulary cannot drift. The
+   final-image baseline remains backend-owned and is deliberately not mirrored. */
+const USER_REFERENCE_AIEDIT_RULES = `==================================================
+ATTACHED IMAGE — REDRAW THIS SAME PICTURE (CRITICAL)
+==================================================
+- One of the attached images is the picture this graphic's main visual is to BE. Re-draw that same picture in the graphic's own visual style: the same subject, the same framing, the same camera angle, the same arrangement of what is near and far.
+- This is NOT a loose style reference. Someone who saw the attached image must recognise your output as the same moment redrawn, not as a different picture of a similar topic. Except where an editor's instruction below asks for a change, do not substitute another scene, another angle, another action or another setting for it.
+- Do redraw it: repaint, restyle and colour-grade it into this graphic's illustration style, and extend or crop the edges as the layout needs. Apart from whatever an editor's instruction below asks you to change, the treatment changes and the content does not.
+- PRESERVE-EXISTING: Text already present in the attached reference image is requested content — keep it as supplied. Preserve every readable word, number and existing brand mark already present in the image; do not erase it, rewrite it, replace it with fake text, garbled text or altered branding.
+- DO-NOT-INVENT OR REUSE: Do not add any text or brand that is not already present in the attached reference image or explicitly requested elsewhere in this prompt. Do not move, copy or reuse text or brand marks from the attached reference image onto a different object.
+- EXPLICIT-REMOVAL ONLY: Remove existing text or brand marks only when the editor's instruction explicitly asks for that specific text or mark to be removed; otherwise preserve them.
+- People in the attached image stay who they are: reproduce every face in it as it appears, recognisable, in the redrawn style. The NAMED REAL PERSON rules below govern only people who are NOT in the attached image — they do not restrict, blur, hide or replace a face that the editor supplied here.
+- If an attached image already contains on-air chrome (a date stamp, LIVE or 24H LIVE badge, channel logo, or a 示意圖 / AI示意圖 label), do not draw another copy of those marks.`;
+
+const USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE = `==================================================
+ATTACHED IMAGES — FUSE ALL {count} OF THEM INTO ONE PICTURE (CRITICAL)
+==================================================
+- {count} attached images together ARE the picture this graphic's main visual is to BE. Compose them into ONE coherent scene redrawn in the graphic's own visual style. Every one of the {count} images must be recognisably present in the output — its subject, its key objects and its people — none may be dropped, merged away or reduced to a vague background hint. Someone who saw all {count} images must be able to point to each of them inside your output.
+- Give each image its own clear share of the frame — side by side, foreground and background, or a natural blend — keeping each image's subject, framing and camera angle recognisable. Do not pick one image and discard the rest; a picture that shows only some of the {count} images is wrong.
+- Do redraw them: repaint, restyle and colour-grade them into this graphic's illustration style, and extend or crop the edges as the layout needs. Apart from whatever an editor's instruction below asks you to change, the treatment changes and the content does not.
+- PRESERVE-EXISTING: Text already present in any attached reference image is requested content for that image — keep it as supplied. Preserve every readable word, number and existing brand mark already present in each image; do not erase it, rewrite it, replace it with fake text, garbled text or altered branding.
+- DO-NOT-INVENT OR REUSE: Do not add any text or brand that is not already present in an attached reference image or explicitly requested elsewhere in this prompt. In a fusion, do not move, copy or reuse text or brand marks from one attached image onto an object from another attached image.
+- EXPLICIT-REMOVAL ONLY: Remove existing text or brand marks only when the editor's instruction explicitly asks for that specific text or mark to be removed; otherwise preserve them.
+- People in the attached images stay who they are: reproduce every face in every attached image as it appears, recognisable, in the redrawn style. The NAMED REAL PERSON rules below govern only people who are NOT in the attached images — they do not restrict, blur, hide or replace a face that the editor supplied here.
+- If an attached image already contains on-air chrome (a date stamp, LIVE or 24H LIVE badge, channel logo, or a 示意圖 / AI示意圖 label), do not draw another copy of those marks.`;
+
 const TEXT_PLACEMENT_RULES =
 `==================================================
 TEXT PLACEMENT (CRITICAL)
@@ -2352,6 +2412,8 @@ function tenCoverFields() {
         layout: fullLayout ? 'full' : 'split',
         // 畫面描述欄已移除（2026-09-08 WP1），改送共用的指令欄當畫面提示
         instruction: coverInstructionForApi(),
+        // B53：後端消化用新聞原文，原樣送出，不摘要、不截斷、不抽人名。
+        news_text: document.getElementById('coverNewsText')?.value || '',
         date_text: val('coverDate'),
         badge: document.getElementById('coverBadge')?.value || 'on_air',
         title_creativity: state.coverTitleCreativity,
@@ -2423,6 +2485,7 @@ async function recomposeTenCoverText() {
 // 下拉、產出區、下載都還在同一頁同一個位置，編輯不用切分頁。
 // recomposeOnly=true：合成版（滿版／雙切）的「只改文字」，底圖不重生（比照 handleYtCoverGenerate）。
 async function handleTenCoverGenerate(recomposeOnly = false) {
+    clearGenerateBannerForNewRequest();
     const val = id => (document.getElementById(id)?.value || '').trim();
     const titleLeft = val('coverTitleLeft');
     const titleRight = val('coverTitleRight');
@@ -2480,6 +2543,8 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
                     title_right: fullLayout ? '' : titleRight,
                     layout: fullLayout ? 'full' : 'split',
                     instruction: coverInstructionForApi(),
+                    // B53：原樣送新聞原文給封面補畫面描述，不摘要、不截斷、不抽人名。
+                    news_text: document.getElementById('coverNewsText')?.value || '',
                     date_text: val('coverDate'),
                     badge: document.getElementById('coverBadge')?.value || 'on_air',
                     title_creativity: state.coverTitleCreativity,
@@ -2516,6 +2581,7 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
         document.getElementById('oneClickMeta').innerText = fullLayout ? titleLeft : `${titleLeft}｜${titleRight}`;
         document.getElementById('oneClickEmpty').classList.add('hidden');
         document.getElementById('oneClickResult').classList.remove('hidden');
+        showGenerateNoticeBanner(data.notices);
         completed = true;
         showToast('封面已完成');
     } catch (err) {
@@ -2646,6 +2712,8 @@ function ytCoverFields() {
         slot_right: ytUsesAsisSlots() && ytLayoutNow() === 'dual' ? slotPayload(state.ytAsis.right) : [],
         // 指令欄（2026-09-08 WP1）：餵給底圖推導當畫面提示
         instruction: coverInstructionForApi(),
+        // B53：後端消化用新聞原文，原樣送出，不摘要、不截斷、不抽人名。
+        news_text: document.getElementById('ytCoverNewsText')?.value || '',
         // 只改文字／重貼固定元素也走這支，所以這裡一律送目前這顆；遞增只在重生那條路徑
         seed: state.ytSeed,
     };
@@ -2699,6 +2767,7 @@ function showYtCoverResult(data, fields) {
 
 // YT 直播封面。recomposeOnly=true：底圖不重生，只用目前欄位重疊文字。
 async function handleYtCoverGenerate(recomposeOnly = false) {
+    clearGenerateBannerForNewRequest();
     const fields = ytCoverFields();
     if (!fields.title) return showToast('請輸入直播標題');
     // 雙則每行最多 YT_HOURLY_LINE_MAX_CHARS 個全形字寬（半形算半字），送出前先擋，別燒完兩次生圖才被後端退
@@ -2754,6 +2823,7 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
         }
         rememberSeed('ytSeed', data);
         showYtCoverResult(data, fields);
+        showGenerateNoticeBanner(data.notices);
         completed = true;
     } catch (err) {
         console.error(err);
@@ -2964,6 +3034,7 @@ async function handleYtVstripGenerate() {
 }
 
 async function handleOneClickGenerate() {
+    clearGenerateBannerForNewRequest();
     if (editorFormat().inputs === 'cover') return handleTenCoverGenerate();
     if (editorFormat().inputs === 'yt_cover') return handleYtCoverGenerate();
     if (editorFormat().inputs === 'yt_vstrip') return handleYtVstripGenerate();
@@ -2985,6 +3056,7 @@ async function handleOneClickGenerate() {
         beginGenerationProgress("digest");
         const digest = await digestNewsText(input);
         applyDigestToForm(digest);
+        showGenerateNoticeBanner(digest.notices);
         const variable = (digest.variable || "").replace(SYSTEM_DISCLAIMER, "").trim();
         const prompt = buildPrompt({
             role: state.currentRole,
@@ -3010,6 +3082,7 @@ async function handleOneClickGenerate() {
                 provider: effectiveImageProvider(),
                 aspect_ratio: currentAspectRatio(),
                 image_size: state.imageSize,
+                density: state.density,
                 safe_frame: state.safeFrame,
                 safe_frame_profile: state.currentRole,
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
@@ -3048,6 +3121,7 @@ async function handleOneClickGenerate() {
         document.getElementById("oneClickResult").classList.remove("hidden");
         completed = true;
         hideGenerateErrorBanner();
+        showGenerateNoticeBanner(data.notices);
         showToast(titleMatch ? `已生成：${titleMatch[1].trim()}` : "已完成圖片生成");
     } catch (err) {
         console.error(err);
@@ -3556,6 +3630,8 @@ function resetRefineState(source, display) {
     state.refineStack = [];
     const input = document.getElementById('refineInput');
     if (input) input.value = '';
+    const replacement = document.getElementById('replacementPerson');
+    if (replacement) replacement.value = '';
     updateRefineControls();
 }
 
@@ -3581,6 +3657,14 @@ async function handleRefine() {
     const instruction = input.value.trim();
     if (!instruction) return showToast('請輸入要修改的內容');
     if (!state.refineSource) return showToast('沒有可修改的圖，請先生成一張');
+    const replacementInput = document.getElementById('replacementPerson');
+    const replacementPerson = (replacementInput?.value || '').trim();
+    if (!replacementPerson && requestsNamedFaceReplacement(instruction)) {
+        showGenerateErrorBanner('要換臉時請填寫「換臉對象（具名時必填）」欄位，系統不會從自由文字猜姓名。');
+        replacementInput?.focus();
+        return;
+    }
+    clearGenerateBannerForNewRequest();
 
     const btn = document.getElementById('refineBtn');
     const btnText = document.getElementById('refineBtnText');
@@ -3609,11 +3693,22 @@ async function handleRefine() {
                 aspect_ratio: isCover ? '16:9' : currentAspectRatio(),
                 image_size: state.imageSize,
                 safe_frame: isCover ? false : state.safeFrame,
-                safe_frame_profile: state.currentRole,
+                // B51：封面不能只送 safe_frame=false 卻仍帶「編輯」——編輯身分在
+                // resolve_frame_plan 一律會被置對位框（見 main.py 的說明），safe_frame
+                // 的值因此完全無效。封面一律送空字串，並改用下面的 cover_kind 讓後端
+                // 走結構化 bypass，不依角色字串猜。
+                safe_frame_profile: isCover ? '' : state.currentRole,
+                // 白名單值＝ EDITOR_FORMATS 的版型 key，正好對齊後端
+                // editor_formats.COVER_REFINE_KINDS；非封面一律不送。
+                cover_kind: isCover ? state.editorFormat : '',
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
                 broadcast_hole: isCover ? '' : broadcastHoleForApi(),
                 text_free: ytTextFree,
+                replacement_person: replacementPerson,
+                reference_images: replacementPerson
+                    ? userRefImagesPayload().filter(ref => ref.purpose === 'portrait')
+                    : [],
             }),
         });
         const data = await response.json().catch(() => ({}));
@@ -3634,6 +3729,9 @@ async function handleRefine() {
         state.refineSource = refineSourceFromResponse(shown);
         state.refineDisplay = shown;
         showRefinedImage(shown);
+        showGenerateNoticeBanner(
+            Array.isArray(shown.notices) && shown.notices.length ? shown.notices : data.notices
+        );
         // 封面的成品標籤維持版型名，不顯示內部的 recomposite 模型字串
         if (isCover) document.getElementById('oneClickLabel').innerText = editorFormat().label;
         input.value = '';
@@ -3682,6 +3780,7 @@ function showToast(msg) {
 function showGenerateErrorBanner(msg) {
     const banner = document.getElementById('oneClickErrorBanner');
     if (!banner) return;
+    banner.dataset.notice = '0';
     document.getElementById('oneClickErrorMsg').innerText = msg;
     banner.classList.remove('hidden');
     const staleNotice = document.getElementById('oneClickStaleNotice');
@@ -3690,11 +3789,48 @@ function showGenerateErrorBanner(msg) {
     }
 }
 
-function hideGenerateErrorBanner() {
+function hideGenerateErrorBanner(force = false) {
     const banner = document.getElementById('oneClickErrorBanner');
+    if (banner && banner.dataset.notice === '1' && !force) return;
     if (banner) banner.classList.add('hidden');
+    if (banner) banner.dataset.notice = '';
     const staleNotice = document.getElementById('oneClickStaleNotice');
     if (staleNotice) staleNotice.classList.add('hidden');
+}
+
+function showGenerateNoticeBanner(notices) {
+    const messages = Array.isArray(notices) ? notices.filter(Boolean) : [];
+    if (!messages.length) return;
+    const banner = document.getElementById('oneClickErrorBanner');
+    if (!banner) return;
+    banner.dataset.notice = '1';
+    document.getElementById('oneClickErrorMsg').innerText = messages.join('\n');
+    banner.classList.remove('hidden');
+    const staleNotice = document.getElementById('oneClickStaleNotice');
+    if (staleNotice) staleNotice.classList.add('hidden');
+}
+
+function clearGenerateBannerForNewRequest() {
+    hideGenerateErrorBanner(true);
+}
+
+// 只判斷「這段話是否在要求換臉」，不從自由文字抽取或猜測姓名。
+//
+// ⚠「刪臉」不算換臉，一定要先排除掉。2026-09-16 監督驗收時抓到：曹雪卿 0915 下的
+// 「左邊的鮑爾不要!!!!」是**刪掉那張臉**，而且那條路徑本來就會成功（見 MASTER B63
+// 「刪得掉、換不掉」）。如果她改打「把左邊那張臉換掉」，在只看「臉＋換掉」的判斷下
+// 會被擋住要她填換臉對象——但她根本沒有要換成誰，等於整條路被堵死。
+// 所以句子裡出現移除語意時一律放行，交給既有的一般 refine 規則處理。
+function requestsNamedFaceReplacement(text) {
+    const value = String(text || '').toLowerCase();
+    const removalTerms = ['不要', '刪除', '刪掉', '移除', '拿掉', '去掉', 'remove', 'delete'];
+    if (removalTerms.some(term => value.includes(term))) return false;
+    const directTerms = ['換臉', '換人', 'face swap', 'swap face', 'replace the face'];
+    if (directTerms.some(term => value.includes(term))) return true;
+    const faceTerms = ['臉', '人臉', '人頭', 'face'];
+    const changeTerms = ['換成', '換為', '替換', '換掉', 'replace', 'swap'];
+    return faceTerms.some(term => value.includes(term))
+        && changeTerms.some(term => value.includes(term));
 }
 
 function clearMatrix() {

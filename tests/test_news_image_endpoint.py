@@ -66,6 +66,15 @@ class GenerateNewsImageTests(unittest.TestCase):
         self.assertEqual(result.title, "熊本強震重創九州")
         self.assertTrue(result.prompt_version)
 
+    def test_portrait_notice_reaches_line_response(self):
+        def resolve_with_notice(*_args, **_kwargs):
+            main._record_portrait_notice("entry-only notice")
+            return FAKE_DIGEST, {}
+
+        with patch.object(main, "resolve_digest_portraits", side_effect=resolve_with_notice):
+            result = generate_news_image(NewsImageGenerateRequest(news_text=NEWS))
+        self.assertEqual(result.notices, ["entry-only notice"])
+
     def test_prompt_sent_to_image_gen_includes_safe_area_rules(self):
         generate_news_image(NewsImageGenerateRequest(news_text=NEWS))
         sent_prompt = self.mock_image.call_args[0][0].prompt
