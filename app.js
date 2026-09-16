@@ -3815,8 +3815,16 @@ function clearGenerateBannerForNewRequest() {
 }
 
 // 只判斷「這段話是否在要求換臉」，不從自由文字抽取或猜測姓名。
+//
+// ⚠「刪臉」不算換臉，一定要先排除掉。2026-09-16 監督驗收時抓到：曹雪卿 0915 下的
+// 「左邊的鮑爾不要!!!!」是**刪掉那張臉**，而且那條路徑本來就會成功（見 MASTER B63
+// 「刪得掉、換不掉」）。如果她改打「把左邊那張臉換掉」，在只看「臉＋換掉」的判斷下
+// 會被擋住要她填換臉對象——但她根本沒有要換成誰，等於整條路被堵死。
+// 所以句子裡出現移除語意時一律放行，交給既有的一般 refine 規則處理。
 function requestsNamedFaceReplacement(text) {
     const value = String(text || '').toLowerCase();
+    const removalTerms = ['不要', '刪除', '刪掉', '移除', '拿掉', '去掉', 'remove', 'delete'];
+    if (removalTerms.some(term => value.includes(term))) return false;
     const directTerms = ['換臉', '換人', 'face swap', 'swap face', 'replace the face'];
     if (directTerms.some(term => value.includes(term))) return true;
     const faceTerms = ['臉', '人臉', '人頭', 'face'];
