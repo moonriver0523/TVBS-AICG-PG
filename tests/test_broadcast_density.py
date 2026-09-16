@@ -6,6 +6,7 @@
 import inspect
 import re
 import unittest
+from pathlib import Path
 
 import editor_formats
 import main
@@ -158,6 +159,13 @@ class WiringTests(unittest.TestCase):
             source,
             r"editor_formats\.digest_rules\(\s*editor_format,\s*role,\s*stamp,\s*density",
         )
+
+    def test_one_click_frontend_passes_density_to_the_image_request(self):
+        source = (Path(__file__).resolve().parent.parent / "app.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("state.density = density", source)
+        self.assertRegex(source, r"density:\s*state\.density")
 
     def test_full_prompt_carries_the_two_line_cards_only_when_字多(self):
         standard = main.build_digest_instructions(

@@ -9,13 +9,14 @@
    一個後端不認得的 key，然後靜靜退回 default——圖出來少一個洞卻沒人知道。
 """
 
+import hashlib
 import io
 import os
 import pathlib
 import re
 import unittest
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
@@ -183,6 +184,26 @@ class HoleGeometryTests(unittest.TestCase):
         self.assertLess(left[2], self.CANVAS[0] / 2 + 1)
         self.assertGreater(right[0], self.CANVAS[0] / 2 - 1)
 
+    def test_high_res_hole_uses_height_scaled_legacy_pixels(self):
+        self.assertEqual(
+            compose.broadcast_hole_rect(
+                (2560, 1440), "left", safe_area_spec.EDITOR_FRAME_PROFILE
+            ),
+            (135, 423, 1191, 1017),
+        )
+        self.assertEqual(
+            compose.broadcast_hole_rect(
+                (3360, 1440), "right", safe_area_spec.EDITOR_FRAME_PROFILE
+            ),
+            (1817, 333, 3193, 1107),
+        )
+        self.assertEqual(compose._scaled_pixel(24, 1440), 32)
+        self.assertEqual(compose._scaled_pixel(26, 1440), 35)
+        self.assertEqual(compose._scaled_pixel(3, 1440), 4)
+        self.assertEqual(compose._scaled_pixel(30, 1440), 40)
+        self.assertEqual(compose._scaled_pixel(24, 1080), 24)
+        self.assertEqual(compose._scaled_pixel(30, 1080), 30)
+
     def test_unknown_side_is_rejected(self):
         with self.assertRaises(compose.ComposeError):
             compose.broadcast_hole_rect(self.CANVAS, "middle")
@@ -204,6 +225,46 @@ class ComposeOutputTests(unittest.TestCase):
             # 對側同高度必須還是原本的底圖，不能整條被蓋掉
             outside = image.convert("RGB").getpixel((image.width - 60, (y0 + y1) // 2))
             self.assertEqual(outside, (20, 30, 60))
+
+    def test_base_canvas_compose_is_byte_identical_to_the_golden(self):
+        output = compose.apply_broadcast_hole(
+            _solid(safe_area_spec.BASE_CANVAS, (12, 34, 56)),
+            "left",
+            canvas=safe_area_spec.BASE_CANVAS,
+            profile=safe_area_spec.EDITOR_FRAME_PROFILE,
+        )
+        self.assertEqual(
+            hashlib.sha256(output).hexdigest(),
+            "2b7843eec6f50498c2175c789eef8faf56a34ff010a61508c0d381b6623b4dc4",
+        )
+
+    def test_high_res_watermark_scales_with_the_canvas_height(self):
+        base = _solid(safe_area_spec.BASE_CANVAS, (12, 34, 56))
+        high = _solid((2560, 1440), (12, 34, 56))
+        base_without = Image.open(
+            io.BytesIO(
+                compose.apply_broadcast_hole(
+                    base, "left", canvas=safe_area_spec.BASE_CANVAS, watermark=False
+                )
+            )
+        ).convert("RGB")
+        base_with = Image.open(io.BytesIO(compose.apply_broadcast_hole(base, "left"))).convert("RGB")
+        high_without = Image.open(
+            io.BytesIO(
+                compose.apply_broadcast_hole(
+                    high, "left", canvas=(2560, 1440), watermark=False
+                )
+            )
+        ).convert("RGB")
+        high_with = Image.open(
+            io.BytesIO(compose.apply_broadcast_hole(high, "left", canvas=(2560, 1440)))
+        ).convert("RGB")
+        base_box = ImageChops.difference(base_with, base_without).getbbox()
+        high_box = ImageChops.difference(high_with, high_without).getbbox()
+        self.assertIsNotNone(base_box)
+        self.assertIsNotNone(high_box)
+        self.assertGreater(high_box[2] - high_box[0], base_box[2] - base_box[0])
+        self.assertGreater(high_box[3] - high_box[1], base_box[3] - base_box[1])
 
     def test_cover_output_is_full_hd(self):
         cover = compose.compose_ten_cover(

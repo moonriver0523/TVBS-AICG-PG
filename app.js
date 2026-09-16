@@ -304,6 +304,7 @@ let state = {
     currentRole: '記者',
     // 2026-09-03：三檔（verbatim=不消化／simplified=字少／standard=字多），預設字少
     digestDensity: 'simplified',
+    density: 'simplified',
     // CG 美術創意 0–4（2026-09-10）。記者版與編輯各版型共用；封面那兩條拉桿是別的欄位。
     cgCreativity: 0,
     // 蓋章由使用者決定（2026-09-03）。以前是消化階段自己決定，同一個產品三種行為。
@@ -1291,6 +1292,7 @@ function setDigestDensityLevel(value) {
 
 function switchDigestDensity(density) {
     state.digestDensity = density;
+    state.density = density;
     updateDigestDensityBar();
     updateAIBtnRoleHint();
     const label = DENSITY_LABELS[density] || density;
@@ -3068,6 +3070,7 @@ async function handleOneClickGenerate() {
                 provider: effectiveImageProvider(),
                 aspect_ratio: currentAspectRatio(),
                 image_size: state.imageSize,
+                density: state.density,
                 safe_frame: state.safeFrame,
                 safe_frame_profile: state.currentRole,
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——

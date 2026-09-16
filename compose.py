@@ -309,6 +309,16 @@ WATERMARK_FILL = (236, 236, 236)
 BROADCAST_SIDES = ("left", "right")
 
 
+def _scaled_pixel(value: int, canvas_height: int) -> int:
+    """Scale a legacy pixel constant by canvas height and round to nearest.
+
+    Python's ``round`` rule is explicit here: nearest integer, ties to even.
+    At the 1920x1080 base canvas the scale is exactly 1.0.
+    """
+    scale = canvas_height / safe_area_spec.BASE_CANVAS[1]
+    return round(value * scale)
+
+
 def broadcast_hole_rect(
     canvas: tuple[int, int],
     side: str,
@@ -323,21 +333,22 @@ def broadcast_hole_rect(
         raise ComposeError(f"未知的挖空側：{side!r}（可用：{BROADCAST_SIDES}）")
 
     x0, y0, x1, y1 = safe_area_spec.safe_rect(*canvas, profile)
+    inset = _scaled_pixel(HOLE_INSET, canvas[1])
     # 寬度對齊 16 的倍數，高度才會是整數且長寬比**剛好** 16:9。
     # 四捨五入出來的 795×447 是 1.7785，後製把影片放進去會有半像素級的黑邊，
     # 這個框的整個存在意義就是給影片對位，不能將就。
     width = round((x1 - x0) * HOLE_WIDTH_RATIO) // 16 * 16
     height = width * 9 // 16
 
-    band_top = y0 + HOLE_INSET
-    band_bottom = y1 - HOLE_INSET
+    band_top = y0 + inset
+    band_bottom = y1 - inset
     if height > band_bottom - band_top:
         # 安全區太矮塞不下，改由高度反推寬度，維持 16:9 不變形
         height = (band_bottom - band_top) // 9 * 9
         width = height * 16 // 9
     top = band_top + round((band_bottom - band_top - height) * HOLE_VERTICAL_ANCHOR)
 
-    left = x0 + HOLE_INSET if side == "left" else x1 - HOLE_INSET - width
+    left = x0 + inset if side == "left" else x1 - inset - width
     return left, top, left + width, top + height
 
 
@@ -359,21 +370,24 @@ def apply_broadcast_hole(
         if image.size != canvas:
             # 置框輸出理應等於畫布；不等於就是上游改了尺寸，按實際尺寸重算比硬貼安全
             canvas = image.size
+        inset = _scaled_pixel(HOLE_INSET, canvas[1])
+        radius = _scaled_pixel(HOLE_RADIUS, canvas[1])
+        outline_width = _scaled_pixel(HOLE_OUTLINE_WIDTH, canvas[1])
         draw = ImageDraw.Draw(image)
         rect = broadcast_hole_rect(canvas, side, profile)
         _rounded(
-            draw, rect, HOLE_RADIUS, HOLE_FILL,
-            outline=HOLE_OUTLINE, width=HOLE_OUTLINE_WIDTH,
+            draw, rect, radius, HOLE_FILL,
+            outline=HOLE_OUTLINE, width=outline_width,
         )
         if watermark:
             x0, y0, x1, y1 = safe_area_spec.safe_rect(*canvas, profile)
             _draw_text(
                 draw,
-                (x1 - HOLE_INSET, y1 - HOLE_INSET),
+                (x1 - inset, y1 - inset),
                 WATERMARK_TEXT,
-                _font(WATERMARK_SIZE),
+                _font(_scaled_pixel(WATERMARK_SIZE, canvas[1])),
                 fill=WATERMARK_FILL,
-                stroke_width=3,
+                stroke_width=_scaled_pixel(3, canvas[1]),
                 anchor="rs",
             )
 

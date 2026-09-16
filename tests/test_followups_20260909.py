@@ -207,7 +207,8 @@ class BroadcastBottomStripTests(unittest.TestCase):
         import inspect
 
         source = inspect.getsource(compose.apply_broadcast_hole)
-        self.assertIn("(x1 - HOLE_INSET, y1 - HOLE_INSET)", source)
+        self.assertIn("(x1 - inset, y1 - inset)", source)
+        self.assertIn("_scaled_pixel(HOLE_INSET, canvas[1])", source)
         self.assertIn('anchor="rs"', source)
 
     def test_rule_three_no_longer_contradicts_rule_five(self):

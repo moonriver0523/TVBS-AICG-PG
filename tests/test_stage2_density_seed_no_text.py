@@ -579,5 +579,46 @@ class D14F20NoTextTests(SourceAssertions, unittest.TestCase):
         )
 
 
+class ImageRequestDensityWiringTests(unittest.TestCase):
+    def test_news_pipeline_forwards_density_into_image_request(self):
+        import types
+        from unittest import mock
+
+        captured = {}
+        digest = main.GenerateResponse(
+            style="style",
+            structure="structure",
+            variable="[標題] title",
+            chart_type="資料圖表",
+            seed=0,
+        )
+        generated = main.ImageGenerateResponse(
+            image_data_base64="a", mime_type="image/png", model="fake"
+        )
+
+        def fake_image(request):
+            captured["request"] = request
+            return generated
+
+        with mock.patch.object(
+            main, "check_input", return_value=types.SimpleNamespace(accepted=True, user_message="")
+        ), mock.patch.object(main, "generate", return_value=digest), mock.patch.object(
+            main, "resolve_digest_portraits", return_value=(digest, {})
+        ), mock.patch.object(main, "resolve_portraits", return_value=("", [])), mock.patch.object(
+            main, "build_prompt", return_value="prompt"
+        ), mock.patch.object(main, "generate_image", side_effect=fake_image), mock.patch.object(
+            main, "_archive_generation", return_value=None
+        ), mock.patch.object(main.request_log, "log_generation", return_value=None):
+            main.generate_news_image(
+                main.NewsImageGenerateRequest(
+                    news_text="測試新聞內容", role="編輯", density="maximum"
+                )
+            )
+
+        self.assertEqual(captured["request"].density, "maximum")
+        self.assertEqual(captured["request"].safe_frame_profile, "編輯")
+        self.assertEqual(captured["request"].provider, "gpt")
+
+
 if __name__ == "__main__":
     unittest.main()
