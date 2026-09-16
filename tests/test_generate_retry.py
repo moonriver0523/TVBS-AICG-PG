@@ -308,6 +308,36 @@ class GenerateRetryContextTests(GenerateRetryTests):
         self.assertEqual(_reasoning_max(create.call_args_list[1]), 1024)
         self.assertIn("category=truncated", _user_message(create.call_args_list[1]))
 
+    def test_unparseable_length_response_also_lowers_reasoning_on_retry(self):
+        """main.py:2792-2808 的分支：不是「能解析但截斷」，是「連 JSON 都解析不出來，
+        而且 finish_reason=length」——這條路徑跟品質閘那條（2861-2869）是分開的
+        if/except 區塊，各自要有測試釘住，不能只測其中一條就當兩條都覆蓋到。
+        """
+        result, exc, create = self.call_with(
+            [bad_json_response(), ok_response()]
+        )
+        self.assertIsNone(exc)
+        self.assertEqual(create.call_count, 2)
+        self.assertEqual(_reasoning_max(create.call_args_list[0]), 2000)
+        self.assertEqual(_reasoning_max(create.call_args_list[1]), 1024)
+        self.assertIn("category=parse", _user_message(create.call_args_list[1]))
+
+    def test_verbatim_density_reports_a_clear_400_when_length_truncated(self):
+        """main.py:2792-2800：不消化模式解析失敗＋length 不重試，直接講清楚原因，
+        不要讓使用者收到看不懂的「AI 回傳格式無法解析」。"""
+        request = GenerateRequest(
+            news_text="素材", type_label="資料圖表", density="verbatim"
+        )
+        with patch.object(
+            main.openai_client.chat.completions, "create",
+            side_effect=[bad_json_response()],
+        ) as create:
+            with self.assertRaises(HTTPException) as ctx:
+                generate(request)
+        self.assertEqual(create.call_count, 1)
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("原文太長", ctx.exception.detail)
+
     def test_non_length_quality_failure_does_not_lower_reasoning(self):
         result, exc, create = self.call_with(
             [quality_fail_response("style"), ok_response()]
@@ -369,6 +399,44 @@ class GenerateRetryContextTests(GenerateRetryTests):
         self.assertIn("category=quality", retry_user)
         self.assertLessEqual(retry_user.count("P"), 300)
         self.assertIn("…", retry_user)
+
+
+class DefaultReasoningPayloadBaselineTests(GenerateRetryTests):
+    """回歸基準：**不** patch DIGEST_REASONING_MAX_TOKENS，量現在正式站實際會送出去的值。
+
+    上面 GenerateRetryContextTests 全部把 DIGEST_REASONING_MAX_TOKENS patch 成 2000，
+    驗的是「降級邏輯有沒有被觸發」，不是「現在預設真的送了什麼」。之後把
+    reasoning.max_tokens 換成 reasoning.effort（或換模型）時，要拿這個當比較基準——
+    沒有這條，換掉之後沒有東西可以對照「以前預設送出去的是什麼」。
+    """
+
+    def setUp(self):
+        super().setUp()
+        backend = patch.object(main, "DIGEST_BACKEND", "openrouter")
+        backend.start()
+        self.addCleanup(backend.stop)
+        # 刻意不 patch DIGEST_REASONING_MAX_TOKENS：用它現在的實際值（來自
+        # os.getenv 的預設 2000，見 main.py DIGEST_REASONING_MAX_TOKENS 定義處）。
+
+    def test_first_call_reasoning_body_matches_the_current_default(self):
+        _, exc, create = self.call_with([ok_response()])
+        self.assertIsNone(exc)
+        # 刻意寫死字面值，不呼叫 main.digest_reasoning_body() 來算「應該是什麼」——
+        # digest_completion() 內部就是靠那個函式組出這段 payload，兩邊都呼叫同一個
+        # 函式等於 f(x) == f(x)，往後把 reasoning.max_tokens 換成 reasoning.effort
+        # 時兩邊會一起變、測試永遠綠，就失去「當比較基準」的意義。
+        # 算法：budget = digest_token_budget("資料圖表","standard",...) = 12000
+        # （見 test_digest_output_budget_is_12000_and_other_caps_unchanged）；
+        # min(2000, 12000-2500) = 2000 ≥ DIGEST_REASONING_MIN_TOKENS(1024) → 送出。
+        self.assertEqual(
+            create.call_args_list[0].kwargs.get("extra_body", {}).get("reasoning"),
+            {"max_tokens": 2000},
+        )
+
+    def test_default_reasoning_max_tokens_constant_is_pinned(self):
+        # 這條字面數字故意寫死：常數本身變了就是行為改變，測試要跟著紅燈，
+        # 而不是默默跟著新值通過（那就失去「換 effort 前後比較」的意義）。
+        self.assertEqual(main.DIGEST_REASONING_MAX_TOKENS, 2000)
 
 
 if __name__ == "__main__":
