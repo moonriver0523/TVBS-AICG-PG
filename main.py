@@ -943,6 +943,7 @@ class ImageGenerateRequest(BaseModel):
     provider: Literal["gemini", "gpt"] = "gemini"
     aspect_ratio: str = "16:9"
     image_size: str = "1K"
+    density: str = ""
     # 使用者的安全框開關。⚠️ 不等於「要不要後製」——編輯版兩檔都會後製，
     # 這個旗標只決定用哪一種（見 resolve_frame_plan）。
     safe_frame: bool = False
@@ -3113,6 +3114,7 @@ def generate_image(req: ImageGenerateRequest):
     # ATTACHED MAP REFERENCE 那段用途規則（「標點已在真實位置，不要移動」）。
     req = apply_map_reference_to_image_request(req)
     req = apply_user_references_to_image_request(req)
+    _, output_canvas = image_generation_size(req)
     request_id = request_log.new_request_id()
     own_clock = not _inside_pipeline.get()
     started = _generation_clock() if own_clock else 0.0
@@ -3130,6 +3132,7 @@ def generate_image(req: ImageGenerateRequest):
             safe_frame=needs_frame,
             profile=frame_profile,
             broadcast_hole=req.broadcast_hole,
+            canvas=output_canvas,
         )
     except Exception as exc:
         if own_clock:
@@ -3429,7 +3432,9 @@ MODEL_ASPECT_RATIOS: dict[str, frozenset[str]] = {
 }
 
 
-def _openrouter_gpt_size(model: str, aspect_ratio: str) -> str | None:
+def _openrouter_gpt_size(
+    model: str, aspect_ratio: str, resolved_size: str | None = None
+) -> str | None:
     """OpenRouter 上的 GPT Image 系列要送明確的 size，不能只靠 aspect_ratio。
 
     2026-09-10 實打：GPT Image 2.5（sunburst／flare）在 OpenRouter 上會把 aspect_ratio
@@ -3439,6 +3444,8 @@ def _openrouter_gpt_size(model: str, aspect_ratio: str) -> str | None:
     """
     if not model.startswith("openai/gpt-image"):
         return None
+    if resolved_size is not None:
+        return resolved_size
     return NATIVE_GPT_IMAGE_SIZES.get(aspect_ratio)
 
 
@@ -3493,7 +3500,10 @@ def generate_image_raw(req: ImageGenerateRequest) -> ImageGenerateResponse:
 
 
 def frame_image_response(
-    result: ImageGenerateResponse, profile: str = "記者"
+    result: ImageGenerateResponse,
+    profile: str = "記者",
+    *,
+    canvas: tuple[int, int] = safe_area_spec.BASE_CANVAS,
 ) -> ImageGenerateResponse:
     """把回傳圖置入安全框。
 
@@ -3516,6 +3526,7 @@ def frame_image_response(
             base64.b64decode(result.image_data_base64),
             background=background,
             profile=profile,
+            canvas=canvas,
         )
     except Exception as exc:  # noqa: BLE001 — 任何影像處理失敗都必須讓呼叫端知道
         print(f"[safe_frame] 置框失敗：{type(exc).__name__}: {exc}", flush=True)
@@ -3547,7 +3558,11 @@ def broadcast_hole_for(req: "NewsImageGenerateRequest") -> str:
 
 
 def apply_broadcast_hole_response(
-    result: ImageGenerateResponse, side: str, profile: str
+    result: ImageGenerateResponse,
+    side: str,
+    profile: str,
+    *,
+    canvas: tuple[int, int] = safe_area_spec.BASE_CANVAS,
 ) -> ImageGenerateResponse:
     """在置框後的成品上貼出播出鏡面的挖空框。
 
@@ -3556,7 +3571,10 @@ def apply_broadcast_hole_response(
     """
     try:
         holed = compose.apply_broadcast_hole(
-            base64.b64decode(result.image_data_base64), side, profile=profile
+            base64.b64decode(result.image_data_base64),
+            side,
+            canvas=canvas,
+            profile=profile,
         )
     except Exception as exc:  # noqa: BLE001 — 影像處理失敗必須讓呼叫端知道
         print(f"[compose] 挖空框失敗：{type(exc).__name__}: {exc}", flush=True)
@@ -3576,6 +3594,7 @@ def finalize_image_result(
     safe_frame: bool,
     profile: str,
     broadcast_hole: str = "",
+    canvas: tuple[int, int] = safe_area_spec.BASE_CANVAS,
 ) -> ImageGenerateResponse:
     """生成後的共同收尾：驗比例，需要時置框並保留置框前原圖。
 
@@ -3590,9 +3609,11 @@ def finalize_image_result(
         if broadcast_hole:
             print("[compose] safe_frame=False，跳過播出鏡面挖空框", flush=True)
         return result
-    framed = frame_image_response(result, profile)
+    framed = frame_image_response(result, profile, canvas=canvas)
     if broadcast_hole:
-        framed = apply_broadcast_hole_response(framed, broadcast_hole, profile)
+        framed = apply_broadcast_hole_response(
+            framed, broadcast_hole, profile, canvas=canvas
+        )
     return framed.model_copy(
         update={
             # 追加修改要餵**置框前**原圖回去，不是挖過洞的成品（見欄位說明）
@@ -3602,8 +3623,17 @@ def finalize_image_result(
     )
 
 
-def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGenerateResponse:
+def generate_via_openrouter(
+    model: str,
+    req: ImageGenerateRequest,
+    *,
+    resolved_size: str | None = None,
+) -> ImageGenerateResponse:
     """透過 OpenRouter 統一圖片端點生成，一把 OPENROUTER_API_KEY 涵蓋多家模型。"""
+    if resolved_size is None and model.startswith("openai/gpt-image"):
+        resolved_size, _ = image_generation_size(
+            req.model_copy(update={"provider": "gpt"})
+        )
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         raise HTTPException(
@@ -3625,7 +3655,7 @@ def generate_via_openrouter(model: str, req: ImageGenerateRequest) -> ImageGener
     # GPT Image 系列額外送明確的 size（2026-09-10 熱修，根因見 OPENROUTER_GPT_IMAGE_MODEL
     # 上面那段）：2.5 系列的 aspect_ratio 會被整個丟掉，size 才吃得到。aspect_ratio 一併
     # 留著，對 2 與其他模型仍然有效；兩者並存時以 size 為準（實打確認）。
-    gpt_size = _openrouter_gpt_size(model, req.aspect_ratio)
+    gpt_size = _openrouter_gpt_size(model, req.aspect_ratio, resolved_size)
     if gpt_size:
         payload["size"] = gpt_size
     # 參考圖兩個來源合併送出：肖像參考照（自動查圖）在前、使用者上傳在後。
@@ -3718,6 +3748,47 @@ NATIVE_GPT_IMAGE_SIZES = {
     "21:9": "1680x720",
 }
 
+# F38 stays deliberately disabled until the pricing checkpoint is approved.
+HIGH_RES_EDITOR_ENABLED = False
+HIGH_RES_EDITOR_DENSITIES = frozenset({"standard", "maximum"})
+HIGH_RES_GPT_IMAGE_SIZES = {
+    "16:9": "2560x1440",
+    "21:9": "3360x1440",
+}
+HIGH_RES_OUTPUT_CANVASES = {
+    "16:9": (2560, 1440),
+    "21:9": (3360, 1440),
+}
+
+
+def image_generation_size(
+    req: ImageGenerateRequest,
+) -> tuple[str | None, tuple[int, int]]:
+    """Resolve provider size and local framing canvas from one request.
+
+    The high-resolution path is intentionally gated by the module flag and is
+    limited to the editor role plus the two approved high-density values.
+    Other aspect ratios retain the existing base framing canvas.
+    """
+    high_res = (
+        HIGH_RES_EDITOR_ENABLED
+        and req.safe_frame_profile == safe_area_spec.EDITOR_PROFILE
+        and req.density in HIGH_RES_EDITOR_DENSITIES
+        and req.aspect_ratio in HIGH_RES_OUTPUT_CANVASES
+    )
+    output_canvas = (
+        HIGH_RES_OUTPUT_CANVASES[req.aspect_ratio]
+        if high_res
+        else safe_area_spec.BASE_CANVAS
+    )
+    if req.provider == "gpt":
+        size_map = HIGH_RES_GPT_IMAGE_SIZES if high_res else NATIVE_GPT_IMAGE_SIZES
+        provider_size = size_map.get(req.aspect_ratio)
+    else:
+        # Gemini's existing image_size enum is intentionally unchanged in F38.
+        provider_size = req.image_size
+    return provider_size, output_canvas
+
 
 def _native_reference_files(req: ImageGenerateRequest) -> list[tuple[str, io.BytesIO, str]]:
     """把這次請求的參考圖轉成 images.edit 收得下的檔案清單（順序：肖像照、使用者上傳）。
@@ -3744,11 +3815,17 @@ def _native_reference_files(req: ImageGenerateRequest) -> list[tuple[str, io.Byt
     return files
 
 
-def generate_gpt_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
+def generate_gpt_image(
+    req: ImageGenerateRequest, *, resolved_size: str | None = None
+) -> ImageGenerateResponse:
     model = os.getenv("OPENAI_IMAGE_MODEL", NATIVE_GPT_IMAGE_MODEL)
     quality = os.getenv("OPENAI_IMAGE_QUALITY", "medium")
 
-    size = NATIVE_GPT_IMAGE_SIZES.get(req.aspect_ratio)
+    if resolved_size is None:
+        resolved_size, _ = image_generation_size(
+            req.model_copy(update={"provider": "gpt"})
+        )
+    size = resolved_size
     if size is None:
         raise HTTPException(
             status_code=400,
@@ -4463,6 +4540,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             safe_frame=needs_frame,
             profile=frame_profile,
             broadcast_hole=req.broadcast_hole,
+            canvas=image_generation_size(image_req)[1],
         )
     except Exception as exc:
         _record_generation_failure(
@@ -4609,6 +4687,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 broadcast_hole=broadcast_hole_for(req),
                 aspect_ratio=aspect_ratio,
                 image_size=req.image_size,
+                density=req.density,
                 safe_frame=req.safe_frame,
                 # 傳角色而非解析後的 profile：generate_image 會解析一次，
                 # 這裡先解析會讓它拿「編輯安全框」當角色再解析一次而解錯。
