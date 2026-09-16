@@ -356,6 +356,12 @@ let state = {
     coverAsis: { left: [], right: [] },
     // 整點直播的一標一附圖（2026-09-10，對齊十點）。單則只用 left。
     ytAsis: { left: [], right: [] },
+    // A8（2026-09-16）：切進封面版型把隱藏的安全框／蓋章開關歸零時，暫存原值，
+    // 切回一般編輯版（該欄位不再隱藏）才恢復，不讓使用者的既有偏好被封面模式吃掉。
+    // 只有在被歸零那一刻才會非 null（值恆為 true，因為只在原值是 true 時才會暫存），
+    // 離開封面且沒有 preset 接手時用它復原，之後清空。
+    coverSafeFrameStash: null,
+    coverStampStash: null,
     // ③ 追加修改用：**置框前**原圖（不是顯示中的成品——成品餵回去會二次拉伸）
     // refineSource = {base64, mimeType}；refineDisplay = 顯示中成品的原始回傳；
     // refineStack 供「退回上一版」
@@ -1026,6 +1032,30 @@ function applyEditorFormatLocks() {
     if (typeof presets.safeFrame === 'boolean' && state.safeFrame !== presets.safeFrame) toggleSafeFrame();
     if (typeof presets.stamp === 'boolean' && state.stamp !== presets.stamp) toggleStamp();
     if (presets.density && state.digestDensity !== presets.density) switchDigestDensity(presets.density);
+
+    // A8（2026-09-16 使用者裁決）：五個封面版型把安全框／蓋章開關藏起來，但殘值
+    // 不會因為切版型而消失——之前留在 state 裡的值會被 handleRefine／
+    // handleImageGeneration 當成使用者「現在」的選擇偷渡進請求。開關看不見就必須
+    // 一起歸零，不能讓使用者無從得知也無從更正的殘值送進後端；切回非封面（該欄位
+    // 重新可見）才恢復使用者原本的偏好，presets 明確指定該版型值時 presets 優先。
+    if (hides.safeFrame) {
+        if (state.safeFrame) {
+            state.coverSafeFrameStash = true;
+            toggleSafeFrame();
+        }
+    } else if (state.coverSafeFrameStash) {
+        state.coverSafeFrameStash = null;
+        if (typeof presets.safeFrame !== 'boolean' && !state.safeFrame) toggleSafeFrame();
+    }
+    if (hides.stamp) {
+        if (state.stamp) {
+            state.coverStampStash = true;
+            toggleStamp();
+        }
+    } else if (state.coverStampStash) {
+        state.coverStampStash = null;
+        if (typeof presets.stamp !== 'boolean' && !state.stamp) toggleStamp();
+    }
 
     _hide(document.getElementById('digestControlsRow'), !!hides.digestControls);
     // 指令欄全版型都顯示（2026-09-08 下午裁決，推翻同日早上的隱藏）：封面／YT 的
