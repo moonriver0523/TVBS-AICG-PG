@@ -294,6 +294,48 @@ def _cache_put(key: tuple, value: "PortraitLookupOutcome") -> None:
             _CACHE.popitem(last=False)
 
 
+# ---- 臺灣慣用譯名 → 維基查得到的條目名（B73，2026-09-16 使用者裁決）----
+#
+# 為什麼是人工表而不是自動解析：**兩種自動做法都實測否決過**。
+#   ①中文全文搜尋——見下面 find_portrait_outcome 的 docstring，4 個譯名有 2 個
+#     搜到完全不相干的條目（阿拉奇→阿布拉莫維奇、巴薩尼→威尼斯商人）。
+#   ②Wikidata 別名搜尋（wbsearchentities，2026-09-16 實測）——在最該解決的那個
+#     案例上最糟：查「鮑爾」回來的是蒙大拿州一個人口普查區、一位荷蘭軍官、
+#     一位英國海軍上將和兩個姓氏，**傑羅姆·鮑威爾根本不在結果裡**；
+#     「葉倫」「卡利巴夫」「阿拉奇」直接 0 筆。
+# 猜錯人比查不到嚴重得多，所以這裡只收**逐條實查過、確認落在第 2 層（有條目有照片）**
+# 的映射。新增條目前請照同樣方式驗過再寫進來。
+#
+# ⚠ 同名風險是這張表的固有代價，而且**程式無法自動化解**：`_is_human()` 只驗
+# 「是不是人」，不驗「是不是對的那個人」。最典型的是「鮑爾」——臺灣財經新聞
+# 幾乎一律指聯準會主席 Jerome Powell，但它同時也是 Colin Powell 的譯名。
+# 這張表等於替這類短譯名**釘死一個解釋**，選的是臺灣新聞的壓倒性用法。
+# 使用者 2026-09-16 在知悉此風險後仍裁定要做。
+TW_PORTRAIT_NAME_ALIASES: dict[str, str] = {
+    # 美國財經／政治（臺灣財經新聞最常出現，也是 B73 的起因）
+    "鮑爾": "傑羅姆·鮑威爾",          # ⚠ 亦為 Colin Powell 的譯名，此處釘死聯準會主席
+    "葉倫": "珍妮特·耶倫",
+    "貝森特": "斯科特·貝森特",
+    "盧比歐": "馬可·魯比奧",
+    "范斯": "JD·萬斯",
+    "奧特曼": "Sam Altman",           # 中文條目名對不上，英文條目查得到
+    # 亞太
+    "普拉伯沃": "普拉博沃·蘇比延多",
+    "安瓦爾": "安瓦爾·易卜拉欣",       # ⚠ 安瓦爾是常見名，此處釘死馬來西亞首相
+    "洪瑪奈": "Hun Manet",
+    # 中東／歐洲（photo_lookup 舊註解列為「整類卡住」的那幾位）
+    "卡利巴夫": "Mohammad Bagher Ghalibaf",
+    "阿拉奇": "Abbas Araghchi",
+    "瓦希迪": "Ahmad Vahidi",
+    "蘇納克": "Rishi Sunak",
+}
+
+
+def resolve_tw_name_alias(name: str) -> str | None:
+    """臺灣慣用譯名對應到的維基條目名；沒收錄就回 None。"""
+    return TW_PORTRAIT_NAME_ALIASES.get((name or "").strip())
+
+
 def find_portrait_outcome(
     name: str,
     *,
@@ -321,9 +363,17 @@ def find_portrait_outcome(
     if cached is not _CACHE_MISS:
         return cached
 
+    # 候選順序：原名 → 臺灣譯名對照表 → 英文原名。
+    # 對照表排在英文名之前是刻意的：表裡的映射逐條實查過、確定命中第 2 層，
+    # 而 alt_names 是消化端給的，可能空著也可能拼錯（main.py 的 prompt 明文禁止
+    # 從常識填英文名，只准從原文抽取）。確定的先試。
     candidates = [
         candidate
-        for candidate in [(name or "").strip(), *[(alt or "").strip() for alt in alt_names]]
+        for candidate in [
+            (name or "").strip(),
+            resolve_tw_name_alias(name),
+            *[(alt or "").strip() for alt in alt_names],
+        ]
         if candidate
     ]
     # 同名去重但保留順序：中文優先（臺灣新聞的人物多半中文條目較貼近本地認知）

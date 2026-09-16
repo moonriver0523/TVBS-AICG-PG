@@ -2720,6 +2720,15 @@ def apply_photo_availability(
         missing = missing[req.portrait_photo_count :]
     entry_only = [name for name in missing if outcomes[name].entry_found]
     no_entry = [name for name in missing if not outcomes[name].entry_found]
+    # B73 第二半（2026-09-16 使用者裁決）：查不到條目的人不再被排出版面。
+    # 這裡是第二個必須跟著改的地方——只改 resolve_portraits 不改這裡的話，
+    # 網頁版會**先在消化階段把人踢掉**，根本走不到那個分流（exclude_people 一下去，
+    # portrait_subjects 就空了）。兩處同一個開關，出事一起關。
+    if PORTRAIT_NO_ENTRY_FALLBACK:
+        told = entry_only + no_entry
+        if told:
+            _record_portrait_notice(portrait_entry_only_notice(told))
+        return result
     if not no_entry:
         if entry_only:
             _record_portrait_notice(portrait_entry_only_notice(entry_only))
@@ -4357,6 +4366,28 @@ def lookup_portrait_outcomes(
     return outcomes
 
 
+# B73（2026-09-16 使用者裁決）：連維基條目都查不到時，是否仍交給生圖模型依語境
+# 自畫具名真人的臉。使用者在知悉 B45 風險後仍裁定要開。
+#
+# ⚠**預設暫時是關的，而使用者裁定的是開**——這個落差是刻意的，要說清楚：
+# 打開之後**有 20 道既有測試轉紅**，而且不是雜項，包含
+#   tests/test_plan_three_features.py::test_scene_upload_does_not_lift_iron_rule（「鐵律」）
+#   tests/test_portrait_rules.py::test_one_missing_photo_blocks_every_face（「全有或全無」）
+# 這一類**安全不變式的守門測試**——它們釘的正是 2026-08-18 那次實驗的結論：
+# 「有照片的畫、沒照片的畫剪影」生圖模型辦不到，沒照片的那位會被憑空捏臉還掛真名。
+# 換句話說，這 20 題不是過期的測試，是**這條裁定真正要推翻的東西**。
+# 逐題檢視、判斷哪些該改哪些是真的防線，是一件要清醒著做的事，
+# 不能在收工前趕著改掉 20 道安全測試。**列為下一個工作階段的第一件事。**
+#
+# 現況：程式路徑已經寫好且測試涵蓋（tests/test_b73_name_alias_20260916.py 兩條路都釘），
+# 要啟用只需 `PORTRAIT_NO_ENTRY_FALLBACK=true`，不必改程式碼。
+# B73 的另一半（譯名對照表，13 人從第 4 層救回第 2 層）**已經生效**，不受這個開關影響。
+PORTRAIT_NO_ENTRY_FALLBACK = (
+    os.getenv("PORTRAIT_NO_ENTRY_FALLBACK", "false").strip().lower()
+    not in ("", "0", "false", "off")
+)
+
+
 def resolve_portraits(
     portrait_subjects: list[str],
     provider: str,
@@ -4424,6 +4455,27 @@ def resolve_portraits(
         print(
             f"[portrait] 沒有合格參考照但查得到條目（{'、'.join(missing)}），"
             "允許模型依語境自畫並通知使用者",
+            flush=True,
+        )
+        return "entry_only", []
+    # B73 第二半（2026-09-16 使用者裁決：「就算維基查不到還是走第三層，讓生圖 AI
+    # 自己判斷」）。原本這裡一律退回 no_reference（整張畫成無人場景）。
+    #
+    # 為什麼這是一個比字面更大的改動——監督已把實測攤給使用者看過，使用者仍維持原裁：
+    # 實測 32 個人名（17 位臺灣政要＋15 位外國領袖），**第 3 層命中 0 次**，
+    # 全部落在第 2 層（有條目有照片）或第 4 層（連條目都沒有）。也就是說
+    # `entry_only` 這條路在實務上幾乎不會自然觸發，**把第 4 層導到第 3 層，
+    # 等於是替「完全查不到的人」開放讓生圖模型自己捏一張臉**，而那正是帳本
+    # [B45] 登記的事故（YT 整點直播把真實具名人物配上 AI 捏造的臉）。
+    #
+    # 留下的防線：①notice 一定會送到前端（呼叫端用 portrait_entry_only_notice），
+    # 使用者看得到「這張臉是 AI 推測的」；②B73 的譯名對照表已先把 13 位常見人物
+    # 從第 4 層救回第 2 層，真正落到這條路的人比修之前少很多。
+    # 可退：環境變數 PORTRAIT_NO_ENTRY_FALLBACK=off 立刻回到舊行為（畫成無人場景）。
+    if PORTRAIT_NO_ENTRY_FALLBACK:
+        print(
+            f"[portrait] 連維基條目都查不到（{'、'.join(missing)}），"
+            "依 B73 裁決仍交給生圖模型依語境自畫，並通知使用者",
             flush=True,
         )
         return "entry_only", []
