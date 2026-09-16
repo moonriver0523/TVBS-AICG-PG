@@ -28,7 +28,7 @@ import random
 import re
 import unicodedata
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 import safe_area_spec
 
@@ -2995,6 +2995,75 @@ def split_canvas(images: list[bytes], size: tuple[int, int]) -> Image.Image:
     lines = lines.resize((width, height), Image.LANCZOS)
     canvas.paste(Image.new("RGB", (width, height), YT_SPLIT_LINE_FILL), (0, 0), lines)
     return canvas
+
+
+def restore_photo_outside_title_band(
+    base_png: bytes, ai_png: bytes, *, band_top_ratio: float, diff_threshold: int = 24,
+    max_band_change_ratio: float = 0.5,
+) -> bytes:
+    """B55（2026-09-16 使用者裁決）：單張「原圖放置」＋AI 標題時，照片本身一個像素都
+    不准動，只有標題設計可以變。生圖模型永遠是整張重畫，prompt 只是請求、不是保證
+    （AI_TITLE_BASE_IMAGE_NOTE 已經寫到不能再死照樣被改），保證只能來自程式回貼。
+
+    做法是「限定字帶＋差異遮罩＋面積防呆」三件事合起來，缺一都不夠：
+    - 字帶（band_top_ratio 以上）是**硬邊界**——不管模型畫了什麼，一律強制還原成
+      base，logo／人臉／示意圖那一帶不可能被模型的任何輸出污染，不靠比對結果。
+      邊界用既有的 COVER_HEADER_RATIO／COVER_TITLE_TOP_CLEARANCE_RATIO（或呼叫端
+      對應的 YT 版本）算，不手打座標數字。
+    - 字帶以內只在模型「真的畫了東西」（與 base 逐像素有差異）的地方才採用模型
+      像素，帶內沒被動過的像素仍是 base——不能整條帶都給模型的畫布替換掉，
+      否則等於放行模型把底下的照片內容也重畫一次（字帶本來就佔照片下半，
+      直接整帶採用模型輸出跟不設限沒兩樣）。
+    - 面積防呆：字帶內「有差異」的像素比例超過 max_band_change_ratio，代表模型
+      根本沒有只加標題、而是把整張照片（或帶內大半個場景）重畫了一次——這正是
+      B55 回報的症狀。遮罩救不了這種整片觸發，只能整批擋下、丟 ComposeError，
+      不能把違規結果靜靜送出去（那等於使用者的規則形同虛設）。呼叫端接手後應該
+      回報清楚的錯誤，不能把這次生圖硬塞給使用者。
+
+    回傳一律是 base 尺寸的 PNG；ai_png 尺寸不同時等比縮放對齊（生圖模型偶爾會回
+    比要求略大/略小的畫布，此時仍要能比對）。
+    """
+    base_img = Image.open(io.BytesIO(base_png)).convert("RGB")
+    ai_img = Image.open(io.BytesIO(ai_png)).convert("RGB")
+    if ai_img.size != base_img.size:
+        ai_img = ai_img.resize(base_img.size, Image.LANCZOS)
+    width, height = base_img.size
+    band_top = round(height * band_top_ratio)
+
+    # 逐通道差異取最大值（不是轉灰階平均）：某個顏色的字剛好跟底圖亮度接近時，
+    # 灰階平均會把差異洗掉，漏掉那個顏色通道其實差很多的像素。
+    diff_r, diff_g, diff_b = ImageChops.difference(base_img, ai_img).split()
+    diff_max = ImageChops.lighter(ImageChops.lighter(diff_r, diff_g), diff_b)
+    changed = diff_max.point(lambda p: 255 if p > diff_threshold else 0)
+
+    band_mask = Image.new("L", (width, height), 0)
+    band_pixel_count = 0
+    if band_top < height:
+        ImageDraw.Draw(band_mask).rectangle([0, band_top, width, height], fill=255)
+        band_pixel_count = width * (height - band_top)
+    mask = ImageChops.multiply(changed, band_mask)
+
+    if band_pixel_count:
+        # histogram()[255] 數的是 mask 裡值恰好 255 的像素數（changed 與 band 都命中）
+        changed_in_band = mask.histogram()[255]
+        change_ratio = changed_in_band / band_pixel_count
+        if change_ratio > max_band_change_ratio:
+            raise ComposeError(
+                "生圖模型把原圖放置的照片改動範圍過大（"
+                f"字帶內 {change_ratio:.0%} 的像素被重畫，上限 {max_band_change_ratio:.0%}），"
+                "已擋下這次生成——原圖放置規則是照片不能被重畫，只能改標題設計，請重試或降低標題創意等級"
+            )
+
+    result = Image.composite(ai_img, base_img, mask)
+    buffer = io.BytesIO()
+    result.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def cover_title_band_top_ratio() -> float:
+    """十點封面標題可落筆的最上緣（佔畫面高的比例），與 `_cover_title_vertical_cap`
+    用同一組常數推導，供 B55 的字帶保護取用——不要另外手打一份數字。"""
+    return COVER_HEADER_RATIO + COVER_TITLE_TOP_CLEARANCE_RATIO
 
 
 def crop_background_16x9(image_bytes: bytes) -> bytes:
