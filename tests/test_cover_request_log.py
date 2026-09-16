@@ -135,6 +135,39 @@ class CoverLogFieldTests(unittest.TestCase):
                 self.assertEqual(logged[-1]["source"], source)
                 self.assertIn("上游安全過濾擋下", logged[-1]["error"])
 
+    def test_generation_failure_archives_once_with_the_same_request_id(self):
+        def boom(image_req):
+            raise RuntimeError("上游安全過濾擋下")
+
+        for url, body, source in (
+            ("/api/editor/cover",
+             {"title_left": "梅爾茨 深感震驚", "title_right": "柏林街頭 選舉海報", "layout": "split", "mode": "composite"},
+             "editor-cover"),
+            ("/api/editor/cover",
+             {"title_left": "梅爾茨 深感震驚", "layout": "full", "mode": "composite"},
+             "editor-cover-full"),
+            ("/api/editor/yt-cover",
+             {"title": "梅爾茨 深感震驚", "title_mode": "composite"},
+             "editor-yt-cover-news-composite"),
+        ):
+            with self.subTest(source=source):
+                logged, archived, succeeded = [], [], []
+                with patch.object(main, "digest_completion", return_value=_completion(DERIVED)), \
+                     patch.object(main, "lookup_portrait_photos", side_effect=_found), \
+                     patch.object(main, "supports_reference_image", return_value=True), \
+                     patch.object(main, "generate_image_raw", side_effect=boom), \
+                     patch.object(request_log, "log_failure", side_effect=lambda **kw: logged.append(kw)), \
+                     patch.object(main, "_archive_generation_failure", side_effect=lambda **kw: archived.append(kw)), \
+                     patch.object(main, "_archive_generation", side_effect=lambda **kw: succeeded.append(kw)):
+                    with self.assertRaises(RuntimeError):
+                        client.post(url, json=body, headers=_headers())
+                self.assertEqual(len(logged), 1)
+                self.assertEqual(len(archived), 1)
+                self.assertEqual(succeeded, [])
+                self.assertEqual(logged[0]["request_id"], archived[0]["request_id"])
+                self.assertEqual(archived[0]["status"], "failed")
+                self.assertEqual(logged[0]["error"], archived[0]["error_summary"])
+
 
 if __name__ == "__main__":
     unittest.main()

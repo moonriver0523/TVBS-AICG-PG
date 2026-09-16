@@ -20,6 +20,7 @@ import base64
 import json
 import os
 import pathlib
+import re
 from datetime import datetime, timezone
 
 ENABLED = os.getenv("AUDIT_ARCHIVE_DIR", "").strip() != ""
@@ -30,6 +31,67 @@ ARCHIVE_DIR = pathlib.Path(os.getenv("AUDIT_ARCHIVE_DIR", "").strip() or ".")
 # 2026-09-16 隨之從 4000 調到 24000：兩邊不同步的話，後台看到的 prompt 會比 JSONL 短，
 # 回查時會誤以為資料沒寫進去。
 MAX_PROMPT_CHARS = 24000
+
+# 失敗摘要只留可分組的短句。traceback 與金鑰不能進磁碟。
+MAX_ERROR_SUMMARY_CHARS = 300
+
+STATUS_OK = "ok"
+STATUS_FAILED = "failed"
+
+_REDACT_RE = re.compile(
+    r"(?i)"
+    r"(?:authorization\s*[:=]\s*(?:bearer\s+)?)\S+"
+    r"|(?:bearer\s+)[A-Za-z0-9._\-]+"
+    r"|(?:(?:api[_-]?key|secret|password|token)\s*[:=]\s*)\S+"
+    r"|sk-[A-Za-z0-9_-]{10,}"
+    r"|AIza[A-Za-z0-9_-]{10,}"
+)
+_TRACE_LINE_RE = re.compile(
+    r"^\s*(?:File \".+\", line \d+|Traceback \(most recent call last\):)"
+)
+
+
+def sanitize_error_summary(
+    text: str, *, max_chars: int = MAX_ERROR_SUMMARY_CHARS
+) -> str:
+    """截短、去掉 traceback、蓋掉金鑰／Authorization。供寫入端與 retry note 共用。"""
+    raw = str(text or "")
+    if "Traceback (most recent call last)" in raw:
+        lines = [line for line in raw.splitlines() if line.strip()]
+        raw = lines[-1] if lines else raw
+    kept = [
+        line.strip()
+        for line in raw.splitlines()
+        if line.strip() and not _TRACE_LINE_RE.match(line)
+    ]
+    cleaned = " ".join(kept) if kept else raw.replace("\n", " ")
+    cleaned = _REDACT_RE.sub("[redacted]", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if len(cleaned) <= max_chars:
+        return cleaned
+    if max_chars <= 1:
+        return cleaned[:max_chars]
+    return cleaned[: max_chars - 1] + "…"
+
+
+def record_type(record: dict) -> str:
+    """後台類型欄的取值順序。舊紀錄若漏帶 type_label，退到 source 仍列得出來。"""
+    return (
+        record.get("type_label")
+        or record.get("chart_type")
+        or record.get("source")
+        or "（未分類）"
+    )
+
+
+def record_status(record: dict) -> str:
+    """舊紀錄沒有 status 欄＝當時只寫成功，視為 ok。讀取失敗不當生成失敗。"""
+    status = record.get("status") or STATUS_OK
+    return STATUS_FAILED if status == STATUS_FAILED else STATUS_OK
+
+
+def record_cursor(record: dict) -> str:
+    return f"{record.get('ts', '')}|{record.get('request_id', '')}"
 
 
 def _month_dir(now: datetime) -> pathlib.Path:
@@ -47,7 +109,7 @@ def archive_generation(
     user_name: str = "",
     **metadata,
 ) -> None:
-    """歸檔一次成功的生成（metadata + 圖片）。例外一律吞掉，不波及請求本身。"""
+    """歸檔一次生成結果（成功帶圖；失敗不要求圖片）。例外一律吞掉，不波及請求本身。"""
     if not ENABLED:
         return
     try:
@@ -71,6 +133,14 @@ def archive_generation(
 
         if "prompt" in metadata and isinstance(metadata["prompt"], str):
             metadata["prompt"] = metadata["prompt"][:MAX_PROMPT_CHARS]
+        if "error_summary" in metadata and isinstance(metadata["error_summary"], str):
+            metadata["error_summary"] = sanitize_error_summary(metadata["error_summary"])
+
+        status = metadata.pop("status", None) or (
+            STATUS_FAILED if metadata.get("error_type") or metadata.get("error_summary") else STATUS_OK
+        )
+        if status != STATUS_FAILED:
+            status = STATUS_OK
 
         record = {
             "ts": now.isoformat(),
@@ -82,6 +152,7 @@ def archive_generation(
             "user_name": user_name,
             "image_file": image_name,
             "mime_type": mime_type,
+            "status": status,
             **metadata,
         }
         (target / f"{stem}.json").write_text(
@@ -91,27 +162,22 @@ def archive_generation(
         print(f"[audit_archive] write failed: {exc}", flush=True)
 
 
-def list_records(*, month: str = "", limit: int = 200, user: str = "") -> list[dict]:
-    """列出歸檔紀錄，最新的在前。供後台頁面使用。
-
-    month 格式 `YYYY-MM`，空字串代表全部月份。user 會同時比對 user_email 與
-    user_name 的子字串（後台的搜尋框直接吃使用者輸入，不要求精確相符）。
-    """
-    if not ENABLED:
-        return []
+def _iter_month_dirs(*, month: str = "") -> list[pathlib.Path]:
+    if month:
+        return [ARCHIVE_DIR / month]
     try:
-        if month:
-            month_dirs = [ARCHIVE_DIR / month]
-        else:
-            month_dirs = sorted(
-                (p for p in ARCHIVE_DIR.iterdir() if p.is_dir()), reverse=True
-            )
+        return sorted(
+            (p for p in ARCHIVE_DIR.iterdir() if p.is_dir()), reverse=True
+        )
     except OSError:
         return []
 
+
+def _iter_records(*, month: str = "", user: str = "", type_value: str = ""):
+    """由新到舊產出可讀的紀錄。JSON 讀取失敗就跳過，不當生成失敗。"""
     needle = user.strip().lower()
-    records: list[dict] = []
-    for directory in month_dirs:
+    wanted_type = type_value.strip()
+    for directory in _iter_month_dirs(month=month):
         if not directory.is_dir():
             continue
         for path in sorted(directory.glob("*.json"), reverse=True):
@@ -125,11 +191,75 @@ def list_records(*, month: str = "", limit: int = 200, user: str = "") -> list[d
                 ).lower()
                 if needle not in haystack:
                     continue
+            if wanted_type and record_type(record) != wanted_type:
+                continue
             record["_month"] = directory.name
-            records.append(record)
-            if len(records) >= limit:
-                return records
+            record["_cursor"] = record_cursor(record)
+            yield record
+
+
+def list_records(
+    *,
+    month: str = "",
+    limit: int = 200,
+    user: str = "",
+    offset: int = 0,
+    cursor: str = "",
+    type_value: str = "",
+) -> list[dict]:
+    """列出歸檔紀錄，最新的在前。供後台頁面使用。
+
+    month 格式 `YYYY-MM`，空字串代表全部月份。user 會同時比對 user_email 與
+    user_name 的子字串（後台的搜尋框直接吃使用者輸入，不要求精確相符）。
+
+    offset／cursor 用來分頁；預設 limit=200 維持舊呼叫相容。cursor 是上一頁
+    最後一筆的 `ts|request_id`，找到後從下一筆開始取。讀取失敗的檔案直接跳過。
+    """
+    if not ENABLED:
+        return []
+    if offset < 0:
+        offset = 0
+    skipped = 0
+    seen_cursor = not cursor
+    records: list[dict] = []
+    for record in _iter_records(month=month, user=user, type_value=type_value):
+        if not seen_cursor:
+            if record.get("_cursor") == cursor:
+                seen_cursor = True
+            continue
+        if skipped < offset:
+            skipped += 1
+            continue
+        records.append(record)
+        if limit and len(records) >= limit:
+            return records
     return records
+
+
+def summarize_records(
+    *, month: str = "", user: str = "", type_value: str = ""
+) -> dict:
+    """完整篩選區間的成功／失敗／全部。後台算失敗率不能只拿最新 200 筆當分母。"""
+    if not ENABLED:
+        return {"total": 0, "ok": 0, "failed": 0, "types": []}
+    total = ok = failed = 0
+    types: set[str] = set()
+    # 類型下拉要看篩選前的全集，否則選了某一類之後其他類會從選單消失。
+    for record in _iter_records(month=month, user=user):
+        types.add(record_type(record))
+        if type_value.strip() and record_type(record) != type_value.strip():
+            continue
+        total += 1
+        if record_status(record) == STATUS_FAILED:
+            failed += 1
+        else:
+            ok += 1
+    return {
+        "total": total,
+        "ok": ok,
+        "failed": failed,
+        "types": sorted(types),
+    }
 
 
 def available_months() -> list[str]:
@@ -168,10 +298,15 @@ def stats() -> dict:
     """後台首頁的概況數字。"""
     if not ENABLED:
         return {"enabled": False}
-    total = 0
+    summary = summarize_records()
     users: set[str] = set()
-    for record in list_records(limit=100000):
-        total += 1
+    for record in _iter_records():
         label = record.get("user_email") or record.get("user_name") or "(未署名)"
         users.add(label)
-    return {"enabled": True, "total": total, "users": sorted(users)}
+    return {
+        "enabled": True,
+        "total": summary["total"],
+        "ok": summary["ok"],
+        "failed": summary["failed"],
+        "users": sorted(users),
+    }

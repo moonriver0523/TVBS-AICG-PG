@@ -346,6 +346,23 @@ class GenerateRetryContextTests(GenerateRetryTests):
             body = main.digest_reasoning_body(main.DIGEST_MAX_TOKENS)
         self.assertEqual(body["reasoning"]["max_tokens"], 2000)
 
+    def test_retry_note_summary_is_capped(self):
+        note = main.digest_retry_note(1, "quality", "Q" * 500)
+        self.assertIn("category=quality", note)
+        self.assertIn("Previous attempt 1", note)
+        self.assertLessEqual(note.count("Q"), 300)
+        self.assertIn("…", note)
+        self.assertNotIn("Q" * 301, note)
+
+    def test_long_quality_problem_is_clipped_in_retry_user_message(self):
+        with patch.object(main, "digest_quality_problem", side_effect=["P" * 500, ""]):
+            result, exc, create = self.call_with([ok_response(), ok_response()])
+        self.assertIsNone(exc)
+        retry_user = _user_message(create.call_args_list[1])
+        self.assertIn("category=quality", retry_user)
+        self.assertLessEqual(retry_user.count("P"), 300)
+        self.assertIn("…", retry_user)
+
 
 if __name__ == "__main__":
     unittest.main()

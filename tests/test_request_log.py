@@ -151,6 +151,112 @@ class DigestEndpointLoggingTests(unittest.TestCase):
         self.assertFalse(main._inside_pipeline.get())
 
 
+class GenerationOutcomeTests(unittest.TestCase):
+    """同一 request id 的 log／audit 口徑一致；失敗只歸檔一次；摘要去敏。"""
+
+    def test_failure_log_and_archive_share_request_id_and_happen_once(self):
+        fake_digest = main.GenerateResponse(
+            style="S", structure="T", variable="[標題]生物疫情圖表",
+            chart_type="資料圖表", portrait_subjects=[],
+        )
+        failures, archives = [], []
+        with patch.object(main, "check_input") as check_input, \
+                patch.object(main, "generate", return_value=fake_digest), \
+                patch.object(main, "resolve_portrait", return_value=("none", None)), \
+                patch.object(main, "build_prompt", return_value="最終 PROMPT"), \
+                patch.object(main, "generate_image", side_effect=RuntimeError("safety system 400")), \
+                patch.object(request_log, "log_failure", side_effect=lambda **kw: failures.append(kw)), \
+                patch.object(request_log, "log_generation") as logged, \
+                patch.object(main, "_archive_generation_failure", side_effect=lambda **kw: archives.append(kw)), \
+                patch.object(main, "_archive_generation") as archived_ok:
+            check_input.return_value = type("V", (), {"accepted": True, "user_message": ""})()
+            with self.assertRaises(RuntimeError):
+                main.generate_news_image(
+                    main.NewsImageGenerateRequest(news_text="生物疫情圖表", source="web")
+                )
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(len(archives), 1)
+        self.assertEqual(failures[0]["request_id"], archives[0]["request_id"])
+        self.assertEqual(archives[0]["status"], "failed")
+        self.assertEqual(archives[0]["error_type"], "unknown")
+        logged.assert_not_called()
+        archived_ok.assert_not_called()
+
+    def test_error_summary_is_capped_and_does_not_leak_authorization(self):
+        secret = (
+            "Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz "
+            + "TRACE " + "Z" * 400
+        )
+        fake_digest = main.GenerateResponse(
+            style="S", structure="T", variable="[標題]生物疫情圖表",
+            chart_type="資料圖表", portrait_subjects=[],
+        )
+        archives = []
+        with patch.object(main, "check_input") as check_input, \
+                patch.object(main, "generate", return_value=fake_digest), \
+                patch.object(main, "resolve_portrait", return_value=("none", None)), \
+                patch.object(main, "build_prompt", return_value="最終 PROMPT"), \
+                patch.object(main, "generate_image", side_effect=RuntimeError(secret)), \
+                patch.object(request_log, "log_failure"), \
+                patch.object(main, "_archive_generation_failure", side_effect=lambda **kw: archives.append(kw)):
+            check_input.return_value = type("V", (), {"accepted": True, "user_message": ""})()
+            with self.assertRaises(RuntimeError):
+                main.generate_news_image(
+                    main.NewsImageGenerateRequest(news_text="生物疫情圖表")
+                )
+        summary = archives[0]["error_summary"]
+        self.assertLessEqual(len(summary), 300)
+        self.assertNotIn("sk-abcdefghijklmnopqrstuvwxyz", summary)
+        self.assertNotIn("Bearer", summary)
+        self.assertNotIn("Authorization", summary)
+
+    def test_success_duration_comes_from_shared_clock(self):
+        fake_digest = main.GenerateResponse(
+            style="S", structure="T", variable="[標題]休達大批移民湧入",
+            chart_type="資料圖表", portrait_subjects=[],
+        )
+        fake_image = main.ImageGenerateResponse(
+            image_data_base64="ZmFrZQ==", mime_type="image/png", model="fake-model"
+        )
+        now = [10.0]
+        archives = []
+
+        def fake_generate_image(req):
+            now[0] = 12.25
+            return fake_image
+
+        with patch.object(main, "check_input") as check_input, \
+                patch.object(main, "generate", return_value=fake_digest), \
+                patch.object(main, "resolve_portrait", return_value=("none", None)), \
+                patch.object(main, "lookup_portrait_photos", return_value=({}, [])), \
+                patch.object(main, "build_prompt", return_value="最終 PROMPT"), \
+                patch.object(main, "generate_image", side_effect=fake_generate_image), \
+                patch.object(main.time, "monotonic", side_effect=lambda: now[0]), \
+                patch.object(request_log, "log_generation"), \
+                patch.object(main, "_archive_generation", side_effect=lambda **kw: archives.append(kw)):
+            check_input.return_value = type("V", (), {"accepted": True, "user_message": ""})()
+            main.generate_news_image(
+                main.NewsImageGenerateRequest(news_text="休達湧入大批移民 當地疏散逾21萬人")
+            )
+        self.assertEqual(len(archives), 1)
+        self.assertEqual(archives[0]["status"], "ok")
+        self.assertEqual(archives[0]["duration_ms"], 2250)
+        self.assertEqual(archives[0]["provider"], "gemini")
+        self.assertEqual(archives[0]["image_model"], "fake-model")
+
+    def test_provider_http_error_is_grouped_by_upstream_status(self):
+        from fastapi import HTTPException
+        meta = main.classify_generation_error(
+            HTTPException(
+                status_code=502,
+                detail="OpenRouter 圖片生成失敗（400）：rejected by the safety system",
+            )
+        )
+        self.assertEqual(meta["error_type"], "provider_4xx")
+        self.assertEqual(meta["http_status"], 400)
+        self.assertIn("safety system", meta["error_summary"])
+
+
 def _fake_completion():
     class Message:
         content = json.dumps({

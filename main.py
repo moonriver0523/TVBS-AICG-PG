@@ -445,23 +445,137 @@ def _recall_digest() -> dict:
     return found[1]
 
 
-def _archive_generation(**kwargs) -> None:
-    """歸檔一次生成：既有的 GCS 備份，加上帶身分的本機稽核歸檔。
+_UPSTREAM_STATUS_RE = re.compile(r"[（(](\d{3})[）)]")
 
-    包成一支的理由：三個生成端點（news-image、web-refine、hybrid）都要歸檔，
-    身分注入與原文補齊只想寫一次；日後要換／加歸檔目的地也只改這裡。
-    兩支底層函式都自己吞例外，這裡不需要再包 try。
-    """
-    gcs_archive.archive_generation(**kwargs)
 
-    # 只補「這條路徑本來就沒有」的欄位，不覆蓋呼叫端已經給值的欄位——
-    # news-image 那條路徑自己就帶著正確的原文，補寫反而可能蓋成舊的。
+def _generation_clock() -> float:
+    return time.monotonic()
+
+
+def _generation_duration_ms(started: float) -> int:
+    return max(0, int(round((time.monotonic() - started) * 1000)))
+
+
+def _reset_generation_retries() -> None:
+    _generation_retry_count.set(0)
+
+
+def _note_generation_retry() -> None:
+    _generation_retry_count.set(_generation_retry_count.get() + 1)
+
+
+def _generation_retries() -> int:
+    return _generation_retry_count.get()
+
+
+def _error_type_from_http(
+    status: int | None, summary: str, *, upstream: bool = False
+) -> str:
+    text = summary or ""
+    lowered = text.lower()
+    if (
+        "太久沒有回應" in text
+        or "timeout" in lowered
+        or "timed out" in lowered
+        or "無法連線" in text
+    ):
+        return "timeout"
+    if "無法解析" in text:
+        return "parse"
+    if "封面生成失敗" in text or "合成失敗" in text or "直標合成" in text:
+        return "compose"
+    if "金鑰" in text or "計費" in text or "credits" in lowered:
+        return "provider_4xx"
+    if status in (408, 504):
+        return "timeout"
+    if status in (400, 422) and not upstream:
+        return "input"
+    if status in (401, 402, 403, 429) or (status is not None and 400 <= status < 500):
+        return "provider_4xx"
+    if status is not None and status >= 500:
+        return "provider_5xx"
+    return "unknown"
+
+
+def classify_generation_error(exc: BaseException) -> dict:
+    """把例外收成可分組的 error_type／http_status／截短去敏摘要。"""
+    summary = str(exc)
+    http_status = None
+    error_type = "unknown"
+    if isinstance(exc, HTTPException):
+        http_status = exc.status_code
+        detail = exc.detail
+        summary = detail if isinstance(detail, str) else str(detail)
+        error_type = _error_type_from_http(http_status, summary)
+        match = _UPSTREAM_STATUS_RE.search(summary)
+        if match:
+            http_status = int(match.group(1))
+            error_type = _error_type_from_http(http_status, summary, upstream=True)
+    elif isinstance(exc, compose.ComposeError):
+        http_status = _compose_error_status(exc)
+        summary = str(exc)
+        error_type = "compose"
+    else:
+        name = type(exc).__name__
+        lowered = summary.lower()
+        if name in {"TimeoutError", "APITimeoutError"} or "timeout" in lowered:
+            error_type = "timeout"
+            http_status = 504
+        elif name in {"URLError", "APIConnectionError"}:
+            error_type = "timeout"
+            http_status = 502
+        else:
+            error_type = _error_type_from_http(None, summary)
+    return {
+        "error_type": error_type,
+        "http_status": http_status,
+        "error_summary": audit_archive.sanitize_error_summary(summary),
+    }
+
+
+def _outcome_meta(
+    started: float,
+    *,
+    provider: str = "",
+    image_model: str = "",
+    exc: BaseException | None = None,
+) -> dict:
+    """成功／失敗共用的耗時、重試、provider。request log 與 audit 都吃同一份。"""
+    meta = {
+        "status": audit_archive.STATUS_FAILED if exc is not None else audit_archive.STATUS_OK,
+        "duration_ms": _generation_duration_ms(started),
+        "retry_count": _generation_retries(),
+        "provider": provider,
+        "image_model": image_model,
+    }
+    if exc is not None:
+        meta.update(classify_generation_error(exc))
+    return meta
+
+
+def _enrich_archive_fields(kwargs: dict) -> dict:
     enriched = dict(kwargs)
     memo = _recall_digest()
     if memo:
         for key, value in memo.items():
             if not enriched.get(key):
                 enriched[key] = value
+    return enriched
+
+
+def _archive_generation(**kwargs) -> None:
+    """歸檔一次成功的生成：既有的 GCS 備份，加上帶身分的本機稽核歸檔。
+
+    包成一支的理由：三個生成端點（news-image、web-refine、hybrid）都要歸檔，
+    身分注入與原文補齊只想寫一次；日後要換／加歸檔目的地也只改這裡。
+    兩支底層函式都自己吞例外，這裡不需要再包 try。
+    """
+    kwargs.setdefault("status", audit_archive.STATUS_OK)
+    gcs_archive.archive_generation(**kwargs)
+
+    # 只補「這條路徑本來就沒有」的欄位，不覆蓋呼叫端已經給值的欄位——
+    # news-image 那條路徑自己就帶著正確的原文，補寫反而可能蓋成舊的。
+    enriched = _enrich_archive_fields(kwargs)
 
     user = current_user()
     audit_archive.archive_generation(
@@ -470,6 +584,66 @@ def _archive_generation(**kwargs) -> None:
         user_name=user.get("name", ""),
         **enriched,
     )
+
+
+def _archive_generation_failure(**kwargs) -> None:
+    """歸檔一次失敗的生成。不要求圖片，也不寫 GCS（那支要圖）。"""
+    kwargs.setdefault("status", audit_archive.STATUS_FAILED)
+    kwargs.pop("image_base64", None)
+    kwargs.pop("mime_type", None)
+    enriched = _enrich_archive_fields(kwargs)
+    user = current_user()
+    audit_archive.archive_generation(
+        user_id=user.get("user_id", ""),
+        user_email=user.get("email", ""),
+        user_name=user.get("name", ""),
+        image_base64="",
+        mime_type="",
+        **enriched,
+    )
+
+
+def _record_generation_failure(
+    request_id: str,
+    started: float,
+    exc: BaseException,
+    **fields,
+) -> None:
+    """失敗只落一筆：request log 與 audit 共用同一 request id、耗時與去敏摘要。"""
+    meta = _outcome_meta(
+        started,
+        provider=str(fields.get("provider") or ""),
+        image_model=str(fields.get("image_model") or ""),
+        exc=exc,
+    )
+    request_log.log_failure(
+        request_id=request_id,
+        source=str(fields.get("source") or ""),
+        news_text=str(fields.get("news_text") or ""),
+        error=meta["error_summary"],
+        style=str(fields.get("style") or ""),
+        structure=str(fields.get("structure") or ""),
+        variable=str(fields.get("variable") or ""),
+        prompt=str(fields.get("prompt") or ""),
+        chart_type=str(fields.get("chart_type") or ""),
+        type_label=str(fields.get("type_label") or ""),
+        role=str(fields.get("role") or ""),
+        density=str(fields.get("density") or ""),
+        provider=str(fields.get("provider") or ""),
+        client_id=str(fields.get("client_id") or ""),
+    )
+    archive_fields = dict(fields)
+    archive_fields.update(meta)
+    _archive_generation_failure(request_id=request_id, **archive_fields)
+
+
+def _abort_generation(exc: Exception, **fields) -> None:
+    """輸入 4xx 等還沒開始生圖就失敗的路徑：記一筆再把例外丟回去。"""
+    _reset_generation_retries()
+    _record_generation_failure(
+        request_log.new_request_id(), _generation_clock(), exc, **fields
+    )
+    raise exc
 
 
 @app.middleware("http")
@@ -1822,6 +1996,8 @@ _inside_pipeline = contextvars.ContextVar("inside_pipeline", default=False)
 # apply_photo_availability 會再呼叫一次 generate()。deadline 放 contextvar，
 # 第二次沿用同一條牆鐘，單一請求不會變成 230+230（B31）。
 _digest_deadline = contextvars.ContextVar("digest_deadline", default=None)
+# 同一 request 的 digest／封面重試次數，給稽核紀錄用，不另開計時器。
+_generation_retry_count = contextvars.ContextVar("generation_retry_count", default=0)
 
 
 # 截斷監控。三個呼叫端（generate／hybrid／cover）各有各的預算，過去只有真的炸了
@@ -1889,9 +2065,10 @@ def digest_excerpt(raw: str, head: int = 600, tail: int = 300) -> str:
 
 def digest_retry_note(attempt: int, category: str, summary: str) -> str:
     """給下一輪 digest 的修正說明。只含分類後原因，不含 provider 原文。"""
+    clipped = audit_archive.sanitize_error_summary(summary)
     return (
         f"[Retry context] Previous attempt {attempt} failed "
-        f"(category={category}): {summary}. "
+        f"(category={category}): {clipped}. "
         "Correct this failure and return complete valid JSON."
     )
 
@@ -2410,6 +2587,7 @@ def generate(req: GenerateRequest):
                     f"{type(exc).__name__} on attempt {attempt + 1}",
                 )
                 reasoning_max_tokens = None
+                _note_generation_retry()
                 time.sleep(1.5)
                 continue
 
@@ -2442,6 +2620,7 @@ def generate(req: GenerateRequest):
                     if finish_reason == "length"
                     else None
                 )
+                _note_generation_retry()
                 time.sleep(1.5)
                 continue
 
@@ -2477,6 +2656,7 @@ def generate(req: GenerateRequest):
                 reasoning_max_tokens = (
                     DIGEST_REASONING_MIN_TOKENS if truncated else None
                 )
+                _note_generation_retry()
                 time.sleep(1.5)
                 continue
 
@@ -2786,6 +2966,10 @@ def generate_image(req: ImageGenerateRequest):
     req = apply_map_reference_to_image_request(req)
     req = apply_user_references_to_image_request(req)
     request_id = request_log.new_request_id()
+    own_clock = not _inside_pipeline.get()
+    started = _generation_clock() if own_clock else 0.0
+    if own_clock:
+        _reset_generation_retries()
     try:
         # safe_frame_profile 帶的是「角色」，實際要用哪個框在這裡才決定——
         # 全系統只有這一個解析點，pipeline 與網頁版直呼都會經過。
@@ -2800,17 +2984,15 @@ def generate_image(req: ImageGenerateRequest):
             broadcast_hole=req.broadcast_hole,
         )
     except Exception as exc:
-        if not _inside_pipeline.get():
-            request_log.log_failure(
-                request_id=request_id,
-                source="web-image",
-                news_text="",
-                error=str(exc),
-                prompt=req.prompt,
+        if own_clock:
+            _record_generation_failure(
+                request_id, started, exc,
+                source="web-image", news_text="", prompt=req.prompt,
                 provider=req.provider,
             )
         raise
-    if not _inside_pipeline.get():
+    if own_clock:
+        meta = _outcome_meta(started, provider=req.provider, image_model=result.model)
         request_log.log_generation(
             request_id=request_id,
             source="web-image",
@@ -2825,8 +3007,7 @@ def generate_image(req: ImageGenerateRequest):
             mime_type=result.mime_type,
             source="web-image",
             prompt=req.prompt,
-            provider=req.provider,
-            image_model=result.model,
+            **meta,
         )
     return result
 
@@ -4076,25 +4257,29 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
     語意是「以附圖為基礎改圖」，混在同一個函式裡兩種行為會打架。
     這條**不呼叫消化端**（省錢也省時間）——指令直接組進 refine prompt。
     """
-    if not supports_reference_image(req.provider):
-        raise HTTPException(
-            status_code=400,
-            detail="目前的生圖後端無法附上參考圖，無法以圖改圖；請整張重新生成",
-        )
-    image_req = ImageGenerateRequest(
-        prompt=build_refine_prompt(req.instruction, text_free=req.text_free),
-        provider=req.provider,
-        aspect_ratio=req.aspect_ratio,
-        image_size=req.image_size,
-        safe_frame=req.safe_frame,
-        safe_frame_profile=req.safe_frame_profile,
-        broadcast_hole=req.broadcast_hole,
-        reference_image_data_url=(
-            f"data:{req.source_mime_type};base64,{req.source_image_base64}"
-        ),
-    )
     request_id = request_log.new_request_id()
+    started = _generation_clock()
+    _reset_generation_retries()
+    prompt = ""
     try:
+        if not supports_reference_image(req.provider):
+            raise HTTPException(
+                status_code=400,
+                detail="目前的生圖後端無法附上參考圖，無法以圖改圖；請整張重新生成",
+            )
+        image_req = ImageGenerateRequest(
+            prompt=build_refine_prompt(req.instruction, text_free=req.text_free),
+            provider=req.provider,
+            aspect_ratio=req.aspect_ratio,
+            image_size=req.image_size,
+            safe_frame=req.safe_frame,
+            safe_frame_profile=req.safe_frame_profile,
+            broadcast_hole=req.broadcast_hole,
+            reference_image_data_url=(
+                f"data:{req.source_mime_type};base64,{req.source_image_base64}"
+            ),
+        )
+        prompt = image_req.prompt
         # 追加修改也要走同一個解析點，否則編輯 OFF 改完圖會整個跳過後製，
         # 出來一張沒置框的原始生成圖（尺寸與版面都不對，卻不會報錯）。
         _, needs_frame, frame_profile = resolve_frame_plan(
@@ -4108,15 +4293,12 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             broadcast_hole=req.broadcast_hole,
         )
     except Exception as exc:
-        request_log.log_failure(
-            request_id=request_id,
-            source="web-refine",
-            news_text="",
-            error=str(exc),
-            prompt=image_req.prompt,
-            provider=req.provider,
+        _record_generation_failure(
+            request_id, started, exc,
+            source="web-refine", news_text="", prompt=prompt, provider=req.provider,
         )
         raise
+    meta = _outcome_meta(started, provider=req.provider, image_model=result.model)
     request_log.log_generation(
         request_id=request_id,
         source="web-refine",
@@ -4131,8 +4313,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
         mime_type=result.mime_type,
         source="web-refine",
         prompt=image_req.prompt,
-        provider=req.provider,
-        image_model=result.model,
+        **meta,
     )
     return result
 
@@ -4198,17 +4379,21 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
     # 前置過濾（縱深防禦）：擋垃圾／亂碼／注入輸入，避免燒掉付費呼叫。
     # LINE 路徑在 line_bot 已含頻率限制地查過一次，這裡 client_id 為空時
     # 只做內容檢查、不重複觸發頻率限制。
-    verdict = check_input(req.news_text, client_id=req.client_id)
-    if not verdict.accepted:
-        raise HTTPException(status_code=400, detail=verdict.user_message)
-    if req.client_id:
-        note_accepted(req.news_text, client_id=req.client_id)
     request_id = request_log.new_request_id()
+    started = _generation_clock()
+    _reset_generation_retries()
     # 編輯固定 GPT＋16:9＋對位框；記者維持呼叫端 provider、safe_frame 時 21:9
     provider = "gpt" if req.role == "編輯" else req.provider
     aspect_ratio = resolve_aspect_ratio(req.aspect_ratio, req.safe_frame, req.role)
+    digest = None
+    prompt = ""
     token = _inside_pipeline.set(True)
     try:
+        verdict = check_input(req.news_text, client_id=req.client_id)
+        if not verdict.accepted:
+            raise HTTPException(status_code=400, detail=verdict.user_message)
+        if req.client_id:
+            note_accepted(req.news_text, client_id=req.client_id)
         digest = generate(
             GenerateRequest(
                 news_text=req.news_text,
@@ -4245,53 +4430,35 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             # 明文覆蓋才壓得住前面那些「把 VARIABLE FIELDS 畫上去」的條款。
             no_text=(req.density == "no_text"),
         )
-        try:
-            image = generate_image(
-                ImageGenerateRequest(
-                    prompt=prompt,
-                    provider=provider,
-                    broadcast_hole=broadcast_hole_for(req),
-                    aspect_ratio=aspect_ratio,
-                    image_size=req.image_size,
-                    safe_frame=req.safe_frame,
-                    # 傳角色而非解析後的 profile：generate_image 會解析一次，
-                    # 這裡先解析會讓它拿「編輯安全框」當角色再解析一次而解錯。
-                    safe_frame_profile=req.role,
-                    # 地圖類的真實座標。generate_image 會據此拼底圖並附上去；
-                    # 送不出參考圖的後端會安靜略過（見 apply_map_reference_to_image_request）。
-                    map_points=digest.map_points,
-                    # 單人走既有的單張欄位（措辭與行為與放寬前逐字相同），
-                    # 2-3 人才走多張通道
-                    reference_image_data_url=(
-                        reference_photos[0].data_url()
-                        if len(reference_photos) == 1
-                        else ""
-                    ),
-                    portrait_reference_data_urls=(
-                        [photo.data_url() for photo in reference_photos]
-                        if len(reference_photos) > 1
-                        else []
-                    ),
-                )
-            )
-        except Exception as exc:
-            request_log.log_failure(
-                request_id=request_id,
-                source=req.source or "news-image",
-                client_id=req.client_id,
-                news_text=req.news_text,
-                error=str(exc),
-                style=digest.style,
-                structure=digest.structure,
-                variable=digest.variable,
+        image = generate_image(
+            ImageGenerateRequest(
                 prompt=prompt,
-                chart_type=digest.chart_type,
-                type_label=req.type_label,
-                role=req.role,
-                density=req.density,
                 provider=provider,
+                broadcast_hole=broadcast_hole_for(req),
+                aspect_ratio=aspect_ratio,
+                image_size=req.image_size,
+                safe_frame=req.safe_frame,
+                # 傳角色而非解析後的 profile：generate_image 會解析一次，
+                # 這裡先解析會讓它拿「編輯安全框」當角色再解析一次而解錯。
+                safe_frame_profile=req.role,
+                # 地圖類的真實座標。generate_image 會據此拼底圖並附上去；
+                # 送不出參考圖的後端會安靜略過（見 apply_map_reference_to_image_request）。
+                map_points=digest.map_points,
+                # 單人走既有的單張欄位（措辭與行為與放寬前逐字相同），
+                # 2-3 人才走多張通道
+                reference_image_data_url=(
+                    reference_photos[0].data_url()
+                    if len(reference_photos) == 1
+                    else ""
+                ),
+                portrait_reference_data_urls=(
+                    [photo.data_url() for photo in reference_photos]
+                    if len(reference_photos) > 1
+                    else []
+                ),
             )
-            raise
+        )
+        meta = _outcome_meta(started, provider=provider, image_model=image.model)
         request_log.log_generation(
             request_id=request_id,
             source=req.source or "news-image",
@@ -4334,10 +4501,9 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 type_label=req.type_label,
                 role=req.role,
                 density=req.density,
-                provider=provider,
-                image_model=image.model,
                 portrait_subject="、".join(digest.portrait_subjects),
                 seed=digest.seed,
+                **meta,
             )
         return NewsImageGenerateResponse(
             image_data_base64=image.image_data_base64,
@@ -4350,6 +4516,26 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             # 回報實際用的那顆（沒帶 seed 時是消化階段現抽的）
             seed=digest.seed,
         )
+    except Exception as exc:
+        fields = {
+            "source": req.source or "news-image",
+            "client_id": req.client_id,
+            "news_text": req.news_text,
+            "prompt": prompt,
+            "type_label": req.type_label,
+            "role": req.role,
+            "density": req.density,
+            "provider": provider,
+        }
+        if digest is not None:
+            fields.update(
+                style=digest.style,
+                structure=digest.structure,
+                variable=digest.variable,
+                chart_type=digest.chart_type,
+            )
+        _record_generation_failure(request_id, started, exc, **fields)
+        raise
     finally:
         _inside_pipeline.reset(token)
 
@@ -5516,7 +5702,17 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
     source_raw, source_mime = b"", ""
     background_raw, background_mime = b"", ""
     request_id = request_log.new_request_id()
+    started = _generation_clock()
+    _reset_generation_retries()
     portrait_fields = cover_portrait_log_fields(visual)
+    fail_fields = {
+        "source": "editor-cover-full",
+        "news_text": req.title_left,
+        "prompt": f"FULL: {visual}",
+        "role": "編輯",
+        "provider": req.provider,
+        "type_label": f"{COVER_TYPE_LABEL_TEN}（滿版）",
+    }
     try:
         if req.mode == editor_formats.COVER_MODE_AI:
             base = _cover_full_base(ten_cover_full_asis_images(req)) if ai_over_base else None
@@ -5530,19 +5726,15 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
             cover, is_ai, image_model, background_raw, background_mime = _cover_full_composite(req, date_text, visual)
     except compose.ComposeError as exc:
         print(f"[compose] 封面失敗：{exc}", flush=True)
-        request_log.log_failure(
-            request_id=request_id, source="editor-cover-full", news_text=req.title_left,
-            error=str(exc), prompt=f"FULL: {visual}", role="編輯", provider=req.provider,
-        )
-        raise HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}") from exc
+        http_exc = HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}")
+        _record_generation_failure(request_id, started, http_exc, **fail_fields)
+        raise http_exc from exc
     except Exception as exc:
         # 生圖端的失敗（安全過濾、比例降級、逾時）以前只會 print，事後查不到是哪一則
         # 標題觸發的。比照 /api/images/generate：記一筆再原樣往外丟。
-        request_log.log_failure(
-            request_id=request_id, source="editor-cover-full", news_text=req.title_left,
-            error=str(exc), prompt=f"FULL: {visual}", role="編輯", provider=req.provider,
-        )
+        _record_generation_failure(request_id, started, exc, **fail_fields)
         raise
+    meta = _outcome_meta(started, provider=req.provider, image_model=image_model)
     request_log.log_generation(
         request_id=request_id,
         source="editor-cover-full",
@@ -5565,9 +5757,8 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         variable=req.title_left,
         prompt=f"FULL: {visual}",
         role="編輯",
-        provider=req.provider,
-        image_model=image_model,
         **portrait_fields,
+        **meta,
     )
     return TenCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
@@ -5597,9 +5788,16 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
 )
 def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     if req.badge not in compose.COVER_BADGES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"未知的標籤：{req.badge}（可用：{list(compose.COVER_BADGES)}）",
+        _abort_generation(
+            HTTPException(
+                status_code=400,
+                detail=f"未知的標籤：{req.badge}（可用：{list(compose.COVER_BADGES)}）",
+            ),
+            source="editor-cover",
+            news_text=req.title_left,
+            role="編輯",
+            provider=req.provider,
+            type_label=COVER_TYPE_LABEL_TEN,
         )
     date_text = req.date_text.strip() or datetime.date.today().strftime("%Y/%m/%d")
     # F0：seed 在入口定一次，滿版／雙切／只改文字每條路徑共用同一顆，回應才報得出
@@ -5625,17 +5823,41 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         req = req.model_copy(update={"mode": resolved_mode})
     if req.layout == "full":
         # 滿版原圖放置最多 N 張（2026-09-14；N 看能力矩陣），擋在下面的斷句模型之前
-        reject_excess_asis(req.slot_refs(0) or req.reference_images, where="滿版", limit=caps.asis_max)
+        try:
+            reject_excess_asis(req.slot_refs(0) or req.reference_images, where="滿版", limit=caps.asis_max)
+        except HTTPException as exc:
+            _abort_generation(
+                exc,
+                source="editor-cover",
+                news_text=req.title_left,
+                role="編輯",
+                provider=req.provider,
+                type_label=f"{COVER_TYPE_LABEL_TEN}（滿版）",
+            )
     if req.background_image_base64 and req.background_layout and req.background_layout != req.layout:
         # 滿版底圖是一張整圖、雙切底圖是拼好的兩格，bytes 分不出來；改了第二標題版面就換了，
         # 明講回 400 比默默把雙切標題壓在整圖上（或反過來）好（2026-09-14）。
-        raise HTTPException(status_code=400, detail="版面變了（滿版↔雙切），上一次的底圖對不上，請重新生成")
+        _abort_generation(
+            HTTPException(status_code=400, detail="版面變了（滿版↔雙切），上一次的底圖對不上，請重新生成"),
+            source="editor-cover",
+            news_text=req.title_left,
+            role="編輯",
+            provider=req.provider,
+            type_label=COVER_TYPE_LABEL_TEN,
+        )
     # 斷句交給消化模型（2026-09-14）：入口登記詞組邊界，下游所有斷行都只在邊界上切
     apply_title_break_hints(req.title_left, req.title_right)
     if req.layout == "full":
         return _editor_cover_full(req, date_text)
     if not req.title_right.strip():
-        raise HTTPException(status_code=400, detail="雙切版型左右標題都要填")
+        _abort_generation(
+            HTTPException(status_code=400, detail="雙切版型左右標題都要填"),
+            source="editor-cover",
+            news_text=req.title_left,
+            role="編輯",
+            provider=req.provider,
+            type_label=f"{COVER_TYPE_LABEL_TEN}（雙切）",
+        )
 
     # slots＝哪一格有「直接上版」的圖。只放了 AI改圖／參考的格子不算數：那格照樣生底圖，
     # 也就不該把整個封面拉去強制合成版（2026-09-13 使用者裁決之三）。
@@ -5678,8 +5900,18 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     source_raw, source_mime = b"", ""
     background_raw = b""
     request_id = request_log.new_request_id()
+    started = _generation_clock()
+    _reset_generation_retries()
     log_prompt = f"L: {visuals[0]}\nR: {visuals[1]}"
     portrait_fields = cover_portrait_log_fields(visuals)
+    fail_fields = {
+        "source": "editor-cover",
+        "news_text": f"{req.title_left} ｜ {req.title_right}",
+        "prompt": log_prompt,
+        "role": "編輯",
+        "provider": req.provider,
+        "type_label": f"{COVER_TYPE_LABEL_TEN}（雙切）",
+    }
     try:
         if req.mode == editor_formats.COVER_MODE_AI:
             base, base_models = (_cover_split_base(req, visuals) if ai_over_base else (None, []))
@@ -5693,21 +5925,15 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
             cover, panel_is_ai, image_model, background_raw = _cover_composite(req, date_text, visuals)
     except compose.ComposeError as exc:
         print(f"[compose] 封面失敗：{exc}", flush=True)
-        request_log.log_failure(
-            request_id=request_id, source="editor-cover",
-            news_text=f"{req.title_left} ｜ {req.title_right}",
-            error=str(exc), prompt=log_prompt, role="編輯", provider=req.provider,
-        )
-        raise HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}") from exc
+        http_exc = HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}")
+        _record_generation_failure(request_id, started, http_exc, **fail_fields)
+        raise http_exc from exc
     except Exception as exc:
         # 生圖端的失敗（安全過濾、比例降級、逾時）比照 /api/images/generate 記一筆再原樣往外丟
-        request_log.log_failure(
-            request_id=request_id, source="editor-cover",
-            news_text=f"{req.title_left} ｜ {req.title_right}",
-            error=str(exc), prompt=log_prompt, role="編輯", provider=req.provider,
-        )
+        _record_generation_failure(request_id, started, exc, **fail_fields)
         raise
 
+    meta = _outcome_meta(started, provider=req.provider, image_model=image_model)
     request_log.log_generation(
         request_id=request_id,
         source="editor-cover",
@@ -5730,9 +5956,8 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         variable=f"{req.title_left}\n{req.title_right}",
         prompt=log_prompt,
         role="編輯",
-        provider=req.provider,
-        image_model=image_model,
         **portrait_fields,
+        **meta,
     )
     return TenCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
@@ -6449,9 +6674,16 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         # 放到 compose 才擋，等於燒完兩次生圖才回錯。AI 整張版不套字數擋（字是模型畫的）。
         for label, text in (("第一標題", req.title), ("第二標題", req.title_second)):
             if compose.title_display_width(text.strip()) > compose.YT_HOURLY_LINE_MAX_CHARS:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"{label}超過 {compose.YT_HOURLY_LINE_MAX_CHARS} 字：「{text.strip()}」（請縮短這一行）",
+                _abort_generation(
+                    HTTPException(
+                        status_code=400,
+                        detail=f"{label}超過 {compose.YT_HOURLY_LINE_MAX_CHARS} 字：「{text.strip()}」（請縮短這一行）",
+                    ),
+                    source="editor-yt-cover",
+                    news_text=req.title,
+                    role="編輯",
+                    provider=req.provider,
+                    type_label=COVER_TYPE_LABEL_YT.get(req.layout, "YT封面"),
                 )
     # 整點直播與今日熱搜沒有原音呈現／AI即時翻譯（2026-09-06 使用者裁決），後端直接忽略
     original_audio = bool(req.original_audio) and not (hourly or hot or live24)
@@ -6486,17 +6718,21 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         photos = yt_cover_plan_photos(plan)
         excluded = list(getattr(plan, "excluded", []))
     request_id = request_log.new_request_id()
+    started = _generation_clock()
+    _reset_generation_retries()
     log_source = f"editor-yt-cover-{req.layout}{'-dual' if dual else ''}-{req.title_mode}"
     log_prompt = visual or "（附圖／既有底圖）"
     # 雙則的兩則標題都要記，只記第一則的話事後查不出是哪一組組合出的問題
     log_title = f"{req.title.strip()}／{req.title_second.strip()}" if dual else req.title
+    type_label = COVER_TYPE_LABEL_YT.get(req.layout, "YT封面") + ("（雙則）" if dual else "")
 
     def _log_failure(exc: Exception) -> None:
         # 生圖與合成的失敗以前只會 print，事後查不到是哪一則標題觸發的。
         # 比照 /api/images/generate：記一筆再原樣往外丟。
-        request_log.log_failure(
-            request_id=request_id, source=log_source, news_text=log_title,
-            error=str(exc), prompt=log_prompt, role="編輯", provider=req.provider,
+        _record_generation_failure(
+            request_id, started, exc,
+            source=log_source, news_text=log_title, prompt=log_prompt,
+            role="編輯", provider=req.provider, type_label=type_label,
         )
 
     ai_title = req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI
@@ -6593,6 +6829,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         # 2026-09-14 抓 bug 輪：標題太長是使用者改得掉的輸入問題，比照十點回 400，不是 500
         raise HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}") from exc
 
+    meta = _outcome_meta(started, provider=req.provider, image_model=image_model)
     request_log.log_generation(
         request_id=request_id,
         source=log_source,
@@ -6619,15 +6856,13 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         mime_type="image/png",
         source=log_source,
         seed=req.seed,
-        type_label=COVER_TYPE_LABEL_YT.get(req.layout, "YT封面")
-                   + ("（雙則）" if dual else ""),
+        type_label=type_label,
         news_text=log_title,
         variable="\n".join(filter(None, [lines[0], lines[1]])),
         prompt=log_prompt,
         role="編輯",
-        provider=req.provider,
-        image_model=image_model,
         portrait_subject="、".join(subjects),
+        **meta,
     )
     return YtCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
@@ -6718,6 +6953,8 @@ def _yt_overlay_layout_payload(layout: dict) -> dict:
 )
 def editor_yt_overlay(req: YtOverlayRequest) -> YtOverlayResponse:
     request_id = request_log.new_request_id()
+    started = _generation_clock()
+    _reset_generation_retries()
     title = req.title.strip()
     second = req.title_second.strip()
     try:
@@ -6748,12 +6985,16 @@ def editor_yt_overlay(req: YtOverlayRequest) -> YtOverlayResponse:
         # 直標的失敗全部是使用者自己改得掉的（字太多、Logo 放錯邊），一律 400，
         # 並把 compose 的訊息原樣往前端送——它已經寫明是哪一個標題、幾格。
         print(f"[yt-overlay] 直標合成失敗：{exc}", flush=True)
-        request_log.log_failure(
-            request_id=request_id, source="editor-yt-overlay", news_text=title,
-            error=str(exc), prompt="（直標，不生圖）", role="編輯", provider="",
+        http_exc = HTTPException(status_code=400, detail=str(exc))
+        _record_generation_failure(
+            request_id, started, http_exc,
+            source="editor-yt-overlay", news_text=title,
+            prompt="（直標，不生圖）", role="編輯", provider="",
+            type_label=COVER_TYPE_LABEL_VSTRIP,
         )
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise http_exc from exc
 
+    meta = _outcome_meta(started, image_model="yt-overlay:compose")
     request_log.log_generation(
         request_id=request_id,
         source=f"editor-yt-overlay-{req.variant}-{req.title_side}",
@@ -6774,7 +7015,7 @@ def editor_yt_overlay(req: YtOverlayRequest) -> YtOverlayResponse:
         variable="｜".join(filter(None, [second, req.source_text.strip()])),
         prompt="（直標，不生圖）",
         role="編輯",
-        image_model="yt-overlay:compose",
+        **meta,
     )
     width, height = compose.YT_CANVAS
     return YtOverlayResponse(
