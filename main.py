@@ -3999,6 +3999,15 @@ class ImageRefineRequest(BaseModel):
     # YT 直播封面：附圖是無文字底圖，改完仍須無文字（文字由程式疊）。
     # 見 news_prompt.TEXT_FREE_REFINE_RULES。
     text_free: bool = False
+    # B51（2026-09-16）：結構化的封面種類，白名單值見 editor_formats.COVER_REFINE_KINDS。
+    # 非空時 refine_image() 直接跳過 resolve_frame_plan()，不置對位框——封面的固定元素
+    # （Logo／節目標籤／日期）由前端 recompose 貼，置框會把整張畫面縮放/推出版面，
+    # 角標跟著跑位。刻意不依 safe_frame_profile 這個角色字串猜（編輯身分一律會被
+    # resolve_frame_plan 置框，見該函式 docstring），白名單值不對就讓 pydantic 擋掉，
+    # 不接受任意 client 拿它繞過一般編輯圖片的安全框。
+    cover_kind: Literal[
+        "", "ten_cover", "yt_live_cover", "yt_hourly_cover", "yt_live24_cover", "yt_hot_cover"
+    ] = ""
 
 
 @app.post(
@@ -4032,11 +4041,18 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
     )
     request_id = request_log.new_request_id()
     try:
-        # 追加修改也要走同一個解析點，否則編輯 OFF 改完圖會整個跳過後製，
-        # 出來一張沒置框的原始生成圖（尺寸與版面都不對，卻不會報錯）。
-        _, needs_frame, frame_profile = resolve_frame_plan(
-            req.safe_frame_profile, req.safe_frame
-        )
+        if req.cover_kind:
+            # B51：封面追加修改一律不置框——resolve_frame_plan 對編輯身分永遠回
+            # needs_frame=True（兩檔都是滿版生成＋後製，見該函式 docstring），照舊問
+            # 下去只要使用者是編輯就一定被置框，safe_frame=False 完全無效。封面的
+            # 固定元素靠前端 recompose 貼，不能讓對位框把角標／Logo 縮放推出版面。
+            needs_frame, frame_profile = False, safe_area_spec.REPORTER_PROFILE
+        else:
+            # 追加修改也要走同一個解析點，否則編輯 OFF 改完圖會整個跳過後製，
+            # 出來一張沒置框的原始生成圖（尺寸與版面都不對，卻不會報錯）。
+            _, needs_frame, frame_profile = resolve_frame_plan(
+                req.safe_frame_profile, req.safe_frame
+            )
         result = finalize_image_result(
             generate_image_raw(image_req),
             aspect_ratio=req.aspect_ratio,

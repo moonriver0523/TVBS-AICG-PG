@@ -3639,7 +3639,14 @@ async function handleRefine() {
                 aspect_ratio: isCover ? '16:9' : currentAspectRatio(),
                 image_size: state.imageSize,
                 safe_frame: isCover ? false : state.safeFrame,
-                safe_frame_profile: state.currentRole,
+                // B51：封面不能只送 safe_frame=false 卻仍帶「編輯」——編輯身分在
+                // resolve_frame_plan 一律會被置對位框（見 main.py 的說明），safe_frame
+                // 的值因此完全無效。封面一律送空字串，並改用下面的 cover_kind 讓後端
+                // 走結構化 bypass，不依角色字串猜。
+                safe_frame_profile: isCover ? '' : state.currentRole,
+                // 白名單值＝ EDITOR_FORMATS 的版型 key，正好對齊後端
+                // editor_formats.COVER_REFINE_KINDS；非封面一律不送。
+                cover_kind: isCover ? state.editorFormat : '',
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
                 broadcast_hole: isCover ? '' : broadcastHoleForApi(),
