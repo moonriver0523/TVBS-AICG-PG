@@ -123,9 +123,25 @@ elif DIGEST_BACKEND == "openrouter" and _openrouter_key:
         api_key=_openrouter_key,
         max_retries=OPENAI_MAX_RETRIES,
     )
-    DEFAULT_DIGEST_MODEL = "anthropic/claude-sonnet-5"
+    # 2026-09-16 D21 裁決：主模型從 anthropic/claude-sonnet-5 換成
+    # google/gemini-3.8-flash。四輪 ×10 次同稿實測（見
+    # docs/交辦-20260916-D21改effort換Gemini.md）：sonnet-5 現況（reasoning.max_tokens）
+    # 5/10 成功、131 秒平均、3 次截斷；sonnet-5+effort=low 7/10、18 秒；
+    # gemini-3.8-flash+effort=low 9/10、6 秒、0 截斷、0 簡體，全面勝出，
+    # 第二輪 10 則不同真實稿再驗一次（9/10、4-8 秒、耗時對稿長不敏感）泛化通過。
+    # 退路：resolve_digest_model() 讀 DIGEST_MODEL／OPENAI_DIGEST_MODEL 環境變數
+    # 覆寫，設回 anthropic/claude-sonnet-5 即可三分鐘內退回 Claude，不用改程式碼
+    # （見該函式 2026-09-13 的「帶 / 的 slug 只在走 openrouter 時才採用」防呆，
+    # 這條退路依賴它，不能破壞）。
+    DEFAULT_DIGEST_MODEL = "google/gemini-3.8-flash"
     # 斷句走小模型（2026-09-14 使用者裁決）。.env 與線上都是 OpenRouter 後端，只改原生分支
     # 等於沒改。slug 已查 GET /api/v1/models（2026-09-14）確有 openai/gpt-5.4-mini。
+    #
+    # 2026-09-16 D21 覆核：這裡原本的理由是「斷句要比主消化快」，但主消化現在是
+    # 4-8 秒的 gemini-3.8-flash，不再比 gpt-5.4-mini 慢——那個理由的前提已經不成立。
+    # 沒有跟著換成 gemini：D21 的四輪實測只測過主消化（長輸出、strict schema），
+    # 沒有任何一次量過斷句這條短輸出路徑，換了就是在拿正式站賭一個沒量過的組合。
+    # 保守留 gpt-5.4-mini，待有斷句自己的實測再決定要不要跟進。
     DEFAULT_TITLE_BREAK_MODEL = "openai/gpt-5.4-mini"
 else:
     openai_client = OpenAI(max_retries=OPENAI_MAX_RETRIES)
@@ -144,7 +160,10 @@ def resolve_title_break_model() -> str:
 
     刻意**不**繼承 DIGEST_MODEL／OPENAI_DIGEST_MODEL：那兩個是主消化的覆寫，
     可能是 OpenRouter slug（見 resolve_digest_model 的 2026-09-13 真因），而且
-    使用者要的就是斷句走比主消化更快的模型。
+    這是獨立覆寫、獨立回退的一條線，不該因為主消化換模型就被連動牽著走。
+    （2026-09-16 D21 覆核：「斷句要比主消化快」這個舊理由在主消化換成
+    gemini-3.8-flash 後已經不成立，但獨立覆寫本身的價值不變——沒有斷句自己的
+    實測前不跟進換模型，見 DEFAULT_TITLE_BREAK_MODEL 定義處的註解。）
     """
     override = (os.getenv("TITLE_BREAK_MODEL") or "").strip()
     return override or DEFAULT_TITLE_BREAK_MODEL
@@ -229,57 +248,88 @@ MAP_DIGEST_MAX_TOKENS = 16000
 # 一次消化最壞情況要五次 attempt（DIGEST_ATTEMPTS），Cloud Run 的請求上限是 300 秒，
 # 實測撞過「重試後 269 秒才回應」——離被硬砍只差一點。
 #
-# 與其繼續刪規則（刪掉的每一條都是使用者驗收過的行為），不如直接把思考封頂：
-# OpenRouter 的統一參數 reasoning.max_tokens，Anthropic 系走的就是這個
-# （OpenAI 系走 effort，這裡不送）。上限必須明顯低於 max_tokens，剩下的才夠寫正文；
-# 觀測到的正文最大 1361，留 DIGEST_REASONING_HEADROOM 這麼多綽綽有餘。
-# 設成 0（或非 OpenRouter 後端）＝完全不送這個欄位，行為與舊版逐字元相同。
-DIGEST_REASONING_MAX_TOKENS = int(os.getenv("DIGEST_REASONING_MAX_TOKENS", "2000"))
-# OpenRouter 文件寫 Anthropic 的思考預算最低 1024，低於這個值等於沒設定
-DIGEST_REASONING_MIN_TOKENS = 1024
-DIGEST_REASONING_HEADROOM = 2500
-
-
-def digest_reasoning_body(max_output_tokens: int) -> dict:
-    """這次呼叫要不要送 reasoning 上限，送多少。不送就回空 dict。"""
-    if DIGEST_BACKEND != "openrouter" or DIGEST_REASONING_MAX_TOKENS <= 0:
-        return {}
-    budget = min(DIGEST_REASONING_MAX_TOKENS, max_output_tokens - DIGEST_REASONING_HEADROOM)
-    if budget < DIGEST_REASONING_MIN_TOKENS:
-        return {}
-    return {"reasoning": {"max_tokens": budget}}
-
-
-# 消化的 provider 順序（2026-09-11）。使用者回報消化階段常撞上游過載，選定的
-# 對策是「同模型換 provider」——claude-sonnet-5 在 OpenRouter 上有九個端點，
-# 第一方過載時還有 AWS、Azure、Bedrock 可以接手，換 provider 不換模型，品質零風險。
+# 2026-09-16 D21：改送 reasoning.effort 而不是 reasoning.max_tokens。
+# 原本這裡的註解寫「OpenAI 系走 effort，Anthropic 系走 max_tokens，這裡不送
+# effort」——這句話是錯的，而且錯得剛好讓這條路一直沒被試過：實查
+# OpenRouter `/models/anthropic/claude-sonnet-5/endpoints`，五個端點的
+# supported_parameters 全部有 reasoning。真正的問題是：實測顯示
+# reasoning.max_tokens 對 Claude 系模型根本沒被遵守（見下方 D21 四輪實測：
+# 送了 max_tokens=2000，實測 reasoning_tokens 仍是 4005-11999，最高到所設
+# 上限的六倍。⚠沒有跑過「完全不送 max_tokens」的對照組，所以能斷言的是
+# 「設了上限但沒擋住」，不是「送與不送完全一樣」）；Codex
+# 2026-09-16 的查證回覆指出官方文件說明該參數對 Claude 系不生效，但這句
+# **未經本專案直接核對官方文件原文**，記在這裡供後續查證，不當作已證實的事實。
+# 可以確定的是實測結果：舊版這個思考封頂從上線以來從來沒真的擋下過任何一次
+# 思考爆量，DIGEST_REASONING_HEADROOM／DIGEST_REASONING_MIN_TOKENS 那套
+# 「budget 要留多少空間給正文」的算法從頭到尾是在算一個沒人理會的數字。
 #
-# 順序寫死第一方優先的理由：OpenRouter 的預設路由「以價格優先、兼顧 uptime」，
-# 實測 2026-09-11 本機連三次 attempt 都落在 claude-on-aws。各端點的延遲與思考
-# 行為不見得一樣，要診斷就得先讓「正常情況走哪一條」是確定的。
+# D21 四輪實測（各 10 次同稿同參數，明細見
+# docs/交辦-20260916-D21改effort換Gemini.md）：reasoning.effort 才是真的被遵守
+# 的欄位——sonnet-5 加上 effort=low 後 reasoning_tokens 從 4005-11999 掉到
+# 0-842，成功率 5/10 → 7/10、耗時 131 秒 → 18 秒。換成 gemini-3.8-flash 再疊加
+# effort=low 更進一步到 9/10、6 秒、0 截斷、0 簡體，第二輪 10 則不同真實稿泛化
+# 通過。effort 只有 low/medium/high 三段式（沒有數字可調），因此不再需要
+# 「留多少 token 給正文」的預算換算，DIGEST_REASONING_MAX_TOKENS／
+# DIGEST_REASONING_MIN_TOKENS／DIGEST_REASONING_HEADROOM 三個常數的角色被
+# effort 值本身取代，整組刪除，不留死碼。
 #
-# google-vertex 刻意不列：查 /models/.../endpoints 的 supported_parameters，
-# 三個 vertex 端點都**不支援 structured_outputs**，而這條線全程用 strict
-# json_schema。OpenRouter 說這種參數偏好「只路由到支援的 provider」，但那份文件
-# 同時寫明它「永遠不會把模型從候選清單移除」——也就是萬一全部不支援就照送不誤。
-# 與其賭那句話的邊界，不如明列白名單。
-# allow_fallbacks 保持 true：清單裡的都排不進去時，寧可讓 OpenRouter 自己找一條
-# 活路，也不要整個請求失敗（這正是使用者要解決的問題）。
-DIGEST_PROVIDER_ORDER = [
-    slug.strip()
-    for slug in os.getenv(
-        "DIGEST_PROVIDER_ORDER",
-        "anthropic,claude-on-aws,azure/global,amazon-bedrock/global",
-    ).split(",")
-    if slug.strip()
-]
+# 值用環境變數 DIGEST_REASONING_EFFORT 設定，預設 "low"（D21 實測勝出的檔位）。
+# 設成空字串或 "off"＝完全不送 reasoning 欄位，行為與舊版逐字元相同
+# （沿用舊版「非 OpenRouter 一律不送」的判斷）。
+DIGEST_REASONING_EFFORT = os.getenv("DIGEST_REASONING_EFFORT", "low").strip().lower()
+
+# 截斷重試時要退到的最低 effort（取代舊版 DIGEST_REASONING_MIN_TOKENS 的角色：
+# 「重試時把思考預算壓到底線，把空間讓給正文」）。effort 只有三段，"low" 已經是
+# 最低檔，沒有比它更低的量化值——但仍需要這個常數，因為 DIGEST_REASONING_EFFORT
+# 是可以被環境變數調高的（例如日後想試 medium/high 當預設），這裡要能在截斷時
+# 無條件退回最低檔，不是「退回目前預設」。
+DIGEST_REASONING_RETRY_EFFORT = "low"
+
+
+def digest_reasoning_body(effort_override: str | None = None) -> dict:
+    """這次呼叫要不要送 reasoning.effort，送什麼值。不送就回空 dict。
+
+    effort_override：可選，覆寫這一次的 effort（重試降級用）。未傳時走
+    DIGEST_REASONING_EFFORT 的一般預設。
+    """
+    if DIGEST_BACKEND != "openrouter":
+        return {}
+    effort = DIGEST_REASONING_EFFORT if effort_override is None else effort_override
+    effort = (effort or "").strip().lower()
+    if not effort or effort == "off":
+        return {}
+    return {"reasoning": {"effort": effort}}
+
+
+# 消化的 provider 選擇（2026-09-11 起，2026-09-16 D21 改法）。使用者回報消化階段
+# 常撞上游過載，選定的對策是「同模型換 provider」，換 provider 不換模型，品質零風險。
+#
+# 舊版寫死白名單 anthropic,claude-on-aws,azure/global,amazon-bedrock/global——
+# 這四個全是 Anthropic 家族的端點，D21 換主模型成 google/gemini-3.8-flash 後
+# 完全對不上，繼續沿用等於白名單一個端點都選不中。
+#
+# 改用 OpenRouter 的統一參數 provider.require_parameters：讓 OpenRouter 自己
+# 只在真正吃得下本次請求參數（reasoning、strict json_schema 等）的端點裡選，
+# 不用替每次換模型重新盤點一份端點白名單。這同時解掉帳本 B74——舊白名單裡的
+# azure/global、amazon-bedrock/global 兩個端點其實不支援 structured_outputs，
+# 過載 fallback 過去時 strict schema 會被靜默丟棄；require_parameters 會把
+# 這兩個端點直接排除在候選之外，不會再有機會被 fallback 選中。
+# 已實測：20 次呼叫送 require_parameters=true 全部順利路由，沒有出現「無
+# provider 可用」，這是它唯一的疑慮，已排除。
+# allow_fallbacks 維持 true：真的全部端點都不支援本次參數時，寧可讓
+# OpenRouter 自己找一條活路，也不要整個請求失敗（這正是 2026-09-11 要解決的
+# 問題）。
+DIGEST_PROVIDER_REQUIRE_PARAMETERS = (
+    os.getenv("DIGEST_PROVIDER_REQUIRE_PARAMETERS", "true").strip().lower()
+    not in ("", "0", "false", "off")
+)
 
 
 def digest_provider_body() -> dict:
-    """這次呼叫要不要指定 provider 順序。非 OpenRouter 後端一律不送。"""
-    if DIGEST_BACKEND != "openrouter" or not DIGEST_PROVIDER_ORDER:
+    """這次呼叫要不要限定 provider 只挑吃得下本次參數的端點。非 OpenRouter 後端一律不送。"""
+    if DIGEST_BACKEND != "openrouter" or not DIGEST_PROVIDER_REQUIRE_PARAMETERS:
         return {}
-    return {"provider": {"order": DIGEST_PROVIDER_ORDER, "allow_fallbacks": True}}
+    return {"provider": {"require_parameters": True, "allow_fallbacks": True}}
 
 
 # 整個消化迴圈的牆鐘預算（2026-09-09）。Cloud Run 的請求上限是 300 秒，超過就是
@@ -2215,7 +2265,7 @@ def digest_completion(
     raw_user_message: bool = False,
     timeout: float | None = None,
     retry_context: str = "",
-    reasoning_max_tokens: int | None = None,
+    reasoning_effort: str | None = None,
 ):
     """呼叫 Chat Completions 取結構化消化結果。
 
@@ -2237,8 +2287,8 @@ def digest_completion(
     retry_context：可選，只附加在 user message 尾端，不改 system prompt。
     未傳時產生的 payload 與舊版相同。
 
-    reasoning_max_tokens：可選，覆寫這一次的思考上限。未傳時仍走
-    digest_reasoning_body() 的一般預設。
+    reasoning_effort：可選，覆寫這一次的 reasoning.effort（重試降級用）。
+    未傳時仍走 digest_reasoning_body() 的一般預設。
     """
     if DIGEST_BACKEND == "gemini":
         max_output_tokens = max(max_output_tokens, GEMINI_DIGEST_MIN_TOKENS)
@@ -2267,17 +2317,11 @@ def digest_completion(
     # 呼叫端與測試對 openai_client 的 patch 就都失效了。
     payload["timeout"] = DIGEST_TIMEOUT_SECONDS if timeout is None else timeout
     client = openai_client
-    # 思考上限只有 OpenRouter 吃得到，而且不是每個模型都支援；被明確拒絕時原樣重送
+    # effort 只有 OpenRouter 吃得到，而且不是每個模型都支援；被明確拒絕時原樣重送
     # 一次不帶這個欄位的請求，換模型不會把整條線弄壞（見 digest_reasoning_body）。
-    # provider 順序同樣只有 OpenRouter 吃得到，兩者共用同一個 extra_body
+    # provider 選擇同樣只有 OpenRouter 吃得到，兩者共用同一個 extra_body
     # （2026-09-11 一起加進來，見 digest_provider_body）。
-    reasoning = digest_reasoning_body(max_output_tokens)
-    if (
-        reasoning_max_tokens is not None
-        and DIGEST_BACKEND == "openrouter"
-        and DIGEST_REASONING_MAX_TOKENS > 0
-    ):
-        reasoning = {"reasoning": {"max_tokens": int(reasoning_max_tokens)}}
+    reasoning = digest_reasoning_body(reasoning_effort)
     extra_body = {**digest_provider_body(), **reasoning}
     if extra_body:
         payload["extra_body"] = extra_body
@@ -2288,7 +2332,7 @@ def digest_completion(
     except BadRequestError as exc:
         message = str(exc)
         if reasoning and "reasoning" in message:
-            print(f"[digest] 模型不吃 reasoning 上限，改用預設思考量：{message}", flush=True)
+            print(f"[digest] 模型不吃 reasoning effort，改用預設思考量：{message}", flush=True)
             # 只拿掉 reasoning，provider 順序要留著——整包 pop 會把換 provider
             # 的能力一起丟掉，而那正是撞過載時唯一還有用的東西。
             extra_body.pop("reasoning", None)
@@ -2712,7 +2756,7 @@ def generate(req: GenerateRequest):
     max_output_tokens = digest_token_budget(type_label, req.density, req.news_text)
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
     retry_context = ""
-    reasoning_max_tokens = None
+    reasoning_effort = None
     existing_deadline = _digest_deadline.get()
     if existing_deadline is None:
         deadline = time.monotonic() + DIGEST_DEADLINE_SECONDS
@@ -2748,7 +2792,7 @@ def generate(req: GenerateRequest):
                     schema=digest_schema(type_label),
                     site="generate",
                     retry_context=retry_context,
-                    reasoning_max_tokens=reasoning_max_tokens,
+                    reasoning_effort=reasoning_effort,
                 )
             except AuthenticationError as exc:
                 raise HTTPException(
@@ -2772,7 +2816,7 @@ def generate(req: GenerateRequest):
                     "upstream",
                     f"{type(exc).__name__} on attempt {attempt + 1}",
                 )
-                reasoning_max_tokens = None
+                reasoning_effort = None
                 _note_generation_retry()
                 time.sleep(1.5)
                 continue
@@ -2801,8 +2845,8 @@ def generate(req: GenerateRequest):
                 retry_context = digest_retry_note(
                     attempt + 1, "parse", "JSON 解析失敗"
                 )
-                reasoning_max_tokens = (
-                    DIGEST_REASONING_MIN_TOKENS
+                reasoning_effort = (
+                    DIGEST_REASONING_RETRY_EFFORT
                     if finish_reason == "length"
                     else None
                 )
@@ -2864,8 +2908,8 @@ def generate(req: GenerateRequest):
                     "truncated" if truncated else "quality",
                     problem,
                 )
-                reasoning_max_tokens = (
-                    DIGEST_REASONING_MIN_TOKENS if truncated else None
+                reasoning_effort = (
+                    DIGEST_REASONING_RETRY_EFFORT if truncated else None
                 )
                 _note_generation_retry()
                 time.sleep(1.5)

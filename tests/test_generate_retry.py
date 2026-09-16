@@ -86,9 +86,9 @@ def _user_message(call):
     return call.kwargs["messages"][1]["content"]
 
 
-def _reasoning_max(call):
+def _reasoning_effort(call):
     extra = call.kwargs.get("extra_body") or {}
-    return (extra.get("reasoning") or {}).get("max_tokens")
+    return (extra.get("reasoning") or {}).get("effort")
 
 
 class GenerateRetryTests(unittest.TestCase):
@@ -270,7 +270,9 @@ class GenerateRetryContextTests(GenerateRetryTests):
         backend = patch.object(main, "DIGEST_BACKEND", "openrouter")
         backend.start()
         self.addCleanup(backend.stop)
-        reasoning = patch.object(main, "DIGEST_REASONING_MAX_TOKENS", 2000)
+        # 基準值刻意用 "medium"（不是退回檔位的 "low"），才能在斷言裡分辨
+        # 「這次降級了」還是「本來就是這個值」。
+        reasoning = patch.object(main, "DIGEST_REASONING_EFFORT", "medium")
         reasoning.start()
         self.addCleanup(reasoning.stop)
 
@@ -298,14 +300,14 @@ class GenerateRetryContextTests(GenerateRetryTests):
         self.assertEqual(systems[0], systems[1])
         self.assertEqual(systems[1], systems[2])
 
-    def test_length_failure_lowers_reasoning_max_tokens_on_retry(self):
+    def test_length_failure_lowers_reasoning_effort_on_retry(self):
         result, exc, create = self.call_with(
             [length_truncated_response(), ok_response()]
         )
         self.assertIsNone(exc)
         self.assertEqual(create.call_count, 2)
-        self.assertEqual(_reasoning_max(create.call_args_list[0]), 2000)
-        self.assertEqual(_reasoning_max(create.call_args_list[1]), 1024)
+        self.assertEqual(_reasoning_effort(create.call_args_list[0]), "medium")
+        self.assertEqual(_reasoning_effort(create.call_args_list[1]), "low")
         self.assertIn("category=truncated", _user_message(create.call_args_list[1]))
 
     def test_unparseable_length_response_also_lowers_reasoning_on_retry(self):
@@ -318,8 +320,8 @@ class GenerateRetryContextTests(GenerateRetryTests):
         )
         self.assertIsNone(exc)
         self.assertEqual(create.call_count, 2)
-        self.assertEqual(_reasoning_max(create.call_args_list[0]), 2000)
-        self.assertEqual(_reasoning_max(create.call_args_list[1]), 1024)
+        self.assertEqual(_reasoning_effort(create.call_args_list[0]), "medium")
+        self.assertEqual(_reasoning_effort(create.call_args_list[1]), "low")
         self.assertIn("category=parse", _user_message(create.call_args_list[1]))
 
     def test_verbatim_density_reports_a_clear_400_when_length_truncated(self):
@@ -344,8 +346,8 @@ class GenerateRetryContextTests(GenerateRetryTests):
         )
         self.assertIsNone(exc)
         self.assertEqual(create.call_count, 2)
-        self.assertEqual(_reasoning_max(create.call_args_list[0]), 2000)
-        self.assertEqual(_reasoning_max(create.call_args_list[1]), 2000)
+        self.assertEqual(_reasoning_effort(create.call_args_list[0]), "medium")
+        self.assertEqual(_reasoning_effort(create.call_args_list[1]), "medium")
         self.assertIn("category=quality", _user_message(create.call_args_list[1]))
 
     def test_upstream_retry_carries_attempt_context(self):
@@ -357,7 +359,7 @@ class GenerateRetryContextTests(GenerateRetryTests):
         user = _user_message(create.call_args_list[1])
         self.assertIn("category=upstream", user)
         self.assertIn("attempt 1", user)
-        self.assertEqual(_reasoning_max(create.call_args_list[1]), 2000)
+        self.assertEqual(_reasoning_effort(create.call_args_list[1]), "medium")
 
     def test_system_prompt_is_unchanged_across_retries(self):
         result, exc, create = self.call_with(
@@ -372,16 +374,17 @@ class GenerateRetryContextTests(GenerateRetryTests):
 
     def test_digest_output_budget_is_12000_and_other_caps_unchanged(self):
         self.assertEqual(main.DIGEST_MAX_TOKENS, 12000)
-        self.assertEqual(main.DIGEST_REASONING_HEADROOM, 2500)
-        self.assertEqual(main.DIGEST_REASONING_MIN_TOKENS, 1024)
+        # 2026-09-16 D21：DIGEST_REASONING_HEADROOM／DIGEST_REASONING_MIN_TOKENS
+        # 隨 max_tokens→effort 一起刪除（見 main.py 該段註解），改釘退回檔位常數。
+        self.assertEqual(main.DIGEST_REASONING_RETRY_EFFORT, "low")
         self.assertEqual(main.DIGEST_ATTEMPTS, 5)
         self.assertEqual(main.DIGEST_TIMEOUT_SECONDS, 90.0)
         self.assertEqual(main.DIGEST_DEADLINE_SECONDS, 230.0)
         with patch.object(main, "DIGEST_BACKEND", "openrouter"), patch.object(
-            main, "DIGEST_REASONING_MAX_TOKENS", 2000
+            main, "DIGEST_REASONING_EFFORT", "medium"
         ):
-            body = main.digest_reasoning_body(main.DIGEST_MAX_TOKENS)
-        self.assertEqual(body["reasoning"]["max_tokens"], 2000)
+            body = main.digest_reasoning_body()
+        self.assertEqual(body["reasoning"]["effort"], "medium")
 
     def test_retry_note_summary_is_capped(self):
         note = main.digest_retry_note(1, "quality", "Q" * 500)
@@ -402,12 +405,14 @@ class GenerateRetryContextTests(GenerateRetryTests):
 
 
 class DefaultReasoningPayloadBaselineTests(GenerateRetryTests):
-    """回歸基準：**不** patch DIGEST_REASONING_MAX_TOKENS，量現在正式站實際會送出去的值。
+    """回歸基準：**不** patch DIGEST_REASONING_EFFORT，量現在正式站實際會送出去的值。
 
-    上面 GenerateRetryContextTests 全部把 DIGEST_REASONING_MAX_TOKENS patch 成 2000，
-    驗的是「降級邏輯有沒有被觸發」，不是「現在預設真的送了什麼」。之後把
-    reasoning.max_tokens 換成 reasoning.effort（或換模型）時，要拿這個當比較基準——
-    沒有這條，換掉之後沒有東西可以對照「以前預設送出去的是什麼」。
+    2026-09-16 從 max_tokens 改為 effort，依據 D21 四輪實測（見
+    docs/交辦-20260916-D21改effort換Gemini.md）：reasoning.max_tokens 被 Sonnet 5
+    官方文件明說對 Claude 系模型不生效，這個常數從上線以來就沒真的擋下過任何一次
+    思考爆量；reasoning.effort 才是真的被遵守的欄位（同稿測試 reasoning_tokens
+    從 4005-11999 掉到 0-842）。這條測試原本釘住舊 payload 字面值，本次改動後
+    照交辦單指示更新成釘住新 payload，作為之後再動這段邏輯時的比較基準。
     """
 
     def setUp(self):
@@ -415,28 +420,25 @@ class DefaultReasoningPayloadBaselineTests(GenerateRetryTests):
         backend = patch.object(main, "DIGEST_BACKEND", "openrouter")
         backend.start()
         self.addCleanup(backend.stop)
-        # 刻意不 patch DIGEST_REASONING_MAX_TOKENS：用它現在的實際值（來自
-        # os.getenv 的預設 2000，見 main.py DIGEST_REASONING_MAX_TOKENS 定義處）。
+        # 刻意不 patch DIGEST_REASONING_EFFORT：用它現在的實際值（來自
+        # os.getenv 的預設 "low"，見 main.py DIGEST_REASONING_EFFORT 定義處）。
 
     def test_first_call_reasoning_body_matches_the_current_default(self):
         _, exc, create = self.call_with([ok_response()])
         self.assertIsNone(exc)
         # 刻意寫死字面值，不呼叫 main.digest_reasoning_body() 來算「應該是什麼」——
         # digest_completion() 內部就是靠那個函式組出這段 payload，兩邊都呼叫同一個
-        # 函式等於 f(x) == f(x)，往後把 reasoning.max_tokens 換成 reasoning.effort
-        # 時兩邊會一起變、測試永遠綠，就失去「當比較基準」的意義。
-        # 算法：budget = digest_token_budget("資料圖表","standard",...) = 12000
-        # （見 test_digest_output_budget_is_12000_and_other_caps_unchanged）；
-        # min(2000, 12000-2500) = 2000 ≥ DIGEST_REASONING_MIN_TOKENS(1024) → 送出。
+        # 函式等於 f(x) == f(x)，往後再動這段邏輯時兩邊會一起變、測試永遠綠，
+        # 就失去「當比較基準」的意義。
         self.assertEqual(
             create.call_args_list[0].kwargs.get("extra_body", {}).get("reasoning"),
-            {"max_tokens": 2000},
+            {"effort": "low"},
         )
 
-    def test_default_reasoning_max_tokens_constant_is_pinned(self):
-        # 這條字面數字故意寫死：常數本身變了就是行為改變，測試要跟著紅燈，
-        # 而不是默默跟著新值通過（那就失去「換 effort 前後比較」的意義）。
-        self.assertEqual(main.DIGEST_REASONING_MAX_TOKENS, 2000)
+    def test_default_reasoning_effort_constant_is_pinned(self):
+        # 這個字面值故意寫死：常數本身變了就是行為改變，測試要跟著紅燈，
+        # 而不是默默跟著新值通過（那就失去「比較基準」的意義）。
+        self.assertEqual(main.DIGEST_REASONING_EFFORT, "low")
 
 
 if __name__ == "__main__":

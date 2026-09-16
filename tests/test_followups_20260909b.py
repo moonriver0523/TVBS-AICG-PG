@@ -134,35 +134,32 @@ class DigestLatencyTests(unittest.TestCase):
     """第 5 項：播出鏡面消化太久、偶有逾時沒生成。
 
     這個 repo 自己量過：正文 token 很穩（856-1361），爆的是思考（603-4873），而且
-    思考量跟規則條數走。所以治法是把思考封頂，不是繼續刪使用者驗收過的規則。
+    思考量跟規則條數走。原本的治法是把思考「封頂」（reasoning.max_tokens）；
+    2026-09-16 D21 查出這個欄位對 Claude 系模型不生效，改送真的被遵守的
+    reasoning.effort（見 main.py 該段註解與
+    docs/交辦-20260916-D21改effort換Gemini.md）。這裡的測試改成量 effort 值本身，
+    不再是「budget 留多少空間給正文」的換算。
     """
 
-    def test_the_reasoning_cap_leaves_room_for_the_body(self):
+    def test_the_configured_effort_is_sent(self):
         with patch.object(main, "DIGEST_BACKEND", "openrouter"), \
-                patch.object(main, "DIGEST_REASONING_MAX_TOKENS", 2000):
-            body = main.digest_reasoning_body(main.DIGEST_MAX_TOKENS)
-        budget = body["reasoning"]["max_tokens"]
-        self.assertEqual(budget, 2000)
-        # 觀測到的正文最大值是 1361 token，剩下的空間要明顯大於它
-        self.assertGreater(main.DIGEST_MAX_TOKENS - budget, 1361)
-
-    def test_a_tight_budget_drops_the_cap_instead_of_starving_the_body(self):
-        """預算小到留不下正文空間時就不要設思考上限——寧可慢，不要吐半截 JSON。"""
-        with patch.object(main, "DIGEST_BACKEND", "openrouter"), \
-                patch.object(main, "DIGEST_REASONING_MAX_TOKENS", 2000):
-            self.assertEqual(main.digest_reasoning_body(3000), {})
+                patch.object(main, "DIGEST_REASONING_EFFORT", "low"):
+            body = main.digest_reasoning_body()
+        self.assertEqual(body["reasoning"]["effort"], "low")
 
     def test_non_openrouter_backends_send_nothing(self):
         """reasoning 是 OpenRouter 的統一欄位，送給原生 OpenAI 會直接 400。"""
         for backend in ("native", "gemini"):
             with self.subTest(backend=backend):
                 with patch.object(main, "DIGEST_BACKEND", backend):
-                    self.assertEqual(main.digest_reasoning_body(6000), {})
+                    self.assertEqual(main.digest_reasoning_body(), {})
 
-    def test_setting_zero_disables_it_entirely(self):
-        with patch.object(main, "DIGEST_BACKEND", "openrouter"), \
-                patch.object(main, "DIGEST_REASONING_MAX_TOKENS", 0):
-            self.assertEqual(main.digest_reasoning_body(6000), {})
+    def test_empty_or_off_disables_it_entirely(self):
+        for value in ("", "off"):
+            with self.subTest(value=value):
+                with patch.object(main, "DIGEST_BACKEND", "openrouter"), \
+                        patch.object(main, "DIGEST_REASONING_EFFORT", value):
+                    self.assertEqual(main.digest_reasoning_body(), {})
 
     def test_the_deadline_stays_under_the_cloud_run_request_limit(self):
         """Cloud Run 的請求上限是 300 秒，超過就是連錯誤訊息都沒有的斷線。
