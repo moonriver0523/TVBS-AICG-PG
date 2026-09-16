@@ -134,15 +134,25 @@ elif DIGEST_BACKEND == "openrouter" and _openrouter_key:
     # （見該函式 2026-09-13 的「帶 / 的 slug 只在走 openrouter 時才採用」防呆，
     # 這條退路依賴它，不能破壞）。
     DEFAULT_DIGEST_MODEL = "google/gemini-3.8-flash"
-    # 斷句走小模型（2026-09-14 使用者裁決）。.env 與線上都是 OpenRouter 後端，只改原生分支
-    # 等於沒改。slug 已查 GET /api/v1/models（2026-09-14）確有 openai/gpt-5.4-mini。
+    # 斷句原本走 openai/gpt-5.4-mini（2026-09-14 使用者裁決），2026-09-16 補做斷句
+    # 自己的實測後換成 gemini（使用者裁定「要改就改到位」）。.env 與線上都是
+    # OpenRouter 後端，只改原生分支等於沒改。
     #
-    # 2026-09-16 D21 覆核：這裡原本的理由是「斷句要比主消化快」，但主消化現在是
-    # 4-8 秒的 gemini-3.8-flash，不再比 gpt-5.4-mini 慢——那個理由的前提已經不成立。
-    # 沒有跟著換成 gemini：D21 的四輪實測只測過主消化（長輸出、strict schema），
-    # 沒有任何一次量過斷句這條短輸出路徑，換了就是在拿正式站賭一個沒量過的組合。
-    # 保守留 gpt-5.4-mini，待有斷句自己的實測再決定要不要跟進。
-    DEFAULT_TITLE_BREAK_MODEL = "openai/gpt-5.4-mini"
+    # 實測：19 則真實封面標題（後台 2026-09 紀錄的 news 欄）、**每則一次呼叫**
+    # （production 的 apply_title_break_hints 就是這個粒度，一次塞 17 段會把耗時
+    # 與輸出長度灌水），兩模型各 78 次、共 108 段：
+    #   mini  ：呼叫層 0 次失敗，但**段被判不採用 29/108**，最終只有 73% 拿到模型斷句
+    #   gemini：呼叫層 6 次失敗（4 逾時＋2 finish=error），**段最終 87% 拿到模型斷句**
+    #   耗時中位 mini 3.1 秒 → gemini 2.2 秒
+    # 代價說清楚：**硬失敗率從 0% 變 7.7%**，而斷句這條線沒有重試迴圈，失敗就直接
+    # 退回規則斷行。但 mini 的「回了卻被判不採用」也同樣退回規則，兩者對使用者
+    # 是同一件事，算總帳 gemini 淨勝 14 個百分點。明細
+    # D:\Downloads\AICG\後台紀錄\20260916\F_斷句模型對照*.jsonl。
+    #
+    # ⚠ 連帶待裁：gemini 的 4 次逾時全部卡在 TITLE_BREAK_TIMEOUT_SECONDS=8.0 這道牆
+    # （中位 2.2 秒、p90 5.5 秒），放寬到 10 秒應能回收大部分，但那是另一個決定，
+    # 沒有使用者裁示不動。
+    DEFAULT_TITLE_BREAK_MODEL = "google/gemini-3.8-flash"
 else:
     openai_client = OpenAI(max_retries=OPENAI_MAX_RETRIES)
     # 2026-09-13：原生預設從 gpt-5.6-terra 換成 gpt-5.5。terra 在使用者 key 上
@@ -161,12 +171,25 @@ def resolve_title_break_model() -> str:
     刻意**不**繼承 DIGEST_MODEL／OPENAI_DIGEST_MODEL：那兩個是主消化的覆寫，
     可能是 OpenRouter slug（見 resolve_digest_model 的 2026-09-13 真因），而且
     這是獨立覆寫、獨立回退的一條線，不該因為主消化換模型就被連動牽著走。
-    （2026-09-16 D21 覆核：「斷句要比主消化快」這個舊理由在主消化換成
-    gemini-3.8-flash 後已經不成立，但獨立覆寫本身的價值不變——沒有斷句自己的
-    實測前不跟進換模型，見 DEFAULT_TITLE_BREAK_MODEL 定義處的註解。）
+
+    2026-09-16：預設值已經跟著換成 gemini-3.8-flash（依斷句自己的 156 次實測，
+    見 DEFAULT_TITLE_BREAK_MODEL 定義處），但**刻意不改成讀 DIGEST_MODEL**——
+    兩條線要能分開回退：主消化出事時把 DIGEST_MODEL 設回 Claude，斷句不必跟著動；
+    斷句出事時設 TITLE_BREAK_MODEL=openai/gpt-5.4-mini 即可，主消化不受影響。
+
+    2026-09-16 Codex 複查抓到：這裡原本沒有 resolve_digest_model() 那道「帶 / 的
+    slug 只在真的走 openrouter 時才採用」防呆，而上面那句回退指引推薦的
+    `openai/gpt-5.4-mini` 正是一個 OpenRouter slug——在 native／Gemini 後端照單
+    全收就會把它送進 api.openai.com，**斷句必然失敗、每張封面都退回規則斷行，
+    而且因為失敗被吃掉只印一行 log，不會有人發現**。補上同一道防呆。
     """
     override = (os.getenv("TITLE_BREAK_MODEL") or "").strip()
-    return override or DEFAULT_TITLE_BREAK_MODEL
+    if not override:
+        return DEFAULT_TITLE_BREAK_MODEL
+    on_openrouter = "openrouter" in str(getattr(openai_client, "base_url", ""))
+    if "/" in override and not on_openrouter:
+        return DEFAULT_TITLE_BREAK_MODEL
+    return override
 
 
 def resolve_digest_model() -> str:
@@ -231,7 +254,9 @@ GEMINI_DIGEST_MIN_TOKENS = 6000
 #
 # 2026-09-16 依 D21 甲案調整：DIGEST_MAX_TOKENS 6000→12000，
 # MAP_DIGEST_MAX_TOKENS 10000→16000。思考常吃滿舊上限、正文寫不出來；
-# timeout／attempt／reasoning headroom 不動。
+# timeout／attempt 不動。
+# （原本這行還寫「reasoning headroom 不動」，2026-09-16 D21 已把
+# DIGEST_REASONING_HEADROOM 整組刪除、改送 reasoning.effort，該詞已無對應物。）
 # 地圖必須維持大於一般——這是 2026-09-05 一次真實回歸留下的防線
 # （見上方 2026-09-05 註解與 tests/test_digest_quality.py TokenBudgetTests）：
 # 地圖類要寫的東西本來就多，思考會先把預算吃光；一般預算拉高時地圖必須
@@ -276,7 +301,28 @@ MAP_DIGEST_MAX_TOKENS = 16000
 # 值用環境變數 DIGEST_REASONING_EFFORT 設定，預設 "low"（D21 實測勝出的檔位）。
 # 設成空字串或 "off"＝完全不送 reasoning 欄位，行為與舊版逐字元相同
 # （沿用舊版「非 OpenRouter 一律不送」的判斷）。
-DIGEST_REASONING_EFFORT = os.getenv("DIGEST_REASONING_EFFORT", "low").strip().lower()
+#
+# 2026-09-16 Codex 複查抓到的洞：這個值原本原封不動送上游，**環境變數拼錯就會
+# 把亂碼當 effort 送出去**（例如 "lwo"）。而 digest_completion 的降級保護只在
+# 錯誤訊息含 "reasoning" 時才拔掉欄位，上游若回的是 "invalid effort" 這類字眼，
+# 整條消化就直接失敗。改成白名單擋在源頭：不認得的值退回 "low" 並印一行，
+# 寧可跑預設檔位也不要因為一個錯字讓整站消化壞掉。
+DIGEST_REASONING_EFFORT_CHOICES = ("low", "medium", "high")
+
+
+def _validated_effort(raw: str) -> str:
+    value = (raw or "").strip().lower()
+    if not value or value == "off" or value in DIGEST_REASONING_EFFORT_CHOICES:
+        return value
+    print(
+        f"[digest] reasoning effort {raw!r} 不是 "
+        f"{'／'.join(DIGEST_REASONING_EFFORT_CHOICES)}／off，退回 low",
+        flush=True,
+    )
+    return "low"
+
+
+DIGEST_REASONING_EFFORT = _validated_effort(os.getenv("DIGEST_REASONING_EFFORT", "low"))
 
 # 截斷重試時要退到的最低 effort（取代舊版 DIGEST_REASONING_MIN_TOKENS 的角色：
 # 「重試時把思考預算壓到底線，把空間讓給正文」）。effort 只有三段，"low" 已經是
@@ -294,8 +340,11 @@ def digest_reasoning_body(effort_override: str | None = None) -> dict:
     """
     if DIGEST_BACKEND != "openrouter":
         return {}
-    effort = DIGEST_REASONING_EFFORT if effort_override is None else effort_override
-    effort = (effort or "").strip().lower()
+    effort = (
+        DIGEST_REASONING_EFFORT
+        if effort_override is None
+        else _validated_effort(effort_override)
+    )
     if not effort or effort == "off":
         return {}
     return {"reasoning": {"effort": effort}}
@@ -6037,8 +6086,11 @@ TEN_DIGEST_MAX_ATTEMPTS = 2   # 十點三段字數不合格時最多問幾次（
 # 四十幾個 token，稍長一點的通稿就吐空字串 → JSONDecodeError → 502。
 # 理由與主消化的 DIGEST_MAX_TOKENS 完全相同（見該常數上方的長註解）：正文很短很穩，
 # 爆的是思考，而上限是天花板不是用量，只有真的寫出來的 token 才計費。
-# 拉到與主消化同一個量級，順便讓 digest_reasoning_body 的思考封頂在這條線上也生效
-# （2000 的預算扣掉正文保留額之後低於 1024，等於封不到）。
+# 拉到與主消化同一個量級。
+# （原本這裡還寫「順便讓 digest_reasoning_body 的思考封頂在這條線上也生效——
+# 2000 的預算扣掉正文保留額之後低於 1024，等於封不到」。2026-09-16 D21 之後
+# 封頂改成 reasoning.effort，不再從輸出上限反推思考預算，那段換算已無對應物；
+# 拉高上限的理由只剩下前面那個——爆的是思考，上限是天花板不是用量。）
 COVER_TITLE_DIGEST_MAX_TOKENS = DIGEST_MAX_TOKENS
 
 

@@ -31,15 +31,27 @@
 
 ## AI 自動消化
 
-「AI 自動消化整理」透過 OpenAI Responses API 產生風格、構圖與內容欄位。請在本機 `.env` 設定：
+「AI 自動消化整理」透過 Chat Completions 產生風格、構圖與內容欄位。請在本機 `.env` 設定：
 
 ```
-OPENAI_API_KEY=your_api_key
-# 可選：預設為 gpt-5.6-terra
-OPENAI_DIGEST_MODEL=gpt-5.6-terra
+# 走 OpenRouter（正式站與本機的預設）
+OPENROUTER_API_KEY=your_api_key
+DIGEST_BACKEND=openrouter
+# 可選：預設為 google/gemini-3.8-flash
+DIGEST_MODEL=google/gemini-3.8-flash
+
+# 或走原生 OpenAI（該後端預設為 gpt-5.5）
+# OPENAI_API_KEY=your_api_key
+# DIGEST_BACKEND=native
+# OPENAI_DIGEST_MODEL=gpt-5.5
 ```
 
-OpenAI API 的計費獨立於 ChatGPT 訂閱，依 API 用量計費。
+2026-09-16（D21）起主消化預設是 `google/gemini-3.8-flash`，實測比原本的
+`anthropic/claude-sonnet-5` 快一個量級且不截斷。要退回 Claude 只需把
+`DIGEST_MODEL` 設成 `anthropic/claude-sonnet-5`，**不必改程式碼**。
+標題斷句是**獨立**的一條線，用 `TITLE_BREAK_MODEL` 覆寫、獨立回退。
+
+API 的計費獨立於 ChatGPT／Claude 訂閱，依 API 用量計費。
 
 ### 文字密度與工作角色
 

@@ -156,6 +156,38 @@ class SegmentationCallTests(unittest.TestCase):
         self.assertEqual(call.call_args.kwargs["model"], "gpt-5.4-nano")
         self.assertEqual(main.TITLE_BREAK_TIMEOUT_SECONDS, 8.0)
 
+    def test_default_break_model_is_gemini_and_rolls_back_independently(self):
+        """2026-09-16：斷句預設換成 gemini-3.8-flash，依斷句自己的 156 次實測。
+
+        釘住兩件事：①預設值真的換了（換回去會轉紅，逼人說明為什麼）；
+        ②退路是 TITLE_BREAK_MODEL，而且**不會被 DIGEST_MODEL 連動**——
+        兩條線要能分開回退，否則主消化回退 Claude 時會把斷句一起拖走。
+        """
+        # 2026-09-16 Codex 複查：原本寫成 `if 後端是 openrouter: assertEqual`，
+        # 在 native 環境會整題靜默跳過、什麼都沒釘到。改成三個後端都各自斷言，
+        # 沒有一條路徑能無聲通過。
+        expected = {
+            "openrouter.ai": "google/gemini-3.8-flash",
+            "generativelanguage.googleapis.com": main.DEFAULT_DIGEST_MODEL,
+        }.get(main.openai_client.base_url.host, "gpt-5.4-mini")
+        self.assertEqual(main.DEFAULT_TITLE_BREAK_MODEL, expected)
+        # 回退指引推薦的 slug 帶 /，非 openrouter 後端必須擋掉（否則送進
+        # api.openai.com 一定失敗，而失敗被吃掉不會有人發現）
+        with patch.dict(os.environ, {"TITLE_BREAK_MODEL": "openai/gpt-5.4-mini"}):
+            on_openrouter = main.openai_client.base_url.host == "openrouter.ai"
+            self.assertEqual(
+                main.resolve_title_break_model(),
+                "openai/gpt-5.4-mini" if on_openrouter else main.DEFAULT_TITLE_BREAK_MODEL,
+            )
+        with patch.dict(os.environ, {"TITLE_BREAK_MODEL": "gpt-5.4-mini"}):
+            self.assertEqual(main.resolve_title_break_model(), "gpt-5.4-mini")
+        # 主消化回退 Claude 時，斷句不准被連動（用不帶 / 的值才能在所有後端斷言）
+        with patch.dict(os.environ, {
+            "TITLE_BREAK_MODEL": "gpt-5.4-mini",
+            "DIGEST_MODEL": "anthropic/claude-sonnet-5",
+        }):
+            self.assertEqual(main.resolve_title_break_model(), "gpt-5.4-mini")
+
     def test_apply_skips_the_model_when_nothing_could_be_split(self):
         with patch.object(main, "digest_completion") as call:
             main.apply_title_break_hints("葉門青年運動 奪下紅海咽喉", "")

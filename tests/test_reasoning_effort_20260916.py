@@ -123,5 +123,45 @@ class RollbackToClaudeTests(unittest.TestCase):
             self.assertIn("reasoning", main.digest_reasoning_body())
 
 
+class DeletedTokenConstantsTests(unittest.TestCase):
+    """2026-09-16 Codex 複查：刪掉的常數要像 DIGEST_PROVIDER_ORDER 一樣反向釘死。
+
+    只刪程式碼不釘測試的話，日後有人「看起來少了個上限」就順手加回來，
+    整套 max_tokens 換算會悄悄復活——而那正是 D21 證明無效的東西。
+    """
+
+    def test_the_three_max_token_knobs_are_gone(self):
+        for name in (
+            "DIGEST_REASONING_MAX_TOKENS",
+            "DIGEST_REASONING_MIN_TOKENS",
+            "DIGEST_REASONING_HEADROOM",
+        ):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(main, name))
+
+
+class EffortValueIsValidatedTests(unittest.TestCase):
+    """2026-09-16 Codex 複查：環境變數拼錯過去會原樣送上游。
+
+    降級保護只在錯誤訊息含 "reasoning" 時才拔欄位，上游若回的是
+    "invalid effort" 這類字眼就整條消化失敗。白名單擋在源頭，不認得退回 low。
+    """
+
+    def test_unknown_values_fall_back_to_low(self):
+        self.assertEqual(main._validated_effort("lwo"), "low")
+        self.assertEqual(main._validated_effort("2000"), "low")
+
+    def test_known_values_and_the_off_switch_survive(self):
+        for value in ("low", "medium", "high", "HIGH ", "off", ""):
+            with self.subTest(value=value):
+                self.assertEqual(main._validated_effort(value), value.strip().lower())
+
+    def test_the_retry_override_is_validated_too(self):
+        with patch.object(main, "DIGEST_BACKEND", "openrouter"):
+            self.assertEqual(
+                main.digest_reasoning_body("nonsense"), {"reasoning": {"effort": "low"}}
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

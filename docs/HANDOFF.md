@@ -119,10 +119,15 @@ CHART_TYPES = {
 
 前端 `handleAIDigestion()` 呼叫本機 FastAPI 的 `/api/generate`。API key 只存在 `.env`，不會送到瀏覽器。
 
-後端目前使用 **OpenAI Responses API**：
+後端目前使用 **Chat Completions**（不是 Responses API；`DIGEST_BACKEND` 決定打哪一家）：
 
-- 預設模型：`gpt-5.6-terra`
-- 可用 `OPENAI_DIGEST_MODEL` 覆寫
+- 預設模型：走 OpenRouter 時 `google/gemini-3.8-flash`（2026-09-16 D21 起，原為
+  `anthropic/claude-sonnet-5`）；走原生 OpenAI 時 `gpt-5.5`
+- 可用 `DIGEST_MODEL`／`OPENAI_DIGEST_MODEL` 覆寫，**環境變數贏過程式預設**，
+  這也是出事時的三分鐘回退路徑
+- 標題斷句是獨立的一條線（`TITLE_BREAK_MODEL`），不跟著主消化連動
+- 走 OpenRouter 時額外送 `reasoning.effort`（預設 low，`DIGEST_REASONING_EFFORT`
+  可調）與 `provider.require_parameters`
 - 使用 JSON Schema 強制回傳 `style`、`structure`、`variable`
 - 記者與編輯使用不同的角色規則
 
