@@ -2866,6 +2866,29 @@ def decode_attached_image(data_url: str, *, what: str = "附圖") -> bytes:
     return raw
 
 
+def using_openrouter_images() -> bool:
+    """這次生圖實際會不會走 OpenRouter——判斷式與 `generate_image_raw` 完全同源。
+
+    2026-09-16 抽出來的（B65）。在此之前底下三支能力函式各自寫一份 `os.getenv`
+    判斷，寫法還互不相同：`supports_map_basemap` 是「非 openrouter 就看 provider」、
+    `supports_multiple_reference_images` 只認字面上的 `"openai"`、
+    `supports_reference_image` 又是第三種。於是同一次請求會出現
+    **「路由說走原生 GPT、能力判斷說送不出參考圖」這種自相矛盾**。
+
+    實際踩到的那次：`dev-local-openai.sh` 設的是 `IMAGE_BACKEND=native`
+    （不是 `openai`），多張判斷因此回 False，肖像參考照被整批丟掉、真人題全部
+    退回背影——log 為證 `portrait_subjects=['華許'] … 參考照=0 張`，而維基那張
+    官方肖像其實查得到。
+
+    所以能力判斷一律以「這次會走哪條後端」為準，不要再各自解讀環境變數的拼法：
+    `generate_image_raw` 的規則是「`openrouter` 且有 key 才走 OpenRouter，
+    其餘一律走原生」，這支就是那一句。
+    """
+    return os.getenv("IMAGE_BACKEND", "openrouter") == "openrouter" and bool(
+        os.getenv("OPENROUTER_API_KEY")
+    )
+
+
 def supports_map_basemap(provider: str) -> bool:
     """這次的路徑能不能把真實地圖底圖送進生圖模型。
 
@@ -2878,46 +2901,60 @@ def supports_map_basemap(provider: str) -> bool:
     刻意與 supports_multiple_reference_images() 分開一支：那條同時管肖像參考照，
     順手放寬會連多人肖像的行為一起改掉，不在這次的範圍內。
     """
-    if os.getenv("IMAGE_BACKEND", "openrouter") == "openrouter" and os.getenv(
-        "OPENROUTER_API_KEY"
-    ):
+    if using_openrouter_images():
         return True
     return provider == "gpt"
 
 
 def supports_reference_image(provider: str) -> bool:
-    """這次的生圖後端能不能真的把參考圖送出去。
+    """這次的生圖後端能不能真的把參考圖送出去（單張就算數）。
 
-    存在理由：附圖能力與 prompt 措辭必須一致。原生 OpenAI 的 images.generate
-    沒有參考圖通道，若照樣叫模型「參考附圖」，模型只能憑印象捏一張臉——比不
-    提附圖更糟。因此送不出去時，呼叫端要改用「不生成臉孔」的規則。
+    存在理由：附圖能力與 prompt 措辭必須一致。送不出去卻照樣叫模型「參考附圖」，
+    模型只能憑印象捏一張臉——比不提附圖更糟。所以送不出去時，呼叫端要改用
+    「不生成臉孔」的規則。
+
+    🔻**2026-09-16 更正（B64）**：原本的實作是 `return provider != "gpt"`，理由寫著
+    「原生 OpenAI 的 images.generate 沒有參考圖通道」。**那句話在 2026-09-10 之後
+    就不成立了**——`generate_gpt_image` 只要 `_native_reference_files` 拿得到圖
+    就改走 `images.edit`，送的是 `reference_image_data_url` 加上整個
+    `reference_images` 陣列。2026-09-13 的 b70f89d 修了多張那一支，**單張這支
+    沒跟著修**，於是本機切原生後端時，查到的肖像參考照會被 `resolve_portraits`
+    當成「送不出去」整批丟掉，真人題一律退回背影。實測 log：
+    `[yt-cover:ai-title] portrait_subjects=['華許'] en=['Kevin Warsh'] 參考照=0 張`。
+
+    現況四種組合都送得出單張：OpenRouter 兩家都行；原生 GPT 走 images.edit；
+    原生 Gemini 把 `reference_image_data_url` 塞進 content（generate_gemini_image）。
+    **多張**是另一回事，看 supports_multiple_reference_images。
+
+    刻意不寫成 `return True`：呼叫端要的是「能力與措辭一致」這個語意，日後真的
+    接上送不出參考圖的後端時，改這裡一處就好。
     """
-    if os.getenv("IMAGE_BACKEND", "openrouter") == "openrouter" and os.getenv(
-        "OPENROUTER_API_KEY"
-    ):
+    if using_openrouter_images():
         return True
-    return provider != "gpt"
+    # 原生兩家都送得出單張（GPT 走 images.edit、Gemini 走 content 內嵌）
+    return provider in ("gpt", "gemini")
 
 
 def supports_multiple_reference_images(provider: str | None = None) -> bool:
     """多張參考圖（reference_images 陣列）這條路送不送得出去。
 
-    存在理由：supports_reference_image() 對 native-gemini 回 True，但那條
-    只送單張 reference_image_data_url——若拿它當放行條件，使用者上傳的
+    存在理由：supports_reference_image() 對原生 Gemini 回 True，但那條只送得出
+    單張 reference_image_data_url——若拿它當放行條件，使用者上傳的
     reference_images 會被靜默丟掉、prompt 卻已寫著「依附圖」，正是
     「叫模型參考不存在的附圖」這個最糟情境。判斷必須用這支。
 
-    2026-09-13：原生 GPT 也放行。2026-09-10 起 generate_gpt_image 有參考圖就改走
-    images.edit，_native_reference_files 送的是整個 reference_images 陣列——能力早就
-    有了，這裡卻還只認 OpenRouter，本機切 IMAGE_BACKEND=openai 後 AI改圖 直接 400。
+    2026-09-13：原生 GPT 放行。2026-09-10 起 generate_gpt_image 有參考圖就改走
+    images.edit，_native_reference_files 送的是整個 reference_images 陣列。
     原生 Gemini 仍只送單張，維持 False。provider 不給時視為 gpt（舊呼叫端相容）。
+
+    🔻**2026-09-16 更正（B65）**：原本用 `backend == "openai"` 認原生，但
+    `generate_image_raw` 的路由是「非 openrouter 一律原生」，`IMAGE_BACKEND=native`
+    （dev-local-openai.sh 用的正是這個拼法）因此掉進最後那個 `return False`。
+    改讀 using_openrouter_images() 之後，能力判斷與實際路由不會再分岔。
     """
-    backend = os.getenv("IMAGE_BACKEND", "openrouter")
-    if backend == "openrouter":
-        return bool(os.getenv("OPENROUTER_API_KEY"))
-    if backend == "openai":
-        return (provider or "gpt") == "gpt"
-    return False
+    if using_openrouter_images():
+        return True
+    return (provider or "gpt") == "gpt"
 
 
 # 一家一個模型，OpenRouter 與原生兩條路徑共用同一個——否則切 IMAGE_BACKEND 會連模型一起

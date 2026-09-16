@@ -15,20 +15,31 @@ import main  # noqa: E402
 
 
 class NativeMultiReference(unittest.TestCase):
-    def test_openrouter_needs_key(self):
+    def test_openrouter_without_key_falls_back_to_native_gpt(self):
+        """沒有 key 時 generate_image_raw 走原生，GPT 仍送得出陣列（2026-09-16 更正）。
+
+        原本這裡釘的是 False——那是把「OpenRouter 不能用」誤當成「送不出參考圖」。
+        原生 GPT 走 images.edit 一樣送得出去，Gemini 才是真的只送得出單張。
+        """
         with patch.dict(os.environ, {"IMAGE_BACKEND": "openrouter", "OPENROUTER_API_KEY": "k"}):
             self.assertTrue(main.supports_multiple_reference_images("gpt"))
         with patch.dict(os.environ, {"IMAGE_BACKEND": "openrouter", "OPENROUTER_API_KEY": ""}):
-            self.assertFalse(main.supports_multiple_reference_images("gpt"))
+            self.assertTrue(main.supports_multiple_reference_images("gpt"))
+            self.assertFalse(main.supports_multiple_reference_images("gemini"))
 
     def test_native_gpt_allowed(self):
-        with patch.dict(os.environ, {"IMAGE_BACKEND": "openai", "OPENROUTER_API_KEY": ""}):
-            self.assertTrue(main.supports_multiple_reference_images("gpt"))
-            self.assertTrue(main.supports_multiple_reference_images())   # 舊呼叫端不帶 provider
+        """兩種拼法都要算原生（2026-09-16 B65：dev-local-openai.sh 用的是 native）。"""
+        for backend in ("openai", "native"):
+            with self.subTest(backend=backend):
+                with patch.dict(os.environ, {"IMAGE_BACKEND": backend, "OPENROUTER_API_KEY": ""}):
+                    self.assertTrue(main.supports_multiple_reference_images("gpt"))
+                    self.assertTrue(main.supports_multiple_reference_images())  # 舊呼叫端不帶 provider
 
     def test_native_gemini_still_blocked(self):
-        with patch.dict(os.environ, {"IMAGE_BACKEND": "openai"}):
-            self.assertFalse(main.supports_multiple_reference_images("gemini"))
+        for backend in ("openai", "native"):
+            with self.subTest(backend=backend):
+                with patch.dict(os.environ, {"IMAGE_BACKEND": backend, "OPENROUTER_API_KEY": ""}):
+                    self.assertFalse(main.supports_multiple_reference_images("gemini"))
 
     def test_apply_references_passes_on_native_gpt(self):
         req = main.ImageGenerateRequest(

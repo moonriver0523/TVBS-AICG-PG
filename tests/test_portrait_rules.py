@@ -383,12 +383,30 @@ class SupportsReferenceImageTests(unittest.TestCase):
             self.assertTrue(supports_reference_image("gpt"))
             self.assertTrue(supports_reference_image("gemini"))
 
-    def test_native_openai_has_no_reference_channel(self):
+    def test_native_openai_sends_single_reference_via_images_edit(self):
+        """2026-09-16（B64）：原生 GPT 送得出單張參考圖，這裡原本釘的是相反的事實。
+
+        2026-09-10 起 generate_gpt_image 有參考圖就改走 images.edit；這支判斷沒跟著
+        改，肖像參考照在原生後端被整批丟掉、真人題退回背影。兩種拼法（native／
+        openai）都要成立——路由只看「是不是 openrouter＋有 key」。
+        """
+        for backend in ("native", "openai"):
+            with self.subTest(backend=backend):
+                with patch.dict(
+                    os.environ,
+                    {"IMAGE_BACKEND": backend, "OPENROUTER_API_KEY": ""},
+                    clear=False,
+                ):
+                    self.assertTrue(supports_reference_image("gpt"))
+                    self.assertTrue(supports_reference_image("gemini"))
+
+    def test_openrouter_without_key_falls_back_to_native(self):
+        """沒有 key 時 generate_image_raw 會落到原生，能力判斷必須跟著落。"""
         with patch.dict(
-            os.environ, {"IMAGE_BACKEND": "native", "OPENROUTER_API_KEY": ""}, clear=False
+            os.environ, {"IMAGE_BACKEND": "openrouter", "OPENROUTER_API_KEY": ""}, clear=False
         ):
-            self.assertFalse(supports_reference_image("gpt"))
-            self.assertTrue(supports_reference_image("gemini"))
+            self.assertFalse(main.using_openrouter_images())
+            self.assertTrue(supports_reference_image("gpt"))
 
 
 class ReferenceImagePayloadTests(unittest.TestCase):
