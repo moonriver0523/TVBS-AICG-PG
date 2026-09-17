@@ -235,8 +235,12 @@ class CoverTitleTopicsTests(unittest.TestCase):
         self.assertIn("appears FIRST in the article", prompt)
 
     def test_schema_requires_topics(self):
+        # 2026-09-17 B77：原本這裡斷言 enum == [1, 2]，但那個寫法正是線上故障的病因
+        # ——Gemini 的 responseSchema 只吃字串 enum，掛在 integer 上會被上游退成 400。
+        # 欄位本身留著（prompt 拿它當「先決定幾則」的腳手架，見上一支測試），
+        # 值域改由 prompt 條文約束。
         schema = editor_formats.COVER_TITLE_DIGEST_SCHEMA_TEN
-        self.assertEqual(schema["properties"]["topics"]["enum"], [1, 2])
+        self.assertEqual(schema["properties"]["topics"], {"type": "integer"})
         for field in ("topics", "title_left", "title_right"):
             self.assertIn(field, schema["required"])
 

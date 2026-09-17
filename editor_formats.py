@@ -1259,7 +1259,11 @@ COVER_TITLE_DIGEST_SCHEMA_TEN = {
     "properties": {
         # strict schema 下每個屬性都得列進 required，所以「單主題」是用 title_right
         # 回空字串表達，不是把欄位省略掉。
-        "topics": {"type": "integer", "enum": [1, 2]},
+        # enum 不能掛在 integer 上：Gemini 的 responseSchema 子集只吃字串 enum，
+        # strict ＋ provider.require_parameters 之下整包請求會被上游退成 400
+        # （2026-09-17 B77，實測 2.6 秒回 400）。判定邏輯本來就只比對 == 1，
+        # 值域由 prompt 條文約束即可。
+        "topics": {"type": "integer"},
         "title_left": {"type": "string"},
         "title_right": {"type": "string"},
         **_DIGEST_CHIP_PROPS,
@@ -1350,7 +1354,8 @@ COVER_TITLE_DIGEST_SCHEMA_YT_HOURLY = {
     "properties": {
         # 同十點：strict schema 下每個屬性都要列進 required，單主題是用 title_second
         # 回空字串表達，不是把欄位省略掉。
-        "topics": {"type": "integer", "enum": [1, 2]},
+        # enum 不能掛在 integer 上，原因同 COVER_TITLE_DIGEST_SCHEMA_TEN（B77）。
+        "topics": {"type": "integer"},
         "title": {"type": "string"},
         "title_second": {"type": "string"},
     },
