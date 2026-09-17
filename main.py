@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from openai import (
     APIConnectionError,
     APIError,
+    APITimeoutError,
     AuthenticationError,
     BadRequestError,
     RateLimitError,
@@ -6172,6 +6173,49 @@ TEN_DIGEST_MAX_ATTEMPTS = 2   # 十點三段字數不合格時最多問幾次（
 # 拉高上限的理由只剩下前面那個——爆的是思考，上限是天花板不是用量。）
 COVER_TITLE_DIGEST_MAX_TOKENS = DIGEST_MAX_TOKENS
 
+# 這條路徑原本零重試：上游一次暫時性故障就直接 502（2026-09-17 B77）。主消化那條
+# 有 DIGEST_ATTEMPTS=5 吸收得掉，這條沒有，所以 Gemini 在 OpenRouter 約 7.7% 的
+# 硬失敗率會原封不動打到使用者臉上。
+# 只重試暫時性故障：schema／參數不相容（400）、認證（401）、權限（403）、找不到
+# 模型（404）、驗證失敗（422）都是確定性錯誤，重送同一個 payload 必然再失敗，
+# 重試只會拖長使用者等待並多燒額度。429 也不重試——短暫 backoff 清不掉用量限制，
+# 照既有慣例直接讓使用者知道要等。
+# SDK 層不會疊第二層重試：OPENAI_MAX_RETRIES = 0（見該常數）。
+COVER_TITLE_UPSTREAM_ATTEMPTS = 3
+
+
+def _is_transient_upstream(exc: Exception) -> bool:
+    # 逾時不重試：APITimeoutError 是 APIConnectionError 的子類，放行的話一次
+    # 耗盡就是 3 × DIGEST_TIMEOUT_SECONDS（90 秒）＋ backoff ≈ 272 秒，外層
+    # TEN_DIGEST_MAX_ATTEMPTS 再來一輪會破 460 秒，正好重演 main.py 的
+    # digest_completion 註解記載的 2026-09-10 事故（Zeabur 300 秒上限、前端卡死）。
+    # 要救的 7.7% 硬失敗本來就是秒級的 finish=error／provider 5xx，不含 90 秒卡死。
+    if isinstance(exc, APITimeoutError):
+        return False
+    if isinstance(exc, APIConnectionError):
+        return True
+    if isinstance(exc, RateLimitError):
+        return False
+    status = getattr(exc, "status_code", None)
+    return status == 408 or (isinstance(status, int) and status >= 500)
+
+
+def _cover_title_completion(**kwargs):
+    """digest_completion 外面包一層有界重試，只吃暫時性上游故障。"""
+    for attempt in range(COVER_TITLE_UPSTREAM_ATTEMPTS):
+        try:
+            return digest_completion(**kwargs)
+        except Exception as exc:  # noqa: BLE001
+            last = attempt == COVER_TITLE_UPSTREAM_ATTEMPTS - 1
+            if last or not _is_transient_upstream(exc):
+                raise
+            print(
+                f"[cover-titles] 上游暫時性故障，{attempt + 1}/{COVER_TITLE_UPSTREAM_ATTEMPTS} "
+                f"重試：{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            time.sleep(0.5 * (attempt + 1))
+
 
 class CoverTitleDigestResponse(BaseModel):
     title_left: str = ""
@@ -6272,7 +6316,7 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
         if attempt:
             prompt += "\n" + editor_formats.ten_digest_retry_note(data)
         try:
-            response = digest_completion(
+            response = _cover_title_completion(
                 model=model,
                 system_prompt=prompt,
                 news_text=req.news_text.strip(),
