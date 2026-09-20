@@ -282,15 +282,19 @@ class FullPipelineWiringTests(unittest.TestCase):
 
 
 class PortraitPromptNoLongerAsksTheModelToDrawTheLabelTests(unittest.TestCase):
-    """B70 甲案：四個「查得到怎麼畫」的肖像區塊改口——模型不再自己規劃／畫標籤，
-    程式後貼。舊的被動措辭（「有給才畫、沒給就不畫」）必須整句換掉，不是並存。
-    （2026-09-20 全站化：no_reference 併入，與另外三條一致。）"""
+    """B70 甲案：三個「查得到怎麼畫、且真的畫出臉」的肖像區塊改口——模型不再自己
+    規劃／畫標籤，程式後貼。舊的被動措辭（「有給才畫、沒給就不畫」）必須整句
+    換掉，不是並存。這三塊都有 resolve_image_disclaimer 對應的 "ai" 回傳值撐腰
+    （PORTRAIT_MODES_NEEDING_DISCLAIMER），軟體真的會壓。"""
 
+    # PORTRAIT_NO_REFERENCE_RULES 不在這裡——2026-09-20 晚間已回退，見
+    # RealWorldRulesRevertedWhereNothingBacksThemTests 的說明：no_reference 不在
+    # PORTRAIT_MODES_NEEDING_DISCLAIMER 裡，resolve_image_disclaimer 永遠不會替
+    # 這條路回 "ai"，告訴模型「不要畫」會讓標籤兩邊都沒有人負責。
     BLOCKS = (
         news_prompt.PORTRAIT_WITH_REFERENCE_RULES,
         news_prompt.PORTRAIT_MULTI_WITH_REFERENCE_RULES,
         news_prompt.PORTRAIT_ENTRY_ONLY_RULES,
-        news_prompt.PORTRAIT_NO_REFERENCE_RULES,
     )
 
     def test_blocks_tell_the_model_not_to_draw_it_itself(self):
@@ -313,7 +317,7 @@ class PortraitPromptNoLongerAsksTheModelToDrawTheLabelTests(unittest.TestCase):
                 self.assertNotRegex(block, r"\d")
 
     def test_frozen_baseline_reference_prompt_snapshot_is_untouched(self):
-        """這四塊只在明確傳入非 none 的 portrait_mode 時才注入，凍結快照
+        """這三塊只在明確傳入非 none 的 portrait_mode 時才注入，凍結快照
         （tests/test_reporter_prompt_frozen.py）全部用 portrait_mode="none" 呼叫，
         不受這批影響——這裡直接重新確認一次。"""
         plain = news_prompt.build_prompt(
@@ -324,71 +328,84 @@ class PortraitPromptNoLongerAsksTheModelToDrawTheLabelTests(unittest.TestCase):
             self.assertNotIn(block, plain)
 
 
-class RealWorldRulesNoLongerAskTheModelToSelfDrawTheLabelTests(unittest.TestCase):
-    """B70 全站化（2026-09-20，重凍額度使用者已批准）：連「沒有具名肖像區塊」的
-    預設路徑（一般重建圖、NAMED REAL PEOPLE 的預設分支）都改口，做完之後不該再有
-    任何一條路是「叫模型自己畫標籤」。
+class RealWorldRulesRevertedWhereNothingBacksThemTests(unittest.TestCase):
+    """B70 全站化第一版（2026-09-20 稍早）曾經把「一般重建圖」與「NAMED REAL
+    PEOPLE 的預設分支」也改成「不要自己畫，軟體會後貼」——但 team-lead 複查點名：
+    這兩條路沒有對應的程式端壓字。`resolve_image_disclaimer()` 只在
+    portrait_mode ∈ PORTRAIT_MODES_NEEDING_DISCLAIMER（reference／reference_multi／
+    entry_only）時回 "ai"；一般重建圖（跟具名肖像無關的建物、場景）與
+    portrait_mode="none"／no_reference 這兩條路永遠回 ""，沒有人會壓標籤。
 
-    這批動到的是被 tests/fixtures 逐字快照凍結的兩塊：
-    - main.py 的 REAL_WORLD_FIDELITY_RULES 第 3、5 條（消化端，寫進 variable 那一半）
-    - news_prompt.py 的 REAL_WORLD_RENDERING_RULES 第 2、4 條（生圖端，一般預設路徑）
-    重凍紀錄與哪十份 fixture 被重建見 tests/test_reporter_prompt_frozen.py 的
-    docstring「2026-09-20（B70／F43）」那一段。
+    使用者裁示：沒有軟體背書就不能叫模型不要畫——寧可讓模型畫醜一點的標籤，
+    也不能讓標籤整個消失（這正是原本 B70 要修的那個缺陷，等級接近 B76）。
+    因此這批把下列三處**回退**成原始措辭（模型自己判斷要不要畫、軟體不介入）：
+    - main.py `REAL_WORLD_FIDELITY_RULES` 第 3 條（一般重建圖，消化端）
+      ——第 5 條（具名真人，消化端）**不回退**：那條講的是「別把字寫進 variable」，
+      三個有軟體背書的 portrait_mode 都在用，no_reference 不畫臉所以本來就沒有
+      要寫的字，維持新措辭沒有風險。
+    - news_prompt.py `REAL_WORLD_RENDERING_RULES` 第 2、4 條（一般重建圖預設路徑、
+      NAMED REAL PEOPLE 沒有專屬區塊時的預設分支）與 app.js 的鏡像常數
+    - news_prompt.py `PORTRAIT_NO_REFERENCE_RULES` 的標籤句（no_reference 專屬
+      區塊，不在凍結範圍內）
+
+    重凍紀錄見 tests/test_reporter_prompt_frozen.py 的 docstring
+    「2026-09-20（B70／F43 修正）」段落；十份 fixture 因此第二次改動，
+    只改回這幾句，其餘（含 B76 那塊）不動。
     """
 
-    def test_digest_side_no_longer_asks_to_write_the_word_into_variable(self):
+    def test_digest_side_reverted_to_asking_the_model_to_write_it_itself(self):
+        """一般重建圖沒有軟體背書，回退成原始措辭——模型自己判斷、自己寫。"""
         for role in ("記者", "編輯"):
             with self.subTest(role=role):
                 instructions = main.build_digest_instructions(role, "standard", "資料圖表")
-                self.assertIn('do NOT write the word 示意圖 into "variable"', instructions)
-                self.assertIn(
-                    'Never write 示意圖 into "variable" for a depicted person either',
-                    instructions,
-                )
-                self.assertNotIn("you MUST plan a clearly visible 示意圖 label", instructions)
+                self.assertIn("you MUST plan a clearly visible 示意圖 label", instructions)
                 self.assertNotIn(
-                    'Always plan the 示意圖 label into "variable" when a person is depicted',
-                    instructions,
+                    'do NOT write the word 示意圖 into "variable" yourself', instructions
                 )
 
-    def test_generation_side_default_path_no_longer_self_draws_either(self):
+    def test_digest_side_named_person_rule_still_says_do_not_write_it(self):
+        """第 5 條（具名真人）不回退：三個有軟體背書的 portrait_mode 都靠這句
+        避免消化端把「示意圖」寫進 variable 造成雙重標籤；no_reference 不畫臉，
+        這句對它沒有任何實質影響。"""
+        instructions = main.build_digest_instructions("記者", "standard", "資料圖表")
+        self.assertIn(
+            'Never write 示意圖 into "variable" for a depicted person either',
+            instructions,
+        )
+        self.assertNotIn(
+            'Always plan the 示意圖 label into "variable" when a person is depicted',
+            instructions,
+        )
+
+    def test_generation_side_default_path_reverted_to_asking_the_model_itself(self):
         """portrait_mode="none"（或未知值）時沒有任何 PORTRAIT_MODES 區塊注入，
-        REAL_WORLD_RENDERING_RULES 的預設措辭才是實際生效的那一份。"""
+        REAL_WORLD_RENDERING_RULES 的預設措辭才是實際生效的那一份——沒有軟體
+        背書，回退成原始「模型自己判斷、自己畫」。"""
         prompt = news_prompt.build_prompt(
             role="記者", engine="gpt", type_label="資料圖表",
             style="[S]", structure="[T]", variable="[V]", portrait_mode="none",
         )
-        self.assertIn("do not draw a 示意圖 label yourself", prompt)
-        self.assertIn("do not draw the 示意圖 label yourself either", prompt)
-        self.assertIn("software stamps", prompt.lower())
-        self.assertNotIn(
+        self.assertIn(
             "the 示意圖 label supplied in VARIABLE FIELDS must be clearly visible",
             prompt,
         )
-        self.assertNotIn("and keep the 示意圖 label visible", prompt)
+        self.assertIn("and keep the 示意圖 label visible", prompt)
+        self.assertNotIn("do not draw a 示意圖 label yourself", prompt)
+        self.assertNotIn("do not draw the 示意圖 label yourself either", prompt)
 
-    def test_no_digits_in_the_two_rewritten_sentences(self):
-        """位置／方位一律用方位詞，不能是數字（同播出鏡面那條鐵律）。這裡只驗
-        新寫的那兩句本身，不驗整塊常數——REAL_WORLD_RENDERING_RULES 別的地方本來
-        就有「4車追撞」「12箱走私菸」這類新聞內容示例數字，不在這條鐵律管轄範圍。"""
-        new_sentences = (
-            'do NOT write the word 示意圖 into "variable" yourself — the backend '
-            "stamps that disclaimer onto the finished image afterwards, at a fixed "
-            'corner outside your layout. Just keep "structure" from placing '
-            "essential content in that corner.",
-            'Never write 示意圖 into "variable" for a depicted person either — the '
-            "backend stamps that label itself once it knows how the face will be "
-            "rendered.",
-            "do not draw a 示意圖 label yourself — software stamps one at the "
-            "lower-right corner of the frame afterwards. Keep that corner clear "
-            "of essential wording and busy detail.",
-            "do not draw the 示意圖 label yourself either — it is stamped "
-            "afterwards.",
+    def test_no_reference_block_reverted_too(self):
+        """no_reference 不在 PORTRAIT_MODES_NEEDING_DISCLAIMER 裡，
+        resolve_image_disclaimer 永遠不會替它回 "ai"——回退成原始措辭。"""
+        prompt = news_prompt.build_prompt(
+            role="記者", engine="gpt", type_label="資料圖表",
+            style="[S]", structure="[T]", variable="[V]", portrait_mode="no_reference",
         )
-        for sentence in new_sentences:
-            with self.subTest(sentence=sentence[:40]):
-                self.assertIn(sentence, main.REAL_WORLD_FIDELITY_RULES + news_prompt.REAL_WORLD_RENDERING_RULES)
-                self.assertNotRegex(sentence, r"\d")
+        self.assertIn(
+            "The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible "
+            "when the scene is a generic stand-in",
+            prompt,
+        )
+        self.assertNotIn("Software stamps the disclaimer afterwards", prompt)
 
     def test_content_fidelity_rule_six_is_left_alone(self):
         """CONTENT_FIDELITY_RULES 第 6 條管的是「版型名稱不是新聞內容」，跟標籤
@@ -400,15 +417,18 @@ class RealWorldRulesNoLongerAskTheModelToSelfDrawTheLabelTests(unittest.TestCase
             "say so in \"structure\" as a small caption", main.CONTENT_FIDELITY_RULES
         )
 
-    def test_app_js_mirror_still_matches_byte_for_byte(self):
+    def test_app_js_mirror_reverted_too(self):
         """news_prompt.REAL_WORLD_RENDERING_RULES 與 app.js 是兩份來源
-        （tests/test_prompt_parity.py 逐字比對）；這裡直接重新核對一次新措辭
-        真的兩邊都改了，不是漏了其中一邊。"""
+        （tests/test_prompt_parity.py 逐字比對）；這裡直接重新核對一次回退
+        真的兩邊都做了，不是漏了其中一邊。"""
         js_source = (main.__file__.rsplit("main.py", 1)[0] + "app.js")
         with open(js_source, encoding="utf-8") as f:
             text = f.read()
-        self.assertIn("do not draw a 示意圖 label yourself", text)
-        self.assertIn("do not draw the 示意圖 label yourself either", text)
+        self.assertIn(
+            "the 示意圖 label supplied in VARIABLE FIELDS must be clearly visible", text
+        )
+        self.assertIn("and keep the 示意圖 label visible", text)
+        self.assertNotIn("do not draw a 示意圖 label yourself", text)
 
 
 class WebImageGenerateEndToEndRegressionTests(unittest.TestCase):
