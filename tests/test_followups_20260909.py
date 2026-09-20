@@ -243,6 +243,31 @@ class BroadcastBottomStripTests(unittest.TestCase):
                 # 浮水印一樣蓋在右下角，OFF 也要留位
                 self.assertIn("extreme lower-RIGHT corner", rules)
 
+    def test_bottom_band_line_must_carry_a_real_point_not_filler(self):
+        """F35③（2026-09-20 使用者升級需求）：曹雪卿回饋「最下面那行容易不是重點
+        （eg字少版，統計時間多應為背景說明）」——底帶那行本來只被要求「carries an
+        ordinary fact」，太寬鬆，實拍會被填成統計期間、背景說明這類空泛內容。改成
+        明講「禁止項目」＋「要抓下一個還沒出現的重點」，蓋章 ON 不受影響（那條分支
+        沒有底帶）。"""
+        for key in self.KEYS:
+            for density in (None, "standard", "maximum"):
+                with self.subTest(key=key, density=density):
+                    off = editor_formats.digest_rules(
+                        key, "編輯", stamp=False, density=density
+                    )
+                    self.assertIn(
+                        "MUST CARRY A SUBSTANTIVE POINT OF ITS OWN", off
+                    )
+                    self.assertIn("has not appeared yet", off)
+                    self.assertIn(
+                        "the date or time period the material's statistics were "
+                        "collected over",
+                        off,
+                    )
+                    self.assertIn("never settle for a vague background sentence", off)
+                on = editor_formats.digest_rules(key, "編輯", stamp=True)
+                self.assertNotIn("MUST CARRY A SUBSTANTIVE POINT OF ITS OWN", on)
+
     def test_the_reserved_window_is_described_as_wide_and_short(self):
         """第 1 條原本寫「filling most of the half」，模型畫成整片高牆，底下那條帶
         根本不存在（使用者附圖）。實際的挖空框是寬扁的橫幅視窗、垂直置中

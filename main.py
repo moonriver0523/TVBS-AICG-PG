@@ -1085,6 +1085,18 @@ class ImageGenerateRequest(BaseModel):
     # 用到：apply_user_references_to_image_request 會把它接在 aiedit 區塊後面，當成
     # 「這張附圖要改哪裡」。其他用途的指令欄照舊由文字模型消化進畫面描述，不走這裡。
     editor_instruction: str = Field(default="", max_length=2_000)
+    # B70／F43（2026-09-20）：這次成品要不要程式端壓「示意圖」或「畫面來源」標籤、
+    # 貼在哪個角落。兩者互斥（見 resolve_image_disclaimer），呼叫端不自己判斷該貼
+    # 哪一種——一律把 portrait_mode／source_text 交給那支函式決定。空字串＝不貼。
+    disclaimer_kind: Literal["", "ai", "source"] = ""
+    # 只有 disclaimer_kind="source" 時使用；上限比照 vstrip 的 source_text 欄位。
+    disclaimer_source_text: str = Field(default="", max_length=40)
+    # 方位詞（非數字）——與版型 prompt 的鐵律同一個理由：貼的位置若要塞進 prompt
+    # 告訴模型「這裡留空」，只能用方位詞。四個角落都落在安全區內（見
+    # compose._disclaimer_box），不會被裁切。
+    disclaimer_corner: Literal[
+        "lower_right", "lower_left", "upper_right", "upper_left"
+    ] = "lower_right"
 
 
 class ImageGenerateResponse(BaseModel):
@@ -3305,6 +3317,13 @@ def generate_image(req: ImageGenerateRequest):
             broadcast_hole=req.broadcast_hole,
             canvas=output_canvas,
         )
+        # B70／F43：置框、挖空框都處理完後最後貼「示意圖」／「畫面來源」標籤。
+        # 播出鏡面挖空框已經在同一套安全區角落自己貼過一次「示意圖」浮水印
+        # （compose.apply_broadcast_hole／compose.WATERMARK_TEXT），這裡不重貼第二次
+        # ——兩者文案（「示意圖」vs 這裡固定的 PORTRAIT_DISCLAIMER_TEXT，剛好同一個字）
+        # 目前相同所以不會互相矛盾，但角落與樣式是兩套獨立實作，之後要合併是後續工作。
+        if req.disclaimer_kind and not req.broadcast_hole:
+            result = apply_image_disclaimer(result, req, profile=frame_profile)
     except Exception as exc:
         if own_clock:
             _record_generation_failure(
@@ -3762,6 +3781,42 @@ def apply_broadcast_hole_response(
     )
 
 
+def apply_image_disclaimer(
+    result: ImageGenerateResponse, req: ImageGenerateRequest, *, profile: str
+) -> ImageGenerateResponse:
+    """B70／F43：在置框（與可能的播出鏡面挖空框）都貼完之後，最後貼「示意圖」或
+    「畫面來源」標籤。
+
+    與挖空框同一個原則：失敗就整支失敗，不要悄悄回傳一張沒標籤的具名肖像圖出去——
+    那正是 B70 的原始事故（合規缺陷不是美觀問題）。
+    """
+    try:
+        stamped = compose.paste_disclaimer_note(
+            base64.b64decode(result.image_data_base64),
+            kind=req.disclaimer_kind,
+            source_text=req.disclaimer_source_text,
+            corner=req.disclaimer_corner,
+            canvas=_image_dimensions(result.image_data_base64),
+            profile=profile,
+        )
+    except Exception as exc:  # noqa: BLE001 — 影像處理失敗必須讓呼叫端知道
+        print(f"[compose] 標籤貼字失敗：{type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=500, detail=f"標籤貼字失敗：{exc}") from exc
+    return result.model_copy(
+        update={
+            "image_data_base64": base64.b64encode(stamped).decode("ascii"),
+            "mime_type": "image/png",
+        }
+    )
+
+
+def _image_dimensions(image_base64: str) -> tuple[int, int]:
+    """讀一張 base64 圖的實際尺寸。貼標籤要用成品真正的尺寸算安全區，不是請求時
+    預期的 output_canvas——理由同 apply_broadcast_hole：上游可能改了尺寸。"""
+    with Image.open(io.BytesIO(base64.b64decode(image_base64))) as opened:
+        return opened.size
+
+
 def finalize_image_result(
     result: ImageGenerateResponse,
     *,
@@ -3923,9 +3978,25 @@ NATIVE_GPT_IMAGE_SIZES = {
     "21:9": "1680x720",
 }
 
-# F38 stays deliberately disabled until the pricing checkpoint is approved.
-HIGH_RES_EDITOR_ENABLED = False
+# F38（2026-09-20 使用者裁決：「把旗標打開」）：字多／字超多在播出時容易糊
+# （現況 1280x720／1680x720 被 apply_safe_frame 升採樣到 1920x1080），拉高生成
+# 畫布能救「糊」；「錯字」那一半已經另外查證結案——解析度救不了錯字，甚至反相關
+# （見 MASTER-列管清單.md F38：同一張圖裡全圖最大的字反而是壞字），只圖利銳利度。
+#
+# 旗標名稱歷史留著 EDITOR，但這次使用者原話「記者/編輯 字多/字超多的時候」明講
+# 兩個角色都要涵蓋，不能再寫死只有編輯——見下面 HIGH_RES_ROLES。
+#
+# 實際會送出的尺寸：16:9→2560x1440、21:9→3360x1440。預設模型
+# NATIVE_GPT_IMAGE_MODEL="gpt-image-2.5-sunburst"（見上方 generate_gpt_image），
+# 2.5 系列長邊上限放寬到 3840（見本檔開頭的模型註記），3360 在界內；若透過
+# OPENAI_IMAGE_MODEL 環境變數換回 gpt-image-2（標準上限 2560×1440），21:9 這條
+# 高解析度會在送出時被 provider 拒絕（400），不是這裡的責任範圍。
+#
+# 代價（2026-09-15/16 實測，記在 MASTER-列管清單.md）：耗時多 12–17%，單價未查證
+# （上線前仍要對一次帳單，量最大的檔位組合正是這批）。
+HIGH_RES_EDITOR_ENABLED = True
 HIGH_RES_EDITOR_DENSITIES = frozenset({"standard", "maximum"})
+HIGH_RES_ROLES = frozenset({safe_area_spec.REPORTER_PROFILE, safe_area_spec.EDITOR_PROFILE})
 HIGH_RES_GPT_IMAGE_SIZES = {
     "16:9": "2560x1440",
     "21:9": "3360x1440",
@@ -3941,13 +4012,17 @@ def image_generation_size(
 ) -> tuple[str | None, tuple[int, int]]:
     """Resolve provider size and local framing canvas from one request.
 
-    The high-resolution path is intentionally gated by the module flag and is
-    limited to the editor role plus the two approved high-density values.
-    Other aspect ratios retain the existing base framing canvas.
+    The high-resolution path is gated by the module flag and applies to both
+    the reporter and editor roles (HIGH_RES_ROLES) at the two approved
+    high-density values. Other aspect ratios retain the existing base framing
+    canvas. Gemini keeps its existing "1K" image_size regardless (see below):
+    this means the gemini provider's upscale ratio to the high-res output
+    canvas gets worse when the flag is on, not better — that trade-off was
+    accepted at e0f4df6/fc71891 and is not revisited here.
     """
     high_res = (
         HIGH_RES_EDITOR_ENABLED
-        and req.safe_frame_profile == safe_area_spec.EDITOR_PROFILE
+        and req.safe_frame_profile in HIGH_RES_ROLES
         and req.density in HIGH_RES_EDITOR_DENSITIES
         and req.aspect_ratio in HIGH_RES_OUTPUT_CANVASES
     )
@@ -4387,6 +4462,37 @@ PORTRAIT_NO_ENTRY_FALLBACK = (
     os.getenv("PORTRAIT_NO_ENTRY_FALLBACK", "false").strip().lower()
     not in ("", "0", "false", "off")
 )
+
+
+# B70（2026-09-20 使用者裁定採甲案）：哪些 portrait_mode 代表「畫面上這張臉不是
+# 使用者提供的真實素材」，需要程式端壓「示意圖」標籤——
+#   reference／reference_multi：模型依附上的參考照畫，仍是重新畫過的一張臉；
+#   entry_only：連參考照都沒有，模型純依新聞語境猜長相（F40 第 3 層）。
+# no_reference 沒有畫臉（改成不畫人形），none 不是具名真人案例，兩者都不需要。
+PORTRAIT_MODES_NEEDING_DISCLAIMER = frozenset({"reference", "reference_multi", "entry_only"})
+
+
+def resolve_image_disclaimer(portrait_mode: str, source_text: str = "") -> tuple[str, str]:
+    """B70／F43 共用的互斥判定：這張成品該貼「示意圖」還是「畫面來源」，或都不貼。
+
+    優先序（2026-09-16 使用者裁定 F43 互斥判準——「原圖沒改圖才需要畫面來源」）：
+    **AI 標籤贏**。只要 portrait_mode 落在 PORTRAIT_MODES_NEEDING_DISCLAIMER，代表
+    畫面上這張臉是模型生成或猜出來的，不可能同時滿足「畫面來源＝程式保證原圖未被
+    動過」的前提，一律標「示意圖」，source_text 直接忽略。沒有這種肖像時，才看
+    呼叫端有沒有填 source_text——有才標「畫面來源」，兩者都沒有就回 ("", "")，
+    表示這次成品不貼任何標籤。
+
+    回傳 (kind, text)：kind 直接對應 ImageGenerateRequest.disclaimer_kind／
+    compose.paste_disclaimer_note 的 kind 參數；text 只在 kind="source" 時有值
+    （已去除前後空白，尚未套用 compose.vstrip_source_text 的「畫面來源：」前綴——
+    那個正規化留給 compose 那層做，這裡只管「有沒有東西可以標」）。
+    """
+    if portrait_mode in PORTRAIT_MODES_NEEDING_DISCLAIMER:
+        return "ai", ""
+    text = (source_text or "").strip()
+    if text:
+        return "source", text
+    return "", ""
 
 
 def resolve_portraits(
@@ -5017,6 +5123,10 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
         portrait_mode, reference_photos = resolve_portraits(
             digest.portrait_subjects, provider, photos=portrait_photos
         )
+        # B70：這張成品要不要程式端壓「示意圖」標籤，由 portrait_mode 決定
+        # （見 resolve_image_disclaimer）。這條管線沒有「畫面來源」的來源可填，
+        # 所以只傳 portrait_mode，source_text 用預設空字串。
+        disclaimer_kind, _disclaimer_text = resolve_image_disclaimer(portrait_mode)
         prompt = build_prompt(
             role=req.role,
             engine=provider,
@@ -5058,6 +5168,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                     if len(reference_photos) > 1
                     else []
                 ),
+                disclaimer_kind=disclaimer_kind,
             )
         )
         meta = _outcome_meta(started, provider=provider, image_model=image.model)
