@@ -341,7 +341,17 @@
 
 ✅**2026-09-20 追加授權：B76 也納入重凍額度**（使用者當面授權）。理由：B76 是播出事故等級、使用者要求「百分之百絕對避免」，
 修法必然要動 prompt 的地圖／國界規則文字。**條件同上**：更新 fixture 時要在 `tests/test_reporter_prompt_frozen.py` 的
-docstring「快照更新記錄」補一段說明，沿用既有格式。**額度仍只到 B57／B61／F40／F41／B66／B76 這六條，其餘照舊要請示。**
+docstring「快照更新記錄」補一段說明，沿用既有格式。
+
+✅**2026-09-20 再追加授權：B70／F43 的「示意圖」標籤全站化也納入重凍額度**（使用者當面授權）。背景：B70 的甲案已把
+`PORTRAIT_WITH_REFERENCE_RULES`／`PORTRAIT_MULTI_WITH_REFERENCE_RULES`／`PORTRAIT_ENTRY_ONLY_RULES` 三條路改成程式端壓字，
+但另外兩條路——**`portrait_mode="none"`（沒有具名人物的一般重建圖）與 `no_reference`（改畫無人場景）**——的規則寫在
+`news_prompt.py` 的 `REAL_WORLD_RENDERING_RULES` 與 `main.py` 的 `REAL_WORLD_FIDELITY_RULES` 第 3／5 條，**兩者都被逐字快照凍結**
+（`reporter/editor-digest-*.txt` 與 `reporter-image-prompt-*.txt` 都含這段）。不給額度就只能一半程式保證、一半靠模型自律，
+標籤漏畫／錯字仍會從那兩條路漏出來。**條件同上**：重建 fixture 要在 docstring「快照更新記錄」補說明，且**只准重建因這次改動
+而變的那幾份**，其他 fixture（含 `cover_design_brief_rng_pins_20260911.json`）一律不得動。
+
+**額度現為 B57／B61／F40／F41／B66／B76／B70＋F43 共七項，其餘照舊要請示。**
 
 ### 🏭 這一批的執行方式（2026-09-16 使用者裁定）
 
