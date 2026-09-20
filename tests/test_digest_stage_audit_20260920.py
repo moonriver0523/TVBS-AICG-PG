@@ -82,6 +82,11 @@ class DigestFailureIsRecordedTests(unittest.TestCase):
         self.assertTrue(logged[0]["digest_model"], "失敗筆也要看得出當時的消化模型")
         self.assertEqual(len(archived), 1)
         self.assertEqual(archived[0]["status"], "failed")
+        # team-lead 點名要驗證這兩個真的寫得進去，不是只有 status 一個空殼欄位。
+        # APIConnectionError 燒完重試後的 last_detail 是「無法連線至 AI 服務」，
+        # classify_generation_error() 靠文字比對歸成 timeout（見 _error_type_from_http）。
+        self.assertEqual(archived[0]["error_type"], "timeout")
+        self.assertEqual(archived[0]["http_status"], 502)
 
     def test_deadline_hit_is_logged(self):
         """Cloud Run／Cloudflare 逾時走的正是這條路徑——B39 524 的真因。"""
@@ -95,6 +100,8 @@ class DigestFailureIsRecordedTests(unittest.TestCase):
         self.assertIn("太久沒有回應", exc.detail)
         self.assertEqual(len(logged), 1)
         self.assertEqual(len(archived), 1)
+        self.assertEqual(archived[0]["error_type"], "timeout")
+        self.assertEqual(archived[0]["http_status"], 503)
 
     def test_auth_failure_is_logged(self):
         request = httpx.Request("POST", "https://openrouter.ai/api/v1")
@@ -174,6 +181,8 @@ class HybridDigestFailureIsRecordedTests(unittest.TestCase):
         self.assertEqual(len(logged), 1)
         self.assertEqual(logged[0]["source"], "hybrid-digest")
         self.assertEqual(len(archived), 1)
+        self.assertEqual(archived[0]["error_type"], "timeout")
+        self.assertEqual(archived[0]["http_status"], 502)
 
 
 class CoverTitlesDigestAuditTests(unittest.TestCase):
@@ -228,6 +237,46 @@ class CoverTitlesDigestAuditTests(unittest.TestCase):
         self.assertEqual(len(logged), 1)
         self.assertEqual(logged[0]["source"], "cover-titles")
         self.assertEqual(len(archived), 1)
+        self.assertEqual(archived[0]["error_type"], "provider_5xx")
+        self.assertEqual(archived[0]["http_status"], 502)
+
+
+class LoggingItselfMustNotSwallowTheOriginalErrorTests(unittest.TestCase):
+    """team-lead 點名（正確）：`_outcome_meta`／`classify_generation_error` 以前
+    完全沒有包 try，記錄失敗這件事本身可能把原本要往外丟的例外蓋掉——使用者
+    原本該看到消化逾時的 503，不能因為分類例外訊息時自己又炸出一個無關的 500。
+    """
+
+    def test_a_broken_classifier_does_not_replace_the_original_exception(self):
+        request = GenerateRequest(news_text="素材測試新聞", type_label="資料圖表")
+        with patch.object(
+            main.openai_client.chat.completions,
+            "create",
+            side_effect=[connection_error()] * main.DIGEST_ATTEMPTS,
+        ), patch.object(
+            main.time, "sleep"
+        ), patch.object(
+            main, "classify_generation_error", side_effect=RuntimeError("落檔本身壞了")
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                generate(request)
+        # 使用者拿到的仍然是消化重試燒完的 502，不是落檔壞掉炸出來的 500。
+        self.assertEqual(ctx.exception.status_code, 502)
+
+    def test_a_broken_archive_sink_does_not_replace_the_original_exception(self):
+        request = HybridDigestRequest(news_text="美股三大指數收黑")
+        with patch.object(
+            main.openai_client.chat.completions,
+            "create",
+            side_effect=[connection_error()] * 3,
+        ), patch.object(
+            main.time, "sleep"
+        ), patch.object(
+            main, "_archive_generation_failure", side_effect=RuntimeError("落檔本身壞了")
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                hybrid_digest(request)
+        self.assertEqual(ctx.exception.status_code, 502)
 
 
 class ActionColumnTests(unittest.TestCase):
