@@ -692,39 +692,53 @@ def _archive_generation(**kwargs) -> None:
     判斷之前就丟 `TypeError`。消化階段（`generate()`）現在也會呼叫這支函式落一筆
     「只有文字、沒有圖」的稽核紀錄（網頁版消化完才在前端組 prompt、還沒生圖），
     因此這裡要能接受沒有圖的呼叫——沒圖就只跳過 GCS 那份備份，本機稽核照寫。
+
+    2026-09-20（team-lead 複查點名）：`_enrich_archive_fields()`／`current_user()`
+    以前沒有包 try——落檔本來是「附帶效果」，但這兩支萬一炸掉會把一次**成功**的
+    生成也弄失敗，這比「沒歸檔」更糟。整支包起來，落檔失敗只印一行，不影響呼叫端。
     """
-    kwargs.setdefault("status", audit_archive.STATUS_OK)
-    if kwargs.get("image_base64"):
-        gcs_archive.archive_generation(**kwargs)
+    try:
+        kwargs.setdefault("status", audit_archive.STATUS_OK)
+        if kwargs.get("image_base64"):
+            gcs_archive.archive_generation(**kwargs)
 
-    # 只補「這條路徑本來就沒有」的欄位，不覆蓋呼叫端已經給值的欄位——
-    # news-image 那條路徑自己就帶著正確的原文，補寫反而可能蓋成舊的。
-    enriched = _enrich_archive_fields(kwargs)
+        # 只補「這條路徑本來就沒有」的欄位，不覆蓋呼叫端已經給值的欄位——
+        # news-image 那條路徑自己就帶著正確的原文，補寫反而可能蓋成舊的。
+        enriched = _enrich_archive_fields(kwargs)
 
-    user = current_user()
-    audit_archive.archive_generation(
-        user_id=user.get("user_id", ""),
-        user_email=user.get("email", ""),
-        user_name=user.get("name", ""),
-        **enriched,
-    )
+        user = current_user()
+        audit_archive.archive_generation(
+            user_id=user.get("user_id", ""),
+            user_email=user.get("email", ""),
+            user_name=user.get("name", ""),
+            **enriched,
+        )
+    except Exception as exc:  # noqa: BLE001 - 歸檔失敗只印出來，不能讓成功的生成變失敗
+        print(f"[audit] 成功筆的落檔失敗（不影響原本的生成結果）: {exc}", flush=True)
 
 
 def _archive_generation_failure(**kwargs) -> None:
-    """歸檔一次失敗的生成。不要求圖片，也不寫 GCS（那支要圖）。"""
-    kwargs.setdefault("status", audit_archive.STATUS_FAILED)
-    kwargs.pop("image_base64", None)
-    kwargs.pop("mime_type", None)
-    enriched = _enrich_archive_fields(kwargs)
-    user = current_user()
-    audit_archive.archive_generation(
-        user_id=user.get("user_id", ""),
-        user_email=user.get("email", ""),
-        user_name=user.get("name", ""),
-        image_base64="",
-        mime_type="",
-        **enriched,
-    )
+    """歸檔一次失敗的生成。不要求圖片，也不寫 GCS（那支要圖）。
+
+    2026-09-20（team-lead 複查點名）：同 `_archive_generation`，整支包 try——
+    落檔失敗不能蓋掉原本要往外丟的那個例外。
+    """
+    try:
+        kwargs.setdefault("status", audit_archive.STATUS_FAILED)
+        kwargs.pop("image_base64", None)
+        kwargs.pop("mime_type", None)
+        enriched = _enrich_archive_fields(kwargs)
+        user = current_user()
+        audit_archive.archive_generation(
+            user_id=user.get("user_id", ""),
+            user_email=user.get("email", ""),
+            user_name=user.get("name", ""),
+            image_base64="",
+            mime_type="",
+            **enriched,
+        )
+    except Exception as exc:  # noqa: BLE001 - 落檔失敗只印出來，不能蓋掉原本的錯誤
+        print(f"[audit] 失敗筆的落檔失敗（不影響原本要往外丟的例外）: {exc}", flush=True)
 
 
 def _record_generation_failure(
@@ -733,33 +747,48 @@ def _record_generation_failure(
     exc: BaseException,
     **fields,
 ) -> None:
-    """失敗只落一筆：request log 與 audit 共用同一 request id、耗時與去敏摘要。"""
-    meta = _outcome_meta(
-        started,
-        provider=str(fields.get("provider") or ""),
-        image_model=str(fields.get("image_model") or ""),
-        exc=exc,
-    )
-    request_log.log_failure(
-        request_id=request_id,
-        source=str(fields.get("source") or ""),
-        news_text=str(fields.get("news_text") or ""),
-        error=meta["error_summary"],
-        style=str(fields.get("style") or ""),
-        structure=str(fields.get("structure") or ""),
-        variable=str(fields.get("variable") or ""),
-        prompt=str(fields.get("prompt") or ""),
-        chart_type=str(fields.get("chart_type") or ""),
-        type_label=str(fields.get("type_label") or ""),
-        role=str(fields.get("role") or ""),
-        density=str(fields.get("density") or ""),
-        provider=str(fields.get("provider") or ""),
-        client_id=str(fields.get("client_id") or ""),
-        digest_model=meta["digest_model"],
-    )
-    archive_fields = dict(fields)
-    archive_fields.update(meta)
-    _archive_generation_failure(request_id=request_id, **archive_fields)
+    """失敗只落一筆：request log 與 audit 共用同一 request id、耗時與去敏摘要。
+
+    2026-09-20（team-lead 複查點名，正確）：`_outcome_meta(..., exc=exc)` 內部會呼叫
+    `classify_generation_error()`（正則比對、`_compose_error_status()`、`str(exc)`），
+    這些以前完全沒有包 try——**記錄失敗這件事本身，絕對不能把原本要往外丟的例外
+    蓋掉**：使用者原本該看到的是消化逾時的 503，不能因為分類例外訊息時自己又炸出
+    一個無關的 500。整支函式包一層 try，記錄失敗只印一行，然後繼續讓原例外往外拋
+    （呼叫端的 `raise` 不受影響——這裡只負責記錄，不負責重新拋出）。
+    """
+    try:
+        meta = _outcome_meta(
+            started,
+            provider=str(fields.get("provider") or ""),
+            image_model=str(fields.get("image_model") or ""),
+            exc=exc,
+        )
+        request_log.log_failure(
+            request_id=request_id,
+            source=str(fields.get("source") or ""),
+            news_text=str(fields.get("news_text") or ""),
+            error=meta["error_summary"],
+            style=str(fields.get("style") or ""),
+            structure=str(fields.get("structure") or ""),
+            variable=str(fields.get("variable") or ""),
+            prompt=str(fields.get("prompt") or ""),
+            chart_type=str(fields.get("chart_type") or ""),
+            type_label=str(fields.get("type_label") or ""),
+            role=str(fields.get("role") or ""),
+            density=str(fields.get("density") or ""),
+            provider=str(fields.get("provider") or ""),
+            client_id=str(fields.get("client_id") or ""),
+            digest_model=meta["digest_model"],
+        )
+        archive_fields = dict(fields)
+        archive_fields.update(meta)
+        _archive_generation_failure(request_id=request_id, **archive_fields)
+    except Exception as log_exc:  # noqa: BLE001 - 記錄失敗不能蓋掉原本要往外丟的例外
+        print(
+            f"[audit] 記錄失敗筆本身出錯（不影響原本的錯誤，原例外仍會往外丟）: "
+            f"{log_exc}；原例外：{exc}",
+            flush=True,
+        )
 
 
 def _abort_generation(exc: Exception, **fields) -> None:
