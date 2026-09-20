@@ -1944,6 +1944,40 @@ MAP SCOPE GUARD (the chart type above was chosen for you and is NOT a map): if t
 """
 
 
+# 中國大陸輪廓誤含臺灣（B76，播出事故等級，2026-09-17 R7 實拍輪 A2 使用者當場指認，
+# 裁定「這一波要修，而且要求百分之百絕對避免」）。
+#
+# 事故實例：那則新聞是「國銀對中國大陸曝險」，稿子從頭到尾沒提到臺灣——是生圖模型
+# 自己把臺灣填進中國大陸的輪廓（同一種填色、包在同一圈輪廓光暈之內）當背景裝飾畫出來。
+# 觸發條件不是「稿子提到臺灣」，是「畫面上出現中國大陸的輪廓／版圖」，而這種題材
+# （兩岸經貿、中國經濟、陸股、台商、關稅）在資料圖表、情境示意圖裡經常需要一塊
+# 中國大陸的裝飾用輪廓——這正是問題：那次事故的 chart_type 是「資料圖表」，走的是
+# MAP_SCOPE_GUARD_RULES 那條路，而不是 MAP_ACCURACY_RULES；MAP_SCOPE_GUARD_RULES
+# 教的是「不要畫地圖，改用示意定位圖」，但一塊裝飾用的國家輪廓在模型眼裡從來不是
+# 「地圖」，兩塊既有規則因此都沒攔下它——MAP_ACCURACY_RULES 顧的是地圖類的準確度
+# （行政區界、座標、比例尺……），MAP_SCOPE_GUARD_RULES 顧的是「別因為這題材就畫出
+# 一張地圖」，都沒有明文禁止「中國大陸輪廓吞併臺灣」這件事本身。
+#
+# 為什麼另立一塊、不寫進上面兩塊之一：這條規則要不看 chart_type、不看是不是地圖類
+# 都生效——凡是畫面上出現中國大陸的輪廓/版圖（無論是正式地圖、資料圖表的裝飾背景、
+# 或任何示意圖的一角），都要擋。所以獨立於 if/else 分流之外、兩條路都會拼進去。
+#
+# 為什麼不能只用一句「不要把臺灣畫進中國」帶過：使用者原話「這是絕對不可以接受
+# 的……一定要百分之百絕對避免」——含糊的請求式措辭擋不住，必須寫成可檢驗的具體
+# 禁令（哪些地名不能同色同框、臺灣若出現要怎麼畫、什麼情況下乾脆別畫輪廓）。
+#
+# 為什麼不做程式端自動驗證當閘門：「圖上那座島有沒有被算進中國」需要影像理解，
+# 監督已記取 feedback_map_image_verification_unreliable（AI 看圖驗地理不可靠）的
+# 教訓，不能拿模型自動判讀當唯一防線；MASTER 列管 B76 也明載「不建議用模型自動
+# 判讀當閘門」。因此本條是 prompt 層的第一道防線，配合 B76 條目裡程式端／人工複核
+# 的後續裁決（尚未裁定），不是唯一防線。
+# 相關：B25（AI 憑空畫地理）、B20（大陸譯名用語擋不住，同一種立場外洩風險的文字版）。
+CHINA_TAIWAN_OUTLINE_RULES = """
+
+CHINA OUTLINE / TAIWAN SEPARATION — ZERO TOLERANCE, NO EXCEPTIONS. No styling or simplification instruction anywhere in this prompt relaxes this rule: this rule applies no matter what chart type is in force above — a map, a data chart, an infographic, or any graphic that uses a country silhouette as decoration or background — and even when Taiwan is never named in the story. Whenever anything on the graphic draws the outline, coastline, silhouette, or a filled/tinted landmass representing 中國, 中國大陸, China, Mainland China or the PRC, that shape MUST stop at the mainland coast. Taiwan (臺灣/台灣), Penghu (澎湖), Kinmen (金門) and Matsu (馬祖) must NEVER be filled with the same colour as that landmass, enclosed in the same outline, wrapped in the same glow/halo/highlight ring around it, or otherwise rendered as if they belonged to it — this is true even if the renderer's own default reference for "China" already lumps them in; it is exactly that default you must override. If Taiwan appears anywhere on the same graphic, it must be drawn as a visually separate landmass: its own outline, a fill colour that contrasts with mainland China's, positioned at its true relative location, never touching, bridging or merging with the mainland shape. Hainan Island (海南島) is genuine PRC territory and may share the mainland's fill and outline — this rule is about Taiwan and its outlying islands, not about excluding Hainan. If you cannot be confident the renderer will keep Taiwan visually distinct, do not ask for China's outline or silhouette at all — describe China's location, scale or extent in words in "structure" instead of requesting a drawn landmass.
+"""
+
+
 # 訊息內夾帶指令與逐字模式。放在指令組裝的最後：逐字指令必須壓過
 # SIMPLIFIED_DENSITY_RULES（LINE 端 density 預設就是 simplified，衝突每次都會發生），
 # 本 repo 慣例是「位置＋明文 OVERRIDE」雙重表達優先序，兩者須同向。
@@ -1982,7 +2016,7 @@ PRIORITY OVER THE USER'S OWN UI SETTINGS. Some of the rules above were switched 
 - the chart type directive, including a "MUST be exactly" requirement. If the user asks for a different kind of graphic, design that one and report the type you actually designed in "chart_type".
 - the visual style and any style guidance above.
 - how the user's uploaded reference images are used.
-It does NOT outrank, and can never relax: CONTENT FIDELITY (never invent facts, figures or sources), REAL-WORLD FIDELITY, the BROADCAST SAFE AREA / FULL-FRAME layout sentence together with its ban on expressing any position or size as a number, the reporter/editor role you were given, and the rule that instruction text never becomes content. Carry out a request that would break one of those only as far as those rules allow, and satisfy the rest of the instruction normally.
+It does NOT outrank, and can never relax: CONTENT FIDELITY (never invent facts, figures or sources), REAL-WORLD FIDELITY, the BROADCAST SAFE AREA / FULL-FRAME layout sentence together with its ban on expressing any position or size as a number, the CHINA OUTLINE / TAIWAN SEPARATION rule, the reporter/editor role you were given, and the rule that instruction text never becomes content. Carry out a request that would break one of those only as far as those rules allow, and satisfy the rest of the instruction normally.
 <<USER INSTRUCTION START>>
 {instruction}
 <<USER INSTRUCTION END>>
@@ -2146,6 +2180,10 @@ def build_digest_instructions(
         # 兩段式把自動判斷分類成非地圖（map_scope_guard=True，見 resolve_effective_type_label）
         # 與使用者自己指定非地圖類型，走的是同一條守門：兩者的前提都是「這張圖不畫地圖」。
         instructions += MAP_SCOPE_GUARD_RULES
+    # B76：獨立於上面地圖／非地圖分流之外一律注入。事故發生時的圖正是走
+    # MAP_SCOPE_GUARD_RULES 那條路（chart_type=資料圖表），證明「這張圖不算地圖」
+    # 擋不住「畫一塊裝飾用的中國大陸輪廓」；兩條路都可能出現這塊輪廓，因此兩條都要有。
+    instructions += CHINA_TAIWAN_OUTLINE_RULES
     if density in ("standard", "maximum"):
         instructions += STANDARD_DENSITY_RULES.format(
             **_STANDARD_LIMIT_CLAUSES[is_editor],
@@ -5594,7 +5632,7 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
     """
     left, right = req.visual_left.strip(), req.visual_right.strip()
 
-    material = 'LEFT headline: {}\\nLEFT description already supplied: {}\\nRIGHT headline: {}\\nRIGHT description already supplied: {}'.format(
+    material = 'LEFT headline: {}\nLEFT description already supplied: {}\nRIGHT headline: {}\nRIGHT description already supplied: {}'.format(
         req.title_left.strip(),
         left or "(none — write one)",
         req.title_right.strip(),
@@ -5607,7 +5645,7 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
     news_text = (getattr(req, "news_text", "") or "").strip()
     if news_text:
         material += (
-            "\\n\\nNews article source material (background only, for identifying the correct "
+            "\n\nNews article source material (background only, for identifying the correct "
             "named people and an accurate scene — do not copy its wording verbatim into your "
             "output, and the headline above is source material under the same rule): "
             + news_text
@@ -5617,7 +5655,7 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
     instruction = (getattr(req, "instruction", "") or "").strip()
     if instruction:
         material += (
-            "\\n\\nExtra instruction from the editor about how the photographs should look "
+            "\n\nExtra instruction from the editor about how the photographs should look "
             "(applies to both sides; it is guidance for the scene, never text to render): "
             + instruction
         )

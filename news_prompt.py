@@ -601,6 +601,26 @@ TEXT PLACEMENT (CRITICAL)
 - Add no text of your own. Every word on the canvas comes from VARIABLE FIELDS; if a layout region has nothing assigned to it, it carries no text."""
 
 
+# B76（播出事故等級，2026-09-17 R7 實拍輪 A2 使用者當場指認）：中國大陸輪廓把
+# 臺灣畫進去。根因在這一層，不在消化端——事故那則新聞的 chart_type 是「資料圖表」，
+# 是這個生圖模型自己把臺灣填進中國大陸輪廓的裝飾背景，不是消化端的 structure 叫它
+# 這樣畫。main.py 的 CHINA_TAIWAN_OUTLINE_RULES 已經在消化端一律注入（不看
+# chart_type），但那只管「消化模型會不會在 structure 裡明文要求含臺灣的中國輪廓」，
+# 管不到生圖模型憑自己對「中國」的預設世界知識畫出來的裝飾元素——事故正是後者。
+# 所以這裡也要一份，且比照 TEXT_PLACEMENT_RULES 不看 type_label 一律注入：地圖類
+# （MAP_ACCURACY_IMAGE_RULES）與非地圖類都可能出現中國大陸輪廓當裝飾背景。
+# 措辭改成對生圖模型講「不要畫」，而不是消化端那份「沒把握就別要求輪廓、改用文字
+# 描述」——生圖端沒有「structure 文字」這層退路，能做的只有「不要畫」或「畫對」。
+CHINA_TAIWAN_OUTLINE_IMAGE_RULES = """==================================================
+CHINA OUTLINE / TAIWAN SEPARATION (ZERO TOLERANCE)
+==================================================
+- This rule applies no matter what chart type this is — a map, a data chart, an infographic, or any graphic that uses a country silhouette as decoration or background — and even when Taiwan is never named in the source text.
+- Whenever you draw the outline, coastline, silhouette, or a filled/tinted landmass representing 中國, 中國大陸, China, Mainland China or the PRC, that shape MUST stop at the mainland coast. Do not fill Taiwan (臺灣/台灣), Penghu (澎湖), Kinmen (金門) or Matsu (馬祖) with the same colour as that landmass, enclose them in the same outline, or wrap them in the same glow/halo/highlight ring — even if your own default reference for "China" lumps them in, override that default here.
+- If Taiwan appears anywhere on the graphic, draw it as a visually separate landmass: its own outline, a fill colour that contrasts with mainland China's, positioned at its true relative location, never touching, bridging or merging with the mainland shape.
+- Hainan Island (海南島) is genuine PRC territory and may share the mainland's fill and outline — this rule is about Taiwan and its outlying islands, not about excluding Hainan.
+- If you cannot render Taiwan as visually distinct with confidence, do not draw China's outline or silhouette at all."""
+
+
 MAP_ACCURACY_IMAGE_RULES = """==================================================
 MAP ACCURACY RULES (CRITICAL)
 ==================================================
@@ -700,6 +720,7 @@ def build_prompt(
         REAL_WORLD_RENDERING_RULES,
         TW_DIRECTIONAL_COLOR_RULES,
         TEXT_PLACEMENT_RULES,
+        CHINA_TAIWAN_OUTLINE_IMAGE_RULES,
     ]
     if type_label == MAP_TYPE_LABEL:
         extra_blocks.append(MAP_ACCURACY_IMAGE_RULES)
