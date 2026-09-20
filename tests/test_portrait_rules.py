@@ -775,9 +775,10 @@ class ApplyPortraitToImageRequestTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 400)
 
     def test_one_person_with_photo_sets_the_ai_disclaimer_kind(self):
-        """2026-09-20 使用者複查點名的回歸：這支函式以前從沒設過 disclaimer_kind，
-        prompt 已經告知模型「不要自己畫、軟體會壓」，但軟體那半沒被叫到，
-        標籤整個消失（LINE 路徑的 generate_news_image 沒有這個洞）。"""
+        """2026-09-20 team-lead 複查點名的回歸（獨立複查 gpt-5.6-sol 發現、
+        team-lead 驗證）：這支函式以前從沒設過 disclaimer_kind，prompt 已經告知
+        模型「不要自己畫、軟體會壓」，但軟體那半沒被叫到，標籤整個消失
+        （LINE 路徑的 generate_news_image 沒有這個洞）。"""
         req = ImageGenerateRequest(prompt="base prompt", portrait_subjects=["某人"], provider="gpt")
         with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO):
             with patch.object(main, "supports_reference_image", return_value=True):

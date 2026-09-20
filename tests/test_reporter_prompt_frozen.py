@@ -69,13 +69,16 @@
   `reporter-image-prompt-{plain,safeframe}.txt`（兩份，`REAL_WORLD_RENDERING_RULES`
   那兩條差異）。`git diff --stat tests/fixtures/` 只列出這十份，`cover_design_brief_rng_pins_20260911.json`
   等其他 fixture 零異動。
-- 2026-09-20（B70／F43 修正，同日稍後）：team-lead 複查點名上一條的一半程度不夠——
-  同一批把「不要自己畫，軟體會後貼」推到 `portrait_mode=none`（一般重建圖）與
+- 2026-09-20（B70／F43 修正，同日稍後）：回填 B70／F43 帳本時自己發現上一條的
+  一半程度不夠——同一批把「不要自己畫，軟體會後貼」推到 `portrait_mode=none`（一般重建圖）與
   `no_reference`（無人場景）這兩條路，但 `resolve_image_disclaimer()` 只在
   `PORTRAIT_MODES_NEEDING_DISCLAIMER`（reference／reference_multi／entry_only）
   才回 `"ai"`，這兩條路永遠回 `""`，變成「模型不畫、軟體也不壓」，標籤從
-  「有時錯」惡化成「保證沒有」。使用者裁示：沒有軟體背書就不能叫模型不要畫，
-  寧可讓模型畫醜一點的標籤也不能整個消失。因此**回退**上一條的以下部分（其餘
+  「有時錯」惡化成「保證沒有」。⚠**使用者尚未裁決這一題**——這裡是依既有原則
+  直接推論（沒有軟體背書就不能叫模型不要畫，寧可讓模型畫醜一點的標籤也不能
+  整個消失）先回到全站化之前的安全值，不是替使用者拍板；軟體端要不要也對
+  none／no_reference 補壓、觸發條件是什麼，仍登記在帳本 B70 待裁。
+  因此**回退**上一條的以下部分（其餘
   三個有軟體背書的 portrait_mode 區塊不受影響，仍是「不要自己畫」）：
   ①`main.py` `REAL_WORLD_FIDELITY_RULES` 第 3 條（一般重建圖）回退成原始
   「你必須把示意圖寫進 variable」；第 5 條（具名真人）**不回退**，因為

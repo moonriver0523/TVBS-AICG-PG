@@ -35,16 +35,17 @@ F43 的規則很簡單：「圖是 AI 生成／被 AI 改過 → 標『示意圖
 - **`provider=="gemini"`**：走舊的差異遮罩（`compose.restore_photo_outside_title_band`／
   `restore_yt_cover_photo`），模型仍整張重畫，只是事後用逐通道差異把字帶以外的
   像素「盡量」還原成原圖——這是機率性的補救，不是保證。2026-09-16 實拍量到這條路
-  `change_ratio` 常態超標（見帳本 B55），**功能等同不可用**，不构成任何保證。
+  `change_ratio` 常態超標（見帳本 B55），**功能等同不可用**，不構成任何保證。
 - **`provider=="gpt"`**：走透明底標題圖層（`transparent_mode`）——模型只回一張透明底
   的標題圖層，再用 `compose.overlay_title_layer_over_cover_band`／
   `overlay_title_layer_over_yt_cover` **逐像素**疊到 base 上，base 本身完全不經過
   模型。這條路架構上**確實可以做到跟 composite 模式同一等級的像素保證**——但
-  **現在還不能依賴**：使用者複查已確認三道閘有兩個活著的漏洞（alpha≤16 的薄層可以
-  穿過去染到保護區；全透明輸入會三道全過、回傳一張沒有標題的原圖），`ladder` 正在
-  修 `compose.py`。**等這兩個漏洞修好且驗收過，`provider=="gpt"` 的 `mode="ai"`／
-  `title_mode="ai"`＋單張原圖放置這條路就有機會納入 F43**，是本批之後最有機會
-  「原來不能接、變成能接」的一條路，不是要重新盤點整個判準。
+  **現在還不能依賴**：team-lead 複查點名（獨立複查 gpt-5.6-sol 發現、team-lead
+  實測重現）三道閘有兩個活著的漏洞（alpha≤16 的薄層可以穿過去染到保護區；
+  全透明輸入會三道全過、回傳一張沒有標題的原圖），team-lead 正在修
+  `compose.py`（已改成四道閘）。**等這兩個漏洞修好且驗收過，`provider=="gpt"`
+  的 `mode="ai"`／`title_mode="ai"`＋單張原圖放置這條路就有機會納入 F43**，
+  是本批之後最有機會「原來不能接、變成能接」的一條路，不是要重新盤點整個判準。
 
 | 版型 | 為什麼不接 | 依賴 |
 |---|---|---|

@@ -330,14 +330,20 @@ class PortraitPromptNoLongerAsksTheModelToDrawTheLabelTests(unittest.TestCase):
 
 class RealWorldRulesRevertedWhereNothingBacksThemTests(unittest.TestCase):
     """B70 全站化第一版（2026-09-20 稍早）曾經把「一般重建圖」與「NAMED REAL
-    PEOPLE 的預設分支」也改成「不要自己畫，軟體會後貼」——但 team-lead 複查點名：
-    這兩條路沒有對應的程式端壓字。`resolve_image_disclaimer()` 只在
+    PEOPLE 的預設分支」也改成「不要自己畫，軟體會後貼」——回填 B70／F43 帳本時
+    自己發現：這兩條路沒有對應的程式端壓字。`resolve_image_disclaimer()` 只在
     portrait_mode ∈ PORTRAIT_MODES_NEEDING_DISCLAIMER（reference／reference_multi／
     entry_only）時回 "ai"；一般重建圖（跟具名肖像無關的建物、場景）與
     portrait_mode="none"／no_reference 這兩條路永遠回 ""，沒有人會壓標籤。
 
-    使用者裁示：沒有軟體背書就不能叫模型不要畫——寧可讓模型畫醜一點的標籤，
-    也不能讓標籤整個消失（這正是原本 B70 要修的那個缺陷，等級接近 B76）。
+    ⚠**使用者尚未裁決這一題**。這裡採用的是既有原則的直接推論——沒有軟體背書
+    就不能叫模型不要畫，寧可讓模型畫醜一點的標籤，也不能讓標籤整個消失（這正是
+    原本 B70 要修的那個缺陷，等級接近 B76）——所以先**回退成全站化之前的安全值**，
+    不是替使用者拍板。**仍待使用者裁決的是**：軟體端要不要也對 portrait_mode=
+    "none"／"no_reference" 補壓「示意圖」，以及用什麼當觸發條件（一個候選是
+    「variable 裡出現 示意圖 就把 disclaimer_kind 設成 'ai'」）。帳本 B70 那列
+    已登記這題，未裁決前程式與文件都不得先給答案。
+
     因此這批把下列三處**回退**成原始措辭（模型自己判斷要不要畫、軟體不介入）：
     - main.py `REAL_WORLD_FIDELITY_RULES` 第 3 條（一般重建圖，消化端）
       ——第 5 條（具名真人，消化端）**不回退**：那條講的是「別把字寫進 variable」，
@@ -432,7 +438,8 @@ class RealWorldRulesRevertedWhereNothingBacksThemTests(unittest.TestCase):
 
 
 class WebImageGenerateEndToEndRegressionTests(unittest.TestCase):
-    """2026-09-20 使用者複查點名的回歸：網頁版 /api/images/generate 這條路（不是
+    """2026-09-20 team-lead 複查點名的回歸（獨立複查 gpt-5.6-sol 發現、team-lead
+    驗證）：網頁版 /api/images/generate 這條路（不是
     LINE 的 generate_news_image）曾經完全沒有貼上「示意圖」——prompt 已經告訴
     模型「不要自己畫」，但 apply_portrait_to_image_request() 從沒設過
     disclaimer_kind，後貼那半沒被叫到，兩邊斷開＝標籤整個消失，而這正是網頁版

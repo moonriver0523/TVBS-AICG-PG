@@ -4831,7 +4831,8 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
         if mode == "entry_only":
             _record_portrait_notice(portrait_entry_only_notice(subjects))
         block = PORTRAIT_MODES.get(mode, "")
-        # 網頁版專用路徑的 B70 缺陷（2026-09-20 使用者複查點名）：這支函式從沒呼叫過
+        # 網頁版專用路徑的 B70 缺陷（2026-09-20 team-lead 複查點名，獨立複查
+        # gpt-5.6-sol 發現、team-lead 實測驗證）：這支函式從沒呼叫過
         # resolve_image_disclaimer，disclaimer_kind 永遠是空字串——prompt 已經告訴
         # 模型「不要自己畫、軟體會壓」，但軟體那半從沒被叫到，兩邊斷開＝標籤整個消失。
         # LINE 路徑（generate_news_image）另外呼叫這支函式，沒有這個洞。
