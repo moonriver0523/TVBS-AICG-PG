@@ -90,6 +90,7 @@ def log_generation(
     density: str = "",
     provider: str = "",
     image_model: str = "",
+    digest_model: str = "",
     prompt_version: str = "",
     client_id: str = "",
     portrait_subject: str = "",
@@ -108,6 +109,10 @@ def log_generation(
                 "client_id": client_id,
                 "provider": provider,
                 "image_model": image_model,
+                # 消化模型（B72，2026-09-20）：image_model 只記生圖端，出事查不出是哪支
+                # 模型消化出這份 style/structure/variable。resolve_digest_model() 是純
+                # 環境設定查詢，呼叫端在任何時點取都同一個值，因此就地傳入即可。
+                "digest_model": digest_model,
                 "prompt_version": prompt_version,
                 "role": role,
                 "density": density,
@@ -148,6 +153,7 @@ def log_failure(
     density: str = "",
     provider: str = "",
     client_id: str = "",
+    digest_model: str = "",
 ) -> None:
     """記一筆失敗的生成（例如上游安全過濾擋下）。
 
@@ -165,6 +171,8 @@ def log_failure(
                 "source": source,
                 "client_id": client_id,
                 "provider": provider,
+                # B72：失敗筆同樣要記消化模型，理由同 log_generation。
+                "digest_model": digest_model,
                 "role": role,
                 "density": density,
                 "type_label": type_label,

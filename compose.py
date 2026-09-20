@@ -397,6 +397,106 @@ def apply_broadcast_hole(
 
 
 # ============================================================
+# 具名肖像／新聞圖的「示意圖」標籤，與 F43「畫面來源」標籤（B70／F43，2026-09-20）
+# ============================================================
+#
+# B70 根因：這個標籤以前完全交給生圖模型自己畫進「variable」，沒有程式保證——
+# 4 張具名肖像實拍裡 2 張不合格：一張整張找不到標籤，一張寫成錯字「示憊佪」
+# （見 MASTER-列管清單.md B70）。使用者 2026-09-16 裁定採甲案：比照播出鏡面
+# 的 `apply_broadcast_hole` 浮水印與十點封面的 `paste_cover_ai_note`——標籤
+# 一律由程式後貼，模型只被告知「這個角落留空」，不再自己找位置、自己選字。
+#
+# F43 追加「畫面來源」欄位，與「示意圖」互斥：圖是 AI 生成或被 AI 改過畫面 →
+# 標「示意圖」；圖是使用者原圖、且程式保證像素未被動過 → 標「畫面來源：○○○」
+# （沿用 vstrip 已有的 `VSTRIP_SOURCE_PREFIX`／`vstrip_source_text`，同一套「使用者
+# 只填來源名，前綴自動補」的體貼）。兩者的互斥判定在 main.resolve_image_disclaimer，
+# 這裡只管貼哪一種、貼在哪。
+#
+# 位置改用 `safe_area_spec.safe_rect` 的四個角落之一，內縮量沿用播出鏡面浮水印
+# 同一個 HOLE_INSET——保證落在安全框內（B70 動工前要釘的第②件事），不會被摳圖裁掉。
+PORTRAIT_DISCLAIMER_TEXT = "示意圖"
+PORTRAIT_DISCLAIMER_CORNERS = ("lower_right", "lower_left", "upper_right", "upper_left")
+PORTRAIT_DISCLAIMER_SIZE_RATIO = 0.03        # 字級佔畫布高（同 _draw_cover_ai_note）
+PORTRAIT_DISCLAIMER_HEIGHT_RATIO = 1.6       # 底板高＝字級 × 這個倍數
+PORTRAIT_DISCLAIMER_PAD_RATIO = 0.012        # 底板左右各留的內距（佔畫布高）
+PORTRAIT_DISCLAIMER_PLATE_FILL = (0, 0, 0, 130)
+
+
+def _disclaimer_box(
+    canvas: tuple[int, int], corner: str, profile: str, box_w: int, box_h: int
+) -> tuple[int, int, int, int]:
+    """算出標籤底板要貼的座標，釘在安全區四個角落之一，內縮 HOLE_INSET。"""
+    if corner not in PORTRAIT_DISCLAIMER_CORNERS:
+        raise ComposeError(
+            f"未知的標籤角落：{corner!r}（可用：{PORTRAIT_DISCLAIMER_CORNERS}）"
+        )
+    x0, y0, x1, y1 = safe_area_spec.safe_rect(*canvas, profile)
+    inset = _scaled_pixel(HOLE_INSET, canvas[1])
+    if corner.endswith("left"):
+        left, right = x0 + inset, x0 + inset + box_w
+    else:
+        right, left = x1 - inset, x1 - inset - box_w
+    if corner.startswith("upper"):
+        top, bottom = y0 + inset, y0 + inset + box_h
+    else:
+        bottom, top = y1 - inset, y1 - inset - box_h
+    return left, top, right, bottom
+
+
+def paste_disclaimer_note(
+    image_bytes: bytes,
+    *,
+    kind: str,
+    source_text: str = "",
+    corner: str = "lower_right",
+    canvas: tuple[int, int] = safe_area_spec.BASE_CANVAS,
+    profile: str = safe_area_spec.REPORTER_PROFILE,
+) -> bytes:
+    """程式端壓「示意圖」或「畫面來源：○○○」標籤（B70 甲案／F43）。
+
+    kind="ai"     → 固定文字 PORTRAIT_DISCLAIMER_TEXT（「示意圖」）。
+    kind="source" → vstrip_source_text(source_text)（「畫面來源：」由該函式自動補）。
+    兩者互斥，呼叫端負責只傳其中一種——見 main.resolve_image_disclaimer，這裡不
+    重新判斷「該不該標」，只管「怎麼貼」。
+
+    視覺沿用 `_draw_cover_ai_note` 那一套：半透明黑底＋白字，高度以傳入的畫布為準
+    （這裡的呼叫端可能是任意 provider 尺寸，不是固定的 COVER_CANVAS）。
+    """
+    if kind not in ("ai", "source"):
+        raise ComposeError(f"未知的標籤種類：{kind!r}（可用：'ai'／'source'）")
+    text = PORTRAIT_DISCLAIMER_TEXT if kind == "ai" else vstrip_source_text(source_text)
+    if not text:
+        raise ComposeError("畫面來源標籤沒有文字可貼（source_text 是空的）")
+
+    with Image.open(io.BytesIO(image_bytes)) as opened:
+        canvas_image = opened.convert("RGBA")
+    if canvas_image.size != canvas:
+        # 傳入的畫布只是預設值；實際以真正拿到的圖為準，理由同 apply_broadcast_hole。
+        canvas = canvas_image.size
+    height = canvas[1]
+    font = _font(round(height * PORTRAIT_DISCLAIMER_SIZE_RATIO))
+    pad = round(height * PORTRAIT_DISCLAIMER_PAD_RATIO)
+    text_w = font.getbbox(text)[2]
+    box_w = text_w + pad * 2
+    box_h = round(height * PORTRAIT_DISCLAIMER_SIZE_RATIO * PORTRAIT_DISCLAIMER_HEIGHT_RATIO)
+    x0, y0, x1, y1 = _disclaimer_box(canvas, corner, profile, box_w, box_h)
+
+    plate = Image.new("RGBA", canvas_image.size, (0, 0, 0, 0))
+    ImageDraw.Draw(plate).rounded_rectangle(
+        (x0, y0, x1, y1), radius=6, fill=PORTRAIT_DISCLAIMER_PLATE_FILL
+    )
+    canvas_image.alpha_composite(plate)
+    _draw_text(
+        ImageDraw.Draw(canvas_image), ((x0 + x1) // 2, (y0 + y1) // 2), text, font,
+        stroke_width=0, anchor="mm",
+    )
+
+    buffer = io.BytesIO()
+    canvas_image.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+# ============================================================
 # 版型 B：十點不一樣封面圖（左右兩張 AI 底圖＋程式畫的固定元素）
 # ============================================================
 
@@ -2597,6 +2697,12 @@ VSTRIP_CELL_TIGHT = 0.92             # 字級佔格距（字距約 0.08em）
 # 四捨五入正好卡在 32px，一點餘裕都沒有，所以這條線不能再往上調。
 VSTRIP_MIN_FONT_RATIO = 0.030
 VSTRIP_MIN_PITCH_RATIO = VSTRIP_MIN_FONT_RATIO / VSTRIP_CELL_TIGHT   # 反推的格距下限
+# 2026-09-20 使用者看過樣張後追加：**色框要貼著 LIVE 章（B46），但框裡的字不能貼**——
+# 第一個字原本從色框最頂端起排，看起來直接黏在 LIVE 章下緣。這條是色框內的上內距，
+# 只推文字、不動色框，所以 B46 的零縫不受影響。13px@1080，約等於字級下限的 0.4 個字高，
+# 拉開得出來又不會吃掉太多可用長度。⚠**這段內距會從可用欄高扣掉**，等於字級下限更容易
+# 撞到——計算 pitch 時一律用扣掉內距之後的 column_h，不要拿色框原高去算。
+VSTRIP_TEXT_TOP_PAD_RATIO = 0.012
 VSTRIP_TOP_GAP_RATIO = 0.014         # Logo 與色框最小淨距（同側下角時的防呆，見下方 same_side_bottom）
 VSTRIP_LABEL_FILL = (255, 255, 255)
 VSTRIP_LABEL_TEXT = (208, 20, 30)
@@ -2811,7 +2917,10 @@ def yt_vertical_layout(
     # 兩欄同字級（2026-09-08 裁決不變）：格距由格數多的那欄決定；欄高＝色框高度，
     # B80 起是常數，不再由格數反推——反過來是字級要遷就它，見下面的下限檢查。
     most = max(len(main_cells), len(sub_cells))
-    column_h = box[3] - box[1]
+    # 文字從色框頂端往下讓一點，不要黏在 LIVE 章下緣（2026-09-20 使用者看樣張後指出）。
+    # 色框本身不動，所以 B46 的零縫維持不變。
+    text_top = box[1] + round(height * VSTRIP_TEXT_TOP_PAD_RATIO)
+    column_h = box[3] - text_top
     pitch = column_h / most
     cell_size = max(1, round(pitch * VSTRIP_CELL_TIGHT))
     floor = round(height * VSTRIP_MIN_FONT_RATIO)
@@ -2828,8 +2937,8 @@ def yt_vertical_layout(
     # 右半永遠是主標（比較靠畫面中央那一半）——鏡射成右緣版之後這個關係還是成立
     # （鏡射會把左右反過來，原生右半鏡射後變成新畫面的左半，一樣是比較靠中央那半）。
     half_w = (box[2] - box[0]) // 2
-    sub = (box[0], box[1], box[0] + half_w, box[3])
-    main = (box[0] + half_w, box[1], box[2], box[3])
+    sub = (box[0], text_top, box[0] + half_w, box[3])
+    main = (box[0] + half_w, text_top, box[2], box[3])
     if not sub_cells:
         sub = (sub[0], sub[1], sub[0], sub[1])
 

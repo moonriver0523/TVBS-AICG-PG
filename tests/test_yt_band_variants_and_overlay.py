@@ -203,13 +203,25 @@ class VerticalLayoutTests(unittest.TestCase):
         self.assertLessEqual(abs(main_w - sub_w), 1)
 
     def test_the_two_columns_touch_and_form_one_box(self):
-        """同一個色框不拆開：兩欄之間沒有縫，box 就是兩欄的聯集。"""
+        """同一個色框不拆開：兩欄之間沒有縫，左右緣與底緣都貼齊色框。
+
+        2026-09-20 使用者看過樣張後要求「字不要黏在 LIVE 章下面」，所以**欄頂刻意比
+        色框頂端低一個上內距**（`VSTRIP_TEXT_TOP_PAD_RATIO`）。舊斷言 `box == 兩欄聯集`
+        把四個邊一起比，現在頂邊本來就該不一樣，改成分開驗：左右緣與底緣仍然嚴格貼齊
+        色框（這才是「同一個色框不拆開」要守的），頂邊則驗「確實往下讓了，而且讓的量
+        就是那個內距」——順便擋住有人把內距改成 0 又把這個 bug 放回來。
+        """
         for side in ("left", "right"):
             with self.subTest(side=side):
                 layout = self._layout(title_side=side)
                 inner, outer = sorted((layout["main"], layout["sub"]), key=lambda r: r[0])
                 self.assertEqual(inner[2], outer[0], "兩欄之間有縫")
-                self.assertEqual(layout["box"], (inner[0], inner[1], outer[2], inner[3]))
+                box = layout["box"]
+                self.assertEqual((inner[0], outer[2]), (box[0], box[2]), "兩欄沒有填滿色框寬度")
+                self.assertEqual(inner[3], box[3], "欄底沒有貼齊色框底緣")
+                pad = round(compose.YT_CANVAS[1] * compose.VSTRIP_TEXT_TOP_PAD_RATIO)
+                self.assertGreater(pad, 0, "上內距被改成 0，字會黏回 LIVE 章")
+                self.assertEqual(inner[1], box[1] + pad, "欄頂讓開的量不等於上內距")
 
     def test_both_columns_share_a_top_and_a_bottom(self):
         """截圖量出來就是等長：ref1 兩欄都是 y 67→358。"""

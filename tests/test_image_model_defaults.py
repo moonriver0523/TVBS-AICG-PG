@@ -120,14 +120,15 @@ class HighResolutionDecisionTableTests(unittest.TestCase):
                                     (expected_size, main.safe_area_spec.BASE_CANVAS),
                                 )
 
-    def test_flag_on_only_editor_standard_and_maximum_hit_high_resolution(self):
+    def test_flag_on_reporter_and_editor_standard_and_maximum_hit_high_resolution(self):
+        """2026-09-20 使用者裁決：記者／編輯都要涵蓋，不再寫死只有編輯（見 F38）。"""
         for role in ("記者", "編輯"):
             for density in self.DENSITIES:
                 for provider in ("gpt", "gemini"):
                     for aspect, (old_size, high_canvas) in self.ASPECTS.items():
                         with self.subTest(role=role, density=density, provider=provider, aspect=aspect):
                             with patch.object(main, "HIGH_RES_EDITOR_ENABLED", True):
-                                high = role == "編輯" and density in {"standard", "maximum"}
+                                high = role in ("記者", "編輯") and density in {"standard", "maximum"}
                                 expected_size = (
                                     main.HIGH_RES_GPT_IMAGE_SIZES[aspect]
                                     if high and provider == "gpt"
@@ -141,11 +142,29 @@ class HighResolutionDecisionTableTests(unittest.TestCase):
                                     (expected_size, expected_canvas),
                                 )
 
+    def test_other_roles_do_not_hit_high_resolution(self):
+        """角色白名單是 HIGH_RES_ROLES，不是「非某個角色就放行」——擋掉打錯字或未來
+        新角色被靜靜放行。"""
+        with patch.object(main, "HIGH_RES_EDITOR_ENABLED", True):
+            self.assertEqual(
+                main.image_generation_size(
+                    self._request("路人", "standard", "gpt", "16:9")
+                ),
+                (main.NATIVE_GPT_IMAGE_SIZES["16:9"], main.safe_area_spec.BASE_CANVAS),
+            )
+
     def test_image_request_density_is_optional_for_old_callers(self):
         self.assertEqual(ImageGenerateRequest(prompt="p").density, "")
 
-    def test_high_resolution_flag_defaults_to_off(self):
-        self.assertFalse(main.HIGH_RES_EDITOR_ENABLED)
+    def test_high_resolution_flag_defaults_to_on(self):
+        """2026-09-20 使用者裁決：把旗標打開（見 MASTER-列管清單.md F38）。"""
+        self.assertTrue(main.HIGH_RES_EDITOR_ENABLED)
+
+    def test_high_res_roles_cover_both_reporter_and_editor(self):
+        self.assertEqual(
+            main.HIGH_RES_ROLES,
+            {main.safe_area_spec.REPORTER_PROFILE, main.safe_area_spec.EDITOR_PROFILE},
+        )
 
 
 class AspectRatioGuardTests(unittest.TestCase):
@@ -210,6 +229,32 @@ class NativeGptSizeTests(unittest.TestCase):
 
     def test_safe_frame_ratio_is_available_natively(self):
         self.assertIn(main.SAFE_FRAME_ASPECT_RATIO, main.NATIVE_GPT_IMAGE_SIZES)
+
+
+class HighResGptSizeTests(unittest.TestCase):
+    """F38：高解析度那張表跟 NATIVE 表一樣要守幾何與 provider 上限，只是上限不同——
+    2.5 系列長邊放寬到 3840（見 main.py 該常數上方的模型註記），不是 2560。"""
+
+    def test_sizes_match_their_declared_ratio(self):
+        for ratio, size in main.HIGH_RES_GPT_IMAGE_SIZES.items():
+            with self.subTest(ratio=ratio):
+                width, height = (int(v) for v in size.split("x"))
+                w_ratio, h_ratio = (int(v) for v in ratio.split(":"))
+                self.assertEqual(Fraction(width, height), Fraction(w_ratio, h_ratio))
+
+    def test_sizes_are_multiples_of_16_within_the_2_5_long_edge_cap(self):
+        for ratio, size in main.HIGH_RES_GPT_IMAGE_SIZES.items():
+            with self.subTest(ratio=ratio):
+                width, height = (int(v) for v in size.split("x"))
+                self.assertEqual((width % 16, height % 16), (0, 0))
+                self.assertLessEqual(max(width, height), 3840)
+
+    def test_output_canvas_matches_the_provider_size_pixel_for_pixel(self):
+        """高解析度是「不再靠升採樣」，provider 尺寸與交付畫布必須是同一組數字。"""
+        for ratio, size in main.HIGH_RES_GPT_IMAGE_SIZES.items():
+            with self.subTest(ratio=ratio):
+                width, height = (int(v) for v in size.split("x"))
+                self.assertEqual(main.HIGH_RES_OUTPUT_CANVASES[ratio], (width, height))
 
     def test_requested_ratio_reaches_the_api_instead_of_a_hardcoded_size(self):
         captured = {}
