@@ -1605,12 +1605,16 @@ def _paste_live_badge(canvas: Image.Image, box: tuple[int, int], width: int) -> 
     return height
 
 
-def _draw_ai_note(canvas: Image.Image, y0: int) -> None:
-    """右側「AI示意圖」小標（半透明黑底、白字），y0 為標籤頂。"""
+def _draw_ai_note(canvas: Image.Image, y0: int, *, text: str = YT_AI_NOTE) -> None:
+    """右側小標（半透明黑底、白字），y0 為標籤頂，預設文字是「AI示意圖」。
+
+    text 參數（2026-09-20，F43）：那一格不是 AI 底圖、改標「畫面來源：○○○」時
+    共用同一套版位／底板／字體，只換文字內容——見各 compose_yt_*cover 呼叫端。
+    """
     width, height = YT_CANVAS
     margin = round(width * YT_MARGIN_RATIO)
     note_font = _font(round(height * YT_AI_NOTE_SIZE_RATIO))
-    note_w = note_font.getbbox(YT_AI_NOTE)[2]
+    note_w = note_font.getbbox(text)[2]
     note_h = round(height * YT_AI_NOTE_SIZE_RATIO * 1.5)
     x1 = width - margin - 12
     plate = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
@@ -1618,7 +1622,7 @@ def _draw_ai_note(canvas: Image.Image, y0: int) -> None:
         (x1 - note_w - 24, y0, x1, y0 + note_h), radius=8, fill=YT_AI_NOTE_PLATE
     )
     canvas.alpha_composite(plate)
-    _draw_text(ImageDraw.Draw(canvas), (x1 - 12, y0 + note_h // 2), YT_AI_NOTE, note_font, stroke_width=0, anchor="rm")
+    _draw_text(ImageDraw.Draw(canvas), (x1 - 12, y0 + note_h // 2), text, note_font, stroke_width=0, anchor="rm")
 
 
 def _draw_top_line(canvas: Image.Image) -> None:
@@ -1796,6 +1800,7 @@ def compose_yt_cover(
     original_audio: bool = False,
     ai_translation: bool = False,
     ai_note: bool = False,
+    source_text: str = "",
     draw_titles: bool = True,
     bottom_band: bool = False,
     band_top_ratio: float | None = None,
@@ -1813,6 +1818,10 @@ def compose_yt_cover(
     裁滿 1920×1080。line1／line2 是已分好的兩行標題（分段邏輯在 editor_formats），
     original_audio＝LIVE 章上方「原音呈現」、ai_translation＝日期下方「AI即時翻譯」，
     兩者獨立可並存；ai_note=True 時右側加「AI示意圖」（AI 生的底圖一律標，附圖不標）。
+
+    source_text（2026-09-20，F43）：ai_note=False 且底圖是原圖放置時，填了來源名
+    改標「畫面來源：○○○」，與「AI示意圖」互斥、同一個版位——ai_note=True 時這個
+    參數被忽略（AI 標籤贏）。
     """
     line1, line2 = (line1 or "").strip(), (line2 or "").strip()
     if not line1 or not line2:
@@ -1872,9 +1881,15 @@ def compose_yt_cover(
             YT_AI_TRANSLATION_LABEL, small, stroke=YT_TITLE_STROKE, stroke_width=4, anchor="la",
         )
 
-    # ---- 右側：AI 示意圖小標（只有 AI 底圖才有）----
+    # ---- 右側：AI 示意圖小標（只有 AI 底圖才有）／畫面來源（F43，互斥）----
     if ai_note:
         _draw_ai_note(canvas, round(height * YT_AI_NOTE_TOP_RATIO))
+        draw = ImageDraw.Draw(canvas)
+    elif source_text.strip():
+        _draw_ai_note(
+            canvas, round(height * YT_AI_NOTE_TOP_RATIO),
+            text=vstrip_source_text(source_text),
+        )
         draw = ImageDraw.Draw(canvas)
 
     # ---- 底部：兩行標題置中（白／黃、黑描邊）----
@@ -2016,6 +2031,7 @@ def compose_yt_hourly_cover(
     date_text: str,
     time_text: str = "",
     ai_note: bool = False,
+    source_text: str = "",
     draw_titles: bool = True,
     line_max_chars: int | None = None,
     draw_date: bool = True,
@@ -2031,6 +2047,10 @@ def compose_yt_hourly_cover(
     line_max_chars（2026-09-08 WP2）：每行字數上限，超過就報錯。給「雙則」用——
     那個模式的兩行各是一則新聞的完整標題，不是同一句拆兩段，長度沒有天然上限。
     單則模式不帶這個參數，維持原行為。
+
+    source_text（2026-09-20，F43）：ai_note=False 且底圖是原圖放置時，填了來源名
+    改標「畫面來源：○○○」，與「AI示意圖」互斥、同一個版位——ai_note=True 時這個
+    參數被忽略（AI 標籤贏）。
     """
     line1, line2 = (line1 or "").strip(), (line2 or "").strip()
     if not line1 or not line2:
@@ -2082,10 +2102,16 @@ def compose_yt_hourly_cover(
         )
         block_bottom = band[3]
 
-    # ---- 右側：AI 示意圖小標（只有 AI 底圖才有）----
+    # ---- 右側：AI 示意圖小標（只有 AI 底圖才有）／畫面來源（F43，互斥）----
     draw = ImageDraw.Draw(canvas)
     if ai_note:
         _draw_ai_note(canvas, max(round(height * YT_HOURLY_AI_NOTE_TOP_RATIO), block_bottom + 16))
+        draw = ImageDraw.Draw(canvas)
+    elif source_text.strip():
+        _draw_ai_note(
+            canvas, max(round(height * YT_HOURLY_AI_NOTE_TOP_RATIO), block_bottom + 16),
+            text=vstrip_source_text(source_text),
+        )
         draw = ImageDraw.Draw(canvas)
 
     # ---- 左中：紅底白字日期（只有 0 級才由程式畫，見 YT_HOURLY_DATE_TAB_BOX 註解）----
@@ -2412,6 +2438,7 @@ def compose_yt_live24_cover(
     title: str,
     date_text: str,
     ai_note: bool = False,
+    source_text: str = "",
     draw_title: bool = True,
 ) -> bytes:
     """合成 YT 24H LIVE 封面：底圖＋左上角標（含日期）＋右上兩層 Logo＋單行紅標題。
@@ -2419,6 +2446,9 @@ def compose_yt_live24_cover(
     draw_title=False：標題已由生圖模型畫在 background 上（創意 ≥1），這裡只貼固定
     元素。角標、日期與 Logo **任何模式下都是程式貼的**——那三個是頻道識別，
     交給模型畫就會有錯字與走樣的版本。
+
+    source_text（2026-09-20，F43）：ai_note=False 且底圖是原圖放置時，填了來源名
+    改標「畫面來源：○○○」，與「AI示意圖」互斥、同一個版位。
     """
     title = (title or "").strip()
     if not title:
@@ -2445,9 +2475,15 @@ def compose_yt_live24_cover(
         logo = logo.resize((logo_w, round(logo.height * logo_w / logo.width)), Image.LANCZOS)
         canvas.alpha_composite(logo, (logo_x, round(height * LIVE24_LOGO_TOP_RATIO)))
 
-    # ---- 左側：AI示意圖小標。掛在角標正下方——右上被 Logo 佔走了，不能照 hourly 放右邊 ----
+    # ---- 左側：AI示意圖小標／畫面來源（F43，互斥）。掛在角標正下方——右上被 Logo
+    # 佔走了，不能照 hourly 放右邊 ----
     if ai_note:
         _draw_live24_ai_note(canvas, round(height * LIVE24_BADGE_TOP_RATIO) + badge_h + 16)
+    elif source_text.strip():
+        _draw_live24_ai_note(
+            canvas, round(height * LIVE24_BADGE_TOP_RATIO) + badge_h + 16,
+            text=vstrip_source_text(source_text),
+        )
 
     # ---- 底部：單行紅標題（AI 標題模式下模型已經畫了，不再壓一次）----
     if draw_title:
@@ -2458,23 +2494,25 @@ def compose_yt_live24_cover(
     return buffer.getvalue()
 
 
-def _draw_live24_ai_note(canvas: Image.Image, y0: int) -> None:
-    """live24 的「AI示意圖」小標：**靠左**，貼在角標下方。
+def _draw_live24_ai_note(canvas: Image.Image, y0: int, *, text: str = YT_AI_NOTE) -> None:
+    """live24 的小標：**靠左**，貼在角標下方，預設文字是「AI示意圖」。
 
     與 _draw_ai_note 分開一支的理由：那支寫死靠右，而 live24 的右上是 Logo，
     共用會直接壓在 Logo 上。
+
+    text 參數（2026-09-20，F43）：改標「畫面來源：○○○」時共用同一套版位。
     """
     width, height = YT_CANVAS
     x0 = round(width * LIVE24_BADGE_LEFT_RATIO)
     note_font = _font(round(height * YT_AI_NOTE_SIZE_RATIO))
-    note_w = note_font.getbbox(YT_AI_NOTE)[2]
+    note_w = note_font.getbbox(text)[2]
     note_h = round(height * YT_AI_NOTE_SIZE_RATIO * 1.5)
     plate = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     ImageDraw.Draw(plate).rounded_rectangle(
         (x0, y0, x0 + note_w + 24, y0 + note_h), radius=8, fill=YT_AI_NOTE_PLATE
     )
     canvas.alpha_composite(plate)
-    _draw_text(ImageDraw.Draw(canvas), (x0 + 12, y0 + note_h // 2), YT_AI_NOTE, note_font,
+    _draw_text(ImageDraw.Draw(canvas), (x0 + 12, y0 + note_h // 2), text, note_font,
                stroke_width=0, anchor="lm")
 
 
@@ -2596,6 +2634,7 @@ def compose_yt_hot_cover(
     line1: str,
     line2: str,
     ai_note: bool = False,
+    source_text: str = "",
     draw_titles: bool = True,
     bottom_band: bool = False,
     band_top_ratio: float | None = None,
@@ -2605,6 +2644,8 @@ def compose_yt_hot_cover(
 
     draw_titles=False（標題由 AI 生成）：background 已含標題與底帶，只貼固定元素。
     bottom_band（2026-09-08 使用者裁決，預設關）：底部深紅壓色框，開關與透明度同新聞版。
+    source_text（2026-09-20，F43）：ai_note=False 且底圖是原圖放置時，填了來源名
+    改標「畫面來源：○○○」，與「AI示意圖」互斥、同一個版位。
     """
     line1, line2 = (line1 or "").strip(), (line2 or "").strip()
     if not line1 or not line2:
@@ -2618,6 +2659,11 @@ def compose_yt_hot_cover(
     _draw_hot_header(canvas)
     if ai_note:
         _draw_ai_note(canvas, round(height * YT_AI_NOTE_TOP_RATIO))
+    elif source_text.strip():
+        _draw_ai_note(
+            canvas, round(height * YT_AI_NOTE_TOP_RATIO),
+            text=vstrip_source_text(source_text),
+        )
     draw = ImageDraw.Draw(canvas)
     max_w = width - margin * 2
     start = round(height * YT_TITLE_SIZE_RATIO)

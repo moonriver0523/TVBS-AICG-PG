@@ -7218,6 +7218,11 @@ class YtCoverRequest(BaseModel):
     background_mime_type: str = "image/png"
     # 那張底圖是不是 AI 生的——決定要不要疊「AI示意圖」。前端原樣帶回上一次的回應值。
     background_is_ai: bool = False
+    # 「畫面來源」（F43，2026-09-20）：只在底圖是原圖放置（is_ai=False）時才會顯示，
+    # 與「AI示意圖」互斥、AI 標籤贏（見 compose 各 compose_yt_*cover 的 ai_note 分支）。
+    # 只有單一欄位：dual（雙則）的底圖一律是 yt_dual_background 羽化拼出來的
+    # （main.py 的 is_ai=True 寫死），本來就不會是原圖放置，不需要左右各一份。
+    source_text: str = Field(default="", max_length=40)
     # 變化池的 seed（F0／D1）。None＝後端現抽一顆並在回應裡回報。取代原本
     # seed=f"{title}|{date}" 的寫法——那種 seed 只要標題與日期沒變就永遠同一種長相，
     # 使用者按幾次「重新生成」都拿到同一張。
@@ -7258,6 +7263,9 @@ class YtCoverResponse(ImageGenerateResponse):
     line2: str = ""
     visual: str = ""
     background_is_ai: bool = False
+    # 那一格實際貼了「畫面來源」（F43）。空字串＝這格沒有標——不論是因為底圖是
+    # AI 生的（background_is_ai=True）還是使用者沒填來源名。
+    source_text: str = ""
     title_mode: str = "ai"
     # 整點雙則（2026-09-08 WP2）：前端據此顯示版面與對應的下載短名
     dual: bool = False
@@ -8014,10 +8022,15 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         _log_failure(exc)
         raise
     try:
+        # F43（2026-09-20）：畫面來源與 AI示意圖互斥，is_ai=True 時 compose 端會自己
+        # 忽略這個參數（AI 標籤贏），這裡不用再判斷一次；dual 模式的底圖一律
+        # is_ai=True（yt_dual_background 寫死），傳了也不會生效。
+        source_text = req.source_text.strip()
         if live24:
             # 單行標題：這個版型不拆段，req.title 整句就是那一行。
             cover = compose.compose_yt_live24_cover(
                 background, title=req.title.strip(), date_text=date_text, ai_note=is_ai,
+                source_text=source_text,
                 # AI 標題模式下標題已經畫在底圖上了，再壓一次會疊成兩層
                 draw_title=not ai_title,
             )
@@ -8027,6 +8040,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 line1=lines[0],
                 line2=lines[1],
                 ai_note=is_ai,
+                source_text=source_text,
                 draw_titles=not ai_title,
                 bottom_band=bottom_band,
             )
@@ -8038,6 +8052,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 date_text=date_text,
                 time_text=req.time_text.strip(),
                 ai_note=is_ai,
+                source_text=source_text,
                 draw_titles=not ai_title,
                 # 雙則的每一行是一則新聞的完整標題，長度沒有天然上限，要有一條硬線；
                 # 單則是同一句拆兩段，長度受原標題限制，不套用（維持原行為）。
@@ -8055,6 +8070,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 original_audio=original_audio,
                 ai_translation=ai_translation,
                 ai_note=is_ai,
+                source_text=source_text,
                 draw_titles=not ai_title,
                 bottom_band=bottom_band,
             )
@@ -8110,6 +8126,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         line2=lines[1],
         visual=visual,
         background_is_ai=is_ai,
+        source_text="" if is_ai else source_text,
         title_mode=req.title_mode,
         dual=dual,
         seed=req.seed,

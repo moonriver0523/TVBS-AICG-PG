@@ -18,13 +18,14 @@ F43 的規則很簡單：「圖是 AI 生成／被 AI 改過 → 標『示意圖
 畫面，即使模型宣稱「只是參考」，**都不算保證**——本 repo 自己的教訓（B55）已經
 證明「附了原圖當參考，模型還是會整張重畫」是實測會發生的事，不是理論上的風險。
 
-## 已接（本批，commit 見 F43 接線 commit）
+## 已接
 
 | 版型 | 條件 | 保證來源 | 狀態 |
 |---|---|---|---|
 | 十點不一樣（滿版） | `mode="composite"` 且該格是原圖放置（`left_is_ai=False`） | `_cover_full_composite`：`background_image_base64`／`asis_left` 直接進 `compose.compose_ten_cover`，`is_ai=False` 那個分支完全不呼叫任何生圖函式（`_cover_full_image` 只在 `slot is None` 才叫） | ✅ 已接：`TenCoverRequest.source_left`，`compose_ten_cover(left_source_text=...)` |
 | 十點不一樣（雙切） | `mode="composite"` 且該格是原圖放置（`left_is_ai`／`right_is_ai=False`） | `_cover_composite`：`_cover_panels` 對已有附圖的格直接回傳原始 bytes，不進 `_cover_panel_image` | ✅ 已接：`source_left`／`source_right`，各自獨立互斥 |
 | 十點不一樣（雙切「只改文字」recompose） | 同上，`background_is_ai`／`background_right_is_ai` 帶回 False | `background_image_base64` 是「拼好但沒壓字」的底圖，重壓文字不重拼、不重生 | ✅ 已接：`source_left`／`source_right` 由前端原樣重送（純使用者輸入欄位，不像 `background_is_ai` 需要另開 carry-forward 欄位） |
+| YT 封面 `title_mode="composite"`，四個 layout（news／hourly／hot／live24） | 該次生成是原圖放置（`is_ai=False`） | `_yt_cover_background` 對 asis 圖（`compose.crop_background_16x9`／`compose.split_backgrounds`）走純裁切／貼合，完全不經過生圖模型，回傳 `is_ai=False`；跟十點不一樣 composite 模式同一等級的保證 | ✅ 已接（2026-09-20 補接）：`YtCoverRequest.source_text`／`YtCoverResponse.source_text`；`compose.py` 的 `_draw_ai_note`／`_draw_live24_ai_note` 各加 `text` 參數，`compose_yt_cover`／`compose_yt_hourly_cover`／`compose_yt_hot_cover`／`compose_yt_live24_cover` 各加 `source_text` 參數＋互斥判定。dual（雙則）模式的底圖一律 `is_ai=True`（`yt_dual_background` 寫死），`source_text` 對它自動被忽略，不需要左右各一份 |
 | YT 直播直標（`/api/editor/yt-overlay`） | 全部 | **不生圖、不打任何模型、沒有底圖**——透明 PNG 疊在直播訊號上，畫面內容不是這支端點管的 | ✅ 既有功能（`YtOverlayRequest.source_text`，2026-09-09 上線），F43 這批沒有新動它，列在這裡只為了盤點完整 |
 
 ## 故意不接（本批），與原因
@@ -50,7 +51,6 @@ F43 的規則很簡單：「圖是 AI 生成／被 AI 改過 → 標『示意圖
 | 版型 | 為什麼不接 | 依賴 |
 |---|---|---|
 | 十點不一樣，`mode="ai"`（含附了原圖當參考） | 見上方 provider 分岔說明；`provider="gemini"` 是機率性補救、`provider="gpt"` 架構上可行但閘門有已知活漏洞，兩者都不到「程式保證」的門檻。 | **B55**（`ladder` 代理同批在動，見下方「與 ladder 的關係」） |
-| YT 封面（news／hourly／hot／live24），所有 layout | `_yt_cover_background` 對 asis 圖（`compose.crop_background_16x9`／`compose.split_backgrounds`）回傳 `is_ai=False`，理論上跟十點不一樣同一等級的保證，**技術上可以比照十點不一樣的做法接**。這批沒接純粹是時間分配：先把十點不一樣一種版型做完整、測完整，比兩種版型都做一半更安全。函式與參數名稱見下方「下次要接的話」。 | 無（跟 B55／B78／B79 無關，純粹沒排進這批） |
 | YT 封面 `title_mode="ai"` | 同「十點不一樣 mode=ai」——B55 YT 擴充也是同一套 provider 分岔（`main.py:7958` 附近的 `transparent_mode`），結論同上一列。 | 同上，B55 的兩個閘門漏洞。 |
 | 一般新聞圖／播出鏡面（`/api/images/generate`、`/api/news-image`） | 這條線本來就沒有「原圖直接上版」的概念——每一張都是生圖模型畫出來的，沒有 asis 這種東西可言。不適用 F43，維持只有 B70 的「AI示意圖」邏輯。 | 無 |
 
@@ -65,23 +65,27 @@ F43 的規則很簡單：「圖是 AI 生成／被 AI 改過 → 標『示意圖
 表示 `ladder` 那批也動到了 AI 標籤的貼字邏輯，屬於「合併順序」問題，不是我這批
 的責任範圍，由 team-lead 判斷先後。**
 
-## 下次要接 YT 封面的話，改哪裡
+## YT 封面 composite 補接紀錄（2026-09-20）
 
-比照十點不一樣這批的做法：
+上一版這裡列的六個步驟已經照做完畢：
 
-1. `main.py` `YtCoverRequest` 加 `source_text: str = Field(default="", max_length=40)`
-   （dual 模式的 `background_is_ai` 是單一 bool——`yt_dual_background` 一律
-   `is_ai=True`，dual 模式本來就不會 asis，不用另外處理 `source_text_second`）。
-2. `compose.py` `_draw_ai_note` 已比照 `_draw_cover_ai_note` 的模式加一個
-   `text: str = YT_AI_NOTE` 參數了嗎？**還沒**——這是下次要做的第一步，做法完全
-   一樣（見 `_draw_cover_ai_note` 的 diff）。
-3. `compose_yt_cover`（news layout）、以及 hourly／hot／live24 各自的合成函式
-   （`_draw_ai_note` 目前有 5 個呼叫點，見 `compose.py:1853/2064/2596/3436/3475`），
-   每一個都要加 `source_text` 參數並比照 `if ai_note: ... elif source_text: ...`
-   的互斥寫法。
-4. `main.py` `_yt_cover_background` 已經回傳 `is_ai` 了，不用改；改的是拿到
-   `is_ai=False` 之後把 `req.source_text` 往下傳給 `compose_yt_cover(...)`
-   的呼叫端（`editor_yt_cover` 端點函式本體）。
-5. 同樣要在 `YtCoverResponse` 加 `source_text: str = ""` 回顯。
-6. 測試比照 `tests/test_f43_source_label.py` 的三段式寫法：compose 單元測試
-   （互斥、正規化）＋端到端（asis 有/無來源名、AI 生底圖時忽略）。
+1. `main.py` `YtCoverRequest` 加了 `source_text: str = Field(default="", max_length=40)`；
+   dual 模式的底圖一律 `is_ai=True`（`yt_dual_background` 寫死），不需要
+   `source_text_second`。
+2. `compose.py` `_draw_ai_note`／`_draw_live24_ai_note` 都加了 `text` 參數
+   （預設值不變，既有呼叫端零行為改變）。
+3. 四個合成函式（`compose_yt_cover`／`compose_yt_hourly_cover`／
+   `compose_yt_hot_cover`／`compose_yt_live24_cover`）都加了 `source_text` 參數，
+   `if ai_note: ... elif source_text.strip(): ...` 的互斥寫法。
+   `_yt_news_or_hot_fixed_boxes`／`_yt_hourly_fixed_boxes`／`_yt_live24_fixed_boxes`
+   這三支不算「呼叫點」——那是 B55 量測固定元素外框用的輔助函式，只在
+   `provider="gemini"` 的差異遮罩路徑才用得到，跟 composite 模式的 F43 無關，
+   沒有改動。
+4. `editor_yt_cover` 端點在四個 layout 分支都把 `req.source_text.strip()` 傳給
+   對應的合成函式。
+5. `YtCoverResponse` 加了 `source_text: str = ""`，`is_ai=True` 時一律回空字串。
+6. 測試見 `tests/test_f43_yt_cover_source_label.py`（13 題）：compose 層四個函式
+   的互斥判定（6 題）＋端到端四種 layout（7 題，含 AI 生底圖時忽略、來源前綴
+   正規化）。
+
+`title_mode="ai"` 那條路維持不接，理由同上表。
