@@ -6325,6 +6325,13 @@ def _cover_ai(
                 f"AI 標題圖層沒通過檢查（{exc}）。這張已改用程式壓字的標題，"
                 "版面與字體會跟 AI 標題不一樣；想要 AI 標題請重新生成一次。"
             )
+            # 斷句補打（2026-09-21 獨立複查第三輪）：端點入口的 apply_title_break_hints
+            # 帶的是 composite=False（B75：AI 標題模式下 compose 不壓字，斷句沒人讀），
+            # 所以走到這裡時**詞組邊界是空的**。現在這條路真的要用 Pillow 壓字了，
+            # 不補打的話 compose._split_line_near_middle 只能按規則硬切，會把詞腰斬
+            # （sol 的例子：「全球半導體供應鏈重新洗牌」切成「全球半導體供／應鏈重新洗牌」）。
+            # 只在真的退回時才打這一次文字模型，正常路徑不受影響。
+            apply_title_break_hints(req.title_left, req.title_right, composite=True)
             cover = compose.compose_ten_cover(
                 base, None,
                 title_left=req.title_left.strip(), title_right="",
@@ -8070,6 +8077,11 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                         background, ai_title = base, False
                         image_model = f"{image_model}＋yt-cover:title-layer-fallback"
                         title_layer_fallback = True
+                        # 斷句補打，理由同 _cover_ai 的 fallback（2026-09-21 複查第三輪）：
+                        # 入口是用 composite=False 進來的，詞組邊界空的，現在要壓字了。
+                        # live24 單行不拆，本來就不打。
+                        if not live24:
+                            apply_title_break_hints(req.title, req.title_second, composite=True)
                 else:
                     background = compose.restore_yt_cover_photo(
                         base, background, layout=req.layout,

@@ -21,7 +21,8 @@ provider=="gemini" 維持原本的差異遮罩回貼（哪怕那條路本來就�
 (b) 保護區（頁首帶／Logo／角標）內 alpha 必須全為 0——那些位置由程式後貼，模型碰了就擋。
 (c) 面積防呆：可疊區域裡非透明像素比例超過門檻＝模型畫的是整片背景不是標題。
 (d) 空圖層／殘渣防呆：可疊區域裡一個像素都沒畫，或畫到的比例低於
-    `TITLE_LAYER_MIN_PAINT_RATIO`（1%，2026-09-20 使用者裁定）＝疊出來會是一張
+    `TITLE_LAYER_MIN_PAINT_RATIO`（0.1%——2026-09-20 先裁 1%，2026-09-21 獨立複查
+    用實際字形量出 1% 會誤擋合法的一～二字標題，改判 0.1%）＝疊出來會是一張
     幾乎沒有標題的原圖。
 
 **任何一道沒過的處理方式在 2026-09-20 由使用者改判**：原本一律丟 ComposeError、
@@ -106,11 +107,12 @@ class OverlayTitleLayerCoreUnitTests(unittest.TestCase):
         self.base = _rgb_png(RED, (self.width, self.height))
 
     def _title_box(self, band_mid: int) -> list[int]:
-        """一塊「像真的標題」的實心區（900×60 ≈ 可疊區的 3.6%）。
+        """一塊「像真的標題」的實心區（900×60 ≈ 可疊區的 3%）。
 
-        2026-09-20 使用者裁定第四道閘加下限 1% 之後，原本 300×40 的示意方塊只有
-        0.67%，會被新的下限擋掉——那不是回歸，是示意方塊本來就比真標題小一個量級。
-        改用有量過的尺寸，下限本身另外用 OnePercentFloorTests 直接驗。
+        原本是 300×40（0.67%）。2026-09-20 第四道閘加下限時一度會擋到它，所以放大成
+        有量過的尺寸；2026-09-21 下限改判 0.1% 之後兩者其實都過得了，但這個尺寸更
+        貼近真標題的量級（獨立複查實測：十點兩行標題 5.91%），維持不動。
+        下限本身由 test_the_floor_* 那組直接驗。
         """
         return [200, band_mid - 30, 1100, band_mid + 30]
 
@@ -191,9 +193,10 @@ class OverlayTitleLayerCoreUnitTests(unittest.TestCase):
         )
         self.assertEqual(Image.open(io.BytesIO(out)).mode, "RGB")
 
-    def test_the_one_percent_floor_blocks_a_few_stray_pixels(self):
-        """第四道閘的下限（2026-09-20 使用者裁定 1%）：只吐出殘渣一樣要擋。
-        原本第四道只擋「完全沒畫」，殘渣會通過、疊出一張幾乎沒有標題的原圖。"""
+    def test_the_floor_blocks_a_few_stray_pixels(self):
+        """第四道閘的下限：只吐出殘渣一樣要擋。原本第四道只擋「完全沒畫」，
+        殘渣會通過、疊出一張幾乎沒有標題的原圖。
+        60×20＝1,200px，在十點可疊區（約 1,833,600px）是 0.065%，低於 0.1%。"""
         band_mid = self.band_top + (self.height - self.band_top) // 2
         layer = _rgba_layer_png(
             (self.width, self.height), opaque_box=[200, band_mid, 260, band_mid + 20],
@@ -204,17 +207,31 @@ class OverlayTitleLayerCoreUnitTests(unittest.TestCase):
             )
         self.assertIn("幾乎是空的", str(ctx.exception))
 
-    def test_a_real_sized_title_clears_the_floor_with_room_to_spare(self):
-        """釘住「1% 只擋得到殘渣」這個前提：像真標題的區塊要遠高於下限。
-        量到的數字寫進斷言，之後有人調門檻時會看到餘裕剩多少。"""
+    def test_the_thinnest_legal_single_character_title_is_not_blocked(self):
+        """門檻改判的理由（2026-09-21）：1% 會誤擋合法的短標題。
+
+        `TenCoverRequest.title_left` 允許一字標題。獨立複查用實際字形量到
+        十點一字＝9,143px（0.50%）、二字一行＝18,145px（0.99%）、
+        細字重無描邊單字＝3,464px（0.19%），在 1% 下全部被誤擋。
+        這一題用最瘦的那個案例（3,464px）當守門，確保門檻不會再被調回去擋到它。
+        """
         band_mid = self.band_top + (self.height - self.band_top) // 2
-        box = self._title_box(band_mid)
-        painted = (box[2] - box[0]) * (box[3] - box[1])
-        ratio = painted / (self.width * self.height)
-        self.assertGreater(
-            ratio, compose.TITLE_LAYER_MIN_PAINT_RATIO * 2.5,
-            f"示意標題只占畫布 {ratio:.2%}，離下限太近，這個 fixture 撐不起「餘裕」的說法",
+        # 3,464px ≈ 62×56 的實心塊，模擬「細字重、無描邊的一個中文字」
+        layer = _rgba_layer_png(
+            (self.width, self.height), opaque_box=[200, band_mid, 262, band_mid + 56],
         )
+        # 不應該丟例外
+        compose.overlay_title_layer_over_cover_band(
+            self.base, layer, band_top_ratio=self.band_top_ratio,
+        )
+
+    def test_the_floor_keeps_real_headroom_on_both_sides(self):
+        """把餘裕寫成數字釘住：最瘦合法案例對下限要有 1.5 倍以上，
+        殘渣要低於下限。之後有人再調門檻時，這一題會直接告訴他兩邊剩多少。"""
+        editable = 1_833_600  # 十點滿版可疊區（複查實算）
+        floor = compose.TITLE_LAYER_MIN_PAINT_RATIO * editable
+        self.assertGreater(3_464 / floor, 1.5, "最瘦的合法單字標題離下限太近")
+        self.assertLess(1_200 / floor, 1.0, "殘渣已經擋不住了")
 
 
 class OverlayTitleLayerIndependentReviewTests(unittest.TestCase):
@@ -413,6 +430,33 @@ class TenCoverEndpointWiringTests(unittest.TestCase):
         r, g, b = cover.getpixel((w // 2, round(h * 0.45)))
         self.assertGreater(r, 150, "主色不再是紅的，底圖被換掉了")
         self.assertLess(max(g, b), 80)
+
+    def test_the_fallback_cover_really_has_pixels_drawn_where_the_title_goes(self):
+        """2026-09-21 獨立複查第三輪點名的覆蓋缺口：原本那幾題只驗 200＋notice＋
+        metadata，**沒有一題逐像素確認退回來的成品真的長出標題**。若日後有人漏掉
+        `ai_title=False`（或十點這邊漏了 compose_ten_cover），notice 照發、狀態碼照樣
+        200、欄位照樣對，卻輸出一張沒有標題的原圖——那正是第四道閘要擋的東西。"""
+        def fake_raw(req):
+            return SimpleNamespace(
+                image_data_base64=base64.b64encode(_rgb_png((10, 10, 10), compose.COVER_CANVAS)).decode(),
+                model="fake", mime_type="image/png",
+            )
+
+        body = {**self.BODY, "slot_left": [{"data_url": _data_url(_rgb_png(RED, (640, 640))), "purpose": "asis"}]}
+        res = self._post(body, fake_raw)
+        self.assertEqual(res.status_code, 200, res.text)
+        cover = Image.open(io.BytesIO(base64.b64decode(res.json()["image_data_base64"]))).convert("RGB")
+        w, h = cover.size
+        # 標題壓在下半部。底圖是純紅的，所以「非紅」像素＝程式畫上去的東西。
+        band = cover.crop((0, round(h * 0.55), w, h))
+        drawn = sum(
+            1 for px in band.getdata()
+            if abs(px[0] - RED[0]) > 40 or px[1] > 90 or px[2] > 90
+        )
+        self.assertGreater(
+            drawn, 2000,
+            f"下半部只有 {drawn} 個像素跟底圖不同——退回來的成品幾乎沒有標題",
+        )
 
     def test_photo_pixels_outside_the_title_area_survive_bit_exact(self):
         def fake_raw(req):
