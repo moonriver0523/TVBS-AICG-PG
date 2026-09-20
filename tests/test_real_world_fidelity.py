@@ -67,7 +67,11 @@ class ImageStageTests(unittest.TestCase):
             "not even a small, faint, distant or background one",
             "do NOT draw a recognisable face for a named real person",
             "示意圖",
-            "never drop or hide it",
+            # 2026-09-20（B70 全站化）：標籤改程式端壓字，模型被告知「不要自己畫」
+            # 取代舊版「必須清楚可見」——見 tests/test_reporter_prompt_frozen.py
+            # docstring「2026-09-20（B70／F43）」那一段。
+            "do not draw a 示意圖 label yourself",
+            "software stamps one at the lower-right corner",
             "SELF-CHECK before finalizing",
         ):
             with self.subTest(phrase=phrase):

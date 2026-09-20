@@ -28,6 +28,33 @@
   fixture**（`tests/fixtures/` 目錄零異動，`git diff --stat` 可查證）。
   B53（news_text 併入補畫面描述的 material）與四層分流的 mode 判斷邏輯只影響
   `main.py` 的 cover／yt-cover／一般生圖路徑，同樣不動這裡管的 digest 快照。
+- 2026-09-20（B70／F43）：使用者當面追加重凍額度，把「示意圖」標籤全站化——
+  Stage 5a 那批只改了 portrait_mode≠"none" 時才注入的四個 PORTRAIT_* 區塊
+  （見上一條），沒有動「no portrait block present」時的預設路徑，那條預設路徑
+  這一批才補上，本檔管的 `build_digest_instructions()`（unconditional 注入，不看
+  portrait_mode）與 `news_prompt.build_prompt()` 的預設路徑因此都要重凍。
+  改了兩處：①`main.py` 的 `REAL_WORLD_FIDELITY_RULES` 第 3、5 條——原本要求
+  文字模型「把『示意圖』寫進 variable」，改成「不要自己寫，成品由後端程式壓字」，
+  與 B70 甲案（compose.paste_disclaimer_note）呼應，消化端不再產出這個字串。
+  ②`news_prompt.py` 的 `REAL_WORLD_RENDERING_RULES` 第 2、4 條（一般重建圖的預設
+  標籤規則、NAMED REAL PEOPLE 沒有專屬 portrait 區塊時的預設分支）——同樣從
+  「模型自己畫」改成「軟體後貼在右下角，模型只需留空」。②同時是 `app.js` 的
+  `REAL_WORLD_RENDERING_RULES` 平行常數（`tests/test_prompt_parity.py` 逐字比對），
+  已同步改過，兩邊仍逐字相同。
+  ⚠**這批刻意沒有改的**：`main.py` 的 `CONTENT_FIDELITY_RULES` 第 6 條（禁止
+  「示意圖」等版型名稱出現在 variable 裡）——那條講的是別的事（版型名稱不是新聞
+  內容），不是標籤機制，維持原樣；也沒有替「非具名人物的一般重建圖」（例如單純
+  建物、事件現場）新增程式端判斷是否要壓標籤的邏輯——目前後端只在
+  portrait_mode ∈ {reference, reference_multi, entry_only} 時才會真的貼「示意圖」
+  （見 `main.resolve_image_disclaimer`），這批只把「模型不要自己畫」的 prompt 半
+  邊補齊，「一般重建圖到底該不該自動貼」是待裁的 D 級題，不在這批範圍內，
+  未裁決前這類圖仍不會有任何標籤（不是退步，是本來就沒有，只是現在也不會被
+  模型自己畫出一個來湊數）。
+  重建的十份快照：`reporter/editor-digest-{standard,simplified}-{fullbleed,safearea}.txt`
+  （八份，`REAL_WORLD_FIDELITY_RULES` 那兩條差異）、
+  `reporter-image-prompt-{plain,safeframe}.txt`（兩份，`REAL_WORLD_RENDERING_RULES`
+  那兩條差異）。`git diff --stat tests/fixtures/` 只列出這十份，`cover_design_brief_rng_pins_20260911.json`
+  等其他 fixture 零異動。
 """
 
 import os
