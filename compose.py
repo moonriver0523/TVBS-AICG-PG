@@ -397,6 +397,106 @@ def apply_broadcast_hole(
 
 
 # ============================================================
+# 具名肖像／新聞圖的「示意圖」標籤，與 F43「畫面來源」標籤（B70／F43，2026-09-20）
+# ============================================================
+#
+# B70 根因：這個標籤以前完全交給生圖模型自己畫進「variable」，沒有程式保證——
+# 4 張具名肖像實拍裡 2 張不合格：一張整張找不到標籤，一張寫成錯字「示憊佪」
+# （見 MASTER-列管清單.md B70）。使用者 2026-09-16 裁定採甲案：比照播出鏡面
+# 的 `apply_broadcast_hole` 浮水印與十點封面的 `paste_cover_ai_note`——標籤
+# 一律由程式後貼，模型只被告知「這個角落留空」，不再自己找位置、自己選字。
+#
+# F43 追加「畫面來源」欄位，與「示意圖」互斥：圖是 AI 生成或被 AI 改過畫面 →
+# 標「示意圖」；圖是使用者原圖、且程式保證像素未被動過 → 標「畫面來源：○○○」
+# （沿用 vstrip 已有的 `VSTRIP_SOURCE_PREFIX`／`vstrip_source_text`，同一套「使用者
+# 只填來源名，前綴自動補」的體貼）。兩者的互斥判定在 main.resolve_image_disclaimer，
+# 這裡只管貼哪一種、貼在哪。
+#
+# 位置改用 `safe_area_spec.safe_rect` 的四個角落之一，內縮量沿用播出鏡面浮水印
+# 同一個 HOLE_INSET——保證落在安全框內（B70 動工前要釘的第②件事），不會被摳圖裁掉。
+PORTRAIT_DISCLAIMER_TEXT = "示意圖"
+PORTRAIT_DISCLAIMER_CORNERS = ("lower_right", "lower_left", "upper_right", "upper_left")
+PORTRAIT_DISCLAIMER_SIZE_RATIO = 0.03        # 字級佔畫布高（同 _draw_cover_ai_note）
+PORTRAIT_DISCLAIMER_HEIGHT_RATIO = 1.6       # 底板高＝字級 × 這個倍數
+PORTRAIT_DISCLAIMER_PAD_RATIO = 0.012        # 底板左右各留的內距（佔畫布高）
+PORTRAIT_DISCLAIMER_PLATE_FILL = (0, 0, 0, 130)
+
+
+def _disclaimer_box(
+    canvas: tuple[int, int], corner: str, profile: str, box_w: int, box_h: int
+) -> tuple[int, int, int, int]:
+    """算出標籤底板要貼的座標，釘在安全區四個角落之一，內縮 HOLE_INSET。"""
+    if corner not in PORTRAIT_DISCLAIMER_CORNERS:
+        raise ComposeError(
+            f"未知的標籤角落：{corner!r}（可用：{PORTRAIT_DISCLAIMER_CORNERS}）"
+        )
+    x0, y0, x1, y1 = safe_area_spec.safe_rect(*canvas, profile)
+    inset = _scaled_pixel(HOLE_INSET, canvas[1])
+    if corner.endswith("left"):
+        left, right = x0 + inset, x0 + inset + box_w
+    else:
+        right, left = x1 - inset, x1 - inset - box_w
+    if corner.startswith("upper"):
+        top, bottom = y0 + inset, y0 + inset + box_h
+    else:
+        bottom, top = y1 - inset, y1 - inset - box_h
+    return left, top, right, bottom
+
+
+def paste_disclaimer_note(
+    image_bytes: bytes,
+    *,
+    kind: str,
+    source_text: str = "",
+    corner: str = "lower_right",
+    canvas: tuple[int, int] = safe_area_spec.BASE_CANVAS,
+    profile: str = safe_area_spec.REPORTER_PROFILE,
+) -> bytes:
+    """程式端壓「示意圖」或「畫面來源：○○○」標籤（B70 甲案／F43）。
+
+    kind="ai"     → 固定文字 PORTRAIT_DISCLAIMER_TEXT（「示意圖」）。
+    kind="source" → vstrip_source_text(source_text)（「畫面來源：」由該函式自動補）。
+    兩者互斥，呼叫端負責只傳其中一種——見 main.resolve_image_disclaimer，這裡不
+    重新判斷「該不該標」，只管「怎麼貼」。
+
+    視覺沿用 `_draw_cover_ai_note` 那一套：半透明黑底＋白字，高度以傳入的畫布為準
+    （這裡的呼叫端可能是任意 provider 尺寸，不是固定的 COVER_CANVAS）。
+    """
+    if kind not in ("ai", "source"):
+        raise ComposeError(f"未知的標籤種類：{kind!r}（可用：'ai'／'source'）")
+    text = PORTRAIT_DISCLAIMER_TEXT if kind == "ai" else vstrip_source_text(source_text)
+    if not text:
+        raise ComposeError("畫面來源標籤沒有文字可貼（source_text 是空的）")
+
+    with Image.open(io.BytesIO(image_bytes)) as opened:
+        canvas_image = opened.convert("RGBA")
+    if canvas_image.size != canvas:
+        # 傳入的畫布只是預設值；實際以真正拿到的圖為準，理由同 apply_broadcast_hole。
+        canvas = canvas_image.size
+    height = canvas[1]
+    font = _font(round(height * PORTRAIT_DISCLAIMER_SIZE_RATIO))
+    pad = round(height * PORTRAIT_DISCLAIMER_PAD_RATIO)
+    text_w = font.getbbox(text)[2]
+    box_w = text_w + pad * 2
+    box_h = round(height * PORTRAIT_DISCLAIMER_SIZE_RATIO * PORTRAIT_DISCLAIMER_HEIGHT_RATIO)
+    x0, y0, x1, y1 = _disclaimer_box(canvas, corner, profile, box_w, box_h)
+
+    plate = Image.new("RGBA", canvas_image.size, (0, 0, 0, 0))
+    ImageDraw.Draw(plate).rounded_rectangle(
+        (x0, y0, x1, y1), radius=6, fill=PORTRAIT_DISCLAIMER_PLATE_FILL
+    )
+    canvas_image.alpha_composite(plate)
+    _draw_text(
+        ImageDraw.Draw(canvas_image), ((x0 + x1) // 2, (y0 + y1) // 2), text, font,
+        stroke_width=0, anchor="mm",
+    )
+
+    buffer = io.BytesIO()
+    canvas_image.convert("RGB").save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+# ============================================================
 # 版型 B：十點不一樣封面圖（左右兩張 AI 底圖＋程式畫的固定元素）
 # ============================================================
 
@@ -1607,6 +1707,21 @@ def _yt_shared_title_font(lines: list[str], max_w: int, start: int, smallest: in
     return _font(min(sizes)) if sizes else _font(start)
 
 
+def _yt_hourly_title_ink_top_ratio(font: ImageFont.FreeTypeFont, baseline_ratio: float) -> float:
+    """整點封面某一行標題、用給定字級畫出來時，含描邊的墨水上緣（佔畫布高比例）。
+
+    跟 `_yt_title_ink_top_ratio` 算法一樣，差別是那支只服務固定字級
+    （`YT_TITLE_SIZE_RATIO`）的國內外／熱搜封面；整點的字級是 `_yt_shared_title_font`
+    依標題長度動態決定的，所以字級要當參數傳進來，不能寫死。F36 的日期牌自動判斷
+    就是拿這支函式分別算「起始字級」與「實際字級」兩個墨水上緣，量出兩者的差。
+    """
+    _, height = YT_CANVAS
+    size = font.size
+    ascent, _ = font.getmetrics()
+    outline = max(4, round(size * YT_TITLE_STROKE_RATIO)) + round(size * YT_TITLE_BOLD_RATIO)
+    return (round(height * baseline_ratio) - ascent - outline) / height
+
+
 def _draw_title_band(
     canvas: Image.Image,
     fill: tuple[int, int, int] = YT_BAND_FILL,
@@ -1904,6 +2019,13 @@ def compose_yt_hourly_cover(
     width, height = YT_CANVAS
     margin = round(width * YT_MARGIN_RATIO)
 
+    # 標題字級提前算好：F36 起日期牌的位置要看它（見下方「左中：日期」那段），
+    # 畫字的迴圈仍然留在原本靠底部的位置，這裡只是把字級計算搬前面共用。
+    max_w = width - margin * 2
+    start = round(height * YT_HOURLY_TITLE_SIZE_RATIO)
+    smallest = round(height * YT_TITLE_MIN_SIZE_RATIO)
+    font = _yt_shared_title_font([line1, line2], max_w, start, smallest)
+
     # ---- 左上：小 Logo ----
     _paste_logo(
         canvas, (margin, round(height * YT_HOURLY_LOGO_TOP_RATIO)), round(width * YT_HOURLY_LOGO_WIDTH_RATIO)
@@ -1949,6 +2071,25 @@ def compose_yt_hourly_cover(
             round(width * box[0]), round(height * box[1]),
             round(width * box[2]), round(height * box[3]),
         )
+        if draw_titles:
+            # F36（2026-09-20 使用者裁決）：日期牌與標題的距離不再訂死一個數字，
+            # 改依標題實際佔用的字級自動判斷——「字數太少（字級大、會蓋到日期
+            # 方塊）→ 日期方塊維持現在的位置；字數多 → 日期方塊跟標題靠近」。
+            #
+            # GAP 怎麼來的：字數少時字級會被放到起始／最大字級（YT_HOURLY_TITLE_
+            # SIZE_RATIO），這時標題第一行的墨水上緣減掉「現在」日期牌的下緣，就是
+            # 使用者已經核可、不准再拉近的最小間距——用這個關係反推 GAP，不是憑
+            # 感覺給一個裸數字（2026-09-20 使用者原話「先量現行成品再訂數字」，
+            # 本 session 實際算出來約 0.096×畫布高）。字數變多、字級縮小時，
+            # 墨水上緣往下移，日期牌就跟著往下靠近，直到再次只差這個 GAP 為止；
+            # 短標題（字級已經是最大值）算出來的位置跟這條規則生效前一個像素都
+            # 沒變，因為 GAP 本來就是拿它反推出來的。
+            max_ink_top = round(height * _yt_hourly_title_ink_top_ratio(_font(start), YT_HOURLY_LINE1_BASELINE_RATIO))
+            gap = max_ink_top - tab_box[3]
+            ink_top = round(height * _yt_hourly_title_ink_top_ratio(font, YT_HOURLY_LINE1_BASELINE_RATIO))
+            shift = max(0, (ink_top - gap) - tab_box[3])
+            if shift:
+                tab_box = (tab_box[0], tab_box[1] + shift, tab_box[2], tab_box[3] + shift)
         draw.rounded_rectangle(tab_box, radius=10, fill=YT_HOURLY_DATE_FILL)
         tab_w, tab_h = tab_box[2] - tab_box[0], tab_box[3] - tab_box[1]
         date_font = _fit_font_bold(
@@ -2471,63 +2612,98 @@ def compose_yt_hot_cover(
 
 
 # ============================================================
-# YT 直播「直標」PNG 壓標（2026-09-08 WP3 第二版，計畫書 E 段）
+# YT 直播「直標」PNG 壓標（2026-09-08 WP3 第二版，計畫書 E 段；2026-09-20 B80 改版）
 #
 # 第一版做成底部橫向標題條，是誤讀規格：使用者說的「直標」是**垂直**的標題條。
-# 這一版全部依兩張真實播出截圖重量：
-#   D:\Downloads\20260908_直標參考_一般國內直播.png（718×404）
-#   D:\Downloads\20260908_直標參考_原音呈現.png（721×404）
 #
-# 版面（左緣版，右緣版整組鏡射）：
-#   LIVE 章（＋原音呈現／AI即時翻譯白底小標）壓在最上面，底下接兩欄直排文字。
-#   內側欄＝主標，字大、欄寬；外側欄＝副標，字小、欄窄。兩欄**同一個上緣、同一個
-#   下緣**，各自的字距＝共用欄高 ÷ 自己的格數——所以格數多的那欄字自動變小。
-#   這是量出來的：ref1 兩欄都是 y 67→358，主標 9 格、副標 12 格，格距 8.0%／6.0%。
+# **B80（2026-09-20 使用者裁甲案）**：LIVE 章與藍色色框原本是生圖模型重製的近似圖
+# （程式畫漸層＋貼一張去背 LIVE 章），使用者事後拿到官方真檔，裁決「整張官方底圖
+# 當固定層，程式只壓直排文字與來源句；標題長度反過來遷就固定色框，超出就縮字級，
+# 不准再拉長色框」。色框長度從此是**常數**，不再隨標題行數／格數伸長。
 #
-# 兩件跟直覺不一樣、但截圖就是這樣的事：
-#   1. 兩欄都是深藍，沒有紅欄。ref1／ref2 取色外側 (28,53,99)、內側 (27,41,74)；
-#      2026-09-08 使用者裁決兩欄同底色、同一塊色框，統一用內側那個色（fill 參數）。
-#   2. 右上角是白色 TVBS NEWS 字標，不是 YT 封面那塊藍色斜標籤（logo_tab 參數）。
+# 官方檔（`static/brand/`，本 session 用 `magick`／PIL 逐一量過像素，不是目測）：
+#   yt-vstrip-live.png           （來源「直播底圖(直).png」，1914×1063）：一般版，
+#                                 LIVE 章 184×71 @(31,100)、藍色框 189×485 @(31,171)。
+#   yt-vstrip-live-labelled.png  （來源「原音呈現底圖(直).png」，1905×1070）：有
+#                                 原音呈現／AI即時翻譯小標時，LIVE 章與白底小標貼合
+#                                 無縫成一塊 194×146 @(19,67)，之後接藍色框 194×489
+#                                 @(19,213)。
+# 兩張圖右上角都烤了一枚 TVBS NEWS 字標——那不是這次要換的東西（程式自己的
+# Logo／logo_corner 系統維持不變），裁切時只取左側 LIVE 章＋色框那一叢，右上的
+# 字標整塊丟棄。
+#
+# 比例一律用「該圖自己的」寬高當分母（例如 31/1914），不換算成 1920×1080 再存一次
+# ——兩張圖的長寬比跟畫布只差 1% 左右，直接把原生比例套進畫布不會看出破綻，換算
+# 反而多一層誤差來源。放大縮小時是連同「裁切框」一起等比縮放到畫布尺寸，不是先把
+# 整張圖縮放再裁切。
+#
+# **與原案的一處落差（唯一真的偏離「整張底圖」的地方）**：官方只給了「原音呈現」
+# 那一種小標的成品圖，「AI即時翻譯」沒有官方檔。若整塊貼官方圖，AI即時翻譯就只能
+# 顯示錯字。改法：兩種小標狀態的 LIVE 章都直接貼官方裁切（一般版用一般檔、有小標
+# 版用有小標檔的 LIVE 章那一段），但白底小標本身照舊由程式畫（沿用 2026-09-08 就有
+# 的 rounded_rectangle＋文字），文字依 variant 換成「原音呈現」或「AI即時翻譯」。
+# 這樣兩種小標走同一條路徑，行為對稱，也維持 B46 裁決的「LIVE 章與小標貼合無縫」。
+#
+# 版面（左緣版，右緣版整組水平鏡射，含底圖像素——漸層方向也要跟著翻，不能只搬位置）：
+#   LIVE 章（＋原音呈現／AI即時翻譯白底小標）在最上面，底下接兩欄直排文字。
+#   內側欄＝主標，字大；外側欄＝副標，字小。兩欄同寬（各佔色框寬的一半）、同一個
+#   上緣、同一個下緣，字距＝共用欄高 ÷ 各自格數——格數多的那欄字自動變小。
 #
 # 直排是逐字疊放，不是把整行轉 90°：標點要換成直排相容字元（「→﹁、。→︒），
 # 連續的英數字（AI／AMD／30）併成一格橫著寫（縱中橫），截圖裡就是這樣排的。
 # ============================================================
 
-VSTRIP_LEFT_RATIO = 0.0265           # 整組直標離畫面外緣（19/718）
-# 2026-09-08 使用者裁決：兩欄字級一樣大、底色一致、同一個色框不拆開——
-# 所以兩欄同寬（都用主標欄寬）、中間沒有縫、共用一個格距，底色是一整塊。
-# 2026-09-09 使用者回饋：整組直標太長、上下都貼邊，要縮短、字級再縮小、兩行之間的
-# 行距也縮小，整體置中偏上。
-#   - 欄寬本來是固定比例（0.0445w≈85px），字級卻是由格距算的，兩者脫鉤——字級一縮，
-#     欄寬不動，兩行之間的空白反而變大。改成由字級推導（VSTRIP_COLUMN_WIDTH_EM），
-#     字級縮 → 欄寬縮 → 行距自動變窄。舊常數留著給還在用它的呼叫端當參考值。
-#   - 上緣本來釘死在 VSTRIP_TOP_RATIO 往下長，長標題就一路長到 BOTTOM_MAX 貼邊。
-#     改成先算出色框長度，再用 VSTRIP_VERTICAL_ANCHOR 在可用範圍內置中偏上。
-VSTRIP_COLUMN_WIDTH_EM = 1.12        # 欄寬＝字級 × 這個值（字左右各留一點）
-VSTRIP_MAIN_WIDTH_RATIO = 0.0445     # 舊的固定欄寬（32/718）；現在只當參考值
-VSTRIP_SUB_WIDTH_RATIO = VSTRIP_MAIN_WIDTH_RATIO
-VSTRIP_SEAM_RATIO = 0.0              # 兩欄之間不留縫：同一個色框
-VSTRIP_TOP_RATIO = 0.166             # 色框可用範圍的上緣，一般版（67/404）
-VSTRIP_TOP_WITH_LABEL_RATIO = 0.191  # 有原音呈現／AI即時翻譯小標時（77/404）
-VSTRIP_TOP_GAP_RATIO = 0.014         # 色框上緣與 LIVE 章／小標底之間至少留這麼多（2026-09-08 使用者：頂上的字快被吃掉）
-VSTRIP_BOTTOM_MAX_RATIO = 0.94       # 可用範圍的下緣（不是實際長度，2026-09-09 起色框在範圍內浮動）
-VSTRIP_VERTICAL_ANCHOR = 0.38        # 色框在可用範圍裡的位置：0＝貼上緣、1＝貼下緣，置中偏上
-# 色框總長度的硬上限（佔畫布高）。光縮格距擋不住最長的標題：14 格 × 0.070 = 0.98h，
-# 一定會被可用範圍夾成「從上緣長到下緣」，也就是使用者說的「上下都貼邊」。
-# 直接封住總長度，格距與字級再由它反推，長標題才會真的變短。
-VSTRIP_COLUMN_MAX_RATIO = 0.64
-VSTRIP_MAIN_PITCH_RATIO = 0.070      # 格距上限（2026-09-09 由 0.080 縮小），兩欄共用
-VSTRIP_SUB_PITCH_RATIO = VSTRIP_MAIN_PITCH_RATIO
-VSTRIP_MIN_PITCH_RATIO = 0.040       # 縮到這裡還放不下就丟 ComposeError（2026-09-09 隨總長度上限一起下修）
+VSTRIP_BG_NORMAL = BRAND_DIR / "yt-vstrip-live.png"
+VSTRIP_BG_LABELLED = BRAND_DIR / "yt-vstrip-live-labelled.png"
+
+# ---- 一般版（yt-vstrip-live.png，1914×1063）----
+# 官方口頭量測給的是 LIVE 章與色框合在一起的外框（189×485 @31,171），但實測發現
+# 色框本身其實比 LIVE 章窄、往內縮了一截——不是同一個左緣／寬度。本 session 逐列
+# 逐欄用 PIL 掃過（沿 y=171..651 每隔 20 列取一次，四個 x 樣本互相印證），色框的
+# 實心矩形是 48..201（寬 153），不是 31..220；LIVE 章本身（31..214，寬 184）與
+# 官方數字一致，只有色框的左緣／寬度需要用這次量到的值，上緣／高度不變。
+VSTRIP_BG_BADGE_LEFT_RATIO = 31 / 1914
+VSTRIP_BG_BADGE_TOP_RATIO = 100 / 1063
+VSTRIP_BG_BADGE_WIDTH_RATIO = 184 / 1914
+VSTRIP_BG_BADGE_HEIGHT_RATIO = 71 / 1063
+VSTRIP_BG_BOX_LEFT_RATIO = 48 / 1914
+VSTRIP_BG_BOX_TOP_RATIO = 171 / 1063
+VSTRIP_BG_BOX_WIDTH_RATIO = 153 / 1914
+VSTRIP_BG_BOX_HEIGHT_RATIO = 485 / 1063
+
+# ---- 有小標版（yt-vstrip-live-labelled.png，1905×1070）----
+# 官方量測只給了 LIVE 章＋白底小標的合體框（194×146 @19,67，兩者貼合無縫，上緣／
+# 高度可信、已用色差交叉驗證）。跟一般版同一個毛病：色框本身比合體框窄，本 session
+# 另外掃了三塊各自的實心矩形（LIVE 章 20..203、白底小標 21..212、色框 37..191）。
+# 合體框內部 LIVE／小標的切分點同樣是掃像素量的（紅色描邊在 y≈130 收尾、白底
+# y≈130 開始）。白底小標本身不用官方像素畫（見上方模組註解的落差說明）。
+VSTRIP_BG_LABELLED_BADGE_LEFT_RATIO = 20 / 1905
+VSTRIP_BG_LABELLED_BADGE_WIDTH_RATIO = 183 / 1905
+VSTRIP_BG_LABELLED_LABEL_LEFT_RATIO = 21 / 1905
+VSTRIP_BG_LABELLED_LABEL_WIDTH_RATIO = 191 / 1905
+VSTRIP_BG_LABELLED_BOX_LEFT_RATIO = 37 / 1905
+VSTRIP_BG_LABELLED_BOX_WIDTH_RATIO = 154 / 1905
+VSTRIP_BG_LABELLED_BADGE_TOP_RATIO = 67 / 1070
+VSTRIP_BG_LABELLED_BADGE_HEIGHT_RATIO = (130 - 67) / 1070
+VSTRIP_BG_LABELLED_LABEL_HEIGHT_RATIO = (213 - 130) / 1070
+VSTRIP_BG_LABELLED_BOX_TOP_RATIO = 213 / 1070
+VSTRIP_BG_LABELLED_BOX_HEIGHT_RATIO = 489 / 1070
+
 VSTRIP_CELL_TIGHT = 0.92             # 字級佔格距（字距約 0.08em）
-VSTRIP_MAIN_FILL = (27, 41, 74)      # 整塊色框：深藏青（截圖取色）
-VSTRIP_SUB_FILL = VSTRIP_MAIN_FILL   # 2026-09-08 起兩欄同色（保留名字給舊呼叫）
-VSTRIP_FILL_SHADE = 0.78             # 欄內由外而內的漸層，模擬截圖的漸層感
-VSTRIP_LIVE_TOP_RATIO = 0.104        # LIVE 章上緣，一般版（42/404）
-VSTRIP_LIVE_TOP_WITH_LABEL_RATIO = 0.057   # 有小標時 LIVE 往上讓（23/404）
-VSTRIP_LIVE_WIDTH_RATIO = 0.0877     # LIVE 章寬（63/718）
-VSTRIP_LABEL_HEIGHT_RATIO = 0.069    # 白底小標高（28/404）
-VSTRIP_LABEL_WIDTH_RATIO = 0.0905    # 白底小標寬（65/718）
+# 2026-09-20 使用者裁決：色框長度變常數後，字級下限是唯一防線——縮到這裡還放不下
+# 就是 ComposeError，不准再縮。32px＝約 0.030×畫布高（1080p），數字怎麼來的：
+# 色框可用高度從舊版上限 0.64h 砍到官方實測的 0.456h（見上方 VSTRIP_BG_*_HEIGHT_
+# RATIO），副標上限 14 格是最擠的情況——492.8px÷14 格＝35.2px 格距×0.92＝32.4px，
+# 四捨五入正好卡在 32px，一點餘裕都沒有，所以這條線不能再往上調。
+VSTRIP_MIN_FONT_RATIO = 0.030
+VSTRIP_MIN_PITCH_RATIO = VSTRIP_MIN_FONT_RATIO / VSTRIP_CELL_TIGHT   # 反推的格距下限
+# 2026-09-20 使用者看過樣張後追加：**色框要貼著 LIVE 章（B46），但框裡的字不能貼**——
+# 第一個字原本從色框最頂端起排，看起來直接黏在 LIVE 章下緣。這條是色框內的上內距，
+# 只推文字、不動色框，所以 B46 的零縫不受影響。13px@1080，約等於字級下限的 0.4 個字高，
+# 拉開得出來又不會吃掉太多可用長度。⚠**這段內距會從可用欄高扣掉**，等於字級下限更容易
+# 撞到——計算 pitch 時一律用扣掉內距之後的 column_h，不要拿色框原高去算。
+VSTRIP_TEXT_TOP_PAD_RATIO = 0.012
+VSTRIP_TOP_GAP_RATIO = 0.014         # Logo 與色框最小淨距（同側下角時的防呆，見下方 same_side_bottom）
 VSTRIP_LABEL_FILL = (255, 255, 255)
 VSTRIP_LABEL_TEXT = (208, 20, 30)
 VSTRIP_LABEL_BORDER = (208, 20, 30)
@@ -2622,17 +2798,24 @@ def _is_tofu(ch: str, font: ImageFont.FreeTypeFont) -> bool:
     return probe.getbbox() is None
 
 
-def _vertical_column_layer(size: tuple[int, int], fill: tuple[int, int, int], outward: bool) -> Image.Image:
-    """一欄的底色：由外緣往內做一道很淡的漸層，貼近截圖的漸層感。"""
-    width, height = size
-    column = Image.new("RGBA", size)
-    draw = ImageDraw.Draw(column)
-    dark = tuple(round(c * VSTRIP_FILL_SHADE) for c in fill)
-    for x in range(width):
-        t = (x / max(1, width - 1)) if outward else (1 - x / max(1, width - 1))
-        colour = tuple(round(fill[i] + (dark[i] - fill[i]) * t) for i in range(3))
-        draw.line(((x, 0), (x, height)), fill=colour + (255,))
-    return column
+def _vstrip_rect(
+    width: int, height: int, left_ratio: float, top: int, width_ratio: float, height_ratio: float,
+) -> tuple[int, int, int, int]:
+    """比例矩形換算成畫布像素座標。
+
+    top 收的是**已經算好的像素 y0**，不是比例——這樣才能把 badge→label→box 串接成
+    「上一塊的下緣＝下一塊的上緣」，零縫銜接。三塊各自的比例獨立四捨五入的話，官方
+    素材原本貼合無縫的設計會被捨入誤差撬出 0～1px 的縫，B46 就是在修這個。
+    """
+    x0 = round(width * left_ratio)
+    h = round(height * height_ratio)
+    return (x0, top, x0 + round(width * width_ratio), top + h)
+
+
+def _vstrip_mirror(rect: tuple[int, int, int, int], width: int) -> tuple[int, int, int, int]:
+    """水平鏡射一個矩形：title_side="right" 時色框整組（含底圖像素）鏡射用。"""
+    x0, y0, x1, y1 = rect
+    return (width - x1, y0, width - x0, y1)
 
 
 def vstrip_source_text(raw: str) -> str:
@@ -2672,8 +2855,10 @@ def yt_vertical_layout(
 ) -> dict:
     """算出直標每一塊的矩形，不畫任何東西。
 
-    幾何跟畫圖拆開才驗得到「主標在內側」——兩欄都是深藍，用像素分不出誰是誰。
-    回傳 live／label／main／sub／source／logo 的 (x0, y0, x1, y1)，以及兩欄的格數與格距。
+    2026-09-20（B80）改版：LIVE 章／色框改用官方底圖當固定層，box／live／label 的
+    位置與尺寸是常數（見模組開頭 VSTRIP_BG_* 比例），不再由標題格數反推——反過來是
+    字級要遷就固定的欄高。幾何跟畫圖仍然拆開，好驗「主標在內側」（兩欄都是深藍，
+    像素分不出誰是誰）。
     """
     width, height = YT_CANVAS
     main_cells = _vertical_cells(main_title)
@@ -2685,17 +2870,35 @@ def yt_vertical_layout(
     if len(sub_cells) > VSTRIP_SUB_MAX_CELLS:
         raise ComposeError(f"第二標題 {len(sub_cells)} 格，超過上限 {VSTRIP_SUB_MAX_CELLS} 格")
 
+    # badge→label→box 依序串接（見 _vstrip_rect 註解）：B46 裁決「沒勾小標時 LIVE 與
+    # 標題要黏合」，一般版跟有小標版現在走同一條鏈，天生零縫，不用另外判斷要不要留白。
     labelled = variant in VSTRIP_VARIANT_LABELS
-    band_top = round(height * (VSTRIP_TOP_WITH_LABEL_RATIO if labelled else VSTRIP_TOP_RATIO))
-    # LIVE 章（與小標）先算高度：色框上緣不准貼到它們，至少隔 VSTRIP_TOP_GAP_RATIO
-    live_top = round(height * (VSTRIP_LIVE_TOP_WITH_LABEL_RATIO if labelled
-                               else VSTRIP_LIVE_TOP_RATIO))
-    with Image.open(LIVE_BADGE) as badge:
-        live_h = round(badge.height * round(width * VSTRIP_LIVE_WIDTH_RATIO) / badge.width)
-    stack_bottom = live_top + live_h + (round(height * VSTRIP_LABEL_HEIGHT_RATIO) if labelled else 0)
-    band_top = max(band_top, stack_bottom + round(height * VSTRIP_TOP_GAP_RATIO))
+    if labelled:
+        badge = _vstrip_rect(
+            width, height, VSTRIP_BG_LABELLED_BADGE_LEFT_RATIO,
+            round(height * VSTRIP_BG_LABELLED_BADGE_TOP_RATIO),
+            VSTRIP_BG_LABELLED_BADGE_WIDTH_RATIO, VSTRIP_BG_LABELLED_BADGE_HEIGHT_RATIO,
+        )
+        label = _vstrip_rect(
+            width, height, VSTRIP_BG_LABELLED_LABEL_LEFT_RATIO, badge[3],
+            VSTRIP_BG_LABELLED_LABEL_WIDTH_RATIO, VSTRIP_BG_LABELLED_LABEL_HEIGHT_RATIO,
+        )
+        box = _vstrip_rect(
+            width, height, VSTRIP_BG_LABELLED_BOX_LEFT_RATIO, label[3],
+            VSTRIP_BG_LABELLED_BOX_WIDTH_RATIO, VSTRIP_BG_LABELLED_BOX_HEIGHT_RATIO,
+        )
+    else:
+        badge = _vstrip_rect(
+            width, height, VSTRIP_BG_BADGE_LEFT_RATIO, round(height * VSTRIP_BG_BADGE_TOP_RATIO),
+            VSTRIP_BG_BADGE_WIDTH_RATIO, VSTRIP_BG_BADGE_HEIGHT_RATIO,
+        )
+        label = (0, 0, 0, 0)
+        box = _vstrip_rect(
+            width, height, VSTRIP_BG_BOX_LEFT_RATIO, badge[3],
+            VSTRIP_BG_BOX_WIDTH_RATIO, VSTRIP_BG_BOX_HEIGHT_RATIO,
+        )
 
-    # Logo 要先算：同側下角時色框底緣得讓開它（2026-09-09 放寬下角同側之後的必要條件）
+    # Logo 跟色框素材無關，維持既有系統：四角可選、同側上角擋掉（見 compose_yt_overlay）。
     logo_w = round(width * VSTRIP_LOGO_WIDTH_RATIO)
     logo_margin = round(width * VSTRIP_LOGO_MARGIN_RATIO)
     with Image.open(TVBS_LOGO_WHITE) as logo_file:
@@ -2704,56 +2907,48 @@ def yt_vertical_layout(
     logo_y0 = logo_margin if logo_corner in ("tr", "tl") else height - logo_margin - logo_h
     logo = (logo_x0, logo_y0, logo_x0 + logo_w, logo_y0 + logo_h)
 
-    band_bottom = round(height * VSTRIP_BOTTOM_MAX_RATIO)
+    # 色框長度是常數了（B80 裁決），不會再因為同側下角有 Logo 而縮短；在 1080p 下
+    # 色框底緣（約 0.66h）離同側下角的 Logo（約 0.98h）還有一大截，理論上碰不到。
+    # 留這道防呆只是不讓未來畫布尺寸或 Logo 邊界一改，兩者悄悄疊在一起卻沒人發現。
     same_side_bottom = logo_corner == ("bl" if title_side == "left" else "br")
-    if same_side_bottom:
-        gap = round(height * VSTRIP_TOP_GAP_RATIO)
-        band_bottom = min(band_bottom, logo_y0 - gap)
-        # 2026-09-09（第三批）：來源句與 Logo 同角時改排在 Logo「內側」的同一列，
-        # 垂直範圍完全落在 Logo 之內，所以 logo_y0 這一刀已經涵蓋它，不用再多讓一層
-        # （上一版為此扣掉的 src_h 白白吃掉了色框長度）。
+    if same_side_bottom and box[3] + round(height * VSTRIP_TOP_GAP_RATIO) > logo_y0:
+        raise ComposeError("Logo 與直標色框同側下角太近，請把 Logo 換到另一邊或另一個角")
 
-    # 兩欄同字級（2026-09-08 裁決）：格距由格數多的那欄決定，另一欄用同一個格距、
-    # 字少就早點結束；欄高＝格數多的那欄的長度（色框是一整塊，高度取這個）。
+    # 兩欄同字級（2026-09-08 裁決不變）：格距由格數多的那欄決定；欄高＝色框高度，
+    # B80 起是常數，不再由格數反推——反過來是字級要遷就它，見下面的下限檢查。
     most = max(len(main_cells), len(sub_cells))
-    wanted = min(most * height * VSTRIP_MAIN_PITCH_RATIO, height * VSTRIP_COLUMN_MAX_RATIO)
-    column_h = round(min(wanted, band_bottom - band_top))
+    # 文字從色框頂端往下讓一點，不要黏在 LIVE 章下緣（2026-09-20 使用者看樣張後指出）。
+    # 色框本身不動，所以 B46 的零縫維持不變。
+    text_top = box[1] + round(height * VSTRIP_TEXT_TOP_PAD_RATIO)
+    column_h = box[3] - text_top
     pitch = column_h / most
-    if pitch < height * VSTRIP_MIN_PITCH_RATIO:
-        longer = "第一標題" if len(main_cells) >= len(sub_cells) else "第二標題"
-        hint = "（Logo 放在同一側的下角壓縮了可用高度）" if same_side_bottom else ""
-        raise ComposeError(
-            f"{longer} {most} 格，縮到最小字級仍放不進直標（欄高 {column_h}px）{hint}"
-        )
-    # 2026-09-09：色框不再從 band_top 往下長到底，改成在可用範圍內置中偏上
-    top = band_top + round((band_bottom - band_top - column_h) * VSTRIP_VERTICAL_ANCHOR)
-
-    # 欄寬由字級推導（2026-09-09）：字級縮 → 欄寬縮 → 兩行之間的行距跟著變窄。
-    # 字級與 compose_yt_overlay 畫字時用的是同一個值，所以一併回傳。
     cell_size = max(1, round(pitch * VSTRIP_CELL_TIGHT))
-    main_w = sub_w = max(1, round(cell_size * VSTRIP_COLUMN_WIDTH_EM))
-    seam = round(width * VSTRIP_SEAM_RATIO)
-    outer = round(width * VSTRIP_LEFT_RATIO)
-    if title_side == "left":
-        sub_x0 = outer
-        main_x0 = sub_x0 + sub_w + seam
-    else:
-        sub_x0 = width - outer - sub_w
-        main_x0 = sub_x0 - seam - main_w
-    main = (main_x0, top, main_x0 + main_w, top + column_h)
-    sub = (sub_x0, top, sub_x0 + sub_w, top + column_h) if sub_cells else (sub_x0, top, sub_x0, top)
+    floor = round(height * VSTRIP_MIN_FONT_RATIO)
+    if cell_size < floor:
+        longer = "第一標題" if len(main_cells) >= len(sub_cells) else "第二標題"
+        raise ComposeError(
+            f"{longer} {most} 格，縮到字級下限（{floor}px）仍放不進固定色框"
+            f"（欄高 {column_h}px），請縮短標題"
+        )
 
-    strip_x0 = min(main[0], sub[0]) if sub_cells else main[0]
-    strip_x1 = max(main[2], sub[2]) if sub_cells else main[2]
-    box = (strip_x0, top, strip_x1, top + column_h)   # 一整塊色框
-    live_w = round(width * VSTRIP_LIVE_WIDTH_RATIO)
-    live_x0 = strip_x0 if title_side == "left" else strip_x1 - live_w
-    live = (live_x0, live_top, live_x0 + live_w, live_top + live_h)
+    # 欄寬＝色框寬度對半分（兩欄同寬，2026-09-08 裁決不變）；色框寬度本身固定了，
+    # 不再由字級反推。畫字那段仍有「欄寬 ×0.94」的保險上限，見 compose_yt_overlay。
+    # 先在「原生（左緣）」座標算好主／副標哪一半，兩側共用同一個規則：色框自己的
+    # 右半永遠是主標（比較靠畫面中央那一半）——鏡射成右緣版之後這個關係還是成立
+    # （鏡射會把左右反過來，原生右半鏡射後變成新畫面的左半，一樣是比較靠中央那半）。
+    half_w = (box[2] - box[0]) // 2
+    sub = (box[0], text_top, box[0] + half_w, box[3])
+    main = (box[0] + half_w, text_top, box[2], box[3])
+    if not sub_cells:
+        sub = (sub[0], sub[1], sub[0], sub[1])
 
-    label_w = round(width * VSTRIP_LABEL_WIDTH_RATIO)
-    label_h = round(height * VSTRIP_LABEL_HEIGHT_RATIO)
-    label_x0 = strip_x0 if title_side == "left" else strip_x1 - label_w
-    label = (label_x0, live[3], label_x0 + label_w, live[3] + label_h) if labelled else (0, 0, 0, 0)
+    if title_side == "right":
+        box = _vstrip_mirror(box, width)
+        badge = _vstrip_mirror(badge, width)
+        label = _vstrip_mirror(label, width) if labelled else (0, 0, 0, 0)
+        main = _vstrip_mirror(main, width)
+        sub = _vstrip_mirror(sub, width)
+    live = badge
 
     source = (0, 0, 0, 0)
     source_text = vstrip_source_text(source_text)
@@ -2822,6 +3017,37 @@ def _vstrip_source_box_follow_logo(logo, logo_corner, src_w, src_h, gap=None):
     return (x0, y0, x1, y0 + src_h)
 
 
+def _vstrip_crop_native(
+    asset: pathlib.Path, left_ratio: float, top_ratio: float, width_ratio: float, height_ratio: float,
+) -> Image.Image:
+    """依比例從官方底圖裁出一塊（LIVE 章或色框），比例是該圖自己的寬高當分母
+    （見模組開頭的 VSTRIP_BG_* 註解）——不是先換算成畫布尺寸再裁。
+    """
+    with Image.open(asset) as source:
+        img = source.convert("RGBA")
+        w, h = img.size
+        x0 = round(w * left_ratio)
+        y0 = round(h * top_ratio)
+        return img.crop((x0, y0, x0 + round(w * width_ratio), y0 + round(h * height_ratio)))
+
+
+def _paste_vstrip_crop(
+    canvas: Image.Image, crop: Image.Image, target_rect: tuple[int, int, int, int], *, flip: bool,
+) -> None:
+    """把裁好的官方底圖貼到畫布的 target_rect，等比縮放到目標尺寸。
+
+    flip=True（title_side="right"）先水平鏡射裁片本身——色框的漸層方向要跟著翻，
+    不能只搬位置，不然右緣版的亮暗邊會反過來貼在錯的那一側。
+    """
+    if flip:
+        crop = crop.transpose(Image.FLIP_LEFT_RIGHT)
+    width = target_rect[2] - target_rect[0]
+    height = target_rect[3] - target_rect[1]
+    if width <= 0 or height <= 0:
+        return
+    canvas.alpha_composite(crop.resize((width, height), Image.LANCZOS), (target_rect[0], target_rect[1]))
+
+
 def compose_yt_overlay(
     *,
     main_title: str,
@@ -2834,14 +3060,18 @@ def compose_yt_overlay(
     source_corner: str = "",
     logo_tab: bool = False,
     live: bool = True,
-    fill: tuple[int, int, int] = VSTRIP_MAIN_FILL,
     size: tuple[int, int] = YT_CANVAS,
 ) -> bytes:
     """合成 YT 直播用的「直標」透明底 PNG，回傳 PNG bytes（RGBA，沒有底圖）。
 
-    main_title 是主標（內側欄），sub_title 是副標（外側欄）；2026-09-08 起兩欄**同字級、
-    同底色、同一塊色框**（fill 一個顏色畫整塊），字少的那欄早點結束。
-    variant：normal／original_audio／ai_translation，後兩者在 LIVE 章下方多一枚白底小標。
+    2026-09-20（B80）起 LIVE 章與色框是官方去背 PNG 當固定層（見模組開頭註解），
+    程式只在上面疊直排文字、（有小標時的）白底小標文字、Logo 與來源句；不再由
+    程式畫漸層色塊，所以拿掉了舊版的 fill 參數（沒有任何呼叫端傳過非預設值）。
+    main_title 是主標（內側欄），sub_title 是副標（外側欄）；2026-09-08 起兩欄**同字級**
+    （色框寬度對半分），字少的那欄早點結束。
+    variant：normal／original_audio／ai_translation，後兩者在 LIVE 章下方多一枚白底小標
+    ——official 檔只給了「原音呈現」那張成品圖，所以白底小標本身（含文字）仍是程式畫的，
+    兩種文案走同一條路徑（見模組開頭「與原案的一處落差」）。
     source_text 只要填來源名（例「美聯社」），「畫面來源：」由 vstrip_source_text 自動補。
     source_corner 指定它落在哪一角（tl／tr／bl／br），空字串＝舊行為
     （source_follow_logo=True 跟 Logo、False 跟 LIVE 章）。同一角有 Logo 或 LIVE 章時
@@ -2874,11 +3104,22 @@ def compose_yt_overlay(
                                source_follow_logo=source_follow_logo,
                                source_corner=source_corner)
     canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    labelled = variant in VSTRIP_VARIANT_LABELS
+    flip = title_side == "right"
+    bg_asset = VSTRIP_BG_LABELLED if labelled else VSTRIP_BG_NORMAL
 
-    # ---- 底色：一整塊色框（兩欄不拆開），由外緣往內一道很淡的漸層 ----
-    x0, y0, x1, y1 = layout["box"]
-    canvas.alpha_composite(_vertical_column_layer((x1 - x0, y1 - y0), fill, title_side == "left"),
-                           (x0, y0))
+    # ---- 色框：官方去背 PNG 當固定層（B80），裁「原生（左緣）」座標再依 flip 鏡射 ----
+    if labelled:
+        box_crop = _vstrip_crop_native(
+            bg_asset, VSTRIP_BG_LABELLED_BOX_LEFT_RATIO, VSTRIP_BG_LABELLED_BOX_TOP_RATIO,
+            VSTRIP_BG_LABELLED_BOX_WIDTH_RATIO, VSTRIP_BG_LABELLED_BOX_HEIGHT_RATIO,
+        )
+    else:
+        box_crop = _vstrip_crop_native(
+            bg_asset, VSTRIP_BG_BOX_LEFT_RATIO, VSTRIP_BG_BOX_TOP_RATIO,
+            VSTRIP_BG_BOX_WIDTH_RATIO, VSTRIP_BG_BOX_HEIGHT_RATIO,
+        )
+    _paste_vstrip_crop(canvas, box_crop, layout["box"], flip=flip)
 
     # ---- 兩欄文字：白字、同字級，不用封面那套重描邊＋陰影（那是壓照片用的，壓深藍會糊）----
     pitch = layout["pitch"]
@@ -2886,8 +3127,7 @@ def compose_yt_overlay(
         if not cells:
             continue
         x0, y0, x1, _ = layout[key]
-        # 欄寬 2026-09-09 起由字級推導，字級直接用 layout 算好的那個；仍夾一次欄寬
-        # 當保險，免得哪天欄寬改回固定值又忘了這裡。
+        # 欄寬＝色框寬度對半分（B80 起固定），仍夾一次 0.94 上限當保險。
         size_px = min(layout["cell_size"], round((x1 - x0) * 0.94))
         font = _font(size_px)
         for index, cell in enumerate(cells):
@@ -2895,12 +3135,25 @@ def compose_yt_overlay(
             _draw_vertical_cell(canvas, cell, (x0, cell_y0, x1, cell_y0 + round(pitch)),
                                 font, (255, 255, 255))
 
-    # ---- LIVE 章 ----
+    # ---- LIVE 章：一般版與有小標版分別裁自各自的官方檔（B80）----
     if live:
-        box = layout["live"]
-        _paste_live_badge(canvas, (box[0], box[1]), box[2] - box[0])
+        if labelled:
+            badge_crop = _vstrip_crop_native(
+                bg_asset, VSTRIP_BG_LABELLED_BADGE_LEFT_RATIO, VSTRIP_BG_LABELLED_BADGE_TOP_RATIO,
+                VSTRIP_BG_LABELLED_BADGE_WIDTH_RATIO, VSTRIP_BG_LABELLED_BADGE_HEIGHT_RATIO,
+            )
+        else:
+            badge_crop = _vstrip_crop_native(
+                bg_asset, VSTRIP_BG_BADGE_LEFT_RATIO, VSTRIP_BG_BADGE_TOP_RATIO,
+                VSTRIP_BG_BADGE_WIDTH_RATIO, VSTRIP_BG_BADGE_HEIGHT_RATIO,
+            )
+        # LIVE 章不能鏡射：裡面的「LIVE」字樣與播放三角形是有方向性的內容，鏡射
+        # 會變成鏡像文字（實測抓到：「LIVE」變成反字、播放鍵朝左）——只搬位置、
+        # 不翻轉像素，跟舊版行為一致（舊版本來就沒有鏡射過 LIVE 章）。
+        _paste_vstrip_crop(canvas, badge_crop, layout["live"], flip=False)
 
-    # ---- 原音呈現／AI即時翻譯：白底、紅框、紅字 ----
+    # ---- 原音呈現／AI即時翻譯：白底、紅框、紅字（官方只給「原音呈現」成品圖，
+    # 這塊仍是程式畫的，兩種文案同一條路徑——見模組開頭「與原案的一處落差」）----
     if variant in VSTRIP_VARIANT_LABELS:
         box = layout["label"]
         draw = ImageDraw.Draw(canvas)
@@ -3296,6 +3549,133 @@ def restore_yt_cover_photo(
     result = _restore_outside_protected_boxes(
         base_img, ai_img, protect_boxes=protect_boxes,
         diff_threshold=diff_threshold, max_change_ratio=max_change_ratio,
+    )
+    buffer = io.BytesIO()
+    result.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+# ============================================================
+# B55 修法甲（2026-09-20 使用者裁決，見帳本）：模型只產一張透明底的標題圖層，
+# 程式疊到未經觸碰的原圖上。
+#
+# 跟上面 `_restore_outside_protected_boxes` 那條差異遮罩回貼是兩種不同的保證路徑：
+# 差異遮罩靠「比對像不像」決定要不要還原成 base，門檻放在哪裡都是機率性的（2026-09-16
+# 實拍量到十點滿版創意 0 級 change_ratio 就有 68.1%，等於這條路本來就形同擋死，見帳本
+# B55 那列）。這裡的保證來自 **alpha 通道本身**：alpha=0 的像素定義上就是「模型完全
+# 沒有動過」，疊圖時原封不動地漏出 base，不需要比對、不會有機率性的假陽性或假陰性。
+#
+# 代價：只有支援 `background: "transparent"` 的模型才畫得出乾淨的透明底（本 session
+# 查證：openai/gpt-image-2.5-sunburst 有這個 enum；google/gemini-3-pro-image 沒有）。
+# 呼叫端只在 provider=="gpt" 時才走這條路，gemini 維持原本的差異遮罩回貼不變。
+#
+# 三道閘缺一不可，任何一道沒過就丟 ComposeError，不悄悄降級成半套保證：
+#   (a) 模型是不是真的回了透明底——alpha 全不透明代表模型忽略了 background=transparent
+#       這個請求（prompt 只是請求，跟 AI_TITLE_BASE_IMAGE_NOTE 同一個教訓）。
+#   (b) 保護區（頁首帶／Logo／角標這些程式後貼元素要用的位置）內 alpha 必須全為 0——
+#       模型不准在那些區域畫任何東西，畫了代表要蓋掉程式後貼的內容。
+#   (c) 面積防呆：可疊區域裡非透明像素比例超過門檻，代表模型畫的不是標題，是整片
+#       半透明背景——沿用既有的 PHOTO_PROTECT_MAX_CHANGE_RATIO，不另訂數字。
+# ============================================================
+
+# alpha 判定的雜訊容忍：反鋸齒邊緣、JPEG-like 壓縮偽影會讓「理論上全透明」的像素
+# 落在 1-15 之間，門檻抓在肉眼看不出差異、又能濾掉這類雜訊的位置。
+TITLE_LAYER_ALPHA_THRESHOLD = 16
+
+
+def _overlay_title_layer_core(
+    base_img: Image.Image, layer_img: Image.Image, *,
+    protect_boxes: list[tuple[int, int, int, int]],
+    max_paint_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+    alpha_threshold: int = TITLE_LAYER_ALPHA_THRESHOLD,
+) -> Image.Image:
+    """三道閘＋疊圖的核心邏輯，在 PIL Image 層級操作。base_img 必須是 RGB，
+    layer_img 必須是 RGBA（呼叫端負責轉檔與縮放對齊）。"""
+    width, height = base_img.size
+    alpha = layer_img.split()[3]
+    painted = alpha.point(lambda p: 255 if p > alpha_threshold else 0)
+
+    # (a) 全不透明防呆：alpha 的最小值都超過門檻，代表整張圖沒有一個像素是透明的，
+    # 模型沒有理會 background=transparent 這個請求。
+    if alpha.getextrema()[0] > alpha_threshold:
+        raise ComposeError(
+            "生圖模型沒有回傳透明底的標題圖層（畫面完全不透明），已擋下這次生成——"
+            "原圖放置規則要求模型只畫標題、其餘保持透明，請重試"
+        )
+
+    protect_mask = Image.new("L", (width, height), 0)
+    pd = ImageDraw.Draw(protect_mask)
+    for box in protect_boxes:
+        x0, y0, x1, y1 = box
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(width, x1), min(height, y1)
+        if x1 > x0 and y1 > y0:
+            pd.rectangle([x0, y0, x1, y1], fill=255)
+
+    # (b) 保護區內不准有任何被畫過的像素——這一道跟面積無關，一個像素都不許。
+    protect_violation = ImageChops.multiply(painted, protect_mask)
+    if protect_violation.getbbox() is not None:
+        raise ComposeError(
+            "生圖模型在保留給程式後貼元素（頁首帶／Logo／角標）的區域畫了東西，"
+            "已擋下這次生成——那一帶必須維持透明，請重試"
+        )
+
+    # (c) 面積防呆：可疊區域（畫布扣掉保護區）裡畫了多大比例。
+    editable_mask = ImageChops.invert(protect_mask)
+    editable_pixel_count = editable_mask.histogram()[255]
+    if editable_pixel_count:
+        painted_in_editable = ImageChops.multiply(painted, editable_mask)
+        paint_ratio = painted_in_editable.histogram()[255] / editable_pixel_count
+        if paint_ratio > max_paint_ratio:
+            raise ComposeError(
+                "生圖模型的標題圖層畫的範圍過大（"
+                f"可疊區域內 {paint_ratio:.0%} 的像素非透明，上限 {max_paint_ratio:.0%}），"
+                "已擋下這次生成——這代表模型畫的不是標題、是整片背景，請重試或降低標題創意等級"
+            )
+
+    result = base_img.convert("RGBA")
+    result.alpha_composite(layer_img)
+    return result.convert("RGB")
+
+
+def overlay_title_layer_over_cover_band(
+    base_png: bytes, layer_png: bytes, *, band_top_ratio: float,
+    max_paint_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+) -> bytes:
+    """十點封面（滿版）版本：保護區是標頭帶（`cover_title_band_top_ratio()` 以上），
+    跟 `restore_photo_outside_title_band` 保護的區域完全一樣，只是保證機制換成
+    上面那組 alpha 三道閘。回傳一律是 base 尺寸的 PNG。"""
+    base_img = Image.open(io.BytesIO(base_png)).convert("RGB")
+    layer_img = Image.open(io.BytesIO(layer_png)).convert("RGBA")
+    if layer_img.size != base_img.size:
+        layer_img = layer_img.resize(base_img.size, Image.LANCZOS)
+    width, height = base_img.size
+    band_top = round(height * band_top_ratio)
+    protect_boxes = [(0, 0, width, band_top)] if band_top < height else []
+    result = _overlay_title_layer_core(
+        base_img, layer_img, protect_boxes=protect_boxes, max_paint_ratio=max_paint_ratio,
+    )
+    buffer = io.BytesIO()
+    result.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def overlay_title_layer_over_yt_cover(
+    base_png: bytes, layer_png: bytes, *, layout: str,
+    original_audio: bool = False, ai_translation: bool = False, ai_note: bool = False,
+    max_paint_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+) -> bytes:
+    """YT 四版型版本：保護區沿用 `yt_cover_protect_boxes()`，跟 `restore_yt_cover_photo`
+    保護的區域完全一樣，只是保證機制換成 alpha 三道閘。回傳一律是 base 尺寸的 PNG。"""
+    base_img = Image.open(io.BytesIO(base_png)).convert("RGB")
+    layer_img = Image.open(io.BytesIO(layer_png)).convert("RGBA")
+    if layer_img.size != base_img.size:
+        layer_img = layer_img.resize(base_img.size, Image.LANCZOS)
+    protect_boxes = yt_cover_protect_boxes(
+        layout, original_audio=original_audio, ai_translation=ai_translation, ai_note=ai_note,
+    )
+    result = _overlay_title_layer_core(
+        base_img, layer_img, protect_boxes=protect_boxes, max_paint_ratio=max_paint_ratio,
     )
     buffer = io.BytesIO()
     result.save(buffer, format="PNG")

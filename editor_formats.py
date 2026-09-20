@@ -109,7 +109,7 @@ _BROADCAST_STAMP_ON = """5. THE CLOSING <蓋章> BANNER RUNS THE FULL WIDTH ALON
 6. "variable" must be exactly one [標題] line, then exactly {count_word} [內文小標] lines, then one <蓋章> line. {count_word_cap} points, no more and no fewer: this format's card stack has {count_word} rows.{density_rules}
 """
 _BROADCAST_STAMP_OFF = """5. THERE IS NO STAMP BANNER IN THIS GRAPHIC (the user switched it OFF, and that setting wins over every rule above or below that mentions a closing banner). Do NOT write any stamp banner, conclusion strip or closing bar into "structure", and do not put a <蓋章> line in "variable". BUT THE LOW STRIP UNDER THE RESERVED AREA IS STILL FILLED, BY A <底帶> LINE INSTEAD. Leaving that strip empty makes the graphic look unfinished, and it is what the user complained about. Write into "structure" that the <底帶> line is a single bar lying in that low strip, BELOW the reserved area, hugging the bottom of the design and spanning the FULL width from the {side_en} edge across to the {opposite_en} edge — it crosses both halves, exactly like the headline does across the top strip, and the two of them sandwich the video window. It is styled as an ordinary information card like the ones stacked above it, NOT as a coloured stamp and NOT as a closing slogan: it carries a real fact of its own. The remaining cards stay stacked in the {opposite_en} half under the headline. Nothing of it may rise up beside or into the video window, and it stays a single line. Keep the extreme lower-RIGHT corner of it clear of essential wording: a small mark is added there afterwards. (It is the lower-right corner whichever half is reserved — the mark's position does not mirror.)
-6. THIS RULE OVERRIDES THE STAMP-OFF BLOCK ABOVE WHERE THEY DISAGREE ABOUT THE LAST LINE. "variable" must be exactly one [標題] line, then exactly {count_word} [內文小標] lines, then exactly one line beginning with the marker <底帶>. {count_word_cap} points, no more and no fewer: this format's card stack has {count_word} rows, and the <底帶> line is separate from them — it is the bar along the bottom, not one of the rows. Still no <蓋章> line anywhere. The <底帶> line carries an ordinary fact from the material, written short, in the same voice as the cards; it is never a slogan, a sign-off or a repeat of the headline.{density_rules}
+6. THIS RULE OVERRIDES THE STAMP-OFF BLOCK ABOVE WHERE THEY DISAGREE ABOUT THE LAST LINE. "variable" must be exactly one [標題] line, then exactly {count_word} [內文小標] lines, then exactly one line beginning with the marker <底帶>. {count_word_cap} points, no more and no fewer: this format's card stack has {count_word} rows, and the <底帶> line is separate from them — it is the bar along the bottom, not one of the rows. Still no <蓋章> line anywhere. THE <底帶> LINE MUST CARRY A SUBSTANTIVE POINT OF ITS OWN — a figure, an outcome, or a named party from the material that none of the lines above it already used. It is never a slogan, a sign-off or a repeat of the headline, and it is never padding: do NOT fill it with the date or time period the material's statistics were collected over, an "as of" remark, generic scene-setting, or a restatement of the topic the headline already gave. If every strong fact is already spent on the headline and the cards, pull forward whichever fact from the material has not appeared yet — never settle for a vague background sentence just to fill the line.{density_rules}
 """
 
 
@@ -654,6 +654,37 @@ def with_base_image_note(prompt: str, has_base: bool) -> str:
     return prompt.replace(marker, AI_TITLE_BASE_IMAGE_NOTE + marker, 1)
 
 
+# ---- B55 修法甲：透明底標題圖層（2026-09-20 使用者裁決）----
+#
+# AI_TITLE_BASE_IMAGE_NOTE 那條路是「請模型把整張照片原樣重畫一遍、只在上面加字」——
+# 2026-09-16 實拍量到光是創意 0 級 change_ratio 就有 68.1%，證明「請模型不要重畫」
+# 這件事 prompt 語氣再怎麼加重都沒用，模型的生成方式就是重新畫一張完整的圖。
+# 這一條路換了做法：不要求模型輸出照片本身，只要求它輸出**一張透明底、只有標題與
+# 設計元素的圖層**，照片完全交給程式疊圖時逐像素貼上——模型連照片長什麼樣都不用管，
+# 保證自然就成立，不必再靠事後比對。
+#
+# 只在 provider=="gpt" 時使用（見 main.ImageGenerateRequest.transparent_background
+# 與 compose.py 那組三道閘的說明）：background=transparent 是 gpt-image 系列公告的
+# 能力，Gemini 沒有這個參數，那條路仍然走 AI_TITLE_BASE_IMAGE_NOTE ＋事後差異遮罩。
+AI_TITLE_LAYER_ONLY_NOTE = """=== YOU ARE DRAWING A TRANSPARENT OVERLAY, NOT A PHOTOGRAPH ===
+The attached image is a REFERENCE ONLY — it shows you the composition, the colours and where the photograph will sit, so your typography and design elements can be placed and coloured to work with it. Do NOT reproduce, redraw, repaint or recreate that photograph in your output.
+Your output canvas is TRANSPARENT (alpha channel, background="transparent"). Every pixel that is not part of the headline text or an explicit design element (a plate, a card shape, an accent stroke, a decorative device described below) MUST be fully transparent — alpha = 0. Leaving the transparent background empty is correct; painting any kind of tint, gradient, vignette, wash or texture across it is not — that would cover the photograph.
+Draw ONLY: the headline typography, and any design elements the instructions below explicitly ask for (plates behind text, accent shapes, wordless devices). Nothing else. Never fill the frame, never draw a solid or semi-transparent panel across the whole canvas, never approximate the photograph's colours as a background.
+
+"""
+
+
+def with_title_layer_note(prompt: str) -> str:
+    """B55 修法甲專用：取代 with_base_image_note，注入位置相同（第一個 TEXT TO RENDER
+    段之前），但措辭完全不同——那邊叫模型「重現整張照片」，這裡叫模型「除了字跟設計
+    元素，其餘全部留透明」，兩句話同時出現在同一份 prompt 裡會直接互相矛盾，
+    呼叫端只能二選一（見 main._cover_ai／main._yt_cover_full_image 的呼叫處）。"""
+    marker = "=== TEXT TO RENDER"
+    if marker not in prompt:
+        return AI_TITLE_LAYER_ONLY_NOTE + prompt
+    return prompt.replace(marker, AI_TITLE_LAYER_ONLY_NOTE + marker, 1)
+
+
 # ---- 設計綱要：插在 CANVAS 正後方（2026-09-11 第二輪）----
 #
 # 第一輪把整份級距條文放在 TYPOGRAPHY 段尾，實拍（創意梯子-260911 A／B 兩組）四級長得
@@ -1139,6 +1170,18 @@ def split_cover_title(title: str) -> list[str]:
 # 分成 **3 段**（每段就是封面上的一行，白／黃／紅；2026-09-08 使用者回報只出 2 段就沒有紅字、
 # 或生圖階段瞎掰第三段，改成一律 3 段）。YT 直播：一句標題用一個半形空格分兩段（版型固定兩行）。
 # 忠實度規則由 main.CONTENT_FIDELITY_RULES 接在後面（同主流程），標題只能用原文有的事實。
+#
+# 2026-09-20 B79 查證：使用者回報「創意階梯時兩行標題好像被強制成三行」。逐段查過
+# compose.py 的配色表（COVER_TITLE_LINE_COLOURS 只綁創意 0 級，1 級起配色早已依內容走、
+# 與行數無關，見 cover_line_annotation）與 main._lines_block（送給生圖模型的行數說明
+# 是 f"exactly {len(lines)} lines"，逐次動態算，不是寫死 3）——兩處都排除了。撈了
+# 2026-09-18～09-20 正式站十點雙切最近 23 筆生成紀錄（46 個標題格）：**31 格（67%）
+# 是 2 段、15 格（33%）是 3 段**，2 段在近期成品裡是多數，並非被強制成 3。
+# 全鏈路唯一真的寫著「3 段優先」的地方是本消化 prompt 這一句（下面 Prefer 3 segments
+# 那句，TEN_FULL 版同款），已改成中性措辭（段數由內容決定，不再預設 3、也不再把 2
+# 講成退路）——2／3 段的合法範圍本身沒有變（2026-09-11 已裁），這只是拿掉一句
+# 傾向性措辭，不需要追加 D16。這句話對模型輸出實際有多大影響無法驗證（要打付費消化
+# 模型），改動基準是「這句話本身讀起來確實偏向 3」，不是量到的行為差異。
 COVER_TITLE_DIGEST_SYSTEM_TEN = """You write the headlines for a Taiwanese prime-time news programme cover (十點不一樣) from one news article.
 
 FIRST decide how many stories the article carries, and say so in "topics":
@@ -1149,7 +1192,7 @@ FIRST decide how many stories the article carries, and say so in "topics":
 THEN write the headlines.
 - When "topics" is 1: write ONE headline into "title_left" for the core of that story, and leave "title_right" as an empty string.
 - When "topics" is 2: write "title_left" for the story that appears FIRST in the article and "title_right" for the one that appears second. Keep the two headlines about their own story only — never repeat the same facts in both.
-- Each headline is 2 OR 3 segments separated by ONE half-width space; each segment 4–7 characters, NEVER more than 7 (a longer segment shrinks every line on the cover). Each segment becomes one printed line. Prefer 3 segments — with 3 the headline runs 12–18 characters excluding spaces and fills the cover. Use 2 segments (8–14 characters excluding spaces) when the story is genuinely said in fewer words, or when the only way to reach 3 would be to cut a name or a fixed phrase in half. NEVER pad a short headline up to 3 segments with filler.
+- Each headline is 2 OR 3 segments separated by ONE half-width space; each segment 4–7 characters, NEVER more than 7 (a longer segment shrinks every line on the cover). Each segment becomes one printed line. CHOOSE THE SEGMENT COUNT BY HOW THE STORY READS, NOT BY A DEFAULT — 3 is not the goal and 2 is not the fallback. 3 segments (12–18 characters excluding spaces) fills the cover when the headline naturally supports it. 2 segments (8–14 characters excluding spaces) fits a story genuinely said in fewer words, or one where the only way to reach 3 would be to cut a name or a fixed phrase in half. NEVER pad a short headline up to 3 segments with filler.
 - A SEGMENT BOUNDARY IS A READING BREAK, NOT A CHARACTER COUNT. Every segment has to stand on its own as a phrase. 「葉門青年運動」is the name of an organisation, so 「葉門青年 運動 奪下紅海咽喉」is wrong — it reads as young people in Yemen taking exercise. The correct answer is 「葉門青年運動 奪下紅海咽喉」in 2 segments. The same holds for place names, personal names, organisation names, titles and fixed four-character phrases: never let a segment boundary fall inside one.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
@@ -1159,12 +1202,18 @@ ALSO SUGGEST THE TWO OPTIONAL CHIP FIELDS. Both are printed on the cover exactly
 - "info_chips": at most 2 small free-standing chips. One may be the PLACE the story happens, written as the article writes it (「日本・名古屋」「臺南」). One may be the single most telling FIGURE with its unit or subject attached (「降41%」「5萬名確診」「7級強風」). Each at most 10 characters. Never invent or round a figure, never guess a place, and never repeat something the headline already says.
 """
 
-# 十點不一樣（滿版）：只有一個標題，一律 3 段（每段一行，白／黃／紅）。
+# 十點不一樣（滿版）：只有一個標題，2 或 3 段皆合法（每段一行；0 級白／黃／紅，
+# 1 級起配色改依內容走，見 cover_line_annotation）。
+#
+# 2026-09-20 B79：這句原本寫「一律 3 段」，是 2026-09-08 那輪「一律 3 段」裁決的
+# 舊註解，2026-09-11 早就relax成 2 或 3（見上面 TEN 那份的同款歷史），但這行註解
+# 沒跟著更新——本 session 查證時發現文件與程式碼已經脫鉤，一併修正，避免下一個
+# 維護者被舊註解誤導成「這裡還鎖 3 段」。
 COVER_TITLE_DIGEST_SYSTEM_TEN_FULL = """You write the single headline for a Taiwanese prime-time news programme cover (十點不一樣, full-bleed single-photo layout) from one news article.
 
 Return JSON with "title".
 - One punchy Traditional Chinese (Taiwan) headline for the core of the story.
-- 2 OR 3 segments separated by ONE half-width space; each segment 4–7 characters, NEVER more than 7. Each segment becomes one printed line. Prefer 3 segments — with 3 the headline runs 12–18 characters excluding spaces and fills the cover. Use 2 segments (8–14 characters excluding spaces) when the story is genuinely said in fewer words, or when the only way to reach 3 would be to cut a name or a fixed phrase in half. NEVER pad a short headline up to 3 segments with filler.
+- 2 OR 3 segments separated by ONE half-width space; each segment 4–7 characters, NEVER more than 7. Each segment becomes one printed line. CHOOSE THE SEGMENT COUNT BY HOW THE STORY READS, NOT BY A DEFAULT — 3 is not the goal and 2 is not the fallback. 3 segments (12–18 characters excluding spaces) fills the cover when the headline naturally supports it. 2 segments (8–14 characters excluding spaces) fits a story genuinely said in fewer words, or one where the only way to reach 3 would be to cut a name or a fixed phrase in half. NEVER pad a short headline up to 3 segments with filler.
 - A SEGMENT BOUNDARY IS A READING BREAK, NOT A CHARACTER COUNT. Every segment has to stand on its own as a phrase. 「葉門青年運動」is the name of an organisation, so 「葉門青年 運動 奪下紅海咽喉」is wrong — it reads as young people in Yemen taking exercise. The correct answer is 「葉門青年運動 奪下紅海咽喉」in 2 segments. The same holds for place names, personal names, organisation names, titles and fixed four-character phrases: never let a segment boundary fall inside one.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
@@ -2235,7 +2284,7 @@ YT_COVER_DERIVE_SCHEMA = {
 
 EDITOR_FORMATS = {
     DEFAULT_FORMAT: {
-        "label": "預設（現行）",
+        "label": "編輯CG",
         "pipeline": PIPELINE_GENERATE,
         "digest_rules": "",
         "hole_side": None,

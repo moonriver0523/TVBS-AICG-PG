@@ -13,6 +13,12 @@
 3. 字帶內改動面積超過門檻＝視為整張重畫，直接擋下（ComposeError），不能悄悄送出違規結果。
 4. 這條保護只在「滿版、剛好 1 張原圖放置、AI 標題模式」生效；≥2 張切格與其他版型不受影響
    （使用者尚未就多圖融合裁決逐像素保真，見 _cover_ai 的 protect_base 文件字串）。
+
+2026-09-20 修法甲：上面這條差異遮罩路徑實拍量到 change_ratio 常態超標（見帳本 B55），
+provider=="gpt" 時已改走 compose.overlay_title_layer_over_cover_band（模型只回透明底
+標題圖層，程式疊到原圖上，見 test_b55_transparent_title_layer.py）。**這份檔案自此
+之後專測 provider=="gemini" 那條沒有 background=transparent、必須繼續用差異遮罩的
+路徑**——本檔的端點測試 BODY 已改成 provider=gemini，維持這份檔案原本要驗的行為。
 """
 import base64
 import io
@@ -127,9 +133,11 @@ class RestorePhotoOutsideTitleBandUnitTests(unittest.TestCase):
 class TenCoverFullSingleAsisEndpointTests(unittest.TestCase):
     """透過 /api/editor/cover 端點驗證 _editor_cover_full 有把 protect_base 接上。"""
 
+    # provider=gemini（2026-09-20 修法甲後）：這份檔案專測差異遮罩路徑，gpt 已經
+    # 改走 test_b55_transparent_title_layer.py 的透明底圖層路徑。
     BODY = {
         "title_left": "測試標題", "title_right": "", "layout": "full",
-        "mode": "ai", "title_creativity": 1, "provider": "gpt",
+        "mode": "ai", "title_creativity": 1, "provider": "gemini",
         "date_text": "2026/09/16",
     }
 

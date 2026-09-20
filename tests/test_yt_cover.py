@@ -496,7 +496,15 @@ class EndpointTests(unittest.TestCase):
 
     def test_single_asis_with_ai_title_draws_the_title_over_the_photo(self):
         """2026-09-13 使用者裁決（2026-09-07 的強制壓字作廢）：單張原圖放置＋AI 標題＝
-        程式裁滿版當唯一附圖，模型只在上面畫字；一次生圖、零張肖像。"""
+        程式裁滿版當唯一附圖，模型只在上面畫字；一次生圖、零張肖像。
+
+        provider=gemini（2026-09-20 修法甲後）：`YtCoverRequest.provider` 預設是 gpt，
+        剛好 1 張原圖放置時 gpt 已改走透明底圖層（見
+        tests/test_b55_transparent_title_layer.py），fake_raw 回的不透明圖會被那條路
+        的 (a) 擋下。這支測的是請求組裝（reference_images purpose／portrait_subjects／
+        note 文字），不是 B55 的像素保證，改用 gemini 沿用差異遮罩那條路，維持原本
+        要驗的斷言（含 AI_TITLE_BASE_IMAGE_NOTE 那句）成立。
+        """
         calls = []
 
         def fake_raw(req):
@@ -508,7 +516,7 @@ class EndpointTests(unittest.TestCase):
 
         payload = {
             "title": "北北基宜大雨特報 台北12處道路封閉",
-            "title_mode": "ai", "creativity": 1,
+            "title_mode": "ai", "creativity": 1, "provider": "gemini",
             "date_text": "2026/09/07",
             "reference_images": [{"data_url": _data_url(_png_bytes((1200, 700))), "purpose": "asis"}],
         }

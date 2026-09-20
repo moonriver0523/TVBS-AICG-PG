@@ -229,7 +229,7 @@ NAMED REAL PERSON — PORTRAIT TREATMENT (CRITICAL)
 - Render the portrait as a realistic editorial news portrait: the primary impression is a faithful likeness of the reference photograph — the same facial structure, hairstyle, glasses and build, so that viewers recognise the same individual at a glance. Keep only a light illustrative touch on top of that realism, such as a subtle painterly texture or brushwork in the finish.
 - Do not aim for a flat photographic reproduction of the reference image, and do not push the treatment into an overtly hand-drawn or cartoon style either — realism must dominate, the illustrative touch stays understated.
 - Take only the person's likeness from the reference photograph. Pose, attire, framing and surroundings follow STRUCTURE, not the photograph's own background or occasion.
-- The 示意圖 label supplied in VARIABLE FIELDS sits beside the portrait and must stay clearly visible: this is a depiction, not an actual photograph of the person. If VARIABLE FIELDS supplies no such label, do not add one yourself.
+- Do NOT draw any 示意圖, AI示意圖 or 來源 label yourself, and do not plan one into VARIABLE FIELDS either — this OVERRIDES the general instruction elsewhere in this prompt that asks you to plan and draw that label. Software stamps the disclaimer afterwards at the lower-right corner of the frame, outside your layout. Keep that corner clear of the portrait, essential wording and busy detail so the stamped label does not land on top of anything you drew.
 - Never place the person in a scene, action or context that STRUCTURE does not describe."""
 
 PORTRAIT_NO_REFERENCE_RULES = """==================================================
@@ -252,7 +252,7 @@ NAMED REAL PERSON — NO VERIFIED PHOTOGRAPH, DRAW FROM CONTEXT (CRITICAL)
 - No reference photograph is attached for this named real person, but the news context (their role, nationality, age, setting and any description the source material gives) is enough to depict them as a specific identifiable individual rather than a generic figure.
 - Draw a plausible likeness consistent with that context. Do not claim or imply pinpoint accuracy of their actual face — this is a contextual depiction, not a verified portrait.
 - Render it in the same realistic-editorial-with-a-light-illustrative-touch treatment as a reference-photo portrait: realism dominates, any illustrative texture stays understated.
-- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible. If VARIABLE FIELDS supplies no such label, do not add one yourself.
+- Do NOT draw any 示意圖, AI示意圖 or 來源 label yourself, and do not plan one into VARIABLE FIELDS either — this OVERRIDES the general instruction elsewhere in this prompt that asks you to plan and draw that label. Software stamps the disclaimer afterwards at the lower-right corner of the frame, outside your layout. Keep that corner clear of the portrait, essential wording and busy detail so the stamped label does not land on top of anything you drew.
 - Never place the person in a scene, action or context that STRUCTURE does not describe."""
 
 # 2-3 位具名真人、且**每一位都查到參考照**時用這段（2026-08-18 使用者裁定放寬）。
@@ -275,7 +275,7 @@ NAMED REAL PEOPLE — MULTIPLE PORTRAITS (CRITICAL)
 - Take only each person's likeness from the photographs. Pose, attire, framing and surroundings follow STRUCTURE, not the photographs' own backgrounds or occasions.
 - An attached photograph may happen to show more than one person. Use only the person the name label refers to; never carry a bystander from a photograph into the graphic.
 - Other real people may be named in the text of this graphic without a photograph. That is intended: render their names as text only, never as a face, and never place such a name beside a depicted figure.
-- The 示意圖 label supplied in VARIABLE FIELDS must stay clearly visible: these are illustrated depictions, not photographs of the people. If VARIABLE FIELDS supplies no such label, do not add one yourself.
+- Do NOT draw any 示意圖, AI示意圖 or 來源 label yourself, and do not plan one into VARIABLE FIELDS either — this OVERRIDES the general instruction elsewhere in this prompt that asks you to plan and draw that label. Software stamps the disclaimer afterwards at the lower-right corner of the frame, outside your layout. Keep that corner clear of every portrait, essential wording and busy detail so the stamped label does not land on top of anything you drew.
 - Never place a person in a scene, action or context that STRUCTURE does not describe."""
 
 PORTRAIT_MODES = {

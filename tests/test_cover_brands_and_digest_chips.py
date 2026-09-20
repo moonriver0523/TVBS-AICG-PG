@@ -102,6 +102,57 @@ class DigestChipTests(unittest.TestCase):
                     self.assertIn(field, schema["properties"])
                     self.assertIn(field, schema["required"])
 
+
+class B79SegmentCountNeutralTests(unittest.TestCase):
+    """B79：使用者回報「十點不一樣創意階梯時兩行標題好像被強制成三行」。
+
+    查證結論（本 session）：不是 compose.py 的配色表——COVER_TITLE_LINE_COLOURS
+    只綁創意 0 級，1 級起配色早依內容走（cover_line_annotation），跟行數無關；
+    也不是生圖 prompt 的行數說明——main._lines_block 動態算 `exactly {len(lines)}
+    lines`，不是寫死 3。撈了正式站近 3 天十點雙切 46 個標題格，2 段佔 67%，並非
+    被強制成 3。全鏈路唯一寫著「3 段優先」的只有這份消化 prompt，已改成中性措辭：
+    2／3 段的合法範圍不變（2026-09-11 已裁），不需要 D16。
+    """
+
+    def test_the_preference_wording_is_gone_from_both_ten_prompts(self):
+        for name in ("COVER_TITLE_DIGEST_SYSTEM_TEN", "COVER_TITLE_DIGEST_SYSTEM_TEN_FULL"):
+            with self.subTest(prompt=name):
+                text = getattr(editor_formats, name)
+                self.assertNotIn("Prefer 3 segments", text)
+                self.assertIn(
+                    "CHOOSE THE SEGMENT COUNT BY HOW THE STORY READS, NOT BY A DEFAULT",
+                    text,
+                )
+                self.assertIn("3 is not the goal and 2 is not the fallback", text)
+
+    def test_the_legal_segment_range_and_character_bounds_are_unchanged(self):
+        """措辭中性化不是偷改數字：2/3 段、4-7 字、12-18／8-14 總字數全部原封不動。"""
+        for name in ("COVER_TITLE_DIGEST_SYSTEM_TEN", "COVER_TITLE_DIGEST_SYSTEM_TEN_FULL"):
+            with self.subTest(prompt=name):
+                text = getattr(editor_formats, name)
+                self.assertIn("2 OR 3 segments", text)
+                self.assertIn("4–7 characters", text)
+                self.assertIn("12–18 characters excluding spaces", text)
+                self.assertIn("8–14 characters excluding spaces", text)
+        self.assertEqual(editor_formats.TEN_DIGEST_MIN_SEGMENTS, 2)
+        self.assertEqual(editor_formats.TEN_DIGEST_MAX_SEGMENTS, 3)
+        self.assertEqual(editor_formats.ten_digest_total_range(2), (8, 14))
+        self.assertEqual(editor_formats.ten_digest_total_range(3), (12, 18))
+
+    def test_a_well_formed_two_segment_title_still_passes_validation_untouched(self):
+        """2 段標題本來就合法、不會觸發重問——這條在 09-11 就成立，這裡釘住不退步。"""
+        data = {"title_left": "葉門青年運動 奪下紅海咽喉", "title_right": ""}
+        self.assertEqual(editor_formats.ten_digest_violations(data), [])
+
+    def test_the_full_width_prompt_comment_no_longer_claims_always_three(self):
+        """滿版那份 prompt 上方原本有一行模組註解「只有一個標題，一律 3 段」，
+        是 09-08 舊裁決留下的死註解，程式本體早在 09-11 relax 成 2 或 3——
+        文件與程式碼脫鉤，一併修正。這裡直接釘那句舊字面消失。"""
+        source = (Path(__file__).resolve().parent.parent / "editor_formats.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("只有一個標題，一律 3 段", source)
+
     def test_the_full_layout_no_longer_borrows_the_yt_schema(self):
         """滿版以前借 YT 那個 schema（只有 title），籤欄位塞不進去。"""
         self.assertNotIn("side_labels", editor_formats.COVER_TITLE_DIGEST_SCHEMA_YT["properties"])
