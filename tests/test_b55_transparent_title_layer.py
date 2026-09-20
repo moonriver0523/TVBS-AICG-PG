@@ -27,6 +27,10 @@ provider=="gemini" 維持原本的差異遮罩回貼（哪怕那條路本來就�
 (d) 與「疊圖前先把低於門檻的 alpha 歸零」都是 2026-09-20 獨立複查（gpt-5.6-sol）之後
 補的——原本只有 (a)(b)(c) 三道，而那三道全是「畫太多／畫錯地方」的上限，放行之後疊出來
 的東西對不對完全沒有人驗。見 OverlayTitleLayerIndependentReviewTests 的兩支說明。
+
+同一次複查的第四項是 prompt 自相矛盾（底圖標成 purpose="aiedit"，把「重畫這張照片」
+那段接在「不要重畫這張照片」後面），修法是新增內部用途 "titlelayer"——
+見 AttachedImagePurposeContradictionTests。
 """
 import base64
 import io
@@ -46,10 +50,14 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 os.environ.setdefault("NEWS_IMAGE_API_KEY", "b55-layer-test-key")
 
 import compose  # noqa: E402
+import editor_formats  # noqa: E402
 import main  # noqa: E402
+import news_prompt  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 client = TestClient(main.app)
+
+APP_JS = (ROOT / "app.js").read_text(encoding="utf-8")
 
 RED = (200, 30, 30)
 
@@ -427,6 +435,119 @@ class YtCoverEndpointWiringTests(unittest.TestCase):
         res = self._post(body, fake_raw)
         self.assertEqual(res.status_code, 400, res.text)
         self.assertIn("透明", res.text)
+
+
+class AttachedImagePurposeContradictionTests(unittest.TestCase):
+    """獨立複查（gpt-5.6-sol）第四項：透明圖層那條路的底圖用途標錯，prompt 自相矛盾。
+
+    修法甲把程式拼好的底圖當成唯一附圖送進模型，原本標 purpose="aiedit"，
+    於是 apply_user_references_to_image_request 會把 USER_REFERENCE_AIEDIT_RULES
+    接在 prompt 尾巴——那段開頭是「One of the attached images is the picture this
+    graphic's main visual is to BE. Re-draw that same picture」，而同一份 prompt
+    前面剛被 with_title_layer_note 注入「Do NOT reproduce, redraw, repaint or
+    recreate that photograph」。兩句互斥還同時送，等於把修法甲要擋的「模型重畫整張
+    照片」請回來一次；compose.py 那四道閘是最後的攔截網，不該拿來扛 prompt 自相矛盾。
+
+    修法：新增內部用途 "titlelayer"（前台下拉沒有這一項），措辭改成「附圖只當位置與
+    配色參考」。gemini 那條路（差異遮罩回貼）仍然要重畫整張，維持 aiedit 不動。
+    """
+
+    BASE = "ATTACHED IMAGE — REFERENCE ONLY, DO NOT REDRAW IT"
+    REDRAW = "Re-draw that same picture"
+
+    def test_the_two_rule_blocks_really_do_contradict_each_other(self):
+        """先證明前提成立：aiedit 那段真的要求重畫，title-layer note 真的要求不要重畫。
+        沒有這一題，下面兩題只是在比對字串有沒有換掉。"""
+        self.assertIn(self.REDRAW, news_prompt.USER_REFERENCE_AIEDIT_RULES)
+        self.assertIn("Do NOT reproduce, redraw", editor_formats.AI_TITLE_LAYER_ONLY_NOTE)
+        self.assertNotIn(self.REDRAW, news_prompt.USER_REFERENCE_TITLE_LAYER_RULES)
+        self.assertIn(
+            "Do NOT reproduce, redraw", news_prompt.USER_REFERENCE_TITLE_LAYER_RULES
+        )
+
+    def test_the_internal_purpose_is_not_offered_in_the_front_end_dropdown(self):
+        """titlelayer 是程式自己標的，不該出現在使用者選得到的清單裡。"""
+        self.assertIn("titlelayer", news_prompt.USER_REFERENCE_MODES)
+        self.assertNotIn("titlelayer", editor_formats.REF_PURPOSE_KEYS)
+        self.assertNotIn("titlelayer", APP_JS)
+
+    def _ten_cover(self, provider):
+        captured = {}
+
+        def fake_raw(req):
+            captured["req"] = req
+            band_top = round(compose.COVER_CANVAS[1] * compose.cover_title_band_top_ratio())
+            band_mid = band_top + (compose.COVER_CANVAS[1] - band_top) // 2
+            layer = _rgba_layer_png(
+                compose.COVER_CANVAS, opaque_box=[200, band_mid - 20, 700, band_mid + 20],
+            )
+            return SimpleNamespace(
+                image_data_base64=base64.b64encode(layer).decode(),
+                model="fake", mime_type="image/png",
+            )
+
+        body = {
+            "title_left": "測試標題", "title_right": "", "layout": "full",
+            "mode": "ai", "title_creativity": 1, "provider": provider,
+            "date_text": "2026/09/16",
+            "slot_left": [{"data_url": _data_url(_rgb_png(RED, (640, 640))), "purpose": "asis"}],
+        }
+        with patch.object(main, "generate_image_raw", side_effect=fake_raw), \
+             patch.object(main, "resolve_cover_visuals", return_value=("景", "景")):
+            res = client.post("/api/editor/cover", json=body, headers=_headers())
+        return res, captured.get("req")
+
+    def test_ten_cover_gpt_sends_the_reference_only_block_not_the_redraw_block(self):
+        res, req = self._ten_cover("gpt")
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual([r.purpose for r in req.reference_images], ["titlelayer"])
+        self.assertIn(self.BASE, req.prompt)
+        self.assertNotIn(
+            self.REDRAW, req.prompt,
+            "透明圖層的 prompt 裡還留著「重畫這張照片」，跟 TRANSPARENT OVERLAY 那段互相抵銷",
+        )
+
+    def test_yt_cover_gpt_sends_the_reference_only_block_too(self):
+        captured = {}
+
+        def fake_raw(req):
+            captured["req"] = req
+            w, h = compose.YT_CANVAS
+            layer = _rgba_layer_png(
+                (w, h),
+                opaque_box=[round(w * 0.3), round(h * 0.82), round(w * 0.6), round(h * 0.88)],
+            )
+            return SimpleNamespace(
+                image_data_base64=base64.b64encode(layer).decode(),
+                model="fake", mime_type="image/png",
+            )
+
+        body = {
+            "layout": "news", "title_mode": "ai", "creativity": 1, "provider": "gpt",
+            "date_text": "2026/09/16", "title": "前段 後段",
+            "reference_images": [{"data_url": _data_url(_rgb_png(RED, (640, 640))), "purpose": "asis"}],
+        }
+        with patch.object(main, "generate_image_raw", side_effect=fake_raw), \
+             patch.object(main, "derive_yt_cover_plan", return_value={"visual": "景"}):
+            res = client.post("/api/editor/yt-cover", json=body, headers=_headers())
+        self.assertEqual(res.status_code, 200, res.text)
+        req = captured["req"]
+        self.assertEqual([r.purpose for r in req.reference_images], ["titlelayer"])
+        self.assertIn(self.BASE, req.prompt)
+        self.assertNotIn(self.REDRAW, req.prompt)
+
+    def test_gemini_keeps_the_redraw_block_because_it_really_does_redraw(self):
+        """provider=="gemini" 不支援 background=transparent，走的是舊的差異遮罩回貼，
+        模型確實要重畫整張照片——那條路標 aiedit 才是對的，不能一起改掉。
+
+        這裡只驗**送出去的 request**，不驗回應碼：fake_raw 回的是透明底圖層，
+        gemini 那條路會拿它去比對差異遮罩、量到 100% 改動而擋成 400（那正是 B55
+        原本的行為，與本題無關）。要驗的是 purpose 有沒有被我一起改掉。
+        """
+        _res, req = self._ten_cover("gemini")
+        self.assertEqual([r.purpose for r in req.reference_images], ["aiedit"])
+        self.assertIn(self.REDRAW, req.prompt)
+        self.assertNotIn(self.BASE, req.prompt)
 
 
 class TransportWiringTests(unittest.TestCase):

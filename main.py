@@ -997,10 +997,15 @@ MAX_INPUT_REFERENCES = 6
 # 使用者裁決；這張圖就是成品那塊畫面，但交給生圖模型照版型風格重畫一次——
 # 與 asis 差在會被重畫，與 scene 差在畫的是同一個畫面，見 USER_REFERENCE_AIEDIT_RULES）。
 #
-# 這組 key 與前台下拉的順序、標籤由 editor_formats.REF_PURPOSE_ORDER 統一（唯一真相源）。
+# 這組 key 與前台下拉的順序、標籤由 editor_formats.REF_PURPOSE_ORDER 統一（唯一真相源），
+# titlelayer 除外——它是內部用途，下拉裡沒有，見下面欄位註解。
 class UserReferenceImage(BaseModel):
     data_url: str = Field(min_length=1, max_length=2_800_000)  # 約 2MB base64
-    purpose: Literal["map", "scene", "portrait", "asis", "aiedit"] = "scene"
+    # titlelayer＝B55 修法甲的透明底標題圖層專用（2026-09-20 獨立複查補）：
+    # 附圖只是位置／配色參考，模型輸出透明圖層，照片由程式疊。標成 aiedit 會注入
+    # USER_REFERENCE_AIEDIT_RULES 的「Re-draw that same picture」，跟同一份 prompt 裡
+    # editor_formats.AI_TITLE_LAYER_ONLY_NOTE 的「Do NOT reproduce, redraw…」正面矛盾。
+    purpose: Literal["map", "scene", "portrait", "asis", "aiedit", "titlelayer"] = "scene"
 
 
 # ============================================================
@@ -5053,7 +5058,12 @@ def apply_user_references_to_image_request(
     # 例外二（2026-09-13 使用者裁決）：AI改圖的畫面是模型重繪出來的，不是使用者
     # 親自提供的真實素材——那個 override 的語意不成立，「AI示意圖」標籤照舊要留。
     # 混了別種用途也一樣留：同一張成品只有一個標籤，有任何一塊是 AI 重繪就得標。
-    if any(ref.purpose == "aiedit" for ref in req.reference_images):
+    # titlelayer 同列（2026-09-20 獨立複查補）：理由不同但結論一樣。這條路的成品
+    # 是「程式底圖 ＋ 模型只畫的標題圖層」，模型輸出裡根本沒有照片，標不標
+    # 「示意圖」不是它能決定的事；而 USER_REFERENCE_NO_DISCLAIMER_RULES 的內文
+    # 還會引用 REAL-WORLD ACCURACY／NAMED REAL PERSON 兩個封面 prompt 裡不存在的
+    # 區塊，注進去只是懸空指涉。維持修法甲上線前的行為：不注入。
+    if any(ref.purpose in ("aiedit", "titlelayer") for ref in req.reference_images):
         return req.model_copy(update={"prompt": prompt}) if prompt != req.prompt else req
     # 例外三（2026-09-14 B28）：畫真人並掛真實姓名時，「有上傳就不標示意圖」
     # 的 override 不成立——D13 的前提就是畫面上還有 AI示意圖標籤。
@@ -6273,8 +6283,14 @@ def _cover_ai(
         # 2026-09-13：附圖位裡的 AI改圖／實景／肖像／地圖也要收——整張 AI 版是十點的
         # 預設模式，漏掉這裡等於使用者在那一格選了 AI改圖 卻完全沒送進模型。
         # 整張 AI 只有一個畫面，兩格的參考都歸這一張。
+        # 用途跟著 transparent_mode 走（2026-09-20 獨立複查補）：透明圖層那條路的底圖
+        # 是「只給你看位置與配色」的參考，標成 aiedit 會注入「Re-draw that same picture」，
+        # 跟 with_title_layer_note 注入的「Do NOT reproduce, redraw…」互相抵銷。
         reference_images=(
-            [UserReferenceImage(data_url=_base_data_url(base), purpose="aiedit")]
+            [UserReferenceImage(
+                data_url=_base_data_url(base),
+                purpose="titlelayer" if transparent_mode else "aiedit",
+            )]
             if base is not None else
             [ref for ref in req.reference_images if ref.purpose != "asis"]
             + slot_generation_refs(req.slot_refs(0)) + slot_generation_refs(req.slot_refs(1))
@@ -7628,8 +7644,13 @@ def _yt_cover_full_image(
         aspect_ratio="16:9",
         image_size=req.image_size,
         safe_frame=False,
+        # 用途跟著 protect_base 走（2026-09-20 獨立複查補，同 _cover_ai 的理由）：
+        # 透明圖層那條路的底圖只當位置／配色參考，不能叫模型重畫它。
         reference_images=(
-            [UserReferenceImage(data_url=_base_data_url(base), purpose="aiedit")]
+            [UserReferenceImage(
+                data_url=_base_data_url(base),
+                purpose="titlelayer" if protect_base else "aiedit",
+            )]
             if base is not None else _yt_cover_all_refs(req)
         ),
         portrait_subjects=[] if base is not None else subjects,

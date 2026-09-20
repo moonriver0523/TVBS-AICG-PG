@@ -423,12 +423,39 @@ THE EDITOR'S INSTRUCTION FOR THIS REDRAW (OUTRANKS "the content does not change"
 The editor has asked for the following change to the attached picture(s). It is a direction about what to change in the picture, never words to render — do not write any of it, or any translation of it, anywhere in the image. Carry it out, and leave everything it does not mention exactly as it is in the attached image. It does not relax the brand-mark, human-face or NAMED REAL PERSON rules above; satisfy the rest of the instruction within those.
 {instruction}"""
 
+# B55 修法甲的內部用途（2026-09-20 獨立複查補）：透明底標題圖層那條路的附圖。
+#
+# 為什麼要獨立一種用途、不能沿用 aiedit：修法甲的呼叫端（main._cover_ai、
+# main._yt_cover_full_image）把程式拼好的底圖當成唯一附圖送進去，原本標成
+# purpose="aiedit"，於是 apply_user_references_to_image_request 會注入
+# USER_REFERENCE_AIEDIT_RULES——那段的第一句是「One of the attached images is the
+# picture this graphic's main visual is to BE. Re-draw that same picture」，跟同一份
+# prompt 裡 editor_formats.AI_TITLE_LAYER_ONLY_NOTE 的「Do NOT reproduce, redraw,
+# repaint or recreate that photograph」正面對撞。兩句互斥還同時送，等於把修法甲
+# 要擋的「模型重畫整張照片」又請回來一次（compose.py 那四道閘只是最後的攔截網，
+# 不該靠它扛 prompt 自相矛盾）。
+#
+# 這一段的措辭核心：附圖只是**位置與配色的參考**，輸出是透明底圖層，照片由程式疊。
+# 其餘與 aiedit 共用的條款（不要另外畫 on-air chrome、不要憑空加商標文字）留著，
+# 因為它們對「只畫標題」這條路一樣成立。
+USER_REFERENCE_TITLE_LAYER_RULES = """==================================================
+ATTACHED IMAGE — REFERENCE ONLY, DO NOT REDRAW IT (CRITICAL)
+==================================================
+- The attached image is the finished photograph layer of this graphic. It is supplied ONLY so you can see the composition, the colours and where the photograph sits, and place your typography where it reads well against them.
+- Your output is a TRANSPARENT overlay containing the typography and the design elements asked for below, and nothing else. Do NOT reproduce, redraw, repaint, restyle, colour-grade or recreate the attached photograph, or any part of it, in your output. Software composites your overlay onto the untouched original afterwards, pixel for pixel.
+- Do not draw a background of any kind behind your typography unless the instructions below explicitly ask for one (a plate, a card, an accent shape). A tint, gradient, vignette, wash or texture spread across the canvas would cover the photograph and is wrong.
+- Do not add any text or brand mark that is not asked for elsewhere in this prompt, and do not copy text or brand marks out of the attached photograph into your overlay.
+- If the attached image already contains on-air chrome (a date stamp, LIVE or 24H LIVE badge, channel logo, or a 示意圖 / AI示意圖 label), do not draw another copy of those marks."""
+
 USER_REFERENCE_MODES = {
     "map": USER_REFERENCE_MAP_RULES,
     "scene": USER_REFERENCE_SCENE_RULES,
     "portrait": USER_REFERENCE_PORTRAIT_RULES,
     "asis": USER_REFERENCE_ASIS_RULES,
     "aiedit": USER_REFERENCE_AIEDIT_RULES,
+    # 前台下拉沒有這一項（editor_formats.REF_PURPOSE_ORDER 不含它），只由 B55
+    # 修法甲的兩個呼叫端在 transparent_background=True 時自己標上去。
+    "titlelayer": USER_REFERENCE_TITLE_LAYER_RULES,
 }
 
 # 消化階段（build_digest_instructions）專用，與上面 USER_REFERENCE_ASIS_RULES
