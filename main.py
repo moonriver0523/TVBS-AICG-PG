@@ -1085,6 +1085,12 @@ class ImageGenerateRequest(BaseModel):
     # 用到：apply_user_references_to_image_request 會把它接在 aiedit 區塊後面，當成
     # 「這張附圖要改哪裡」。其他用途的指令欄照舊由文字模型消化進畫面描述，不走這裡。
     editor_instruction: str = Field(default="", max_length=2_000)
+    # B55 修法甲（2026-09-20）：只在「原圖放置只有一張＋provider=gpt」的判準下由
+    # 呼叫端設 True，要求模型回一張透明底的標題圖層，疊在未經觸碰的原圖上。
+    # provider=gemini 不支援 background=transparent（本 session 查證，見 compose.py
+    # 那段長註解），呼叫端不會對 gemini 設這個旗標，這裡不另外擋——擋的責任在呼叫端，
+    # 這裡只負責「設了就送」。
+    transparent_background: bool = False
 
 
 class ImageGenerateResponse(BaseModel):
@@ -1774,7 +1780,7 @@ Earlier blocks in this prompt asked you for text products. Every one of them is 
 - NO <蓋章> and no conclusion banner, whatever the stamp setting said.
 - NO <底帶>, no lower third, no ticker, no strapline.
 - No digits, no dates, no place names, no legends, no axis labels, no tags, no chips, no badges, no source line, no watermark, no signature, no logo.
-- THE VISUAL CREATIVITY BLOCK, IF ONE APPEARS ABOVE, KEEPS EVERYTHING THAT IS NOT TYPE. Its arrangement, plate shapes, palette and wordless devices all still apply and still make the picture. Its instructions about the typeface, the display treatment of the headline, stacked outlines, knocked-out type and the size step between the headline and the supporting lines apply to nothing here — there is no type on this graphic to apply them to.
+- NO VISUAL CREATIVITY LAYOUT EITHER. This is a plain wordless illustration, not a designed graphic: no dominant/subordinate zones, no hero element, no card or panel shapes, no cut or angled dividing edges, no plate, no icon row, no decorative devices of any kind. Whatever visual creativity setting was chosen for this request does not apply to this graphic at all.
 "variable" is an empty string. If your draft has anything in it, delete it.
 This is the whole point of the setting the user chose: they want the picture, and they will add any words themselves afterwards.
 """
@@ -2189,7 +2195,18 @@ def build_digest_instructions(
     # 創意拉桿放在版型區塊之後：本 repo 的慣例是「位置在後＋明文 OVERRIDE」才壓得住
     # 前面那些命令句。但它自己第一句就限縮成「只覆蓋美術」，而 FIXED 段再把
     # 字句、點數、安全框、清單外文字四件事釘回去。
-    instructions += cg_creativity_rules(visual_creativity, seed=seed)
+    #
+    # 無字檔完全不注入（2026-09-20 B78）。逐段檢查過 cg_creativity_rules 產出的
+    # 四塊東西，沒有一塊乾淨地只描述「插圖本身的風格」：L1-L4 每一級的正文都在講
+    # LAYOUT／HERO ZONE／SHAPE LANGUAGE／BREAK THE GRID 這些版面結構；
+    # _CG_DESIGN_DRAW_TEMPLATE 的 PLATE SHAPE／ARRANGEMENT／HEADLINE BLOCK／
+    # TILT DIRECTION 同樣是版面幾何，唯一例外 PALETTE 也寫成「work in these four
+    # and no others」的硬性配色令，不是可有可無的插圖風格提示；device_block
+    # （WORDLESS DEVICES）更是使用者原話點名的「設計」本身（icon 列、爆裂色塊……）
+    # ——一律「draw every one of them」，不是選項。無字要的是「只要示意圖插圖」，
+    # 這整組東西沒有半塊留得住，所以直接整段跳過，不試著切一半保留。
+    if density != "no_text":
+        instructions += cg_creativity_rules(visual_creativity, seed=seed)
     # 沒有 asis 附圖時完全不注入，消化 prompt 逐字元不變。
     if asis_reference_count:
         instructions += USER_REFERENCE_ASIS_DIGEST_RULES
@@ -3718,9 +3735,17 @@ def frame_image_response(
 
 
 def _compose_error_status(exc: Exception) -> int:
-    """合成失敗的 HTTP 狀態：使用者能自己修的（標題太長、B55 面積防呆）回 400，其餘 500。"""
+    """合成失敗的 HTTP 狀態：使用者能自己修的（標題太長、B55 面積防呆、修法甲的三道閘）
+    回 400，其餘 500。三道閘的訊息字面見 compose._overlay_title_layer_core：都是
+    「重試就可能過」的失敗，不是程式錯誤，比照既有 B55 差異遮罩防呆一樣回 400。"""
     message = str(exc)
-    if "標題太長" in message or "改動範圍過大" in message:
+    if (
+        "標題太長" in message
+        or "改動範圍過大" in message
+        or "沒有回傳透明底的標題圖層" in message
+        or "保留給程式後貼元素" in message
+        or "標題圖層畫的範圍過大" in message
+    ):
         return 400
     return 500
 
@@ -3833,6 +3858,11 @@ def generate_via_openrouter(
     gpt_size = _openrouter_gpt_size(model, req.aspect_ratio, resolved_size)
     if gpt_size:
         payload["size"] = gpt_size
+    # B55 修法甲：只有 openai/gpt-image 系列公告支援 background enum（本 session
+    # 查證：google/gemini-3-pro-image 沒有這個參數）。呼叫端只在 provider=="gpt"
+    # 時才會設這個旗標，這裡再用模型名多擋一層，帶去 gemini 系模型只會白白 400。
+    if req.transparent_background and model.startswith("openai/gpt-image"):
+        payload["background"] = "transparent"
     # 參考圖兩個來源合併送出：肖像參考照（自動查圖）在前、使用者上傳在後。
     # GPT Image 2／2.5 支援 0–16 張、Gemini 0–14 張（PLAN.md 已向 models 端點查證），
     # 但實務上不需要塞滿，超過 MAX_INPUT_REFERENCES 的直接擋下。
@@ -4015,6 +4045,9 @@ def generate_gpt_image(
     # 通道，以前只能把圖丟掉。地圖底圖正是非送不可的那一種——實測同一份 prompt，
     # 有底圖地理全對、沒底圖澎湖被畫到臺灣北方。edit 端點吃得下同一個模型與尺寸。
     edit_images = _native_reference_files(req)
+    # B55 修法甲：原生 OpenAI SDK 的 images.generate／images.edit 都吃 background
+    # 參數（gpt-image 系列），跟 size／quality 同一層 kwargs，不必另外組 payload。
+    background_kwargs = {"background": "transparent"} if req.transparent_background else {}
     try:
         if edit_images:
             print(f"[GPT image] 附 {len(edit_images)} 張參考圖，改走 images.edit", flush=True)
@@ -4025,6 +4058,7 @@ def generate_gpt_image(
                 size=size,
                 quality=quality,
                 timeout=NATIVE_IMAGE_TIMEOUT_SECONDS,
+                **background_kwargs,
             )
         else:
             result = openai_client.images.generate(
@@ -4034,6 +4068,7 @@ def generate_gpt_image(
                 quality=quality,
                 output_format="png",
                 timeout=NATIVE_IMAGE_TIMEOUT_SECONDS,
+                **background_kwargs,
             )
     except AuthenticationError as exc:
         raise HTTPException(
@@ -5747,11 +5782,19 @@ def _cover_ai(
     其他附圖與肖像參考照都不送——畫面已經定了，再送只會讓模型重新構圖。
 
     protect_base（B55，2026-09-16 使用者裁決）＝滿版只有 1 張原圖放置時為 True：
-    「只畫標題，照片一個像素都不准動」。模型永遠是整張重畫，prompt（見
-    AI_TITLE_BASE_IMAGE_NOTE）只是請求、不是保證，保證只能靠生成後用
-    compose.restore_photo_outside_title_band 把字帶以外的像素強制還原成 base。
+    「只畫標題，照片一個像素都不准動」。走哪條保證路徑依 provider 分岔（2026-09-20
+    修法甲）：
+    - provider=="gpt"（`transparent_mode`）：改請模型只回一張透明底標題圖層
+      （`editor_formats.with_title_layer_note`＋`ImageGenerateRequest.
+      transparent_background`），生成後用 `compose.overlay_title_layer_over_cover_band`
+      逐像素疊到 base 上——base 本身完全不經過模型，保證不是機率性的。
+    - provider=="gemini"：background=transparent 不支援（本 session 查證），維持原路：
+      模型仍整張重畫，prompt（AI_TITLE_BASE_IMAGE_NOTE）只是請求、不是保證，靠生成後
+      compose.restore_photo_outside_title_band 的差異遮罩把字帶以外的像素強制還原成
+      base（2026-09-16 實拍量到這條路 change_ratio 常態超標，功能等同不可用，見帳本
+      B55 那列——保留給 gemini 是因為目前沒有更好的替代，不是認可它有效）。
     只在**這次生圖**生效——追加修改（req.background_image_base64 那條路）目前收不到
-    原始 asis，還原不了，這是已知的範圍限制，不是漏改（見呼叫端註解）。
+    原始 asis，兩條路都還原不了，這是已知的範圍限制，不是漏改（見呼叫端註解）。
     ≥2 張（切格）的 base 不受影響：多圖語意本來就允許 AI 融合，使用者尚未裁決要不要
     也鎖到逐像素不動。
 
@@ -5887,7 +5930,16 @@ def _cover_ai(
             title_design_brief=design_brief,
             title_colour_rule=colour_rule,
         )
-    prompt = editor_formats.with_base_image_note(prompt, base is not None)
+    # B55 修法甲（2026-09-20）：protect_base 且 provider=gpt 時整套改走透明底標題圖層
+    # ——這條路的 note 跟 AI_TITLE_BASE_IMAGE_NOTE 直接矛盾（一個要求重現照片、一個
+    # 要求除了字以外全部透明），兩句不能同時注入，這裡二選一。provider=gemini 不支援
+    # background=transparent（見 compose.py 那段長註解），原路（差異遮罩回貼）不動。
+    transparent_mode = protect_base and base is not None and req.provider == "gpt"
+    prompt = (
+        editor_formats.with_title_layer_note(prompt)
+        if transparent_mode
+        else editor_formats.with_base_image_note(prompt, base is not None)
+    )
     # 整張一起生：兩格的具名真人合成一份名單（去重、保持順序）
     subjects, english = [], []
     for side in (0, 1) if req.layout != "full" else (0,):
@@ -5919,6 +5971,7 @@ def _cover_ai(
         portrait_subjects_en=[] if base is not None else english,
         # 有 base 時指令欄不再帶：第一段每格已經吃過了，第二段再帶會對著拼好的底圖再改一次畫面
         editor_instruction="" if base is not None else req.instruction,
+        transparent_background=transparent_mode,
     )
     if base is None:
         image_req = _cover_apply_portraits(image_req, "ai", excluded=ai_excluded)
@@ -5928,7 +5981,11 @@ def _cover_ai(
     result = generate_image_raw(image_req)
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
     raw = base64.b64decode(result.image_data_base64)
-    if protect_base and base is not None:
+    if transparent_mode:
+        raw = compose.overlay_title_layer_over_cover_band(
+            base, raw, band_top_ratio=compose.cover_title_band_top_ratio(),
+        )
+    elif protect_base and base is not None:
         raw = compose.restore_photo_outside_title_band(
             base, raw, band_top_ratio=compose.cover_title_band_top_ratio(),
         )
@@ -7096,6 +7153,7 @@ def _yt_cover_full_image(
     subjects: list[str],
     english: list[str],
     *, excluded: list[str] | None = None, base: bytes | None = None,
+    protect_base: bool = False,
 ) -> tuple[bytes, str, str]:
     """AI 標題模式：整張封面（含兩行標題與底帶）交給生圖模型，回 (bytes, mime, model)。
 
@@ -7105,6 +7163,14 @@ def _yt_cover_full_image(
     base（2026-09-13 使用者裁決）＝程式已拼好的無字底圖（原圖放置裁滿版／多圖分切／
     雙則兩格各自取得後拼起來）。有 base 時它是**唯一**附圖、不查肖像，模型只在上面畫字
     ——比照十點 _cover_ai 的 base。
+
+    protect_base（B55 修法甲，2026-09-20）＝呼叫端已判定「單則、剛好 1 張原圖放置、
+    provider=gpt」時為 True：改注入 with_title_layer_note、設
+    ImageGenerateRequest.transparent_background=True，要模型只回透明底標題圖層。
+    呼叫端（editor_yt_cover_generate）在拿到回傳後自行決定要用
+    compose.overlay_title_layer_over_yt_cover 疊圖還是（provider=gemini 時）沿用
+    compose.restore_yt_cover_photo 的差異遮罩——這支函式本身不碰疊圖，只負責組對
+    的 prompt 與旗標。
     """
     template = {
         editor_formats.YT_COVER_LAYOUT_HOURLY: editor_formats.YT_COVER_FULL_PROMPT_HOURLY,
@@ -7200,9 +7266,16 @@ def _yt_cover_full_image(
         portrait_subjects=[] if base is not None else subjects,
         portrait_subjects_en=[] if base is not None else english,
         editor_instruction="" if base is not None else req.instruction,
+        transparent_background=protect_base and base is not None,
     )
+    # B55 修法甲：protect_base 時（呼叫端已限定 provider=="gpt"）改注入透明底圖層
+    # 的專用 note，跟 with_base_image_note 互斥（見 main._cover_ai 同款分岔的理由）。
     image_req = image_req.model_copy(
-        update={"prompt": editor_formats.with_base_image_note(image_req.prompt, base is not None)}
+        update={"prompt": (
+            editor_formats.with_title_layer_note(image_req.prompt)
+            if protect_base and base is not None
+            else editor_formats.with_base_image_note(image_req.prompt, base is not None)
+        )}
     )
     if base is None:
         image_req = apply_portrait_to_image_request(image_req)
@@ -7523,22 +7596,38 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                         req, visual, subjects, english, excluded=excluded
                     )
                 base_models = [base_model] if base_model else []
+            # B55 YT 擴充（2026-09-16 使用者裁決；2026-09-20 修法甲加 provider 分岔）：
+            # 單則、剛好 1 張原圖放置時（與十點滿版同一個判準）鎖住照片本身，只讓標題
+            # 設計層可以變。dual（雙則，兩格各自一張）不受影響——待裁決，見
+            # compose.restore_yt_cover_photo／overlay_title_layer_over_yt_cover 的
+            # 呼叫端只在這裡接。base_model == "yt-cover:asis" 是 _yt_cover_background
+            # 對「剛好 1 張」的唯一回傳值（2 張以上是 "...asis-split{N}"），不是另外猜的
+            # 判斷。provider=="gpt" 才走透明底圖層（transparent_mode），要在呼叫
+            # _yt_cover_full_image 之前就決定，才能把對的 note 與旗標組進 prompt。
+            transparent_mode = (
+                base is not None and not dual and base_model == "yt-cover:asis"
+                and req.provider == "gpt"
+            )
             # 雙則的 AI 整張版照走同一條：兩行標題原樣進模板，模型自己畫底圖與字
             background, bg_mime, image_model = (
-                _yt_cover_full_image(req, lines, visual, subjects, english, excluded=excluded, base=base)
+                _yt_cover_full_image(
+                    req, lines, visual, subjects, english, excluded=excluded,
+                    base=base, protect_base=transparent_mode,
+                )
                 if base is not None else
                 _yt_cover_full_image(req, lines, visual, subjects, english, excluded=excluded)
             )
-            # B55 YT 擴充（2026-09-16 使用者裁決）：單則、剛好 1 張原圖放置時（與十點滿版
-            # 同一個判準）鎖住照片本身，只讓標題設計層可以變。dual（雙則，兩格各自一張）
-            # 不受影響——待裁決，見 compose.restore_yt_cover_photo 的呼叫端只在這裡接。
-            # base_model == "yt-cover:asis" 是 _yt_cover_background 對「剛好 1 張」的
-            # 唯一回傳值（2 張以上是 "...asis-split{N}"），不是另外猜的判斷。
             if base is not None and not dual and base_model == "yt-cover:asis":
-                background = compose.restore_yt_cover_photo(
-                    base, background, layout=req.layout,
-                    original_audio=original_audio, ai_translation=ai_translation, ai_note=False,
-                )
+                if transparent_mode:
+                    background = compose.overlay_title_layer_over_yt_cover(
+                        base, background, layout=req.layout,
+                        original_audio=original_audio, ai_translation=ai_translation, ai_note=False,
+                    )
+                else:
+                    background = compose.restore_yt_cover_photo(
+                        base, background, layout=req.layout,
+                        original_audio=original_audio, ai_translation=ai_translation, ai_note=False,
+                    )
             if base_models:
                 image_model = "、".join([*base_models, image_model])
             is_ai = True

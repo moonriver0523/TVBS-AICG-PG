@@ -98,6 +98,11 @@ class TenCoverOverBase(_Harness):
         整張塗成 GREEN 會被判定為「整張重畫」而擋下（400）——這裡才是它原本要測的
         request 組裝邏輯，不是 B55 的行為，改用「幾乎照抄底圖、只在字帶裡加一小塊」
         的 fake_raw，行為與細節見 tests/test_b55_photo_placement_protection.py。
+
+        2026-09-20 修法甲：provider=="gpt" 時這個判準已改走透明底標題圖層（見
+        tests/test_b55_transparent_title_layer.py），這裡的 fake_raw 回的是不透明
+        RGB、走不通那條路——呼叫端傳 body 時要記得把 provider 疊成 "gemini"，
+        這支 harness 本身不覆寫，維持跟其他測試共用同一份組裝邏輯的原意。
         """
         calls = []
 
@@ -120,9 +125,11 @@ class TenCoverOverBase(_Harness):
         return res.json(), calls
 
     def test_full_single_asis_ai_title_one_call_with_only_the_photo(self):
+        # provider=gemini（2026-09-20 修法甲後）：這支測的是差異遮罩那條路的
+        # request 組裝，gpt 已改走透明底圖層，見上面 _run_localized_single_asis 的說明。
         data, calls = self._run_localized_single_asis("/api/editor/cover", {
-            **self.BASE, "title_right": "", "layout": "full", "mode": "ai", "title_creativity": 1,
-            "slot_left": [_ref(RED, "asis")],
+            **self.BASE, "provider": "gemini", "title_right": "", "layout": "full", "mode": "ai",
+            "title_creativity": 1, "slot_left": [_ref(RED, "asis")],
         })
         self.assertEqual(data["mode"], "ai")
         self.assertEqual(len(calls), 1)

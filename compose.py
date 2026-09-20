@@ -3446,6 +3446,133 @@ def restore_yt_cover_photo(
     return buffer.getvalue()
 
 
+# ============================================================
+# B55 修法甲（2026-09-20 使用者裁決，見帳本）：模型只產一張透明底的標題圖層，
+# 程式疊到未經觸碰的原圖上。
+#
+# 跟上面 `_restore_outside_protected_boxes` 那條差異遮罩回貼是兩種不同的保證路徑：
+# 差異遮罩靠「比對像不像」決定要不要還原成 base，門檻放在哪裡都是機率性的（2026-09-16
+# 實拍量到十點滿版創意 0 級 change_ratio 就有 68.1%，等於這條路本來就形同擋死，見帳本
+# B55 那列）。這裡的保證來自 **alpha 通道本身**：alpha=0 的像素定義上就是「模型完全
+# 沒有動過」，疊圖時原封不動地漏出 base，不需要比對、不會有機率性的假陽性或假陰性。
+#
+# 代價：只有支援 `background: "transparent"` 的模型才畫得出乾淨的透明底（本 session
+# 查證：openai/gpt-image-2.5-sunburst 有這個 enum；google/gemini-3-pro-image 沒有）。
+# 呼叫端只在 provider=="gpt" 時才走這條路，gemini 維持原本的差異遮罩回貼不變。
+#
+# 三道閘缺一不可，任何一道沒過就丟 ComposeError，不悄悄降級成半套保證：
+#   (a) 模型是不是真的回了透明底——alpha 全不透明代表模型忽略了 background=transparent
+#       這個請求（prompt 只是請求，跟 AI_TITLE_BASE_IMAGE_NOTE 同一個教訓）。
+#   (b) 保護區（頁首帶／Logo／角標這些程式後貼元素要用的位置）內 alpha 必須全為 0——
+#       模型不准在那些區域畫任何東西，畫了代表要蓋掉程式後貼的內容。
+#   (c) 面積防呆：可疊區域裡非透明像素比例超過門檻，代表模型畫的不是標題，是整片
+#       半透明背景——沿用既有的 PHOTO_PROTECT_MAX_CHANGE_RATIO，不另訂數字。
+# ============================================================
+
+# alpha 判定的雜訊容忍：反鋸齒邊緣、JPEG-like 壓縮偽影會讓「理論上全透明」的像素
+# 落在 1-15 之間，門檻抓在肉眼看不出差異、又能濾掉這類雜訊的位置。
+TITLE_LAYER_ALPHA_THRESHOLD = 16
+
+
+def _overlay_title_layer_core(
+    base_img: Image.Image, layer_img: Image.Image, *,
+    protect_boxes: list[tuple[int, int, int, int]],
+    max_paint_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+    alpha_threshold: int = TITLE_LAYER_ALPHA_THRESHOLD,
+) -> Image.Image:
+    """三道閘＋疊圖的核心邏輯，在 PIL Image 層級操作。base_img 必須是 RGB，
+    layer_img 必須是 RGBA（呼叫端負責轉檔與縮放對齊）。"""
+    width, height = base_img.size
+    alpha = layer_img.split()[3]
+    painted = alpha.point(lambda p: 255 if p > alpha_threshold else 0)
+
+    # (a) 全不透明防呆：alpha 的最小值都超過門檻，代表整張圖沒有一個像素是透明的，
+    # 模型沒有理會 background=transparent 這個請求。
+    if alpha.getextrema()[0] > alpha_threshold:
+        raise ComposeError(
+            "生圖模型沒有回傳透明底的標題圖層（畫面完全不透明），已擋下這次生成——"
+            "原圖放置規則要求模型只畫標題、其餘保持透明，請重試"
+        )
+
+    protect_mask = Image.new("L", (width, height), 0)
+    pd = ImageDraw.Draw(protect_mask)
+    for box in protect_boxes:
+        x0, y0, x1, y1 = box
+        x0, y0 = max(0, x0), max(0, y0)
+        x1, y1 = min(width, x1), min(height, y1)
+        if x1 > x0 and y1 > y0:
+            pd.rectangle([x0, y0, x1, y1], fill=255)
+
+    # (b) 保護區內不准有任何被畫過的像素——這一道跟面積無關，一個像素都不許。
+    protect_violation = ImageChops.multiply(painted, protect_mask)
+    if protect_violation.getbbox() is not None:
+        raise ComposeError(
+            "生圖模型在保留給程式後貼元素（頁首帶／Logo／角標）的區域畫了東西，"
+            "已擋下這次生成——那一帶必須維持透明，請重試"
+        )
+
+    # (c) 面積防呆：可疊區域（畫布扣掉保護區）裡畫了多大比例。
+    editable_mask = ImageChops.invert(protect_mask)
+    editable_pixel_count = editable_mask.histogram()[255]
+    if editable_pixel_count:
+        painted_in_editable = ImageChops.multiply(painted, editable_mask)
+        paint_ratio = painted_in_editable.histogram()[255] / editable_pixel_count
+        if paint_ratio > max_paint_ratio:
+            raise ComposeError(
+                "生圖模型的標題圖層畫的範圍過大（"
+                f"可疊區域內 {paint_ratio:.0%} 的像素非透明，上限 {max_paint_ratio:.0%}），"
+                "已擋下這次生成——這代表模型畫的不是標題、是整片背景，請重試或降低標題創意等級"
+            )
+
+    result = base_img.convert("RGBA")
+    result.alpha_composite(layer_img)
+    return result.convert("RGB")
+
+
+def overlay_title_layer_over_cover_band(
+    base_png: bytes, layer_png: bytes, *, band_top_ratio: float,
+    max_paint_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+) -> bytes:
+    """十點封面（滿版）版本：保護區是標頭帶（`cover_title_band_top_ratio()` 以上），
+    跟 `restore_photo_outside_title_band` 保護的區域完全一樣，只是保證機制換成
+    上面那組 alpha 三道閘。回傳一律是 base 尺寸的 PNG。"""
+    base_img = Image.open(io.BytesIO(base_png)).convert("RGB")
+    layer_img = Image.open(io.BytesIO(layer_png)).convert("RGBA")
+    if layer_img.size != base_img.size:
+        layer_img = layer_img.resize(base_img.size, Image.LANCZOS)
+    width, height = base_img.size
+    band_top = round(height * band_top_ratio)
+    protect_boxes = [(0, 0, width, band_top)] if band_top < height else []
+    result = _overlay_title_layer_core(
+        base_img, layer_img, protect_boxes=protect_boxes, max_paint_ratio=max_paint_ratio,
+    )
+    buffer = io.BytesIO()
+    result.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def overlay_title_layer_over_yt_cover(
+    base_png: bytes, layer_png: bytes, *, layout: str,
+    original_audio: bool = False, ai_translation: bool = False, ai_note: bool = False,
+    max_paint_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+) -> bytes:
+    """YT 四版型版本：保護區沿用 `yt_cover_protect_boxes()`，跟 `restore_yt_cover_photo`
+    保護的區域完全一樣，只是保證機制換成 alpha 三道閘。回傳一律是 base 尺寸的 PNG。"""
+    base_img = Image.open(io.BytesIO(base_png)).convert("RGB")
+    layer_img = Image.open(io.BytesIO(layer_png)).convert("RGBA")
+    if layer_img.size != base_img.size:
+        layer_img = layer_img.resize(base_img.size, Image.LANCZOS)
+    protect_boxes = yt_cover_protect_boxes(
+        layout, original_audio=original_audio, ai_translation=ai_translation, ai_note=ai_note,
+    )
+    result = _overlay_title_layer_core(
+        base_img, layer_img, protect_boxes=protect_boxes, max_paint_ratio=max_paint_ratio,
+    )
+    buffer = io.BytesIO()
+    result.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def crop_background_16x9(image_bytes: bytes) -> bytes:
     """把使用者附的原圖（任意比例）裁成 16:9 的無文字底圖，回 PNG。
 
