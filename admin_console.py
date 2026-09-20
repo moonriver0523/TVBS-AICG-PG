@@ -154,6 +154,7 @@ def _row(record: dict) -> str:
       <td class="nowrap status">{_esc(_status_label(record))}</td>
       <td class="who">{who}</td>
       <td class="nowrap">{_esc(_type_of(record))}</td>
+      <td class="nowrap">{_esc(audit_archive.record_action(record))}</td>
       <td class="thumb">{thumb}</td>
       <td class="text">
         <details><summary>新聞原文（{len(record.get("news_text", "") or "")} 字）</summary>
@@ -245,7 +246,7 @@ def _page(records: list[dict], months: list[str], month: str, user: str,
 
     if records:
         body = f"""<div class="wrap"><table>
-        <thead><tr><th>時間</th><th>結果</th><th>使用者</th><th>類型</th><th>成圖</th><th>內容</th></tr></thead>
+        <thead><tr><th>時間</th><th>結果</th><th>使用者</th><th>類型</th><th>動作</th><th>成圖</th><th>內容</th></tr></thead>
         <tbody>{"".join(_row(r) for r in records)}</tbody></table></div>"""
     else:
         body = '<p class="empty">沒有符合條件的紀錄。</p>'

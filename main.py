@@ -686,9 +686,16 @@ def _archive_generation(**kwargs) -> None:
     包成一支的理由：三個生成端點（news-image、web-refine、hybrid）都要歸檔，
     身分注入與原文補齊只想寫一次；日後要換／加歸檔目的地也只改這裡。
     兩支底層函式都自己吞例外，這裡不需要再包 try。
+
+    2026-09-20（B72／F31）：`gcs_archive.archive_generation` 的 `image_base64`／
+    `mime_type` 是必填（無預設值），沒圖時直接 `**kwargs` 展開會在 `ENABLED`
+    判斷之前就丟 `TypeError`。消化階段（`generate()`）現在也會呼叫這支函式落一筆
+    「只有文字、沒有圖」的稽核紀錄（網頁版消化完才在前端組 prompt、還沒生圖），
+    因此這裡要能接受沒有圖的呼叫——沒圖就只跳過 GCS 那份備份，本機稽核照寫。
     """
     kwargs.setdefault("status", audit_archive.STATUS_OK)
-    gcs_archive.archive_generation(**kwargs)
+    if kwargs.get("image_base64"):
+        gcs_archive.archive_generation(**kwargs)
 
     # 只補「這條路徑本來就沒有」的欄位，不覆蓋呼叫端已經給值的欄位——
     # news-image 那條路徑自己就帶著正確的原文，補寫反而可能蓋成舊的。
@@ -2781,7 +2788,22 @@ def apply_photo_availability(
 # 直接呼叫這個函式，不經 HTTP。呼叫端要的是「消化完成或明確失敗」，跟外面那層
 # 用什麼格式把結果送出去無關。
 def generate(req: GenerateRequest):
-    if not _inside_pipeline.get():
+    # own_clock：這支函式會被巢狀呼叫兩種情境——apply_photo_availability 第 4 層
+    # 補救（下面呼叫它那行）與 generate_news_image() 的 pipeline，兩邊都會在呼叫
+    # 前把 _inside_pipeline 設 True，而且各自有自己的落檔（外層決定最終結果後
+    # 才記一筆），這裡再記一次就是重複。只有「真的是最外層」才記消化階段自己的
+    # 成功／失敗。
+    #
+    # 2026-09-20（B72／F31 正式站實查）：`/api/generate` 這支消化端點原本完全沒有
+    # 失敗落檔——所有 HTTPException（逾時 503、認證 503、限流 429、格式錯 502、
+    # verbatim 太長 400）都直接往外丟，`request_log.log_generation` 只有成功路徑
+    # 才會走到。正式站實查 09-18～09-20 共 91 筆後台紀錄失敗數是 0，但同期已知
+    # 有 Cloudflare 524（消化太久）與上游 502——這些全部發生在消化階段、完全沒
+    # 進稽核歸檔，「成功率 100%」是假的。成功那半邊也一樣：這裡以前只寫
+    # request_log 的 JSONL（14 天會被掃掉、重新部署即清空），沒有寫進
+    # audit_archive，所以連「消化階段總共跑了幾次」這個分母都答不出來。
+    own_clock = not _inside_pipeline.get()
+    if own_clock:
         reset_portrait_notices()
     # seed（F0）在最前面就定下來，並寫回 req：apply_photo_availability 會拿這份 req
     # 再呼叫一次 generate()，沒寫回的話第二次會再抽一顆，同一個請求的兩段消化就用了
@@ -2791,6 +2813,10 @@ def generate(req: GenerateRequest):
     seed = req.seed
     # DIGEST_MODEL 可覆寫；沿用舊環境變數 OPENAI_DIGEST_MODEL 作為次要相容
     model = resolve_digest_model()
+    digest_request_id = request_log.new_request_id() if own_clock else ""
+    digest_started = _generation_clock() if own_clock else 0.0
+    if own_clock:
+        _reset_generation_retries()
     # 兩段式（條件注入）：分類成功就整段當成使用者指定了該類型——組 prompt、
     # 選 schema、給預算、chart_type 退路四處一致；分類失敗則 type_label 原樣，
     # 下面每一行都與舊路徑逐字元相同。
@@ -3018,15 +3044,16 @@ def generate(req: GenerateRequest):
             )
             # 網頁版走這個端點後自己在前端組生圖 prompt，後端看不到最終 prompt，
             # 因此這裡只記到消化為止——有輸入與消化結果，事後仍可重跑重現。
-            if not _inside_pipeline.get():
+            if own_clock:
                 # 網頁版的第二段消化在這裡做（LINE 走 generate_news_image 自己那條，
                 # 兩邊都做會白查一次圖）。落檔放在後面，記的是最終採用的那份。
                 result = apply_photo_availability(result, req)
                 notices = collected_portrait_notices()
                 if notices:
                     result = result.model_copy(update={"notices": notices})
+                digest_meta = _outcome_meta(digest_started, image_model="")
                 request_log.log_generation(
-                    request_id=request_log.new_request_id(),
+                    request_id=digest_request_id,
                     source="digest",
                     news_text=req.news_text,
                     style=result.style,
@@ -3038,6 +3065,26 @@ def generate(req: GenerateRequest):
                     density=req.density,
                     seed=seed,
                     digest_model=model,
+                )
+                # B72／F31（2026-09-20）：消化階段自己也要進 audit_archive，不能只靠
+                # request_log 的 JSONL——後台 `/admin` 只讀 audit_archive，這裡沒寫，
+                # 消化階段的成功次數（分母）就永遠是 0，跟失敗次數一起被後台漏看。
+                # 沒有圖可帶（網頁版消化完才在前端組 prompt），_archive_generation
+                # 對沒有 image_base64 的呼叫會略過 GCS 那份（見該函式說明），
+                # 只寫本機的稽核歸檔。
+                _archive_generation(
+                    request_id=digest_request_id,
+                    source="digest",
+                    news_text=req.news_text,
+                    style=result.style,
+                    structure=result.structure,
+                    variable=result.variable,
+                    chart_type=result.chart_type,
+                    type_label=req.type_label,
+                    role=req.role,
+                    density=req.density,
+                    seed=seed,
+                    **digest_meta,
                 )
                 # 存給稍後的生圖請求取用：那支端點只收到 prompt，拿不到新聞原文，
                 # 稽核歸檔要靠這裡記住的內容才補得齊（見 _archive_generation）。
@@ -3055,6 +3102,19 @@ def generate(req: GenerateRequest):
             return result
 
         raise HTTPException(status_code=502, detail=last_detail)
+    except BaseException as exc:
+        # B72／F31（2026-09-20）：這裡涵蓋整個重試迴圈，包含 apply_photo_availability
+        # 巢狀呼叫 generate() 再往外傳的例外（它自己的 try/finally 只重置
+        # _inside_pipeline，不吞例外）——這是消化階段目前唯一會失敗的路徑，
+        # 全部在這裡截下來記一筆，不必在每個 raise HTTPException 旁邊各補一次。
+        if own_clock:
+            _record_generation_failure(
+                digest_request_id, digest_started, exc,
+                source="digest", news_text=req.news_text,
+                role=req.role, density=req.density, type_label=req.type_label,
+                seed=seed,
+            )
+        raise
     finally:
         if deadline_token is not None:
             _digest_deadline.reset(deadline_token)
@@ -3205,72 +3265,98 @@ Rules:
 )
 def hybrid_digest(req: HybridDigestRequest):
     model = resolve_digest_model()
+    request_id = request_log.new_request_id()
+    started = _generation_clock()
+    _reset_generation_retries()
     # 一鍵成圖是無人值守流程：上游偶發失敗（provider 輪替錯誤、輸出截斷、
     # 不合 schema 的回傳）都必須在後端自動吸收重試，不能丟回給外勤記者
     last_detail = "AI 服務處理失敗，請確認模型權限或稍後重試"
-    for attempt in range(3):
-        try:
-            response = digest_completion(
-                model=model,
-                system_prompt=HYBRID_SYSTEM_PROMPT,
-                news_text=req.news_text,
-                # 2026-09-05：思考 token 算進同一個上限，而它的變異遠大於
-                # 正文（同日量測 560-3140）。實測這條路徑只用 493（294 是
-                # 思考），但 1200 擋不住一次思考尖峰，留到 3000。
-                # 上限是天花板不是用量，只有真的寫出來的 token 才計費。
-                max_output_tokens=3000,
-                schema_name="hybrid_card_digest",
-                schema=HYBRID_DIGEST_SCHEMA,
-                site="hybrid",
-            )
-        except AuthenticationError as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="AI 服務金鑰無效或尚未啟用計費",
-            ) from exc
-        except RateLimitError as exc:
-            raise HTTPException(
-                status_code=429,
-                detail="AI 服務用量已達限制，請稍後再試",
-            ) from exc
-        except (APIConnectionError, APIError) as exc:
-            last_detail = (
-                "無法連線至 AI 服務，請稍後再試"
-                if isinstance(exc, APIConnectionError)
-                else "AI 服務處理失敗，請確認模型權限或稍後重試"
-            )
-            print(f"[hybrid] attempt {attempt + 1}/3 API error: {exc}", flush=True)
-            time.sleep(1.5)
-            continue
-
-        raw_content = response.choices[0].message.content or ""
-        finish_reason = response.choices[0].finish_reason if response.choices else "?"
-        try:
-            data = parse_digest_json(raw_content)
-            items = data.get("items") or []
-            if len(items) > 3:
-                items = items[:3]
-            while len(items) < 3:
-                items.append(
-                    {"label": "", "value": "", "change": "", "direction": "flat"}
+    try:
+        for attempt in range(3):
+            try:
+                response = digest_completion(
+                    model=model,
+                    system_prompt=HYBRID_SYSTEM_PROMPT,
+                    news_text=req.news_text,
+                    # 2026-09-05：思考 token 算進同一個上限，而它的變異遠大於
+                    # 正文（同日量測 560-3140）。實測這條路徑只用 493（294 是
+                    # 思考），但 1200 擋不住一次思考尖峰，留到 3000。
+                    # 上限是天花板不是用量，只有真的寫出來的 token 才計費。
+                    max_output_tokens=3000,
+                    schema_name="hybrid_card_digest",
+                    schema=HYBRID_DIGEST_SCHEMA,
+                    site="hybrid",
                 )
-            data["items"] = items
-            # 模型偶爾會改寫或加標記，導致 key 不是 title 的子字串；
-            # 前端靠字串比對定位上色，對不上就整條標題失去強調，故此處直接丟棄
-            key = (data.get("title_key") or "").strip()
-            data["title_key"] = key if key and key in (data.get("title") or "") else ""
-            return HybridDigestResponse(**data)
-        except (json.JSONDecodeError, IndexError, TypeError, ValueError) as exc:
-            last_detail = "AI 回傳格式無法解析"
-            print(
-                f"[hybrid] attempt {attempt + 1}/3 parse failed "
-                f"(finish_reason={finish_reason}): {exc}\n"
-                f"[hybrid] raw content: {digest_excerpt(raw_content)}",
-                flush=True,
-            )
-            time.sleep(1.5)
+            except AuthenticationError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail="AI 服務金鑰無效或尚未啟用計費",
+                ) from exc
+            except RateLimitError as exc:
+                raise HTTPException(
+                    status_code=429,
+                    detail="AI 服務用量已達限制，請稍後再試",
+                ) from exc
+            except (APIConnectionError, APIError) as exc:
+                last_detail = (
+                    "無法連線至 AI 服務，請稍後再試"
+                    if isinstance(exc, APIConnectionError)
+                    else "AI 服務處理失敗，請確認模型權限或稍後重試"
+                )
+                print(f"[hybrid] attempt {attempt + 1}/3 API error: {exc}", flush=True)
+                _note_generation_retry()
+                time.sleep(1.5)
+                continue
 
-    raise HTTPException(status_code=502, detail=last_detail)
+            raw_content = response.choices[0].message.content or ""
+            finish_reason = response.choices[0].finish_reason if response.choices else "?"
+            try:
+                data = parse_digest_json(raw_content)
+                items = data.get("items") or []
+                if len(items) > 3:
+                    items = items[:3]
+                while len(items) < 3:
+                    items.append(
+                        {"label": "", "value": "", "change": "", "direction": "flat"}
+                    )
+                data["items"] = items
+                # 模型偶爾會改寫或加標記，導致 key 不是 title 的子字串；
+                # 前端靠字串比對定位上色，對不上就整條標題失去強調，故此處直接丟棄
+                key = (data.get("title_key") or "").strip()
+                data["title_key"] = key if key and key in (data.get("title") or "") else ""
+                result = HybridDigestResponse(**data)
+                meta = _outcome_meta(started, image_model="")
+                request_log.log_generation(
+                    request_id=request_id, source="hybrid-digest",
+                    news_text=req.news_text, variable=result.title,
+                    digest_model=meta["digest_model"],
+                )
+                _archive_generation(
+                    request_id=request_id, source="hybrid-digest",
+                    news_text=req.news_text, variable=result.title,
+                    **meta,
+                )
+                return result
+            except (json.JSONDecodeError, IndexError, TypeError, ValueError) as exc:
+                last_detail = "AI 回傳格式無法解析"
+                print(
+                    f"[hybrid] attempt {attempt + 1}/3 parse failed "
+                    f"(finish_reason={finish_reason}): {exc}\n"
+                    f"[hybrid] raw content: {digest_excerpt(raw_content)}",
+                    flush=True,
+                )
+                _note_generation_retry()
+                time.sleep(1.5)
+
+        raise HTTPException(status_code=502, detail=last_detail)
+    except BaseException as exc:
+        # B72／F31（2026-09-20）：跟 generate() 同一個根因——一鍵成圖這條消化路徑
+        # 以前完全沒有失敗落檔，`/api/hybrid/digest` 的 502／逾時在後台一筆都查不到。
+        _record_generation_failure(
+            request_id, started, exc,
+            source="hybrid-digest", news_text=req.news_text,
+        )
+        raise
 
 
 @app.post(
@@ -6299,7 +6385,44 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
     """貼新聞內文 → 文字模型消化出封面標題 → 回填前端欄位；不接生圖，編輯確認後自己按。
 
     2026-09-06 使用者裁決：封面類版型也要能自動消化，但回填後停下來讓編輯看過。
+
+    2026-09-20（B72／F31）：跟 generate()／hybrid_digest 同一個根因——這支端點
+    以前完全沒有落檔，502（模型消化失敗／格式錯／缺標題）在後台一筆都查不到。
+    這支有 4 個成功出口（雙切／十點滿版／YT 直標／YT 整點雙則／預設），用內層
+    `_logged` 收斂成一個記錄點，不必在每個 return 前面各補一次。
     """
+    request_id = request_log.new_request_id()
+    started = _generation_clock()
+    _reset_generation_retries()
+    news_text = req.news_text.strip()
+
+    def _logged(result: CoverTitleDigestResponse) -> CoverTitleDigestResponse:
+        meta = _outcome_meta(started, image_model="")
+        variable = result.title or result.title_left
+        request_log.log_generation(
+            request_id=request_id, source="cover-titles", news_text=news_text,
+            variable=variable, type_label=req.target,
+            digest_model=meta["digest_model"],
+        )
+        _archive_generation(
+            request_id=request_id, source="cover-titles", news_text=news_text,
+            variable=variable, type_label=req.target, **meta,
+        )
+        return result
+
+    try:
+        return _editor_cover_titles_impl(req, _logged)
+    except BaseException as exc:
+        _record_generation_failure(
+            request_id, started, exc,
+            source="cover-titles", news_text=news_text, type_label=req.target,
+        )
+        raise
+
+
+def _editor_cover_titles_impl(
+    req: CoverTitleDigestRequest, _logged
+) -> CoverTitleDigestResponse:
     ten = req.target == "ten_cover"
     hourly = req.target == "yt_hourly"
     vstrip = req.target == "yt_vstrip"
@@ -6359,30 +6482,30 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
         # topics 一律由實際有沒有第二標題決定，模型自己說的只當參考。
         if data.get("topics") == 1:
             right = ""
-        return CoverTitleDigestResponse(
+        return _logged(CoverTitleDigestResponse(
             title_left=left, title_right=right, topics=2 if right else 1,
             **_digest_chip_fields(data),
-        )
+        ))
     title = _clip_title(data.get("title"), 60)
     if not title:
         raise HTTPException(status_code=502, detail="消化標題失敗：模型沒給標題")
     if req.target == "ten_cover_full":
-        return CoverTitleDigestResponse(title=title, **_digest_chip_fields(data))
+        return _logged(CoverTitleDigestResponse(title=title, **_digest_chip_fields(data)))
     if vstrip:
         # 格數超標不在這裡擋：回填後編輯自己看得到格數指示器，也還沒生圖。
         # 真正的硬上限在 compose.yt_vertical_layout（超過就 400，訊息指名哪一個標題）。
-        return CoverTitleDigestResponse(
+        return _logged(CoverTitleDigestResponse(
             title=title,
             title_second=_clip_title(data.get("title_second"), 60),
             source_text=_clip_title(data.get("source"), 40),
-        )
+        ))
     if hourly:
         # 整點雙則（2026-09-08 WP2）：判定規則與十點同一套，只是欄位叫 title／title_second
         second = _clip_title(data.get("title_second"), 60)
         if data.get("topics") == 1:
             second = ""
-        return CoverTitleDigestResponse(title=title, title_second=second, topics=2 if second else 1)
-    return CoverTitleDigestResponse(title=title)
+        return _logged(CoverTitleDigestResponse(title=title, title_second=second, topics=2 if second else 1))
+    return _logged(CoverTitleDigestResponse(title=title))
 
 
 def cover_portrait_log_fields(visuals) -> dict:
