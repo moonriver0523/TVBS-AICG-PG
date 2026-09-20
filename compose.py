@@ -986,15 +986,21 @@ def _draw_cover_header(draw: ImageDraw.ImageDraw, canvas: Image.Image, date_text
     return band_h
 
 
-def _draw_cover_ai_note(canvas: Image.Image, x_anchor: int, y0: int, align_right: bool) -> None:
-    """格內「AI示意圖」小標（半透明黑底白字）。
+def _draw_cover_ai_note(
+    canvas: Image.Image, x_anchor: int, y0: int, align_right: bool, *, text: str = COVER_AI_NOTE
+) -> None:
+    """格內小標（半透明黑底白字），預設文字是「AI示意圖」。
 
     幾何一律以**傳進來的畫布**的高為準，不是 COVER_CANVAS：純 AI 版直接畫在模型
     回來的原圖上，那張的解析度是模型決定的（2026-09-07 起 paste_cover_ai_note 共用這支）。
+
+    text 參數（2026-09-20，F43）：合成版原圖放置那格互斥改標「畫面來源：○○○」
+    （呼叫端已用 vstrip_source_text 補好前綴），視覺與「AI示意圖」共用同一套版位／
+    底板／字體，只換文字內容——見 compose_ten_cover。
     """
     height = canvas.size[1]
     font = _font(round(height * 0.03))
-    text_w = font.getbbox(COVER_AI_NOTE)[2]
+    text_w = font.getbbox(text)[2]
     pad = round(height * 0.012)
     note_h = round(height * 0.03 * 1.6)
     if align_right:
@@ -1004,7 +1010,7 @@ def _draw_cover_ai_note(canvas: Image.Image, x_anchor: int, y0: int, align_right
     plate = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     ImageDraw.Draw(plate).rounded_rectangle((x0, y0, x1, y0 + note_h), radius=6, fill=(0, 0, 0, 130))
     canvas.alpha_composite(plate)
-    _draw_text(ImageDraw.Draw(canvas), ((x0 + x1) // 2, y0 + note_h // 2), COVER_AI_NOTE, font, stroke_width=0, anchor="mm")
+    _draw_text(ImageDraw.Draw(canvas), ((x0 + x1) // 2, y0 + note_h // 2), text, font, stroke_width=0, anchor="mm")
 
 
 # 拆行點偏好：切在「數量詞結尾」之後（5年｜各自…、184億元｜提升…），比純粹對半自然得多。
@@ -1390,6 +1396,8 @@ def compose_ten_cover(
     left_is_ai: bool = True,
     right_is_ai: bool = True,
     prebuilt_split: bool = False,
+    left_source_text: str = "",
+    right_source_text: str = "",
 ) -> bytes:
     """合成「十點不一樣」封面圖（2026-09-06 斜切全幅版）。
 
@@ -1403,6 +1411,12 @@ def compose_ten_cover(
     prebuilt_split=True（2026-09-14 雙切「只改文字」）：left_image 已經是拼好的 16:9 雙切
     底圖（split_canvas 的輸出，壓字前），right_image 必須是 None；版面照雙切走——斜切安全
     內框、兩格各自暗化、兩格同字級——只是不再重拼。
+
+    left_source_text／right_source_text（2026-09-20，F43）：那一格不是 AI 底圖、且呼叫端
+    填了來源名時，改標「畫面來源：○○○」，與「AI示意圖」互斥、同一個版位——AI 標籤贏
+    （*_is_ai 為 True 時這兩個參數被忽略），因為 is_ai=True 代表那格畫面本來就不是使用者
+    原圖，掛「畫面來源」等於對觀眾說謊。互斥判定與文字正規化交給呼叫端
+    （main.resolve_image_disclaimer／compose.vstrip_source_text），這裡只管「貼哪一種」。
     """
     if badge not in COVER_BADGES:
         raise ComposeError(f"未知的標籤：{badge!r}（可用：{list(COVER_BADGES)}）")
@@ -1435,8 +1449,18 @@ def compose_ten_cover(
     note_y = band_h + round(height * 0.025)
     if left_is_ai:
         _draw_cover_ai_note(canvas, COVER_MARGIN, note_y, align_right=False)
+    elif left_source_text.strip():
+        _draw_cover_ai_note(
+            canvas, COVER_MARGIN, note_y, align_right=False,
+            text=vstrip_source_text(left_source_text),
+        )
     if right_is_ai:
         _draw_cover_ai_note(canvas, width - COVER_MARGIN, note_y, align_right=True)
+    elif right_source_text.strip():
+        _draw_cover_ai_note(
+            canvas, width - COVER_MARGIN, note_y, align_right=True,
+            text=vstrip_source_text(right_source_text),
+        )
 
     _draw_cover_bottom_line(canvas)
     if right_image is None and not prebuilt_split and not title_right.strip():

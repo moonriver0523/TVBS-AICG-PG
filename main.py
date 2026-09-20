@@ -5451,6 +5451,17 @@ class TenCoverRequest(BaseModel):
     # 畫面小籤（2026-09-11）：地點籤、數據徽章、危險標示那種散落在畫面上的小牌。
     # 同樣由使用者自己填——理由與側邊標籤相同，見 editor_formats.cover_info_chips_block。
     info_chips: str = Field(default="", max_length=120)
+    # 「畫面來源」（F43，2026-09-20）：只在那一格是原圖放置（asis，非 AI 生）時才會
+    # 顯示——與「AI示意圖」互斥，AI 標籤贏（見 compose.compose_ten_cover）。**只對
+    # mode="composite" 生效**：mode="ai" 那條路整張都是模型畫的（即使附了 asis 參考圖，
+    # 那也只是生圖的參考依據，成品像素仍是模型重繪的），沒有「保證原圖未被動過」的前提，
+    # 掛「畫面來源」等於對觀眾說謊，_cover_full_composite／_cover_composite 只在
+    # mode="composite" 分支才會讀這兩欄。純使用者輸入（跟 title_left 同一類），
+    # 「只改文字」重壓時前端原樣重送即可，不像 background_is_ai 需要另開一欄carry
+    # forward——那個是後端算出來的衍生值，這個是使用者自己打的字，同一欄位重送就好。
+    # 空字串＝不標。滿版（layout=full）只有一格，只看 source_left。
+    source_left: str = Field(default="", max_length=40)
+    source_right: str = Field(default="", max_length=40)
 
     def creativity_level(self) -> int:
         if self.title_creativity is not None:
@@ -5551,6 +5562,10 @@ class TenCoverResponse(ImageGenerateResponse):
     background_image_base64: str = ""
     background_mime_type: str = ""
     background_is_ai: bool = False
+    # 那一格實際貼了「畫面來源」（F43，2026-09-20）。空字串＝這格沒有標——不論是
+    # 因為那格是 AI 底圖（left_is_ai／right_is_ai=True）還是使用者沒填來源名。
+    source_left: str = ""
+    source_right: str = ""
     # 這次實際採用的 seed（F0）。前端拿它當「重新生成」的遞增起點。
     seed: int = 0
 
@@ -6218,6 +6233,7 @@ def _cover_full_composite(
                 title_left=req.title_left.strip(), title_right="",
                 date_text=date_text, badge=req.badge,
                 left_is_ai=req.background_is_ai, right_is_ai=False,
+                left_source_text=req.source_left.strip(),
             ),
             req.background_is_ai,
             "ten-cover-full:recomposite",
@@ -6255,6 +6271,7 @@ def _cover_full_composite(
         slot, None,
         title_left=req.title_left.strip(), title_right="",
         date_text=date_text, badge=req.badge, left_is_ai=is_ai, right_is_ai=False,
+        left_source_text=req.source_left.strip(),
     )
     return cover, is_ai, image_model, slot, slot_mime or "image/png"
 
@@ -6322,6 +6339,7 @@ def _cover_composite(
             date_text=date_text, badge=req.badge,
             left_is_ai=req.background_is_ai, right_is_ai=req.background_right_is_ai,
             prebuilt_split=True,
+            left_source_text=req.source_left.strip(), right_source_text=req.source_right.strip(),
         )
         return cover, (req.background_is_ai, req.background_right_is_ai), "ten-cover:recomposite", background
     panels, todo, models = _cover_panels(req, visuals)
@@ -6331,6 +6349,7 @@ def _cover_composite(
             panels[0], None,
             title_left=req.title_left.strip(), title_right=req.title_right.strip(),
             date_text=date_text, badge=req.badge, left_is_ai=False, right_is_ai=False,
+            left_source_text=req.source_left.strip(), right_source_text=req.source_right.strip(),
         )
         return cover, (False, False), "ten-cover:asis", b""
     left_is_ai, right_is_ai = 0 in todo, 1 in todo
@@ -6343,6 +6362,8 @@ def _cover_composite(
         badge=req.badge,
         left_is_ai=left_is_ai,
         right_is_ai=right_is_ai,
+        left_source_text=req.source_left.strip(),
+        right_source_text=req.source_right.strip(),
     )
     buffer = io.BytesIO()
     compose.split_canvas([panels[0], panels[1]], compose.COVER_CANVAS).save(buffer, format="PNG")
@@ -6781,6 +6802,8 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         visual_right="",
         left_is_ai=is_ai,
         right_is_ai=False,
+        source_left="" if is_ai else req.source_left.strip(),
+        source_right="",
         mode=req.mode,
         seed=req.seed,
         notices=collected_portrait_notices(),
@@ -6991,6 +7014,8 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         visual_right=visuals[1],
         left_is_ai=panel_is_ai[0],
         right_is_ai=panel_is_ai[1],
+        source_left="" if panel_is_ai[0] else req.source_left.strip(),
+        source_right="" if panel_is_ai[1] else req.source_right.strip(),
         mode=req.mode,
         seed=req.seed,
         notices=collected_portrait_notices(),
