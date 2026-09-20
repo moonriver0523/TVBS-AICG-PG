@@ -369,15 +369,34 @@ class RealWorldRulesRevertedWhereNothingBacksThemTests(unittest.TestCase):
                     'do NOT write the word 示意圖 into "variable" yourself', instructions
                 )
 
-    def test_digest_side_named_person_rule_still_says_do_not_write_it(self):
-        """第 5 條（具名真人）不回退：三個有軟體背書的 portrait_mode 都靠這句
-        避免消化端把「示意圖」寫進 variable 造成雙重標籤；no_reference 不畫臉，
-        這句對它沒有任何實質影響。"""
+    def test_digest_side_named_person_rule_is_scoped_to_portrait_subjects_only(self):
+        """第 5 條不整條回退，但**範圍要收窄**（2026-09-20 獨立複查 gpt-5.6-sol
+        第二項）。
+
+        原本寫「Never write 示意圖 into "variable" for a depicted person」——
+        「depicted person」比 `portrait_subjects` 寬。那個陣列只收**會露臉**的
+        具名真人（第 5 條自己的定義），所以「具名真人出現在畫面上、但只畫背影／
+        剪影／無臉替身」會落到 `portrait_mode="none"`：模型被第 5 條禁止規劃標籤，
+        `resolve_image_disclaimer("none", "")` 又回 `("", "")` 程式也不貼
+        ⇒ **一個具名真人的重建畫面完全沒有示意圖標籤**。跟 none／no_reference
+        同一個病灶，只是躲在第 5 條裡。
+
+        修法：把豁免範圍釘死在 `portrait_subjects` 上，並明講沒列進去的人仍適用
+        第 3 條（模型自己規劃標籤）。三個有軟體背書的 portrait_mode 行為不變。
+        """
         instructions = main.build_digest_instructions("記者", "standard", "資料圖表")
         self.assertIn(
-            'Never write 示意圖 into "variable" for a depicted person either',
+            'Never write 示意圖 into "variable" for a person you listed in "portrait_subjects"',
             instructions,
         )
+        self.assertNotIn(
+            'Never write 示意圖 into "variable" for a depicted person either',
+            instructions,
+            "舊的寬鬆措辭還在——背影／剪影的具名真人會掉進沒有人負責標籤的縫裡",
+        )
+        # 收窄之後必須明講「沒列進去的人要自己畫」，否則等於只是換句話說
+        self.assertIn("a back view, a silhouette, a faceless stand-in", instructions)
+        self.assertIn("rule 3 above applies in full", instructions)
         self.assertNotIn(
             'Always plan the 示意圖 label into "variable" when a person is depicted',
             instructions,

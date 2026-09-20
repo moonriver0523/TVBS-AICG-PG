@@ -89,6 +89,21 @@
   十份 fixture 因此第二次改動，`git diff --stat tests/fixtures/` 這次也只列出
   同一批十份，每份只改回這一兩句，B76 那塊與其餘內容不受影響（逐份 grep
   `CHINA OUTLINE`／`TAIWAN SEPARATION` 十份仍全部找得到）。
+- 2026-09-20（B70 第 5 條收窄，同日再稍後）：獨立複查（gpt-5.6-sol，第二輪）點名
+  上一條「第 5 條不回退」的理由不成立。第 5 條寫的是「Never write 示意圖 into
+  "variable" for a **depicted person**」，而 `portrait_subjects` 依它自己的定義
+  只收**會露臉**的具名真人；因此「具名真人出現在畫面上、但只畫背影／剪影／無臉
+  替身」會落到 `portrait_mode="none"`——模型被第 5 條禁止規劃標籤，
+  `resolve_image_disclaimer("none", "")` 又回 `("", "")` 程式也不貼，
+  **一個具名真人的重建畫面完全沒有示意圖標籤**。跟上一條修的是同一個病灶，
+  只是躲在第 5 條裡。
+  修法不是整條回退，是把豁免範圍**收窄**到 `portrait_subjects` 這個陣列本身，
+  並明講沒列進去的人仍適用第 3 條（模型自己規劃標籤）。三個有軟體背書的
+  portrait_mode 行為不變，雙重標籤仍然擋著。
+  只動 `main.py` 的 `REAL_WORLD_FIDELITY_RULES` 第 5 條一句 ⇒ **八份 digest
+  快照**第三次改動、每份只差一行（`git diff --numstat tests/fixtures/` 全是
+  `1 1`）；兩份 `reporter-image-prompt-*.txt` **這次沒有變**（`news_prompt.py`
+  沒動）。B76 那塊逐份 grep 十份仍全部找得到。
 """
 
 import os

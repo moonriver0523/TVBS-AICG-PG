@@ -227,5 +227,97 @@ class EndpointOtherLayoutsTests(unittest.TestCase):
         self.assertEqual(data["source_text"], "中央氣象署")
 
 
+class SolReviewRound2Tests(unittest.TestCase):
+    """2026-09-20 獨立複查（gpt-5.6-sol）第二輪針對 F43 的兩項。"""
+
+    BASE = {
+        "title": "測試 標題",
+        "layout": "news",
+        "date_text": "2026.09.20",
+        "title_mode": "composite",
+    }
+
+    def _recompose(self, body):
+        with patch.object(main, "generate_image_raw", side_effect=AssertionError("不該生圖")), \
+             patch.object(main, "derive_yt_cover_plan", return_value={}):
+            return client.post("/api/editor/yt-cover", json=body, headers=_headers())
+
+    # ---- 第一項：不能讓前端漏帶旗標就把 AI 圖標成「畫面來源」----
+
+    def test_client_supplied_background_plus_source_text_needs_an_explicit_flag(self):
+        """sol 逐步重現的序列：AI 生的成品被當底圖送回來、`background_is_ai` 沒帶，
+        Pydantic 預設 False ⇒ 在 AI 圖上貼出「畫面來源：路透社」。
+        那是對觀眾的正面宣稱（這張畫面沒被動過），不能靠預設值決定。"""
+        res = self._recompose({
+            **self.BASE,
+            "background_image_base64": base64.b64encode(_png_bytes()).decode(),
+            "source_text": "路透社",
+        })
+        self.assertEqual(res.status_code, 400, res.text)
+        self.assertIn("background_is_ai", res.text)
+
+    def test_explicitly_declaring_it_is_ai_wins_and_drops_the_source_label(self):
+        res = self._recompose({
+            **self.BASE,
+            "background_image_base64": base64.b64encode(_png_bytes()).decode(),
+            "background_is_ai": True,
+            "source_text": "路透社",
+        })
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(res.json()["source_text"], "", "AI 標籤要贏，來源名不該回顯")
+
+    def test_explicitly_declaring_it_is_not_ai_is_still_honoured(self):
+        """明確送 False 仍照信——那是既有的信任模型，改成後端自行判定是待裁事項。
+        這一題釘住「擋的是預設值，不是把 recompose 整條路關掉」。"""
+        res = self._recompose({
+            **self.BASE,
+            "background_image_base64": base64.b64encode(_png_bytes()).decode(),
+            "background_is_ai": False,
+            "source_text": "路透社",
+        })
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(res.json()["source_text"], "路透社")
+
+    def test_a_request_without_a_source_name_is_untouched_by_the_guard(self):
+        """沒有要標來源就沒有正面宣稱，維持原本行為（不要求帶旗標）。"""
+        res = self._recompose({
+            **self.BASE,
+            "background_image_base64": base64.b64encode(_png_bytes()).decode(),
+        })
+        self.assertEqual(res.status_code, 200, res.text)
+
+    # ---- 第三項：長來源名的版位護欄 ----
+
+    def test_a_long_source_name_shrinks_instead_of_covering_the_live_badge(self):
+        """實測：預設字級下「畫面來源：」＋40 個全形字的底板是 (259,216)-(1858,268)，
+        橫跨畫布 83%，蓋掉左上角 LIVE 章與日期板 (50,54)-(486,349)。"""
+        width = compose.YT_CANVAS[0]
+        min_left = round(width * compose.YT_NOTE_MIN_LEFT_RATIO)
+        x1 = width - round(width * compose.YT_MARGIN_RATIO) - 12
+        for name in ("美聯社", "字" * 12, "字" * 40):
+            with self.subTest(name=name):
+                text = compose.vstrip_source_text(name)
+                _font, note_w = compose._fit_note_font(
+                    text, x1 - min_left - 24, "左上角的 LIVE 章與日期"
+                )
+                self.assertGreaterEqual(
+                    x1 - note_w - 24, min_left,
+                    f"「{text}」的底板左緣越過了 {min_left}，會壓到 LIVE 章",
+                )
+
+    def test_a_source_name_that_cannot_fit_even_at_the_floor_is_rejected(self):
+        with self.assertRaises(compose.ComposeError) as ctx:
+            compose._fit_note_font("字" * 200, 300, "左上角的 LIVE 章與日期")
+        self.assertIn("太長", str(ctx.exception))
+
+    def test_the_default_ai_note_is_not_shrunk_at_all(self):
+        """「AI示意圖」五個字本來就塞得下，護欄不該讓既有成品的字級變小。"""
+        width, height = compose.YT_CANVAS
+        min_left = round(width * compose.YT_NOTE_MIN_LEFT_RATIO)
+        x1 = width - round(width * compose.YT_MARGIN_RATIO) - 12
+        font, _w = compose._fit_note_font(compose.YT_AI_NOTE, x1 - min_left - 24, "x")
+        self.assertEqual(font.size, round(height * compose.YT_AI_NOTE_SIZE_RATIO))
+
+
 if __name__ == "__main__":
     unittest.main()

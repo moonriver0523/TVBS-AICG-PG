@@ -1576,6 +1576,10 @@ YT_LINE2_FILL = (250, 215, 0)
 YT_TITLE_STROKE = (8, 8, 8)
 YT_AI_NOTE = "AI示意圖"
 YT_AI_NOTE_SIZE_RATIO = 0.032
+# 右側小標的版位護欄（2026-09-20，獨立複查第三項）：底板左緣不得越過畫布 40%，
+# 字級可以一路縮到 0.020 去遷就，再塞不下就報錯——見 _draw_ai_note。
+YT_NOTE_MIN_LEFT_RATIO = 0.40
+YT_NOTE_MIN_SIZE_RATIO = 0.020
 YT_AI_NOTE_TOP_RATIO = 0.20          # 藍標籤之下的右側空位
 YT_AI_NOTE_PLATE = (0, 0, 0, 120)
 
@@ -1605,18 +1609,52 @@ def _paste_live_badge(canvas: Image.Image, box: tuple[int, int], width: int) -> 
     return height
 
 
+def _fit_note_font(text: str, max_text_w: int, blocked_by: str):
+    """把小標字級縮到塞得進 max_text_w，回 (font, 實際寬度)；縮到下限仍塞不下就擋。
+
+    2026-09-20 獨立複查（gpt-5.6-sol）第三項共用的護欄——`_draw_ai_note`（靠右，
+    左邊是 LIVE 章與日期）與 `_draw_live24_ai_note`（靠左，右邊是 Logo）兩支都是
+    為「AI示意圖」五個字寫死字級的，F43 讓 text 變成使用者輸入之後就會溢出去壓到
+    固定元素。縮字優先（使用者拿得到成品），縮不下去才報錯（使用者自己改得掉）。
+    """
+    height = YT_CANVAS[1]
+    floor = round(height * YT_NOTE_MIN_SIZE_RATIO)
+    size = round(height * YT_AI_NOTE_SIZE_RATIO)
+    while True:
+        font = _font(size)
+        note_w = font.getbbox(text)[2]
+        if note_w <= max_text_w or size <= floor:
+            break
+        size -= 1
+    if note_w > max_text_w:
+        raise ComposeError(
+            f"「{text}」太長（縮到最小字級仍有 {note_w}px，版位上限 {max_text_w}px），"
+            f"再長會壓到{blocked_by}，請改用較短的來源名"
+        )
+    return font, note_w
+
+
 def _draw_ai_note(canvas: Image.Image, y0: int, *, text: str = YT_AI_NOTE) -> None:
     """右側小標（半透明黑底、白字），y0 為標籤頂，預設文字是「AI示意圖」。
 
     text 參數（2026-09-20，F43）：那一格不是 AI 底圖、改標「畫面來源：○○○」時
     共用同一套版位／底板／字體，只換文字內容——見各 compose_yt_*cover 呼叫端。
+
+    2026-09-20 獨立複查（gpt-5.6-sol）第三項：這支原本是為「AI示意圖」五個字寫的，
+    字級與右靠位置都寫死、沒有任何寬度上限。F43 接上之後 text 變成使用者輸入
+    （`YtCoverRequest.source_text` 允許 40 字），實測「畫面來源：」＋40 個全形字的
+    底板是 (259, 216)-(1858, 268)——橫跨畫布 83%，直接蓋掉左上角的 LIVE 章與日期板
+    （佔 (50, 54)-(486, 349)）。因此加一道版位護欄：先縮字，縮到下限還是塞不下就擋。
     """
     width, height = YT_CANVAS
     margin = round(width * YT_MARGIN_RATIO)
-    note_font = _font(round(height * YT_AI_NOTE_SIZE_RATIO))
-    note_w = note_font.getbbox(text)[2]
     note_h = round(height * YT_AI_NOTE_SIZE_RATIO * 1.5)
     x1 = width - margin - 12
+    # 底板左緣的硬界線：左上角那一叢固定元素（LIVE 章／日期板）最右到 x=486，
+    # 留一段安全距離取畫布 40%（=768）。標籤是右靠的，所以只需要管左緣。
+    min_left = round(width * YT_NOTE_MIN_LEFT_RATIO)
+    max_text_w = x1 - min_left - 24
+    note_font, note_w = _fit_note_font(text, max_text_w, "左上角的 LIVE 章與日期")
     plate = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     ImageDraw.Draw(plate).rounded_rectangle(
         (x1 - note_w - 24, y0, x1, y0 + note_h), radius=8, fill=YT_AI_NOTE_PLATE
@@ -2501,11 +2539,13 @@ def _draw_live24_ai_note(canvas: Image.Image, y0: int, *, text: str = YT_AI_NOTE
     共用會直接壓在 Logo 上。
 
     text 參數（2026-09-20，F43）：改標「畫面來源：○○○」時共用同一套版位。
+    版位護欄同 `_draw_ai_note`，只是方向相反——這支靠左，會撞到的是右上的 Logo。
     """
     width, height = YT_CANVAS
     x0 = round(width * LIVE24_BADGE_LEFT_RATIO)
-    note_font = _font(round(height * YT_AI_NOTE_SIZE_RATIO))
-    note_w = note_font.getbbox(text)[2]
+    # 靠左，所以管右緣：底板右緣不得越過畫布 60%（＝右側 Logo 區之前）。
+    max_text_w = round(width * (1 - YT_NOTE_MIN_LEFT_RATIO)) - x0 - 24
+    note_font, note_w = _fit_note_font(text, max_text_w, "右上角的 Logo")
     note_h = round(height * YT_AI_NOTE_SIZE_RATIO * 1.5)
     plate = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     ImageDraw.Draw(plate).rounded_rectangle(
