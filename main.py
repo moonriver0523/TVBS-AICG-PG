@@ -648,13 +648,22 @@ def _outcome_meta(
     image_model: str = "",
     exc: BaseException | None = None,
 ) -> dict:
-    """成功／失敗共用的耗時、重試、provider。request log 與 audit 都吃同一份。"""
+    """成功／失敗共用的耗時、重試、provider。request log 與 audit 都吃同一份。
+
+    2026-09-20（B72）：這裡也塞 digest_model。resolve_digest_model() 只讀環境設定
+    （DIGEST_MODEL／OPENAI_DIGEST_MODEL／後端預設），跟這次請求本身有沒有真的呼叫
+    消化無關——查的是「出事當下系統設定的消化模型是哪一支」，這正是 B72 的問題
+    （使用者當面問「現在消化模型是？」查不出來）。放在這裡而不是逐一端點各自傳，
+    是因為全部 8 個會落檔的端點（成功與失敗）都經過這支函式，漏傳的風險比
+    F30 那次「新版型忘了接歸檔」小得多。
+    """
     meta = {
         "status": audit_archive.STATUS_FAILED if exc is not None else audit_archive.STATUS_OK,
         "duration_ms": _generation_duration_ms(started),
         "retry_count": _generation_retries(),
         "provider": provider,
         "image_model": image_model,
+        "digest_model": resolve_digest_model(),
     }
     if exc is not None:
         meta.update(classify_generation_error(exc))
@@ -739,6 +748,7 @@ def _record_generation_failure(
         density=str(fields.get("density") or ""),
         provider=str(fields.get("provider") or ""),
         client_id=str(fields.get("client_id") or ""),
+        digest_model=meta["digest_model"],
     )
     archive_fields = dict(fields)
     archive_fields.update(meta)
@@ -3027,6 +3037,7 @@ def generate(req: GenerateRequest):
                     role=req.role,
                     density=req.density,
                     seed=seed,
+                    digest_model=model,
                 )
                 # 存給稍後的生圖請求取用：那支端點只收到 prompt，拿不到新聞原文，
                 # 稽核歸檔要靠這裡記住的內容才補得齊（見 _archive_generation）。
@@ -3039,6 +3050,7 @@ def generate(req: GenerateRequest):
                     type_label=req.type_label,
                     role=req.role,
                     density=req.density,
+                    digest_model=model,
                 )
             return result
 
@@ -3322,6 +3334,7 @@ def generate_image(req: ImageGenerateRequest):
             prompt=req.prompt,
             provider=req.provider,
             image_model=result.model,
+            digest_model=meta["digest_model"],
         )
         _archive_generation(
             request_id=request_id,
@@ -4879,6 +4892,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
         prompt=image_req.prompt,
         provider=req.provider,
         image_model=result.model,
+        digest_model=meta["digest_model"],
     )
     _archive_generation(
         request_id=request_id,
@@ -5085,6 +5099,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 photo.source_page for photo in reference_photos
             ),
             seed=digest.seed,
+            digest_model=meta["digest_model"],
         )
         # LINE 版圖檔已由 line_bot.py 存進 static/generated/，這裡只補網頁版的缺口
         if req.source != "line":
@@ -6470,6 +6485,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         role="編輯",
         provider=req.provider,
         image_model=image_model,
+        digest_model=meta["digest_model"],
         **portrait_fields,
     )
     _archive_generation(
@@ -6680,6 +6696,7 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         role="編輯",
         provider=req.provider,
         image_model=image_model,
+        digest_model=meta["digest_model"],
         **portrait_fields,
     )
     _archive_generation(
@@ -7629,6 +7646,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         role="編輯",
         provider=req.provider,
         image_model=image_model,
+        digest_model=meta["digest_model"],
         # 具名真人與照片出處：肖像這段靠 prompt 端列人名，會飄，事後要能一位一位對
         portrait_subject="、".join(subjects),
         portrait_photo_source="、".join(
@@ -7790,6 +7808,7 @@ def editor_yt_overlay(req: YtOverlayRequest) -> YtOverlayResponse:
         prompt="（直標，不生圖）",
         role="編輯",
         image_model="yt-overlay:compose",
+        digest_model=meta["digest_model"],
     )
     _archive_generation(
         request_id=request_id,

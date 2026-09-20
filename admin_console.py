@@ -162,6 +162,7 @@ def _row(record: dict) -> str:
         <div class="meta muted">{params}</div>
         <div class="meta muted">
           model: {_esc(record.get("image_model"))} ·
+          消化模型: {_esc(record.get("digest_model")) or "－"} ·
           provider: {_esc(record.get("provider"))} ·
           耗時: {_esc(_duration_label(record))} ·
           重試: {_esc(_retry_label(record))} ·
