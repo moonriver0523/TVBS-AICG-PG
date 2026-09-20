@@ -28,6 +28,20 @@
   fixture**（`tests/fixtures/` 目錄零異動，`git diff --stat` 可查證）。
   B53（news_text 併入補畫面描述的 material）與四層分流的 mode 判斷邏輯只影響
   `main.py` 的 cover／yt-cover／一般生圖路徑，同樣不動這裡管的 digest 快照。
+- 2026-09-20（B76）：中國大陸輪廓誤含臺灣（播出事故等級，使用者當面追加授權重凍，
+  見 MASTER-列管清單.md「重凍預算已批准」節）。分兩層修，兩層各補一塊新規則：
+  ① 消化端 `main.py` 新增 `CHINA_TAIWAN_OUTLINE_RULES`，明文禁止把臺灣／澎湖／
+  金門／馬祖畫進中國大陸的輪廓、同填色或同一圈光暈，獨立於既有的地圖／非地圖分流
+  （`MAP_ACCURACY_RULES` 對 `MAP_SCOPE_GUARD_RULES`）之外一律注入。八份 digest
+  快照都因此在 `MAP SCOPE GUARD` 段落之後多出這一塊。
+  ② 生圖端 `news_prompt.py` 新增 `CHINA_TAIWAN_OUTLINE_IMAGE_RULES`，比照
+  `TEXT_PLACEMENT_RULES` 不看 type_label 一律注入到 `build_prompt()`——事故根因
+  在這一層：那則新聞的 chart_type 是「資料圖表」，生圖模型本來連 `MAP_ACCURACY_
+  IMAGE_RULES`（只在地圖類才注入）都拿不到，是它自己把臺灣填進中國大陸輪廓的裝飾
+  背景，不是消化端的 structure 叫它這樣畫；只修消化端擋不住生圖模型自己的世界知識。
+  兩份 `reporter-image-prompt-{safeframe,plain}.txt` 因此在 `TEXT PLACEMENT` 段落
+  之後、`FINAL OUTPUT RULE` 之前多出這一塊。
+  逐一核對後確認十份快照**其餘文字完全沒有改變**；沒有動到 RNG pins 或其他 fixture。
 - 2026-09-20（B70／F43）：使用者當面追加重凍額度，把「示意圖」標籤全站化——
   Stage 5a 那批只改了 portrait_mode≠"none" 時才注入的四個 PORTRAIT_* 區塊
   （見上一條），沒有動「no portrait block present」時的預設路徑，那條預設路徑

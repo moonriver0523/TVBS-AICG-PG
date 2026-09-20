@@ -579,6 +579,55 @@ class D14F20NoTextTests(SourceAssertions, unittest.TestCase):
         )
 
 
+class B78NoTextIgnoresCreativityLadderTests(unittest.TestCase):
+    """B78：無字檔位在創意階梯 ≥1 時仍畫出創意版面的框與設計，應該只剩示意圖插圖。
+
+    根因（本 session 查證）：F20 只把 cg_creativity_rules 的文字類條文關掉
+    （字級、蓋章），沒關掉 main.py:2192 對整段 cg_creativity_rules() 的注入。
+    NO_TEXT_FINAL_REMINDER 原本第 5 條寫「THE VISUAL CREATIVITY BLOCK ... KEEPS
+    EVERYTHING THAT IS NOT TYPE」，等於明文放行版面／分區／卡片／斜切／描邊裝飾
+    這些「框與設計」，創意 ≥1 時整段照樣送給模型。
+
+    修法：build_digest_instructions 對 density == "no_text" 完全跳過
+    cg_creativity_rules()，不試著切一半保留——逐段核對過 L1-L4／設計抽籤／
+    配件池四塊產物，沒有一塊乾淨地只描述插圖風格，PALETTE 與 WORDLESS DEVICES
+    兩塊本身就是使用者說的「設計」。
+    """
+
+    _CREATIVITY_MARKERS = (
+        "VISUAL CREATIVITY — LEVEL",
+        "THE DESIGN DRAW FOR THIS GRAPHIC",
+        main.CG_ACCESSORY_HEADING,
+        "WHAT THE CREATIVITY SETTING NEVER CHANGES",
+    )
+
+    def test_no_text_never_injects_the_creativity_ladder_at_any_level(self):
+        for level in (0, 1, 2, 3, 4):
+            with self.subTest(level=level):
+                prompt = main.build_digest_instructions(
+                    "編輯", "no_text", "資料圖表", visual_creativity=level, seed=1
+                )
+                for marker in self._CREATIVITY_MARKERS:
+                    with self.subTest(marker=marker):
+                        self.assertNotIn(marker, prompt)
+                self.assertIn(main.NO_TEXT_DENSITY_RULES, prompt)
+                self.assertIn(main.NO_TEXT_FINAL_REMINDER, prompt)
+
+    def test_control_group_standard_density_still_gets_the_ladder(self):
+        """對照組：閘門只認 no_text，不能連帶把其他密度的創意拉桿也弄啞。"""
+        prompt = main.build_digest_instructions(
+            "編輯", "standard", "資料圖表", visual_creativity=2, seed=1
+        )
+        self.assertIn("VISUAL CREATIVITY — LEVEL 2 OF 4", prompt)
+        self.assertIn("WHAT THE CREATIVITY SETTING NEVER CHANGES", prompt)
+
+    def test_the_stale_carve_out_sentence_is_gone(self):
+        """舊句子承諾「版面與裝飾仍然適用」，現在整段已經不會出現在無字 prompt 裡，
+        留著就是一句誤導後續維護者的死文字。"""
+        self.assertNotIn("KEEPS EVERYTHING THAT IS NOT TYPE", main.NO_TEXT_FINAL_REMINDER)
+        self.assertIn("NO VISUAL CREATIVITY LAYOUT EITHER", main.NO_TEXT_FINAL_REMINDER)
+
+
 class ImageRequestDensityWiringTests(unittest.TestCase):
     def test_news_pipeline_forwards_density_into_image_request(self):
         import types

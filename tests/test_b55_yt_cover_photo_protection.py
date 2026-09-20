@@ -17,6 +17,10 @@
 2. 保護區以外：模型真的畫了東西才用模型像素，沒動過的仍是 base。
 3. 可編輯區域改動面積超過門檻＝整張重畫，擋下（ComposeError），不能靜靜送出。
 4. 這條保護只在「單則、剛好 1 張原圖放置」生效；雙則（兩格各自一張）與多圖切格不受影響。
+
+2026-09-20 修法甲：provider=="gpt" 已改走 compose.overlay_title_layer_over_yt_cover
+（透明底標題圖層），這份檔案的端點測試 BODY 已改成 provider=gemini，繼續驗差異遮罩
+那條路徑；gpt 的透明底圖層改在 test_b55_transparent_title_layer.py 測。
 """
 import base64
 import io
@@ -196,8 +200,10 @@ class EndpointWiringTests(unittest.TestCase):
         return fake_raw
 
     def _base_body(self, layout):
+        # provider=gemini（2026-09-20 修法甲後）：gpt 已改走透明底圖層，這份檔案
+        # 專測差異遮罩路徑，見檔頭說明。
         common = {
-            "layout": layout, "title_mode": "ai", "creativity": 1, "provider": "gpt",
+            "layout": layout, "title_mode": "ai", "creativity": 1, "provider": "gemini",
             "date_text": "2026/09/16",
         }
         if layout == "live24":
