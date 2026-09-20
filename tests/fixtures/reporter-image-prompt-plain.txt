@@ -95,6 +95,15 @@ TEXT PLACEMENT (CRITICAL)
 - Add no text of your own. Every word on the canvas comes from VARIABLE FIELDS; if a layout region has nothing assigned to it, it carries no text.
 
 ==================================================
+CHINA OUTLINE / TAIWAN SEPARATION (ZERO TOLERANCE)
+==================================================
+- This rule applies no matter what chart type this is — a map, a data chart, an infographic, or any graphic that uses a country silhouette as decoration or background — and even when Taiwan is never named in the source text.
+- Whenever you draw the outline, coastline, silhouette, or a filled/tinted landmass representing 中國, 中國大陸, China, Mainland China or the PRC, that shape MUST stop at the mainland coast. Do not fill Taiwan (臺灣/台灣), Penghu (澎湖), Kinmen (金門) or Matsu (馬祖) with the same colour as that landmass, enclose them in the same outline, or wrap them in the same glow/halo/highlight ring — even if your own default reference for "China" lumps them in, override that default here.
+- If Taiwan appears anywhere on the graphic, draw it as a visually separate landmass: its own outline, a fill colour that contrasts with mainland China's, positioned at its true relative location, never touching, bridging or merging with the mainland shape.
+- Hainan Island (海南島) is genuine PRC territory and may share the mainland's fill and outline — this rule is about Taiwan and its outlying islands, not about excluding Hainan.
+- If you cannot render Taiwan as visually distinct with confidence, do not draw China's outline or silhouette at all.
+
+==================================================
 FINAL OUTPUT RULE
 ==================================================
 - The final generated image must NOT contain any "[" "]" or "<" ">" characters.

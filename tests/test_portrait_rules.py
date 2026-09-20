@@ -774,6 +774,82 @@ class ApplyPortraitToImageRequestTests(unittest.TestCase):
                     apply_portrait_to_image_request(req)
         self.assertEqual(caught.exception.status_code, 400)
 
+    def test_one_person_with_photo_sets_the_ai_disclaimer_kind(self):
+        """2026-09-20 team-lead 複查點名的回歸（獨立複查 gpt-5.6-sol 發現、
+        team-lead 驗證）：這支函式以前從沒設過 disclaimer_kind，prompt 已經告知
+        模型「不要自己畫、軟體會壓」，但軟體那半沒被叫到，標籤整個消失
+        （LINE 路徑的 generate_news_image 沒有這個洞）。"""
+        req = ImageGenerateRequest(prompt="base prompt", portrait_subjects=["某人"], provider="gpt")
+        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                out = apply_portrait_to_image_request(req)
+        self.assertEqual(out.disclaimer_kind, "ai")
+
+    def test_two_people_with_photos_sets_the_ai_disclaimer_kind(self):
+        req = ImageGenerateRequest(
+            prompt="base prompt", portrait_subjects=["鄭明典", "吳軒彤"], provider="gpt"
+        )
+        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                with patch.object(main, "supports_multiple_reference_images", return_value=True):
+                    out = apply_portrait_to_image_request(req)
+        self.assertEqual(out.disclaimer_kind, "ai")
+
+    def test_no_person_scene_sets_no_disclaimer(self):
+        """no_reference：畫面不安排這個人，沒有臉可標，disclaimer_kind 維持空字串。"""
+        req = ImageGenerateRequest(
+            prompt="base prompt", portrait_subjects=["鄭明典", "吳軒彤"], provider="gpt"
+        )
+
+        def outcome_lookup(subjects, english=None):
+            return {
+                name: photo_lookup.PortraitLookupOutcome(
+                    photo=None, entry_found=False, matched_name=None, language=None
+                )
+                for name in subjects
+            }
+
+        with patch.object(photo_lookup, "find_reference_photo", return_value=None):
+            with patch.object(main, "lookup_portrait_outcomes", side_effect=outcome_lookup):
+                with patch.object(main, "supports_reference_image", return_value=True):
+                    with patch.object(main, "supports_multiple_reference_images", return_value=True):
+                        out = apply_portrait_to_image_request(req)
+        self.assertEqual(out.disclaimer_kind, "")
+
+    def test_uploaded_portrait_photo_still_sets_the_ai_disclaimer_kind(self):
+        """B28 例外三：使用者親自上傳肖像照，具名真人仍要標「示意圖」——這條路
+        （uploaded 分支）以前連 prompt 都沒告訴模型要標，disclaimer_kind 也沒設過，
+        是比另一半更早就存在的洞。"""
+        req = ImageGenerateRequest(
+            prompt="base prompt",
+            portrait_subjects=["某人"],
+            provider="gpt",
+            reference_images=[
+                main.UserReferenceImage(data_url="data:image/jpeg;base64,QQ==", purpose="portrait")
+            ],
+        )
+        with patch.object(main, "supports_reference_image", return_value=True):
+            out = apply_portrait_to_image_request(req)
+        self.assertEqual(out.disclaimer_kind, "ai")
+
+    def test_uploaded_portrait_with_lookup_shortfall_also_sets_the_disclaimer(self):
+        req = ImageGenerateRequest(
+            prompt="base prompt",
+            portrait_subjects=["鄭明典", "吳軒彤"],
+            provider="gpt",
+            reference_images=[
+                main.UserReferenceImage(data_url="data:image/jpeg;base64,QQ==", purpose="portrait")
+            ],
+        )
+
+        def lookup(name, **kwargs):
+            return None if name == "吳軒彤" else PHOTO
+
+        with patch.object(photo_lookup, "find_reference_photo", side_effect=lookup):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                out = apply_portrait_to_image_request(req)
+        self.assertEqual(out.disclaimer_kind, "ai")
+
     def test_existing_block_is_not_duplicated(self):
         already = "base\n\n" + news_prompt.PORTRAIT_WITH_REFERENCE_RULES
         req = ImageGenerateRequest(

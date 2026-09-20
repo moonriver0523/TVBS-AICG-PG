@@ -386,9 +386,17 @@ class YtCoverSlotEndpointTests(unittest.TestCase):
         self.assertEqual(data["title_mode"], "ai")
 
     def test_an_as_is_slot_with_ai_title_draws_over_the_photo(self):
-        """2026-09-13 使用者裁決：原圖放置＋AI 標題不再強制壓字，原圖當唯一附圖送模型畫字。"""
+        """2026-09-13 使用者裁決：原圖放置＋AI 標題不再強制壓字，原圖當唯一附圖送模型畫字。
+
+        provider=gemini（2026-09-20 修法甲後）：這裡的 fake `raw` 固定回不透明 PNG，
+        provider=gpt 時剛好 1 張原圖放置會改走透明底圖層（見
+        tests/test_b55_transparent_title_layer.py），對這張不透明假圖會被 (a) 擋下。
+        這支測的是請求組裝（reference_images purpose），不是 B55 的像素保證，改用
+        gemini 沿用差異遮罩那條路，跟這支原本要測的東西一致。
+        """
         data, raw, _ = self._post({
             "title": "挪威國王哈拉德辭世 開放公眾瞻仰遺容",
+            "provider": "gemini",
             "slot_left": [_ref("asis")],
         })
         self.assertEqual(data["title_mode"], "ai")
@@ -396,8 +404,11 @@ class YtCoverSlotEndpointTests(unittest.TestCase):
         self.assertEqual([r.purpose for r in raw.call_args.args[0].reference_images], ["aiedit"])
 
     def test_the_legacy_asis_left_string_also_draws_over_the_photo(self):
+        # provider=gemini：同上一支的理由，這裡測的是舊版 asis_left 字串欄位的相容
+        # 組裝邏輯，不是 B55 的像素保證。
         data, raw, _ = self._post({
             "title": "挪威國王哈拉德辭世 開放公眾瞻仰遺容",
+            "provider": "gemini",
             "asis_left": _data_url(),
         })
         self.assertEqual(data["title_mode"], "ai")

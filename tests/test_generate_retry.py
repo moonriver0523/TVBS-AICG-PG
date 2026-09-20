@@ -219,13 +219,22 @@ class GenerateRetryTests(unittest.TestCase):
             calls["n"] += 1
             return ok_response()
 
+        # B72／F31（2026-09-20）：apply_photo_availability 巢狀呼叫 generate() 失敗時
+        # 只有最外層（own_clock）該記一筆，內層那次巢狀呼叫不該重複記——
+        # 用 request_log.log_failure 的呼叫次數守住「剛好 1 筆」，不是 0 筆（沒接上
+        # 失敗落檔）也不是 2 筆（內外各記一次）。
+        logged = []
         with patch.object(main.time, "monotonic", lambda: now[0]), patch.object(
             main, "lookup_portrait_photos", return_value=({}, ["吳軒彤"])
-        ), patch.object(main, "_remember_digest"):
+        ), patch.object(main, "_remember_digest"), patch.object(
+            main.request_log, "log_failure", side_effect=lambda **kw: logged.append(kw)
+        ):
             result, exc, create = self.call_with(tick)
         self.assertIsNone(result)
         self.assertEqual(exc.status_code, 503)
         self.assertEqual(create.call_count, 1)
+        self.assertEqual(len(logged), 1, "巢狀呼叫失敗要剛好記一筆，不是 0 筆也不是 2 筆")
+        self.assertEqual(logged[0]["source"], "digest")
 
     def test_photo_availability_retry_still_runs_when_budget_remains(self):
         now = [0.0]

@@ -67,6 +67,10 @@ class ImageStageTests(unittest.TestCase):
             "not even a small, faint, distant or background one",
             "do NOT draw a recognisable face for a named real person",
             "示意圖",
+            # 2026-09-20（B70 全站化，同日稍後回退）：一般重建圖沒有程式端壓字
+            # 背書，維持原版「模型自己判斷、必須清楚可見」——見
+            # tests/test_reporter_prompt_frozen.py docstring「2026-09-20
+            # （B70／F43 修正）」那一段。
             "never drop or hide it",
             "SELF-CHECK before finalizing",
         ):

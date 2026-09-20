@@ -453,7 +453,7 @@ function curType() { return CHART_TYPES[state.chartType]; }
    ============================================================ */
 const EDITOR_FORMATS = {
     default: {
-        label: '預設（現行）',
+        label: '編輯CG',
         hint: '',
         inputs: 'news',
         locks: {},
@@ -1368,6 +1368,9 @@ function beginGenerationProgress(stageKey, budgetScale = 1) {
     _genStage = GEN_STAGES[stageKey];
     _genStageStart = Date.now();
     _genStageBudget = _genStage.seconds * budgetScale;
+    // F42：階段切換記一筆到訊息歷史當進度時間軸，不記每 250ms 的百分比 tick——
+    // 那樣只會洗版，看不出「現在到底在做什麼」。
+    logMessage(`${_genStage.label}…`, 'info');
     if (!_genTicker) {
         const btn = document.getElementById('aiBtn');
         if (btn) btn.classList.add('generating');
@@ -1405,6 +1408,7 @@ function endGenerationProgress(completed = false) {
     if (completed) {
         // 成功才有 100%，短暫停留讓使用者看見「跑完了」再還原按鈕文字
         renderGenerationProgress(100, '完成 100%');
+        logMessage('生成完成', 'success');
         setTimeout(restore, 700);
     } else {
         restore();
@@ -3652,6 +3656,15 @@ function showRefinedImage(data) {
     document.getElementById('oneClickLabel').innerText = data.model || 'AI Generated';
 }
 
+// F32（2026-09-20）：輸入框改成多行 textarea，Enter 換行，Ctrl+Enter／⌘+Enter 才送出，
+// 送出仍走既有的 handleRefine（按鈕沒有換掉）。
+function handleRefineKeydown(event) {
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        handleRefine();
+    }
+}
+
 async function handleRefine() {
     const input = document.getElementById('refineInput');
     const instruction = input.value.trim();
@@ -3769,16 +3782,26 @@ function copyToClipboard() {
     showToast("Prompt Copied to Clipboard");
 }
 
+// F42：判斷 showToast 的文字要不要標成 error 色。只認「失敗」會漏掉 catch 區塊常見的
+// 「逾時」「錯誤」「無法」（例如 3132 行 err.message 直接塞「TimeoutError」之類的英文
+// 例外訊息時也未必含「失敗」），所以擴成關鍵字陣列，任一命中就標 error。
+const TOAST_ERROR_KEYWORDS = ['失敗', '逾時', '錯誤', '無法', 'timeout', 'error', 'failed'];
+
 function showToast(msg) {
     const toast = document.getElementById('toast');
     toast.innerText = msg;
     toast.style.opacity = '1'; toast.classList.add('toast-animate');
     setTimeout(() => { toast.style.opacity = '0'; toast.classList.remove('toast-animate'); }, 3000);
+    // toast 3 秒就消失，看不到的人事後想查「剛才系統說了什麼」——一律再記一份到訊息歷史。
+    const lower = String(msg || '').toLowerCase();
+    const isError = TOAST_ERROR_KEYWORDS.some(k => lower.includes(k.toLowerCase()));
+    logMessage(msg, isError ? 'error' : 'info');
 }
 
 // B38：一鍵生成失敗時的訊息要留在畫面上讓使用者自己關掉，不能像 toast 3 秒就消失。
 function showGenerateErrorBanner(msg) {
     const banner = document.getElementById('oneClickErrorBanner');
+    logMessage(msg, 'error');
     if (!banner) return;
     banner.dataset.notice = '0';
     document.getElementById('oneClickErrorMsg').innerText = msg;
@@ -3801,6 +3824,7 @@ function hideGenerateErrorBanner(force = false) {
 function showGenerateNoticeBanner(notices) {
     const messages = Array.isArray(notices) ? notices.filter(Boolean) : [];
     if (!messages.length) return;
+    messages.forEach(m => logMessage(m, 'notice'));
     const banner = document.getElementById('oneClickErrorBanner');
     if (!banner) return;
     banner.dataset.notice = '1';
@@ -3812,6 +3836,80 @@ function showGenerateNoticeBanner(notices) {
 
 function clearGenerateBannerForNewRequest() {
     hideGenerateErrorBanner(true);
+}
+
+/* ============================================================
+   F42（2026-09-20）：訊息歷史視窗——累積顯示訊息（時間＋內容＋類別），不會像 toast／
+   紅色框一閃即逝；同一區塊兼做進度顯示（消化中／生圖中／完成／失敗都進這條時間軸）。
+   刻意不另開一套平行的訊息系統：所有進入口都是既有的 showToast／
+   showGenerateErrorBanner／showGenerateNoticeBanner／beginGenerationProgress 呼叫點，
+   這裡只是多記一筆，不改變它們原本的畫面行為。
+   ============================================================ */
+const MESSAGE_HISTORY_LIMIT = 200;
+const MESSAGE_TYPE_CLASS = {
+    error: 'text-red-300',
+    notice: 'text-amber-300',
+    success: 'text-emerald-300',
+    info: 'text-slate-300',
+};
+let _messageHistory = [];
+let _messageHistoryUnread = 0;
+
+function logMessage(text, type = 'info') {
+    const msg = String(text || '').trim();
+    if (!msg) return;
+    const time = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+    _messageHistory.push({ time, text: msg, type });
+    if (_messageHistory.length > MESSAGE_HISTORY_LIMIT) _messageHistory.shift();
+    const list = document.getElementById('messageHistoryList');
+    if (list && list.classList.contains('hidden')) _messageHistoryUnread += 1;
+    renderMessageHistory();
+}
+
+function renderMessageHistory() {
+    const list = document.getElementById('messageHistoryList');
+    if (list) {
+        // 只有使用者本來就貼著底部時才跟著捲——正往上翻看前一則錯誤的時候，
+        // 新訊息一來就把人拽回底部，剛好毀掉這個視窗存在的理由（回看錯誤訊息）。
+        // 8px 容差：瀏覽器在縮放比例非整數時 scrollTop 會有次像素誤差，抓太死會判成沒貼底。
+        const wasAtBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 8;
+        list.innerHTML = '';
+        _messageHistory.forEach(entry => {
+            const row = document.createElement('div');
+            row.className = `px-3 py-2 text-[10px] leading-relaxed ${MESSAGE_TYPE_CLASS[entry.type] || MESSAGE_TYPE_CLASS.info}`;
+            const time = document.createElement('span');
+            time.className = 'text-slate-500 font-mono mr-1';
+            time.textContent = `[${entry.time}]`;
+            const text = document.createElement('span');
+            text.textContent = entry.text;
+            row.appendChild(time);
+            row.appendChild(text);
+            list.appendChild(row);
+        });
+        if (wasAtBottom) list.scrollTop = list.scrollHeight;
+    }
+    const badge = document.getElementById('messageHistoryBadge');
+    if (badge) {
+        if (_messageHistoryUnread > 0) {
+            badge.textContent = _messageHistoryUnread > 99 ? '99+' : String(_messageHistoryUnread);
+            badge.classList.remove('hidden');
+        } else {
+            badge.classList.add('hidden');
+        }
+    }
+}
+
+function toggleMessageHistory() {
+    const list = document.getElementById('messageHistoryList');
+    if (!list) return;
+    list.classList.toggle('hidden');
+    if (!list.classList.contains('hidden')) {
+        _messageHistoryUnread = 0;
+        renderMessageHistory();
+        // 剛展開一定要看到最新的那幾筆。收合時 display:none，scrollHeight 是 0，
+        // renderMessageHistory() 的「貼底」判斷在這一刻不成立，所以這裡明確捲一次。
+        list.scrollTop = list.scrollHeight;
+    }
 }
 
 // 只判斷「這段話是否在要求換臉」，不從自由文字抽取或猜測姓名。

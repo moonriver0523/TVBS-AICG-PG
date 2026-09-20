@@ -779,20 +779,22 @@
                             <input id="replacementPerson" type="text" maxlength="120"
                                    class="w-full mb-2 bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                    placeholder="只有要換臉時填寫姓名；系統不會從指令猜姓名" />
-                            <div class="flex items-center gap-2">
-                                <input id="refineInput" type="text" maxlength="2000"
-                                       onkeydown="if(event.key==='Enter')handleRefine()"
-                                       class="flex-1 bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
-                                       placeholder="追加修改，如：把標題改成紅色／左邊那張圖換成長條圖" />
-                                <button id="refineBtn" onclick="handleRefine()"
-                                        class="px-3 py-2 rounded-lg text-[10px] font-black bg-red-600 hover:bg-red-500 text-white transition-all active:scale-95 disabled:opacity-50 flex items-center gap-1.5">
-                                    <span id="refineBtnText">修改</span>
-                                    <div id="refineLoading" class="hidden w-3.5 h-3.5 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
-                                </button>
-                                <button id="refineUndoBtn" onclick="undoRefine()" disabled
-                                        class="px-3 py-2 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all disabled:opacity-40">退回上一版</button>
+                            <div class="flex items-start gap-2">
+                                <textarea id="refineInput" maxlength="2000" rows="4"
+                                       onkeydown="handleRefineKeydown(event)"
+                                       class="flex-1 bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring resize-y"
+                                       placeholder="追加修改，如：把標題改成紅色／左邊那張圖換成長條圖（Enter 換行，Ctrl+Enter／⌘+Enter 送出）"></textarea>
+                                <div class="flex flex-col gap-2">
+                                    <button id="refineBtn" onclick="handleRefine()"
+                                            class="px-3 py-2 rounded-lg text-[10px] font-black bg-red-600 hover:bg-red-500 text-white transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5">
+                                        <span id="refineBtnText">修改</span>
+                                        <div id="refineLoading" class="hidden w-3.5 h-3.5 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                                    </button>
+                                    <button id="refineUndoBtn" onclick="undoRefine()" disabled
+                                            class="px-3 py-2 rounded-lg text-[10px] font-black bg-slate-800 hover:bg-slate-700 text-slate-300 transition-all disabled:opacity-40">退回上一版</button>
+                                </div>
                             </div>
-                            <p class="text-[9px] text-slate-600 mt-1">只改指定的部分，其餘保持不變；每次修改為一次付費生圖。</p>
+                            <p class="text-[9px] text-slate-600 mt-1">只改指定的部分，其餘保持不變；每次修改為一次付費生圖。Enter 換行，Ctrl+Enter／⌘+Enter 直接送出。</p>
                         </div>
                     </div>
                 </div>
@@ -1063,8 +1065,27 @@
         Prompt Copied
     </div>
 
-    <script src="app.js?v=20260820a"></script>
+    <!-- F42（2026-09-20）：訊息歷史視窗——累積顯示訊息（時間＋內容），不會像 toast／紅色框
+         一閃即逝，同一區塊兼做進度顯示。掛在既有的 showToast／showGenerateErrorBanner／
+         showGenerateNoticeBanner 呼叫點上，不是另一套平行的訊息系統，見 app.js logMessage()。 -->
+    <div id="messageHistoryPanel" class="fixed bottom-6 right-6 z-40 flex flex-col items-end">
+        <button id="messageHistoryToggle" type="button" onclick="toggleMessageHistory()"
+                title="訊息紀錄：累積顯示錯誤／提示／進度訊息，不會自動消失"
+                class="flex items-center gap-2 px-3 py-2 rounded-full bg-slate-900/90 border border-slate-700 text-[10px] font-black text-slate-300 hover:text-white shadow-lg transition-all">
+            <span>訊息紀錄</span>
+            <span id="messageHistoryBadge" class="hidden min-w-[16px] px-1 h-4 rounded-full bg-red-600 text-white text-[9px] font-black leading-4 text-center">0</span>
+        </button>
+        <div id="messageHistoryList"
+             class="hidden mt-2 w-80 max-w-[90vw] max-h-64 overflow-y-auto rounded-lg border border-slate-700 bg-slate-950/95 shadow-xl divide-y divide-slate-800"></div>
+    </div>
+
+    <!-- ⚠ 改到 app.js／hybrid.js 就**一定要同時把這裡的 ?v= 換掉**（日期＋流水字母）。
+         瀏覽器是按完整 URL 快取的，字串不換＝老使用者永遠拿舊檔。2026-09-20 抓到
+         app.js 掛著 20260820a、實際檔案已經改到 09-16，hybrid.js 掛著 20260815a、
+         檔案已經改到 09-06——B81「正式站前端看起來落後」多半就是這樣來的，
+         伺服器上的檔其實是新的（curl 驗過與 exp HEAD 逐位元組相同）。 -->
+    <script src="app.js?v=20260920a"></script>
     <!-- 第三頁（混合版型）；內部包 IIFE，只對外露出 initHybrid()，由 switchPage(3) 首次切頁時呼叫 -->
-    <script src="hybrid.js?v=20260815a"></script>
+    <script src="hybrid.js?v=20260920a"></script>
 </body>
 </html>
