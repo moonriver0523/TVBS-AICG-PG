@@ -28,6 +28,20 @@ F43 的規則很簡單：「圖是 AI 生成／被 AI 改過 → 標『示意圖
 | YT 封面 `title_mode="composite"`，四個 layout（news／hourly／hot／live24） | 該次生成是原圖放置（`is_ai=False`） | `_yt_cover_background` 對 asis 圖（`compose.crop_background_16x9`／`compose.split_backgrounds`）走純裁切／貼合，完全不經過生圖模型，回傳 `is_ai=False`；跟十點不一樣 composite 模式同一等級的保證 | ✅ 已接（2026-09-20 補接）：`YtCoverRequest.source_text`／`YtCoverResponse.source_text`；`compose.py` 的 `_draw_ai_note`／`_draw_live24_ai_note` 各加 `text` 參數，`compose_yt_cover`／`compose_yt_hourly_cover`／`compose_yt_hot_cover`／`compose_yt_live24_cover` 各加 `source_text` 參數＋互斥判定。dual（雙則）模式的底圖一律 `is_ai=True`（`yt_dual_background` 寫死），`source_text` 對它自動被忽略，不需要左右各一份 |
 | YT 直播直標（`/api/editor/yt-overlay`） | 全部 | **不生圖、不打任何模型、沒有底圖**——透明 PNG 疊在直播訊號上，畫面內容不是這支端點管的 | ✅ 既有功能（`YtOverlayRequest.source_text`，2026-09-09 上線），F43 這批沒有新動它，列在這裡只為了盤點完整 |
 
+⚠**已知限制（自己盤點時發現，未修，先寫清楚）：「只改文字」recompose 路徑的
+`is_ai` 是前端回傳值，後端沒有重算。** 十點不一樣的 `background_is_ai`／
+`background_right_is_ai`、YT 封面 `editor_yt_cover` 裡 `if ai_title and
+req.background_image_base64:` 那支的 `is_ai = req.background_is_ai`，兩者都是
+「前端把上一輪回應原樣帶回來」，不是後端從實際圖檔重新判定的。這個信任模型
+**不是 F43 新引入的**——「AI示意圖」標籤在 F43 之前就已經靠這個值決定要不要畫；
+F43 讓同一個值多背了一個更重的責任：以前值錯只會讓「AI示意圖」漏標（消極的
+遺漏），現在值錯還會讓「畫面來源：○○○」被貼上去（積極宣稱這張圖沒被動過，
+等於對觀眾說謊）。**沒有修**，原因：這是後端內部編輯工具（`verify_internal_
+api_key` 認證），這個值在正常操作下永遠是「前端原樣回傳後端自己在上一輪算出的
+真值」，只有前端本身有 bug 或有人手動兜出不一致的請求序列才會觸發；修法（後端
+從實際位元組重新判定，或改用簽章/不透明 token 取代讓前端自己報）是比這批大的
+改動，不在這次盤點與接線的範圍內，留給下一輪處理 recompose 信任模型時一併看。
+
 ## 故意不接（本批），與原因
 
 ⚠**2026-09-20 補充：`mode="ai"`／`title_mode="ai"` 的保證強度現在依 provider 分岔
