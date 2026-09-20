@@ -2235,7 +2235,7 @@ YT_COVER_DERIVE_SCHEMA = {
 
 EDITOR_FORMATS = {
     DEFAULT_FORMAT: {
-        "label": "預設（現行）",
+        "label": "編輯CG",
         "pipeline": PIPELINE_GENERATE,
         "digest_rules": "",
         "hole_side": None,

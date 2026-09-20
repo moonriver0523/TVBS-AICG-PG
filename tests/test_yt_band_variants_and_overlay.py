@@ -21,6 +21,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from PIL import Image
 
@@ -191,10 +192,15 @@ class VerticalLayoutTests(unittest.TestCase):
                 self.assertLess(abs(main_cx - width / 2), abs(sub_cx - width / 2))
 
     def test_the_two_columns_are_the_same_width(self):
-        """同字級就得同寬，不然窄的那欄字會被 0.94 欄寬的上限壓小。"""
+        """同字級就得同寬，不然窄的那欄字會被 0.94 欄寬的上限壓小。
+
+        2026-09-20（B80）色框寬度改成官方實測值（153px／154px），不是湊出來的偶數，
+        對半分無法整除，容許 1px 差——比對半分本身的捨入誤差還小，看不出來。
+        """
         layout = self._layout()
-        self.assertEqual(layout["main"][2] - layout["main"][0],
-                         layout["sub"][2] - layout["sub"][0])
+        main_w = layout["main"][2] - layout["main"][0]
+        sub_w = layout["sub"][2] - layout["sub"][0]
+        self.assertLessEqual(abs(main_w - sub_w), 1)
 
     def test_the_two_columns_touch_and_form_one_box(self):
         """同一個色框不拆開：兩欄之間沒有縫，box 就是兩欄的聯集。"""
@@ -220,25 +226,33 @@ class VerticalLayoutTests(unittest.TestCase):
         self.assertLess(len(layout["main_cells"]), most)
         self.assertLess(layout["pitch"] * len(layout["main_cells"]), layout["column_height"])
 
-    def test_the_geometry_matches_the_screenshot_within_a_percent(self):
-        """ref1（718×404）：直標 x 19..77、y 67..358。換算成比例要對得上。"""
+    def test_the_geometry_matches_the_official_artwork(self):
+        """2026-09-20（B80）：色框幾何改成官方底圖的常數比例，不再由標題格數反推。
+        上緣／高度是官方口頭量測的數字（171/1063、485/1063）；左緣／寬度官方口頭
+        給的是「LIVE 章與色框合在一起」的外框（31/189），實測色框本身其實內縮、
+        更窄（48/153，見 compose.py VSTRIP_BG_BOX_LEFT_RATIO 的註解），這裡用實測值，
+        不是官方口頭數字。容許 0.003 的捨入誤差。"""
         width, height = compose.YT_CANVAS
         layout = self._layout(title_side="left")
-        strip_x0, strip_x1 = layout["sub"][0], layout["main"][2]
-        self.assertAlmostEqual(strip_x0 / width, 19 / 718, delta=0.006)
-        # 2026-09-09 使用者要求「兩行之間的行距縮小」：欄寬改由字級推導，整組比截圖窄。
-        # 外緣不動，右緣只驗「不寬於截圖的 19+32×2」與「還放得下字」。
-        self.assertLessEqual(strip_x1 / width, 83 / 718 + 1e-9)
-        self.assertGreater(strip_x1, strip_x0)
-        # 2026-09-09：色框不再貼著 LIVE 章往下長，而是在可用範圍內置中偏上，
-        # 所以上緣一定低於截圖的 67/404，但仍在 LIVE 章之下、可用範圍之內。
-        self.assertGreaterEqual(layout["main"][1] / height, 67 / 404 - 0.006)
-        self.assertGreater(layout["main"][1], layout["live"][3])
-        # 總長度有硬上限（VSTRIP_COLUMN_MAX_RATIO），底緣不得破可用範圍下緣
-        self.assertLessEqual(layout["main"][3] / height, compose.VSTRIP_BOTTOM_MAX_RATIO + 1e-9)
-        self.assertLessEqual(
-            layout["column_height"] / height, compose.VSTRIP_COLUMN_MAX_RATIO + 1e-9
-        )
+        box = layout["box"]
+        self.assertAlmostEqual(box[0] / width, 48 / 1914, delta=0.003)
+        self.assertAlmostEqual(box[1] / height, 171 / 1063, delta=0.003)
+        self.assertAlmostEqual((box[2] - box[0]) / width, 153 / 1914, delta=0.003)
+        self.assertAlmostEqual((box[3] - box[1]) / height, 485 / 1063, delta=0.003)
+        # 色框長度是常數了，跟標題格數無關——短標題與長標題量出來要一樣。
+        short = self._layout(title_side="left", main_title="川普宣布關稅", sub_title="")
+        self.assertEqual(short["box"], box)
+
+    def test_the_labelled_geometry_matches_the_official_artwork(self):
+        """同上，有小標版的色框實測左緣／寬度是 37/154，不是官方口頭給的合體框
+        19/194（那個是 LIVE 章＋白底小標的外框，見 compose.py 註解）。"""
+        width, height = compose.YT_CANVAS
+        layout = self._layout(title_side="left", variant="original_audio")
+        box = layout["box"]
+        self.assertAlmostEqual(box[0] / width, 37 / 1905, delta=0.003)
+        self.assertAlmostEqual(box[1] / height, 213 / 1070, delta=0.003)
+        self.assertAlmostEqual((box[2] - box[0]) / width, 154 / 1905, delta=0.003)
+        self.assertAlmostEqual((box[3] - box[1]) / height, 489 / 1070, delta=0.003)
 
     def test_the_strip_sits_on_the_side_it_was_told_to(self):
         width = compose.YT_CANVAS[0]
@@ -256,17 +270,19 @@ class VerticalLayoutTests(unittest.TestCase):
                 self.assertLess(labelled["live"][1], plain["live"][1])
                 self.assertGreater(labelled["label"][3], labelled["label"][1])
 
-    def test_the_box_keeps_a_gap_below_the_live_badge_and_the_label(self):
-        """2026-09-08 使用者：直標頂部跟 LIVE 章靠太近，頂上兩個字快被吃掉。
-        色框上緣要在 LIVE 章（有小標時是小標）底下留一段空隙。"""
-        height = compose.YT_CANVAS[1]
-        gap = round(height * compose.VSTRIP_TOP_GAP_RATIO)
+    def test_the_box_has_zero_gap_below_the_live_badge_and_the_label(self):
+        """2026-09-20（B46 隨 B80 一起改）：舊版留一道 VSTRIP_TOP_GAP_RATIO 的安全縫，
+        是因為色框曾經貼著 LIVE 章往下長、字級一大就會吃到章。改用官方底圖之後，
+        LIVE 章／小標／色框是同一份美術的三個固定區塊，天生貼合——沒勾小標時 LIVE
+        與標題要黏合，正是 B46 的裁決；不再留任何安全縫。"""
         for variant in compose.VSTRIP_VARIANTS:
             with self.subTest(variant=variant):
                 layout = self._layout(variant=variant)
-                stack_bottom = layout["label"][3] if variant in compose.VSTRIP_VARIANT_LABELS                     else layout["live"][3]
-                self.assertGreaterEqual(layout["box"][1] - stack_bottom, gap)
-                self.assertGreaterEqual(gap, 10, "空隙小到看不出來")
+                if variant in compose.VSTRIP_VARIANT_LABELS:
+                    self.assertEqual(layout["live"][3], layout["label"][1], "LIVE 章與小標之間有縫")
+                    self.assertEqual(layout["label"][3], layout["box"][1], "小標與色框之間有縫")
+                else:
+                    self.assertEqual(layout["live"][3], layout["box"][1], "LIVE 章與色框之間有縫")
 
     def test_the_plain_variant_has_no_label_box(self):
         layout = self._layout(variant="normal")
@@ -282,15 +298,27 @@ class VerticalLayoutTests(unittest.TestCase):
         with self.assertRaises(compose.ComposeError):
             compose.yt_vertical_layout(main_title="")
 
-    def test_the_longest_allowed_pair_still_fits_above_the_minimum_pitch(self):
-        """字數上限跟最小字級是兩條規則，撞在一起就會出現「合法字數卻畫不出來」。"""
+    def test_the_longest_allowed_pair_still_fits_above_the_font_floor(self):
+        """字數上限（12／14 格）跟字級下限（0.030h＝32px@1080）是兩條獨立規則，2026-09-20
+        使用者裁決色框長度變常數之後，兩者剛好卡在邊界上——副標 14 格是最擠的情況，
+        算出來的字級四捨五入正好等於下限，一點餘裕都沒有（見 compose.py 模組開頭
+        VSTRIP_MIN_FONT_RATIO 的註解），所以直接驗 cell_size，不要驗會被浮點誤差
+        坑到的 column_height/格數。"""
         layout = compose.yt_vertical_layout(
             main_title="一" * compose.VSTRIP_MAIN_MAX_CELLS,
             sub_title="一" * compose.VSTRIP_SUB_MAX_CELLS,
         )
-        floor = compose.YT_CANVAS[1] * compose.VSTRIP_MIN_PITCH_RATIO
-        for key in ("main", "sub"):
-            self.assertGreaterEqual(layout["column_height"] / len(layout[f"{key}_cells"]), floor)
+        floor = round(compose.YT_CANVAS[1] * compose.VSTRIP_MIN_FONT_RATIO)
+        self.assertGreaterEqual(layout["cell_size"], floor)
+
+    def test_one_cell_more_than_the_floor_allows_is_refused(self):
+        """規格上限本身（VSTRIP_SUB_MAX_CELLS=14）已經卡在字級下限上——這裡直接餵一個
+        超過上限的格數（繞過格數檢查用內部函式），確認擠爆下限時是 ComposeError，
+        不是默默吐一個比下限還小的字。"""
+        oversized = "一" * (compose.VSTRIP_SUB_MAX_CELLS + 4)
+        with mock.patch.object(compose, "VSTRIP_SUB_MAX_CELLS", compose.VSTRIP_SUB_MAX_CELLS + 4):
+            with self.assertRaises(compose.ComposeError):
+                compose.yt_vertical_layout(main_title=MAIN, sub_title=oversized)
 
 
 class VerticalCanvasTests(unittest.TestCase):
@@ -332,17 +360,25 @@ class VerticalCanvasTests(unittest.TestCase):
                 self.assertEqual(a, 255)
                 self.assertGreater(b, r + 25, "欄底色不是藍的")
 
-    def test_the_box_is_one_continuous_colour_across_the_seam(self):
-        """同一個色框：跨過兩欄交界的那一列，顏色連續（沒有縫、沒有兩種藍）。"""
+    def test_the_box_has_no_transparent_gap_across_the_seam(self):
+        """同一個色框：跨過兩欄交界的那一列不准有透明縫。
+
+        2026-09-20（B80）改用官方去背 PNG 當固定層之後，兩欄交界本來就有官方美術
+        自己的一道亮邊（漸層方向對接處），不再是程式畫的單色連續漸層——「顏色連續
+        不超過 3」那條舊斷言驗的是程式畫圖的性質，用官方素材後不成立，改良只驗
+        「沒有透明縫」，這才是這條測試原本要守的紅線（B46/B80 都不准開天窗）。
+        取樣列改在色框垂直中點：官方 PNG 是真實美術，最外緣本來就會有 1～3px 的
+        反鋸齒淡出（縮放貼上時 LANCZOS 又會再柔化一點），那是合理的邊緣，不是縫；
+        真正該驗「沒有縫」的地方是兩欄交界，跟上下邊緣無關，中點最不會被邊緣汙染。
+        """
         img = _vstrip()
         layout = compose.yt_vertical_layout(main_title=MAIN, sub_title=SUB)
-        x0, _, x1, y1 = layout["box"]
-        y = y1 - 3
+        x0, y0, x1, y1 = layout["box"]
+        y = (y0 + y1) // 2
         row = [img.getpixel((x, y)) for x in range(x0, x1)]
-        self.assertTrue(all(px[3] == 255 for px in row), "色框裡有透明縫")
-        for left, right in zip(row, row[1:]):
-            self.assertLessEqual(max(abs(left[i] - right[i]) for i in range(3)), 3,
-                                 "相鄰兩個像素跳色：色框被拆成兩塊")
+        # 門檻用 250 不是 255：官方 PNG 縮放貼上時 LANCZOS 在色框最右緣一行會留一兩個
+        # alpha≈253 的像素（反鋸齒捨入），跟真的開了一條透明縫（alpha 接近 0）差得遠。
+        self.assertTrue(all(px[3] >= 250 for px in row), "色框裡有透明縫")
 
     def test_both_titles_are_drawn_at_the_same_glyph_size(self):
         """兩行直標字級一樣大：拿同一個字在兩欄各畫一格，墨水高度要一樣。"""
@@ -442,7 +478,10 @@ class VerticalGlyphTests(unittest.TestCase):
             lambda v: 255 if v > 200 else 0)
         box = ink.getbbox()
         self.assertIsNotNone(box, "30 那一格沒畫出東西")
-        self.assertGreater(box[2] - box[0], (x1 - x0) * 0.5,
+        # 2026-09-20（B80）改用固定寬的官方色框之後，欄寬不再由字級反推，比字本身
+        # 寬得多——「墨水寬度要佔欄寬一半」這個舊門檻已經量不出「橫著寫」，改驗
+        # 墨水本身的長寬比：橫著寫的「30」一定比高還寬，直著拆成兩格就會反過來。
+        self.assertGreater(box[2] - box[0], box[3] - box[1],
                            "30 沒有橫著佔滿格寬，可能被排成上下兩格")
 
     def test_a_latin_run_is_one_cell_so_the_column_does_not_get_longer(self):

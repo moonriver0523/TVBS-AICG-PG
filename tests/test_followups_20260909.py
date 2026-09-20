@@ -287,7 +287,14 @@ if __name__ == "__main__":
 
 
 class VstripShorterTests(unittest.TestCase):
-    """直標縮短（2026-09-09 使用者：太長、上下貼邊、字級與行距都要縮）。"""
+    """直標縮短（2026-09-09 使用者：太長、上下貼邊、字級與行距都要縮）。
+
+    2026-09-20（B80）使用者改裁甲案：色框改用官方底圖當固定層，色框的位置／尺寸
+    從此是**常數**，不再由標題格數／Logo 位置反推——「縮短」這件事全部轉嫁到字級
+    上（見 compose.py 的 VSTRIP_MIN_FONT_RATIO），色框本身不再有「浮動」「縮短」
+    這些動作。以下測試從「驗證色框會動」改成「驗證色框不會動」，紅線沒變（長標題
+    不准把色框撐到貼邊），只是達成的手段換了。
+    """
 
     LONG_MAIN = "明早晚涼中午破30度"
     LONG_SUB = "北臺灣週三轉濕涼留意日夜溫差"
@@ -297,52 +304,43 @@ class VstripShorterTests(unittest.TestCase):
         kw.setdefault("sub_title", self.LONG_SUB)
         return compose.yt_vertical_layout(**kw)
 
-    def test_the_column_can_never_run_the_whole_height(self):
-        """最長的標題也不准從上緣長到下緣——那正是使用者說的「上下都貼邊」。"""
+    def test_the_column_height_is_a_constant_regardless_of_title_length(self):
+        """B80 裁決：色框長度是常數。最長合法標題與最短標題量出來的欄高要一樣
+        ——不再是「最長的標題也不准撐爆」，而是「標題長度根本影響不到欄高」。"""
+        long_layout = self._layout(title_side="left")
+        short_layout = compose.yt_vertical_layout(main_title="川普宣布關稅", sub_title="美股應聲下挫")
+        self.assertEqual(long_layout["column_height"], short_layout["column_height"])
+        self.assertEqual(long_layout["box"], short_layout["box"])
+        # 底緣離畫布底至少留一成，這條紅線沒變
         height = compose.YT_CANVAS[1]
-        for kw in ({}, {"variant": "original_audio"}, {"logo_corner": "bl"}):
-            with self.subTest(**kw):
-                layout = self._layout(title_side="left", **kw)
-                self.assertLessEqual(
-                    layout["column_height"] / height,
-                    compose.VSTRIP_COLUMN_MAX_RATIO + 1e-9,
-                )
-                # 底緣離畫布底至少留一成
-                self.assertLess(layout["box"][3] / height, 0.90)
+        self.assertLess(long_layout["box"][3] / height, 0.90)
 
-    def test_the_block_floats_instead_of_hanging_from_the_top(self):
-        """色框上緣不再釘死在 VSTRIP_TOP_RATIO：短標題會往下浮。"""
-        height = compose.YT_CANVAS[1]
+    def test_the_block_position_does_not_depend_on_the_title(self):
+        """色框上緣是官方底圖的常數比例，短標題、長標題都貼在同一個位置——
+        不再是「短標題會往下浮」。"""
         short = compose.yt_vertical_layout(main_title="川普宣布關稅", sub_title="美股應聲下挫")
-        self.assertGreater(short["box"][1] / height, compose.VSTRIP_TOP_RATIO)
-        # 但永遠在 LIVE 章之下
-        self.assertGreater(short["box"][1], short["live"][3])
+        long_ = self._layout(title_side="left")
+        self.assertEqual(short["box"][1], long_["box"][1])
+        # 仍然永遠在 LIVE 章之下（B46 起是零縫黏合，不是留一段距離）
+        self.assertEqual(short["box"][1], short["live"][3])
 
-    def test_column_width_follows_the_font_size(self):
-        """行距＝欄寬。字級縮了欄寬要跟著縮，否則兩行之間的空白反而變大。"""
+    def test_column_width_is_a_constant_not_derived_from_the_font_size(self):
+        """B80 起欄寬＝色框寬度對半分，是常數；字級縮了是格距／字級的事，欄寬不變。
+        2026-09-09 那版「行距＝欄寬、字級縮欄寬跟著縮」的關係已經被固定寬度取代。"""
         long_title = self._layout(title_side="left")
         short = compose.yt_vertical_layout(main_title="川普宣布關稅", sub_title="美股應聲下挫")
-        self.assertLess(long_title["cell_size"], short["cell_size"])
+        self.assertLess(long_title["cell_size"], short["cell_size"], "長標題字級仍然要比較小")
         wide = lambda layout: layout["main"][2] - layout["main"][0]  # noqa: E731
-        self.assertLess(wide(long_title), wide(short))
-        for layout in (long_title, short):
-            self.assertEqual(
-                wide(layout),
-                max(1, round(layout["cell_size"] * compose.VSTRIP_COLUMN_WIDTH_EM)),
-            )
+        self.assertEqual(wide(long_title), wide(short), "欄寬不再隨字級變動")
 
-    def test_font_is_smaller_than_the_old_fixed_column(self):
-        """舊版欄寬固定 0.0445w≈85px、格距 0.080h；縮小後兩者都要變小。"""
-        width, height = compose.YT_CANVAS
-        layout = self._layout(title_side="left")
-        self.assertLess(layout["main"][2] - layout["main"][0], round(width * 0.0445))
-        self.assertLess(layout["pitch"], height * 0.080)
-
-    def test_logo_bottom_corner_on_the_same_side_shortens_the_column(self):
+    def test_logo_bottom_corner_on_the_same_side_no_longer_shortens_the_column(self):
+        """B80 裁決：色框長度是常數，不會再因為同側下角有 Logo 而縮短——但仍然不准
+        壓到 Logo（1080p 下色框底緣約 0.62h，同側下角 Logo 約 0.98h，理論上碰不到，
+        由 yt_vertical_layout 裡的防呆負責兜底，見 compose.py 的 same_side_bottom）。"""
         free = self._layout(title_side="left", logo_corner="tr")
         clashing = self._layout(title_side="left", logo_corner="bl")
-        self.assertLess(clashing["box"][3], clashing["logo"][1])
-        self.assertLessEqual(clashing["box"][3], free["box"][3])
+        self.assertLess(clashing["box"][3], clashing["logo"][1], "色框壓到同側下角的 Logo")
+        self.assertEqual(clashing["box"][3], free["box"][3], "色框長度不該因為 Logo 位置改變")
 
     def test_logo_top_corner_on_the_same_side_is_still_refused(self):
         for side, corner in (("left", "tl"), ("right", "tr")):
