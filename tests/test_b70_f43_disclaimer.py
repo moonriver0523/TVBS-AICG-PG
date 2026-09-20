@@ -27,8 +27,19 @@ os.environ.setdefault("NEWS_IMAGE_API_KEY", "test-internal-key")
 import compose  # noqa: E402
 import main  # noqa: E402
 import news_prompt  # noqa: E402
+import photo_lookup  # noqa: E402
 import safe_area_spec  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 from PIL import Image  # noqa: E402
+
+client = TestClient(main.app)
+PHOTO = photo_lookup.ReferencePhoto(
+    image_base64="QUJD",
+    mime_type="image/jpeg",
+    image_url="https://upload.wikimedia.org/x.jpg",
+    source_page="https://zh.wikipedia.org/wiki/%E6%9F%90%E4%BA%BA",
+    lang="zh",
+)
 
 
 def png_base64(width: int, height: int, colour=(40, 60, 90)) -> str:
@@ -398,6 +409,74 @@ class RealWorldRulesNoLongerAskTheModelToSelfDrawTheLabelTests(unittest.TestCase
             text = f.read()
         self.assertIn("do not draw a 示意圖 label yourself", text)
         self.assertIn("do not draw the 示意圖 label yourself either", text)
+
+
+class WebImageGenerateEndToEndRegressionTests(unittest.TestCase):
+    """2026-09-20 使用者複查點名的回歸：網頁版 /api/images/generate 這條路（不是
+    LINE 的 generate_news_image）曾經完全沒有貼上「示意圖」——prompt 已經告訴
+    模型「不要自己畫」，但 apply_portrait_to_image_request() 從沒設過
+    disclaimer_kind，後貼那半沒被叫到，兩邊斷開＝標籤整個消失，而這正是網頁版
+    編輯日常在用的那條路。
+
+    這裡打真正的 HTTP 端點（不是直接呼叫 Python 函式），帶 portrait_subjects，
+    斷言成品上真的貼了「示意圖」——不只是 disclaimer_kind 這個中繼欄位對了。
+    """
+
+    def _headers(self) -> dict:
+        return {"X-API-Key": os.environ["NEWS_IMAGE_API_KEY"]}
+
+    def test_named_portrait_via_web_endpoint_gets_the_stamped_label(self):
+        raw = main.ImageGenerateResponse(
+            image_data_base64=png_base64(1280, 720), mime_type="image/png", model="fake-model",
+        )
+        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO), patch.object(
+            main, "supports_reference_image", return_value=True
+        ), patch.object(main, "generate_image_raw", return_value=raw):
+            res = client.post(
+                "/api/images/generate",
+                json={"prompt": "一張新聞圖", "provider": "gpt", "portrait_subjects": ["某人"]},
+                headers=self._headers(),
+            )
+        self.assertEqual(res.status_code, 200, res.text)
+        data = res.json()
+        with Image.open(io.BytesIO(base64.b64decode(data["image_data_base64"]))) as img:
+            self.assertEqual(img.size, (1280, 720))
+            # 底片背景是純色 (40,60,90)；貼字底板是半透明黑（見
+            # PORTRAIT_DISCLAIMER_PLATE_FILL），錨點釘死在安全區右下角減去 HOLE_INSET
+            # （不論文字寬度，這個角落必定被底板蓋到——見 compose._disclaimer_box：
+            # right=x1-inset、bottom=y1-inset 是 kind="ai" 時該格底板的右下角本身）。
+            x0, y0, x1, y1 = safe_area_spec.safe_rect(
+                *img.size, safe_area_spec.REPORTER_PROFILE
+            )
+            inset = compose._scaled_pixel(compose.HOLE_INSET, img.size[1])
+            corner_pixel = img.convert("RGB").getpixel((x1 - inset - 2, y1 - inset - 2))
+        background_pixel = (40, 60, 90)
+        self.assertLess(
+            sum(corner_pixel), sum(background_pixel) * 0.85,
+            f"右下角底板錨點像素 {corner_pixel} 沒有比純色底片 {background_pixel} 暗，標籤可能沒貼上",
+        )
+
+    def test_named_portrait_via_web_endpoint_sets_disclaimer_kind_upstream(self):
+        """中繼欄位也順帶釘住：apply_portrait_to_image_request 產出的
+        disclaimer_kind 一路帶到 generate_image_raw 收到的請求上。"""
+        captured = {}
+
+        def fake_raw(req):
+            captured["disclaimer_kind"] = req.disclaimer_kind
+            return main.ImageGenerateResponse(
+                image_data_base64=png_base64(1280, 720), mime_type="image/png", model="fake-model",
+            )
+
+        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO), patch.object(
+            main, "supports_reference_image", return_value=True
+        ), patch.object(main, "generate_image_raw", side_effect=fake_raw):
+            res = client.post(
+                "/api/images/generate",
+                json={"prompt": "一張新聞圖", "provider": "gpt", "portrait_subjects": ["某人"]},
+                headers=self._headers(),
+            )
+        self.assertEqual(res.status_code, 200, res.text)
+        self.assertEqual(captured["disclaimer_kind"], "ai")
 
 
 if __name__ == "__main__":

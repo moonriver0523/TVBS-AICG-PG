@@ -29,11 +29,28 @@ F43 的規則很簡單：「圖是 AI 生成／被 AI 改過 → 標『示意圖
 
 ## 故意不接（本批），與原因
 
+⚠**2026-09-20 補充：`mode="ai"`／`title_mode="ai"` 的保證強度現在依 provider 分岔
+（B55 修法甲），不是單一結論，兩條 provider 分開講：**
+
+- **`provider=="gemini"`**：走舊的差異遮罩（`compose.restore_photo_outside_title_band`／
+  `restore_yt_cover_photo`），模型仍整張重畫，只是事後用逐通道差異把字帶以外的
+  像素「盡量」還原成原圖——這是機率性的補救，不是保證。2026-09-16 實拍量到這條路
+  `change_ratio` 常態超標（見帳本 B55），**功能等同不可用**，不构成任何保證。
+- **`provider=="gpt"`**：走透明底標題圖層（`transparent_mode`）——模型只回一張透明底
+  的標題圖層，再用 `compose.overlay_title_layer_over_cover_band`／
+  `overlay_title_layer_over_yt_cover` **逐像素**疊到 base 上，base 本身完全不經過
+  模型。這條路架構上**確實可以做到跟 composite 模式同一等級的像素保證**——但
+  **現在還不能依賴**：使用者複查已確認三道閘有兩個活著的漏洞（alpha≤16 的薄層可以
+  穿過去染到保護區；全透明輸入會三道全過、回傳一張沒有標題的原圖），`ladder` 正在
+  修 `compose.py`。**等這兩個漏洞修好且驗收過，`provider=="gpt"` 的 `mode="ai"`／
+  `title_mode="ai"`＋單張原圖放置這條路就有機會納入 F43**，是本批之後最有機會
+  「原來不能接、變成能接」的一條路，不是要重新盤點整個判準。
+
 | 版型 | 為什麼不接 | 依賴 |
 |---|---|---|
-| 十點不一樣，`mode="ai"`（含附了原圖當參考） | `COVER_AI_PROMPT_TEMPLATE`／`COVER_AI_FULL_PROMPT_TEMPLATE` 要求模型畫「整張」照片，即使附了 asis 參考圖，那張圖也只是生圖的輸入之一，成品像素是模型重繪的。B55 已經加了逐通道差異防呆（`compose.restore_photo_outside_title_band`／`PHOTO_PROTECT_MAX_CHANGE_RATIO`），但 **狀態是「已實作待實拍驗收」，門檻值還沒實拍調過**（見 MASTER-列管清單.md B55）。這批選擇不依賴一個自己都還沒驗收過的保證。 | **B55**（`ladder` 代理同批在動，見下方「與 ladder 的關係」） |
+| 十點不一樣，`mode="ai"`（含附了原圖當參考） | 見上方 provider 分岔說明；`provider="gemini"` 是機率性補救、`provider="gpt"` 架構上可行但閘門有已知活漏洞，兩者都不到「程式保證」的門檻。 | **B55**（`ladder` 代理同批在動，見下方「與 ladder 的關係」） |
 | YT 封面（news／hourly／hot／live24），所有 layout | `_yt_cover_background` 對 asis 圖（`compose.crop_background_16x9`／`compose.split_backgrounds`）回傳 `is_ai=False`，理論上跟十點不一樣同一等級的保證，**技術上可以比照十點不一樣的做法接**。這批沒接純粹是時間分配：先把十點不一樣一種版型做完整、測完整，比兩種版型都做一半更安全。函式與參數名稱見下方「下次要接的話」。 | 無（跟 B55／B78／B79 無關，純粹沒排進這批） |
-| YT 封面 `title_mode="ai"` | 同「十點不一樣 mode=ai」，整張交給模型畫，即使有 asis 附圖也不保證。 | 同上，B55 的保護目前只包在十點不一樣，YT 封面這條路完全沒有保護機制。 |
+| YT 封面 `title_mode="ai"` | 同「十點不一樣 mode=ai」——B55 YT 擴充也是同一套 provider 分岔（`main.py:7958` 附近的 `transparent_mode`），結論同上一列。 | 同上，B55 的兩個閘門漏洞。 |
 | 一般新聞圖／播出鏡面（`/api/images/generate`、`/api/news-image`） | 這條線本來就沒有「原圖直接上版」的概念——每一張都是生圖模型畫出來的，沒有 asis 這種東西可言。不適用 F43，維持只有 B70 的「AI示意圖」邏輯。 | 無 |
 
 ## 與 `ladder` 代理的關係

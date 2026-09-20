@@ -333,6 +333,7 @@ NAMED REAL PERSON — USER-SUPPLIED PORTRAIT REFERENCE (CRITICAL)
 - When the layout shows more than one named person, match each face to the correct person: use the resemblance between the attached photographs and the name labels, and never swap likenesses between people.
 - Draw a recognisable face ONLY for a person whose photograph is attached. Any named real person WITHOUT an attached photograph must still be shown as a back view or a plain silhouette — never invent or approximate a face for them.
 - Take only each person's likeness from the photographs. Pose, attire, framing and surroundings follow STRUCTURE, not the photographs' own backgrounds or occasions.
+- Do NOT draw any 示意圖, AI示意圖 or 來源 label yourself, and do not plan one into VARIABLE FIELDS either — software stamps the disclaimer afterwards at the lower-right corner of the frame, outside your layout, because this is still an illustrated depiction of the person rather than their actual photograph. Keep that corner clear of every portrait, essential wording and busy detail so the stamped label does not land on top of anything you drew.
 - Never place a person in a scene, action or context that STRUCTURE does not describe."""
 
 USER_REFERENCE_ASIS_RULES = """==================================================

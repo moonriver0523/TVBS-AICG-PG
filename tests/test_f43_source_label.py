@@ -136,10 +136,13 @@ class TenCoverFullEndpointSourceLabelTests(unittest.TestCase):
         self.assertEqual(data["source_left"], "")
 
     def test_pure_ai_mode_ignores_source_left_even_with_asis(self):
-        """mode="ai"：即使附了原圖，那張圖只是生圖參考，成品像素仍是模型重繪的
-        （B55 的保護機制截至本批仍待實拍驗收，不可依賴）——這條路一律不接 F43。
-        B55 的逐通道差異防呆不是本測試要驗的東西，patch 掉讓它單純直通，
-        只驗證 source_left 有沒有被忽略。"""
+        """mode="ai"：即使附了原圖，那張圖只是生圖參考，成品像素仍是模型重繪的——
+        這條路一律不接 F43。B55 修法甲（2026-09-20）把 provider="gpt" 的保護路徑
+        換成透明底標題圖層（三道閘，見 compose.overlay_title_layer_over_cover_band），
+        不是本測試要驗的東西；改用 provider="gemini" 走舊的差異遮罩路徑
+        （compose.restore_photo_outside_title_band），patch 掉讓它單純直通，只驗證
+        source_left 有沒有被忽略——像素保證的機制細節見
+        docs/f43-source-label-inventory.md。"""
         def fake_raw(image_req):
             return main.ImageGenerateResponse(
                 image_data_base64=base64.b64encode(
@@ -153,7 +156,7 @@ class TenCoverFullEndpointSourceLabelTests(unittest.TestCase):
         ), patch.object(
             compose, "restore_photo_outside_title_band", side_effect=lambda base_png, ai_png, **kw: ai_png
         ):
-            res = self._post(mode="ai", source_left="美聯社")
+            res = self._post(mode="ai", provider="gemini", source_left="美聯社")
         self.assertEqual(res.status_code, 200, res.text)
         self.assertEqual(res.json()["source_left"], "")
 

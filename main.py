@@ -4830,6 +4830,11 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
         if mode == "entry_only":
             _record_portrait_notice(portrait_entry_only_notice(subjects))
         block = PORTRAIT_MODES.get(mode, "")
+        # 網頁版專用路徑的 B70 缺陷（2026-09-20 使用者複查點名）：這支函式從沒呼叫過
+        # resolve_image_disclaimer，disclaimer_kind 永遠是空字串——prompt 已經告訴
+        # 模型「不要自己畫、軟體會壓」，但軟體那半從沒被叫到，兩邊斷開＝標籤整個消失。
+        # LINE 路徑（generate_news_image）另外呼叫這支函式，沒有這個洞。
+        disclaimer_kind, _ = resolve_image_disclaimer(mode)
         prompt = req.prompt
         if block and block not in prompt:
             prompt = f"{prompt.rstrip()}\n\n{block}"
@@ -4843,6 +4848,7 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
             prompt == req.prompt
             and reference == req.reference_image_data_url
             and portrait_urls == list(req.portrait_reference_data_urls)
+            and disclaimer_kind == req.disclaimer_kind
         ):
             return req
         return req.model_copy(
@@ -4850,6 +4856,7 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
                 "prompt": prompt,
                 "reference_image_data_url": reference,
                 "portrait_reference_data_urls": portrait_urls,
+                "disclaimer_kind": disclaimer_kind,
             }
         )
 
@@ -4865,13 +4872,22 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
                 "請補上他們的照片，或重新消化讓版面不要畫他們。"
             ),
         )
+    # B28 例外三：即使使用者親自上傳肖像照，具名真人仍要標「示意圖」——這裡走到
+    # 這一步代表每一位都湊到照片了（自己上傳或自動查到），一定會畫出具名真人的臉，
+    # 不受「有上傳就不標」的一般原則影響（見 apply_user_references_to_image_request
+    # 的「例外三」與 USER_REFERENCE_PORTRAIT_RULES 的後貼措辭）。同一個洞：以前這裡
+    # 也從沒設過 disclaimer_kind。
+    disclaimer_kind = "ai"
     if not photos or req.portrait_reference_data_urls:
-        return req
+        if req.disclaimer_kind == disclaimer_kind:
+            return req
+        return req.model_copy(update={"disclaimer_kind": disclaimer_kind})
     return req.model_copy(
         update={
             "portrait_reference_data_urls": [
                 photos[name].data_url() for name in subjects if name in photos
-            ]
+            ],
+            "disclaimer_kind": disclaimer_kind,
         }
     )
 
