@@ -2697,6 +2697,12 @@ VSTRIP_CELL_TIGHT = 0.92             # 字級佔格距（字距約 0.08em）
 # 四捨五入正好卡在 32px，一點餘裕都沒有，所以這條線不能再往上調。
 VSTRIP_MIN_FONT_RATIO = 0.030
 VSTRIP_MIN_PITCH_RATIO = VSTRIP_MIN_FONT_RATIO / VSTRIP_CELL_TIGHT   # 反推的格距下限
+# 2026-09-20 使用者看過樣張後追加：**色框要貼著 LIVE 章（B46），但框裡的字不能貼**——
+# 第一個字原本從色框最頂端起排，看起來直接黏在 LIVE 章下緣。這條是色框內的上內距，
+# 只推文字、不動色框，所以 B46 的零縫不受影響。13px@1080，約等於字級下限的 0.4 個字高，
+# 拉開得出來又不會吃掉太多可用長度。⚠**這段內距會從可用欄高扣掉**，等於字級下限更容易
+# 撞到——計算 pitch 時一律用扣掉內距之後的 column_h，不要拿色框原高去算。
+VSTRIP_TEXT_TOP_PAD_RATIO = 0.012
 VSTRIP_TOP_GAP_RATIO = 0.014         # Logo 與色框最小淨距（同側下角時的防呆，見下方 same_side_bottom）
 VSTRIP_LABEL_FILL = (255, 255, 255)
 VSTRIP_LABEL_TEXT = (208, 20, 30)
@@ -2911,7 +2917,10 @@ def yt_vertical_layout(
     # 兩欄同字級（2026-09-08 裁決不變）：格距由格數多的那欄決定；欄高＝色框高度，
     # B80 起是常數，不再由格數反推——反過來是字級要遷就它，見下面的下限檢查。
     most = max(len(main_cells), len(sub_cells))
-    column_h = box[3] - box[1]
+    # 文字從色框頂端往下讓一點，不要黏在 LIVE 章下緣（2026-09-20 使用者看樣張後指出）。
+    # 色框本身不動，所以 B46 的零縫維持不變。
+    text_top = box[1] + round(height * VSTRIP_TEXT_TOP_PAD_RATIO)
+    column_h = box[3] - text_top
     pitch = column_h / most
     cell_size = max(1, round(pitch * VSTRIP_CELL_TIGHT))
     floor = round(height * VSTRIP_MIN_FONT_RATIO)
@@ -2928,8 +2937,8 @@ def yt_vertical_layout(
     # 右半永遠是主標（比較靠畫面中央那一半）——鏡射成右緣版之後這個關係還是成立
     # （鏡射會把左右反過來，原生右半鏡射後變成新畫面的左半，一樣是比較靠中央那半）。
     half_w = (box[2] - box[0]) // 2
-    sub = (box[0], box[1], box[0] + half_w, box[3])
-    main = (box[0] + half_w, box[1], box[2], box[3])
+    sub = (box[0], text_top, box[0] + half_w, box[3])
+    main = (box[0] + half_w, text_top, box[2], box[3])
     if not sub_cells:
         sub = (sub[0], sub[1], sub[0], sub[1])
 

@@ -90,6 +90,44 @@ def record_status(record: dict) -> str:
     return STATUS_FAILED if status == STATUS_FAILED else STATUS_OK
 
 
+# 2026-09-20（F30／F39 正式站實查）：這是「這筆是不是追加修改」的答案，跟
+# record_type() 回答的「這張圖畫的是什麼內容」是兩件事，不能混在同一欄。正式站
+# 09-18～09-20 91 筆裡追加修改（/api/images/refine，prompt 開頭是
+# IMAGE REFINE RULES）實際有 36 筆，但後台 type 欄只有 1 筆標成 web-refine，
+# 其餘 35 筆都被 `_enrich_archive_fields`／`_recall_digest()` 回填成「使用者最近
+# 一次消化」的內容分類（例如「自動判斷」「資料圖表」）——那個回填對 record_type()
+# 要回答的問題（這張圖的內容分類）是正確的，只是不該拿來判斷「這是不是追加修改」。
+#
+# 用 source 判斷而不是 prompt 前綴：prompt 會被截斷（B29）、也可能改寫，source
+# 是寫入當下就決定、不受任何下游回填影響的欄位，而且從 f24dba1 上線起每一筆都有，
+# 對正式站既有的 360 筆歷史紀錄立刻生效，不需要回溯遷移或新增欄位。
+_REFINE_SOURCES = ("web-refine",)
+_DIGEST_SOURCES = ("digest", "hybrid-digest", "cover-titles")
+
+
+def record_action(record: dict) -> str:
+    """這筆是「新生成」「追加修改」「消化」還是「合成」——見上方模組層級註解。
+
+    `action` 明確帶值時直接採用（目前沒有寫入端會帶，留給未來需要更細分類時用，
+    不必再改這支函式的 fallback 表）；沒帶就照 source 的字面值／前綴推。
+    """
+    action = record.get("action")
+    if action:
+        return str(action)
+    source = str(record.get("source") or "")
+    if source in _REFINE_SOURCES:
+        return "追加修改"
+    if source in _DIGEST_SOURCES:
+        return "消化"
+    if source.startswith("editor-yt-overlay"):
+        # 直標是純 Pillow 壓字（80ms 級），不呼叫生圖模型，耗時／逾時的判斷
+        # 天生就跟其他要打生圖 API 的路徑（十秒到分鐘級）不是同一個量級，
+        # 獨立分類讓後台看得出這兩種母體不能套同一套故障率／逾時門檻
+        # （2026-09-20 正式站實查提醒）。
+        return "合成"
+    return "新生成"
+
+
 def record_cursor(record: dict) -> str:
     return f"{record.get('ts', '')}|{record.get('request_id', '')}"
 
