@@ -154,12 +154,18 @@ class ImageBackendRoutingTests(unittest.TestCase):
     def _run(self, provider):
         return generate_image(ImageGenerateRequest(prompt="p", provider=provider))
 
-    def test_openrouter_backend_maps_gpt_to_gpt_image_2(self):
+    def test_openrouter_backend_maps_gpt_to_the_default_gpt_image_model(self):
+        """OpenRouter 那條要對到與原生同一個 GPT 生圖模型，不可以各走各的。
+
+        這裡刻意不寫死型號：換預設模型時該擋的是「兩條路徑不一致」，
+        而不是逼人每次改型號都來改一次測試（型號本身由 test_image_model_defaults 顧）。
+        """
         os.environ["IMAGE_BACKEND"] = "openrouter"
         os.environ["OPENROUTER_API_KEY"] = "test-or-key"
         os.environ.pop("OPENROUTER_GPT_MODEL", None)
         self._run("gpt")
-        self.assertEqual(self.calls.get("openrouter"), "openai/gpt-image-2")
+        self.assertEqual(self.calls.get("openrouter"), main.OPENROUTER_GPT_IMAGE_MODEL)
+        self.assertTrue(self.calls.get("openrouter", "").startswith("openai/"))
 
     def test_openrouter_backend_maps_gemini_to_pro(self):
         os.environ["IMAGE_BACKEND"] = "openrouter"

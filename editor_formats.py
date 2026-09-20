@@ -1,0 +1,2568 @@
+"""編輯專屬版型的定義表（2026-09-03 使用者需求）。
+
+記者沒有這些需求，這是編輯專有的。三層防呆讓記者不可能誤用：
+  1. 前端：角色不是編輯時，這個下拉根本不顯示
+  2. 前端：切回記者時把選擇重置成 default
+  3. 後端：`role != "編輯"` 時直接忽略這個欄位（見 main.build_digest_instructions）
+
+為什麼不併進現有的「版面形式」下拉：那組（資料圖表／情境示意圖／地圖／3D）在後端是
+一組 strict JSON schema enum，而「AI 自動判斷」就是叫模型**從那組裡自己挑**。把編輯
+專屬項目加進去，等於模型會主動挑給記者——UI 藏得掉，模型挑不掉。
+
+為什麼不另開分頁：編輯的工作流是連貫的（同一則新聞可能先出鏡面、再做封面），
+切分頁很怪；而且新聞原文、指令欄、參考圖、產出區、追加修改全部共用，複製一份
+分頁等於每次改都要改兩處。改成「同一頁、選了格式就換裝輸入區」。
+
+這張表刻意只留後端真正需要的三件事：標籤、走哪條管線、注入哪塊消化規則。
+「鎖哪些開關、顯示哪些輸入欄」純屬介面行為，放在 app.js 的同名表裡。
+"""
+
+import random
+import re
+from dataclasses import asdict, dataclass
+
+# 底色框的百分比要跟合成版同一個數字（見 _BAND_CLAUSE_TEMPLATE）。compose 只在函式
+# 內部反向 import editor_formats，模組層級不成環。
+import compose
+import creativity
+
+DEFAULT_FORMAT = "default"
+
+# 走一般 /api/generate + /api/images/generate；ten_cover 走 /api/editor/cover；
+# yt_live_cover 走 /api/editor/yt-cover
+PIPELINE_GENERATE = "generate"
+PIPELINE_COVER = "cover"
+PIPELINE_YT_COVER = "yt_cover"
+# YT 直播「直標」（2026-09-08 WP3）：不生圖、不打任何模型，純程式畫一張透明底 PNG
+# 疊在直播訊號上，所以自成一條 pipeline，跟三種 YT 封面不是同一件事。
+PIPELINE_YT_OVERLAY = "yt_overlay"
+
+# ============================================================
+# 上傳圖片的用途（2026-09-13 使用者裁決：全站統一成同一組，順序照使用者指定）
+#
+# 這裡是唯一真相源：app.js 的 REF_PURPOSES 照抄一份，由
+# tests/test_ref_upload_module_20260913.py 的 parity 測試釘住（比照 test_prompt_parity）。
+#
+# 刻意用「有序的 (key, label) 陣列」而不是 dict：使用者明確指定了下拉的排列順序，
+# 靠 Python dict 與 JS 物件的鍵序去保證兩邊一致太脆——順序是規格的一部分。
+#
+# asis    ＝原圖放置：原封不動放進成圖，一次生圖 API 都不打
+# aiedit  ＝AI改圖：這張圖當底交給生圖模型重繪成版型風格（2026-09-13 新增）
+# scene   ＝實景參考：場景／建物／器材外觀依附圖
+# portrait＝肖像照片：使用者親自上傳的臉，解除「兩位以上具名真人不畫臉」鐵律
+# map     ＝地圖底稿：地理關係以附圖為準
+REF_PURPOSE_ORDER: list[tuple[str, str]] = [
+    ("asis", "原圖放置"),
+    ("aiedit", "AI改圖"),
+    ("scene", "實景參考"),
+    ("portrait", "肖像照片"),
+    ("map", "地圖底稿"),
+]
+# 預設用途 2026-09-13 由 scene 改成 asis（使用者：「原圖放置(預設)」）。
+# 連帶影響見 docs/plan-20260913-上傳圖片模組化.md：主流程附圖預設變成直接上版，
+# YT 國內外／今日熱搜的張數也就直接決定版面。
+REF_PURPOSE_DEFAULT = "asis"
+REF_PURPOSE_KEYS = tuple(key for key, _ in REF_PURPOSE_ORDER)
+
+# 封面的兩種做法。ai＝整張交給生圖模型（只有 Logo 後製）；
+# composite＝AI 只出兩張無文字底圖、文字全部由 Pillow 畫（見 compose.compose_ten_cover）。
+COVER_MODE_AI = "ai"
+COVER_MODE_COMPOSITE = "composite"
+
+# 十點不一樣的版面。auto＝合併後的版型（依第二標題自動判定，見 resolve_cover_layout）；
+# split／full 是實際生成時只會是這兩個之一的結果值，也是舊呼叫端會明示的值。
+COVER_LAYOUT_SPLIT = "split"
+COVER_LAYOUT_FULL = "full"
+COVER_LAYOUT_AUTO = "auto"
+COVER_LAYOUTS = (COVER_LAYOUT_SPLIT, COVER_LAYOUT_FULL)
+
+# 播出鏡面的兩側。挖空方向 2026-09-08 起由請求欄位決定（見 resolve_hole_side）。
+HOLE_SIDES = ("left", "right")
+
+
+# 播出鏡面：畫面裡要留一塊給後製合成影片。那塊由 compose.apply_broadcast_hole
+# 在置框後**數學貼上**，不靠模型自律（五輪實驗證實模型做不到，見 compose.py 開頭）。
+# 消化端要做的只有一件事：把所有內容趕到另外半邊，別讓模型把重點畫在會被蓋掉的地方。
+#
+# ⚠️ 這段文字裡永遠不得出現任何數字或比例——模型會把數字當文字畫進圖裡
+# （見 docs/error-cases/2026-07-23-像素安全框-分析.md）。位置一律用方位詞描述。
+_BROADCAST_RULES_TEMPLATE = """
+
+BROADCAST INSERT LAYOUT ({side_zh}側留給後製) — OVERRIDES THE LAYOUT SENTENCE ABOVE WHERE THEY CONFLICT:
+1. A WIDE, SHORT rectangle — much wider than it is tall — sitting in the {side_en} half of the frame, centred vertically, is reserved for a video window that is composited in after this image is made. It takes up most of that half's WIDTH but only about half of its HEIGHT, so a clear horizontal strip is left above it and a deeper clear strip is left BELOW it, running the whole way across the frame. It is NOT a tall panel and it does NOT reach the bottom of the frame. Treat the window itself as already occupied.
+2. Put NOTHING there: no text, no headline, no icon, no chart, no figure, no logo, no callout, no decorative element. Whatever you place there will be covered and lost.
+3. The layout sentence above asks for the design to be centred. FOR THIS FORMAT THE BODY IS NOT CENTRED: write into "structure" that the HEADLINE is the ONLY element allowed to span the full width{stamp_span_note} — it runs across the top strip of the frame, above the reserved area, as ONE line (two tightly-leaded lines only if it cannot fit in one), and it must end above the reserved area: nothing of it may hang down beside or into the video window. Every OTHER content block — every card, figure, icon and label — sits in the {opposite_en} half, stacked from top to bottom under the headline, entirely clear of the {side_en} half. THE HEADLINE MUST CARRY THE KEY FIGURE OR THE OUTCOME OF THE STORY, never a bare topic name: a reader who sees only that line should already know what happened.
+4. Keep the reserved area visually calm — plain continuous background, no busy texture, no bright focal point, no face. Say so in "structure".
+{stamp_rules}{point_rules}
+8. Describe positions with direction words only (upper, lower, {side_en}, {opposite_en}, alongside, stacked). NEVER express any position or size as a percentage, pixel count, ratio or number of any kind.
+"""
+
+
+# 第 5／6 條依蓋章開關二選一（2026-09-07 使用者回報：蓋章 OFF 在播出鏡面失效——
+# 這兩條原本無條件要求 <蓋章>，注入順序又在 STAMP_OFF_RULES 之後，把 OFF 壓掉了）。
+#
+# 2026-09-09 使用者回饋：挖空框是 16:9、垂直置中貼在留白半邊，於是那半邊的**最下方**
+# 空了一條橫帶（安全區高的兩成多）什麼都沒有，看起來很怪。第 5 條因此反過來——蓋章
+# 改成橫跨全寬、貼在挖空框底下那條低帶，與同樣跨全寬的標題上下夾住挖空框。
+# 最右下角要留給 apply_broadcast_hole 事後蓋的「示意圖」浮水印。
+_BROADCAST_STAMP_ON = """5. THE CLOSING <蓋章> BANNER RUNS THE FULL WIDTH ALONG THE VERY BOTTOM IN THIS FORMAT. The reserved video window does not reach the bottom of the frame: it is centred vertically, so a clear horizontal strip is left underneath it. Write into "structure" that the stamp banner is a single full-width bar lying in that low strip, BELOW the reserved area, hugging the bottom of the design and spanning from the {side_en} edge across to the {opposite_en} edge — it is the counterweight to the headline, which spans the full width across the top strip. Nothing of the banner may rise up beside or into the video window, and it stays a single line. Keep the extreme lower-RIGHT corner of that banner clear of essential wording: a small mark is added there afterwards. (It is the lower-right corner whichever half is reserved — the mark's position does not mirror.)
+6. "variable" must be exactly one [標題] line, then exactly {count_word} [內文小標] lines, then one <蓋章> line. {count_word_cap} points, no more and no fewer: this format's card stack has {count_word} rows.{density_rules}
+"""
+_BROADCAST_STAMP_OFF = """5. THERE IS NO STAMP BANNER IN THIS GRAPHIC (the user switched it OFF, and that setting wins over every rule above or below that mentions a closing banner). Do NOT write any stamp banner, conclusion strip or closing bar into "structure", and do not put a <蓋章> line in "variable". BUT THE LOW STRIP UNDER THE RESERVED AREA IS STILL FILLED, BY A <底帶> LINE INSTEAD. Leaving that strip empty makes the graphic look unfinished, and it is what the user complained about. Write into "structure" that the <底帶> line is a single bar lying in that low strip, BELOW the reserved area, hugging the bottom of the design and spanning the FULL width from the {side_en} edge across to the {opposite_en} edge — it crosses both halves, exactly like the headline does across the top strip, and the two of them sandwich the video window. It is styled as an ordinary information card like the ones stacked above it, NOT as a coloured stamp and NOT as a closing slogan: it carries a real fact of its own. The remaining cards stay stacked in the {opposite_en} half under the headline. Nothing of it may rise up beside or into the video window, and it stays a single line. Keep the extreme lower-RIGHT corner of it clear of essential wording: a small mark is added there afterwards. (It is the lower-right corner whichever half is reserved — the mark's position does not mirror.)
+6. THIS RULE OVERRIDES THE STAMP-OFF BLOCK ABOVE WHERE THEY DISAGREE ABOUT THE LAST LINE. "variable" must be exactly one [標題] line, then exactly {count_word} [內文小標] lines, then exactly one line beginning with the marker <底帶>. {count_word_cap} points, no more and no fewer: this format's card stack has {count_word} rows, and the <底帶> line is separate from them — it is the bar along the bottom, not one of the rows. Still no <蓋章> line anywhere. The <底帶> line carries an ordinary fact from the material, written short, in the same voice as the cards; it is never a slogan, a sign-off or a repeat of the headline.{density_rules}
+"""
+
+
+# 2026-09-08 使用者回饋 D：字多檔位在播出鏡面無處發揮——第 6 條固定「每卡一句」，
+# 消化再怎麼放寬，卡片還是一行。字多時改成每卡兩行（短標＋數據），卡片數不變。
+#
+# ⚠️ 跟上面同一條鐵律：這段文字裡不得出現任何數字（連 half-width 阿拉伯數字都不行），
+# 長度一律用文字描述（a few characters／a brief phrase）。
+#
+# 2026-09-09 第二輪：使用者說「字多消化後資訊量還是太少，可以放寬資訊卡的數量／
+# 資訊密度／內文字數」。所以字多在播出鏡面除了每卡兩行，卡數也從三張放寬到四張
+# （見 _broadcast_point_count），而且補充那一行的長度不再限制成「brief phrase」。
+_BROADCAST_DENSITY_STANDARD = """ THIS GRAPHIC IS RUNNING AT THE 字多 DENSITY, SO EACH OF THOSE CARDS CARRIES TWO LINES INSTEAD OF ONE: the first line is a short punchy label of only a few characters, and the second line is the supporting figure or detail behind it, written as a full informative clause rather than a bare tag — say what the figure means, not just what it is. Write every [內文小標] as those two parts separated by a full-width vertical bar 「｜」, and say in "structure" that each card stacks its label above its supporting line, the label set larger than the line under it. Fill every card: this density exists because the user asked for MORE information on the graphic, so a card carrying only a couple of characters after the bar is a defect."""
+
+
+# 播出鏡面的卡片張數：字多放寬到四張，其餘檔位維持三張（版面本來就是三列）。
+# ⚠️ 一律用英文數字（three／four），不得寫成阿拉伯數字——見 _BROADCAST_RULES_TEMPLATE
+# 上方的鐵律。
+# 第 3 條的「標題是唯一可以跨全寬的元素」在蓋章 ON 之後不再成立（第 5 條把蓋章條
+# 也放到全寬），兩條會被模型讀成互相衝突，所以 ON 的時候補一句指回第 5 條。
+#
+# 2026-09-09（第三批）使用者：「底下的除了蓋章之外，如果沒有開蓋章，其他資訊還是可以
+# 放底下」。蓋章 OFF 也改成有東西跨全寬（最後一張卡下移到底帶），所以 OFF 同樣要補句。
+#
+# 2026-09-09（第四批）使用者實測蓋章 OFF ＋字多，底部還是空的。第三批只是叫模型「把
+# 最後一張卡下移」——那張卡在 variable 裡跟其他卡長得一模一樣，模型沒有理由把它挑出來，
+# 於是四張一起疊在半邊。蓋章 ON 之所以做得到，是因為 <蓋章> 是 variable 裡一個**看得見
+# 的標記**。所以這一版比照辦理，給底帶自己的標記 <底帶>，並在 main 端做確定性兜底
+# （ensure_bottom_band_line）：模型漏寫就把最後一張卡升級成底帶。
+# 同一批也修第 1 條——挖空框其實是 16:9 的寬扁視窗（compose.apply_broadcast_hole），
+# 舊句「filling most of the half」讓模型畫成整片高牆，底下那條帶根本不存在。
+# 使用者同時開放底帶跨版（「就像標題可跨版」），第 5 條照這個寫。
+_BROADCAST_STAMP_SPAN_NOTE = " (the closing <蓋章> banner is the one other full-width element — rule five lays it along the very bottom, under the reserved area)"
+_BROADCAST_NO_STAMP_SPAN_NOTE = " (the <底帶> line is the one other full-width element — rule five lays it along the very bottom, under the reserved area, and it may cross both halves)"
+
+
+# 蓋章 OFF 時，播出鏡面底帶那一行的標記（2026-09-09 第四批）。與 <蓋章> 平行：
+# 有標記，模型才挑得出哪一行要放到底下那條橫帶。
+BROADCAST_BOTTOM_MARKER = "底帶"
+
+
+def _broadcast_point_count(density: str | None) -> dict:
+    word = "four" if density in ("standard", "maximum") else "three"
+    return {"count_word": word, "count_word_cap": word.capitalize()}
+
+# 第 7 條跟著第 6 條一起換檔（2026-09-08 第二輪）：字多時第 6 條要求每卡兩行，
+# 第 7 條若還寫「一句短事實」，兩條就會被模型讀成互相衝突。字少／不改字維持原句。
+_BROADCAST_POINT_RULE_DEFAULT = """7. Each [內文小標] line is one short scannable fact. Wrap the figure or the key phrase of each line in angle brackets so it can be highlighted."""
+_BROADCAST_POINT_RULE_STANDARD = """7. Each [內文小標] is written as the two parts rule six describes — 短標｜補充細節 — joined by a full-width vertical bar 「｜」. The 短標 part before the bar is one short scannable fact; the 補充細節 part after it carries the supporting data or detail behind that fact. Wrap the figure or the key phrase in angle brackets so it can be highlighted, and put those angle brackets in the 短標 part."""
+
+
+def _broadcast_rules(
+    side: str, stamp: bool | None = None, density: str | None = None
+) -> str:
+    left = side == "left"
+    # 字超多沿用字多的版面加碼（四張卡、每卡兩行）：卡片列數是版面實體限制，不隨密度長。
+    standard = density in ("standard", "maximum")
+    stamp_block = _BROADCAST_STAMP_OFF if stamp is False else _BROADCAST_STAMP_ON
+    return _BROADCAST_RULES_TEMPLATE.format(
+        stamp_rules=stamp_block.format(
+            density_rules=_BROADCAST_DENSITY_STANDARD if standard else "",
+            side_en="left" if left else "right",
+            opposite_en="right" if left else "left",
+            **_broadcast_point_count(density),
+        ),
+        point_rules=(
+            _BROADCAST_POINT_RULE_STANDARD if standard else _BROADCAST_POINT_RULE_DEFAULT
+        ),
+        side_zh="左" if left else "右",
+        side_en="left" if left else "right",
+        opposite_en="right" if left else "left",
+        stamp_span_note=(
+            _BROADCAST_NO_STAMP_SPAN_NOTE if stamp is False else _BROADCAST_STAMP_SPAN_NOTE
+        ),
+    )
+
+
+# 十點不一樣封面：AI 只出**無文字**底圖，節目名／Logo／日期／標籤／兩邊標題全部
+# 由 compose.compose_ten_cover 畫。所以這裡完全不經過消化——使用者直接給兩個標題。
+COVER_VISUAL_FULL_PROMPT_TEMPLATE = """Generate a text-free broadcast news cover background photo.
+
+Subject:
+{visual}
+
+Requirements:
+- 16:9 horizontal, photographic, broadcast news quality, dramatic lighting.
+- ABSOLUTELY NO text, no numbers, no letters, no captions, no logos, no watermarks, no signage, no readable writing of any kind anywhere in the image.
+- No borders, no frames, no split-screen, no collage: one single continuous scene.
+- COMPOSITION FOR OVERLAYS: a thin header band covers the very top, and two or three lines of large headline type will be placed in the lower-left area afterwards. Keep the main subject in the upper-middle / right, keep the lower-left free of essential detail (a plain or darker area there is ideal).
+"""
+
+COVER_VISUAL_PROMPT_TEMPLATE = """Generate a text-free broadcast news cover background photo.
+
+Subject:
+{visual}
+
+Requirements:
+- Square 1:1 framing, photographic, broadcast news quality, dramatic lighting.
+- ABSOLUTELY NO text, no numbers, no letters, no captions, no logos, no watermarks, no signage, no readable writing of any kind anywhere in the image.
+- No borders, no frames, no split-screen, no collage: one single continuous scene.
+- Keep the composition readable when cropped to a wide rectangle: keep the subject centred and leave the extreme top and bottom free of essential detail.
+"""
+
+
+# ---- 十點不一樣封面：純 prompt 版（2026-09-03 使用者裁決，取代合成版當預設）----
+#
+# 為什麼改：合成版的字是 Pillow 用系統字型畫的，零錯字，但也零設計感——
+# 參考圖那種金屬立體、雙色描邊、隨內容變化的美術字，程式畫不出來。使用者要的是
+# 「除了 Logo 之外所有文字都要有設計感」，所以整張交給生圖模型，一次成形。
+#
+# 唯一的後製只剩 Logo：正版 Logo 讓模型畫必定變形，那是播出事故，不能賭。
+# 2026-09-07 起「十點不一樣」節目標籤也改貼模板（static/brand/ten-show-tag.png，
+# 使用者給的正版樣式：藍色斜切、金色「十」＋白字、NEWS NIGHT），模型不再畫節目名。
+# 所以 prompt 明令不准畫任何電視台標誌，並在左上角留一塊乾淨的位置給程式貼。
+#
+# 代價講在前面：模型畫中文有機率出錯字，而封面上的錯字是對外事故。合成版仍留在
+# EDITOR_FORMATS 裡（ten_cover_composite）當備援與對照，隨時可以切回去比。
+# 斜切線的幾何 2026-09-10 釘死（使用者實拍：切線整條偏左、右格被壓窄）。
+# 舊寫法只說「稍微傾斜、頂端偏右一點、底端偏左一點」，沒說中線在哪、也沒說能斜多少——
+# 換成 gpt-image-2.5 之後模型把「稍微」畫成整條左移，成品底端量到約畫面 43%。
+# 這**跟整點直播的接縫 0.40 無關**：YT_SEAM_CENTRE_RATIO 只有 yt_dual_background 一個呼叫端，
+# 十點兩條路都是正中（合成版 compose_ten_cover 的 mid＝width//2、split_canvas 的 width*i/n）。
+# 數字直接借合成版的 YT_SPLIT_SLANT_RATIO＝0.05（總斜距佔寬），所以上下各偏 2.5%。
+COVER_AI_PROMPT_TEMPLATE = """Design a complete, broadcast-quality Chinese-language news programme cover image (YouTube thumbnail style) for a Taiwanese prime-time news show.
+
+=== CANVAS ===
+16:9 horizontal. Two photographs fill the ENTIRE frame edge to edge, split by ONE thin white DIAGONAL seam into a LEFT panel and a RIGHT panel. THE SEAM GEOMETRY IS FIXED AND IS NOT A DESIGN DECISION: at mid-height the seam crosses the EXACT HORIZONTAL CENTRE of the frame, so the two panels are the SAME WIDTH. It leans only slightly — its top end sits about 2.5% of the frame width RIGHT of centre, its bottom end about 2.5% of the frame width LEFT of centre. Never move the seam as a whole to the left or to the right of centre, and never lean it harder than that: neither panel may end up visibly wider than the other. No borders, no gutters, no letterboxing. Across the very top runs a deep-navy header band (%HEADER_BAND% of the frame height) with a bright blue hairline along its bottom edge; along the very bottom runs a slim deep-navy strip with one thin glowing straight blue light line (no waves, no text). Everything else is photograph.
+
+{title_design_brief}=== TEXT TO RENDER (Traditional Chinese, Taiwan) ===
+Render EXACTLY these strings, character for character. Do not translate them, do not rewrite them, do not shorten them, and do not add any other words, letters or numbers anywhere in the image.
+- Draw NOTHING in the header band. The date and the small red tag at its right end are pasted in afterwards by software, exactly like the channel logo at its left end.
+- Headline of the LEFT panel, LEFT-aligned in its lower-left area, over the photograph. It is ALREADY split into lines — render each line on its own line, in this order, and do NOT re-split, merge or reorder them:
+{title_left_lines}
+- Headline of the RIGHT panel, RIGHT-aligned in its lower-right area, over the photograph. Same rule — render these lines as given:
+{title_right_lines}
+{side_labels_block}
+=== TYPOGRAPHY (this is the point of the image) ===
+- The two headlines are the loudest thing in the frame: very heavy condensed Chinese display type, STACKED ON THE LINES GIVEN ABOVE (the split is already decided — never change it), tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of each photograph darkens gently so the headline stays readable.
+- THE NUMBER OF LINES AND WHERE THEY BREAK ARE FIXED. Each headline lists its lines above with a count. Render EVERY listed line on its OWN separate row, in the listed order: never merge two listed lines onto one row, never break one listed line across two rows, never drop or reorder one. A headline listed as three lines must appear as three stacked rows.
+{title_colour_rule}- The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
+- Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
+{title_style_clause}
+=== IMAGERY ===
+- LEFT half photograph: {visual_left}
+- RIGHT half photograph: {visual_right}
+- Both are photographic, dramatically lit, news-documentary quality, filling their panel edge to edge behind the headline, meeting at the diagonal seam.
+
+=== HARD CONSTRAINTS ===
+- NO television channel logo, NO station identity mark, NO broadcaster wordmark, NO dot-pattern emblem, NO watermark of any kind, and do NOT write the programme name (十點不一樣) anywhere. The upper-LEFT corner of the header band — its entire LEFT HALF — must be left as clean empty navy background: the real channel logo and the official programme-name tag are pasted there afterwards, so keep that whole area free of text, graphics and busy detail. The header band carries NOTHING you draw: its right end is reserved for the date and the small red tag, which software pastes in afterwards, so keep the WHOLE band clean empty navy.
+- Do NOT draw any 示意圖 label, AI示意圖 label or similar disclaimer anywhere in the image. Software adds that label afterwards, at the outer top corner below the header band — keep that small area free of text and busy detail.
+- No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles. ONE NARROW EXCEPTION: a brand mark that physically belongs to an object in the photograph — an aircraft livery, a storefront sign, a product body, a jersey — may appear on that object when the shot description names that brand, because it is part of the photographed world rather than text laid over it. It never becomes a graphic of its own: no brand mark beside or inside the headline, none floating on the picture, none in the header band or the bottom strip.
+- Keep every piece of text well inside the frame with clear breathing space; nothing may touch or be clipped by any edge.
+"""
+
+# 滿版（單張圖、單一標題）版本，2026-09-07 由雙切模板派生：只改畫布／文字／影像三段。
+COVER_AI_FULL_PROMPT_TEMPLATE = """Design a complete, broadcast-quality Chinese-language news programme cover image (YouTube thumbnail style) for a Taiwanese prime-time news show.
+
+=== CANVAS ===
+16:9 horizontal. ONE single photograph fills the ENTIRE frame edge to edge. No split, no seam, no panels, no collage, no borders, no gutters, no letterboxing. Across the very top runs a deep-navy header band (%HEADER_BAND% of the frame height) with a bright blue hairline along its bottom edge; along the very bottom runs a slim deep-navy strip with one thin glowing straight blue light line (no waves, no text). Everything else is photograph.
+
+{title_design_brief}=== TEXT TO RENDER (Traditional Chinese, Taiwan) ===
+Render EXACTLY these strings, character for character. Do not translate them, do not rewrite them, do not shorten them, and do not add any other words, letters or numbers anywhere in the image.
+- Draw NOTHING in the header band. The date and the small red tag at its right end are pasted in afterwards by software, exactly like the channel logo at its left end.
+- The headline, LEFT-aligned in the lower-left area of the frame, over the photograph. It is ALREADY split into lines — render each line on its own line, in this order, and do NOT re-split, merge or reorder them:
+{title_left_lines}
+{side_labels_block}
+=== TYPOGRAPHY (this is the point of the image) ===
+- The headline is the loudest thing in the frame: very heavy condensed Chinese display type, STACKED ON THE LINES GIVEN ABOVE (the split is already decided — never change it), occupying roughly the left half of the frame, tightly leaded, with a thick dark outline and a strong drop shadow so they read over photography. The lower part of the photograph darkens gently so the headline stays readable.
+- THE NUMBER OF LINES AND WHERE THEY BREAK ARE FIXED. The headline lists its lines above with a count. Render EVERY listed line on its OWN separate row, in the listed order: never merge two listed lines onto one row, never break one listed line across two rows, never drop or reorder one. A headline listed as three lines must appear as three stacked rows.
+{title_colour_rule}- The small red tag is a neat rounded rectangle in bold white characters with a small white dot before the text, like an on-air light.
+- Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
+{title_style_clause}
+=== IMAGERY ===
+- The photograph: {visual_left}
+- Photographic, dramatically lit, news-documentary quality, filling the whole frame edge to edge behind the headline; keep the main subject towards the upper-middle and right so the lower-left stays calm for the headline.
+
+=== HARD CONSTRAINTS ===
+- NO television channel logo, NO station identity mark, NO broadcaster wordmark, NO dot-pattern emblem, NO watermark of any kind, and do NOT write the programme name (十點不一樣) anywhere. The upper-LEFT corner of the header band — its entire LEFT HALF — must be left as clean empty navy background: the real channel logo and the official programme-name tag are pasted there afterwards, so keep that whole area free of text, graphics and busy detail. The header band carries NOTHING you draw: its right end is reserved for the date and the small red tag, which software pastes in afterwards, so keep the WHOLE band clean empty navy.
+- Do NOT draw any 示意圖 label, AI示意圖 label or similar disclaimer anywhere in the image. Software adds that label afterwards, at the outer top corner below the header band — keep that small area free of text and busy detail.
+- No text other than the strings listed above. No captions, no subtitles, no tickers, no lower thirds, no URLs, no social handles. ONE NARROW EXCEPTION: a brand mark that physically belongs to an object in the photograph — an aircraft livery, a storefront sign, a product body, a jersey — may appear on that object when the shot description names that brand, because it is part of the photographed world rather than text laid over it. It never becomes a graphic of its own: no brand mark beside or inside the headline, none floating on the picture, none in the header band or the bottom strip.
+- Keep every piece of text well inside the frame with clear breathing space; nothing may touch or be clipped by any edge.
+"""
+
+
+# 標題設計感開關（2026-09-08 使用者要求：AI 整張版的標題要「設計感＋滿框」，像節目片頭字卡）。
+# 預設 plain＝維持現行排版（白／黃／紅逐行配色、行數行序釘死）；designed 才追加下面這段。
+#
+# 2026-09-09 使用者：「十點不一樣的 AI 設計標題可以不用照白黃紅三段規則，設計規則與放置
+# 位置完全解放，可以嘗試各種字體、顏色、設計邊框、強調，完全交由 AI 大膽設計。」
+# 所以 designed 從「只改大小與位置」升級成整段 OVERRIDE：配色、版位、字體、邊框、
+# 強調手法全放給模型。解放的是**設計**，不是**內容**——底下明文列出仍然不准動的事：
+# 一個字都不能加減改（含 9/12 這種斜線不得拆開）、正體中文、標頭帶左半與 AI示意圖
+# 角落要留空（那兩處是程式後貼的，見 compose.paste_cover_logo／paste_cover_ai_note）、
+# 上下兩條深藍帶不得被字蓋掉。plain 那條線完全不受影響，出事就把開關關掉。
+# 位置在 TYPOGRAPHY 段最後、又寫明 OVERRIDE——本 repo 的慣例是「位置＋明文同向」才壓得住。
+#
+# 2026-09-09（第七批）使用者：「十點不一樣 設計標題 可以更奔放 參考我們現行的AI設計版
+# 標題」，並附兩張現行 YouTube 封面截圖當基準。對照當時的成品（20260909-215559）：
+# 模型只把填色換成金屬金，版面仍是兩行等大、齊左、規規矩矩的堆疊。
+# 根因是這一段**寫成「許可」**（you may…／no longer binds），而它前面整段 TYPOGRAPHY
+# 都是命令句。許可推不動模型，模型會走阻力最小的路＝照舊排版、只換材質。
+# 改法：先用**命令句描述那個 house style 長什麼樣**（大小落差、行內關鍵詞換色、
+# 飽和平塗＋粗黑描邊＋硬投影、可加 1–2 個無字圖示、錯落），解除綁定的句子留在後面。
+# 截圖裡另外那些東西——國旗小標（帶國名）、地圖地名、重複的問號徽章——是**清單外文字**，
+# 撞硬規則 (e)，而且國旗的位置正好是 paste_cover_ai_note 要貼的角落，這批不開。
+# 兩行是同一個名詞／同一句話時（古羅馬圖／拉真浴場）不得放大其中一行，會拆散語意。
+COVER_TITLE_STYLE_PLAIN = "plain"
+COVER_TITLE_STYLE_DESIGNED = "designed"
+COVER_TITLE_STYLES = (COVER_TITLE_STYLE_PLAIN, COVER_TITLE_STYLE_DESIGNED)
+
+# 帶高不手寫。第三批的教訓是「模型手上有什麼數字就抄什麼」，而 compose 補帶／貼 Logo
+# 用的是 COVER_AI_HEADER_RATIO——兩邊各寫各的，改一邊就會悄悄脫鉤。
+# 兩張模板裡還留著 {badge_text} 之類的執行期欄位，不能整段丟給 f-string，所以先放記號再換掉。
+_HEADER_BAND_PERCENT = round(compose.COVER_AI_HEADER_RATIO * 100)
+COVER_AI_PROMPT_TEMPLATE = COVER_AI_PROMPT_TEMPLATE.replace(
+    "%HEADER_BAND%", f"about {_HEADER_BAND_PERCENT}%"
+)
+COVER_AI_FULL_PROMPT_TEMPLATE = COVER_AI_FULL_PROMPT_TEMPLATE.replace(
+    "%HEADER_BAND%", f"about {_HEADER_BAND_PERCENT}%"
+)
+
+
+# ---- 創意拉桿（2026-09-09 第八批）----
+#
+# 使用者：「AI 消化的創意奔放程度，能不能設為好幾個等級，讓使用者自己選擇。前台 UI
+# 做成像調整 AI effort 的拉 bar，最左邊創意最低，最右邊創意最高。」
+#
+# 級距怎麼訂：**每一級都要用命令句描述它長什麼樣**，不能寫成「你可以…」。
+# 第七批才剛證明許可句推不動模型——中間那幾級若寫成許可，成品會跟 0 或 4 長一樣，
+# 拉桿就變成騙人的。所以四級是**由上往下減**：4 是使用者給的那組封面（house style），
+# 往下逐項收回自由。4 以上不再往上加（傾斜、疊字、破格會撞死規則 (c)(d)(g)，
+# 而且使用者沒要）。
+#
+# 不隨等級變的：下面那塊 FIXED (a)–(g)。拉桿調的是**設計自由度**，
+# 內容（一字不改）與版面規約（程式後貼的三塊區域、不得跨格）永遠不動。
+#
+# 2026-09-10 再陡一次。使用者看完 sunburst 重跑的 0–4：「好像沒有這麼抖，尤其是
+# 1、2 之間」。原因是每一級只多給一項自由，而多出來的那項又都落在字的表面：
+# 1 只有 finish、2 只多了尺寸階層與行內換色。所以四級全部重訂，每一級都補一個
+# **看得見形狀改變**的必做項，並把原本 4 級獨有的幅度往下放一級：
+#   L1 厚描邊＋硬投影＋字面材質＋標題塊要有底板（跟「沒設計」拉開）
+#   L2 ＋尺寸階層／行內反白／**錯位排列**／**每行各自的底板**（不再是一塊方板）
+#   L3 ＋多層描邊與立體擠出（原本 4 級的）／**標題與照片主體交錯**／版位自由／圖示
+#   L4 ＋落差拉到 2.5–3 倍／第三層描邊／**傾斜從「可以」改成「必須」**／爆裂裝飾
+# 判準同 CG 那條拉桿的教訓：形容詞會被圖模平均掉，能看見的是形狀與位置的改變。
+# 側邊標籤（2026-09-10）。使用者拿真實封面對照：高創意那幾級「還允許多一些標籤」，
+# 例如胰臟癌那張右側的六個症狀小籤。
+#
+# 為什麼開一個欄位、而不是叫模型自己想：那六個詞是**新的中文字**。讓模型自己生等於把
+# 「編字上鏡」寫進規則——與這條線一路在防的「憑空多一條警示帶」是同一件事。欄位裡的字
+# 由使用者負責，模型只負責畫；FIXED (e)「清單以外的字一個都不准」原樣成立，
+# 只是這幾個字現在也在清單上。沒填就整段不出現，prompt 與過去逐字元相同。
+COVER_SIDE_LABEL_MAX = 6
+COVER_SIDE_LABEL_CHARS = 6
+_SIDE_LABEL_SPLIT = re.compile(r"[\s、,，/／|｜]+")
+
+
+def cover_side_labels(raw: str) -> list[str]:
+    """把使用者填的一串字拆成標籤清單（空白、頓號、逗號、斜線都算分隔）。"""
+    parts = [p.strip() for p in _SIDE_LABEL_SPLIT.split(raw or "") if p.strip()]
+    return [p[:COVER_SIDE_LABEL_CHARS] for p in parts[:COVER_SIDE_LABEL_MAX]]
+
+
+def cover_side_labels_block(raw: str) -> str:
+    """側邊標籤那一段條文。"""
+    labels = cover_side_labels(raw)
+    if not labels:
+        return ""
+    listed = "\n".join(f"    - {text}" for text in labels)
+    return (
+        "- A COLUMN OF SMALL LABEL CHIPS, DRAWN ONCE AND ONLY IN THE RIGHT-HAND PANEL"
+        " (in the single-photograph layout: down the right-hand side of the frame). The left panel"
+        " carries no chips at all — one column total, never a copy on each side."
+        " It runs down the outer side, clear of the headline and clear of the header band."
+        " Render EXACTLY these strings,"
+        " character for character, one chip each, in this order — they are part of the listed"
+        " text, not decoration you may edit, drop or add to:\n"
+        + listed
+        + "\n  Each chip is a small rounded plate in the panel's accent colour with a thin bright"
+        " edge, a wordless pictogram at its left end, and the characters set small but crisp."
+        " The chips share one width and stack with even gaps. They never overlap the headline,"
+        " never enter the header band or the bottom strip, and never touch a frame edge.\n"
+        "  THE TOP OF THE COLUMN STARTS NO HIGHER THAN ONE THIRD OF THE WAY DOWN THE FRAME:"
+        " the small area just under the outer top corner is reserved for the 示意圖 label that"
+        " software pastes in afterwards, and a chip drawn up there comes out with that label"
+        " printed across it. Leave that corner completely empty and begin the column below it.\n"
+    )
+
+
+COVER_INFO_CHIP_MAX = 4
+COVER_INFO_CHIP_CHARS = 10
+_INFO_CHIP_SPLIT = re.compile(r"[\s、,，|｜]+")
+
+
+def cover_info_chips(raw: str) -> list[str]:
+    """把使用者填的一串字拆成小籤清單（空白、頓號、逗號、直線都算分隔）。
+
+    這裡**不拿斜線當分隔**：小籤最常見的內容就是「日本・名古屋」「降41%」「5萬/月」，
+    斜線是內容的一部分（側邊標籤那支拆斜線，是因為那是症狀短語，不會帶斜線）。
+    """
+    parts = [p.strip() for p in _INFO_CHIP_SPLIT.split(raw or "") if p.strip()]
+    return [p[:COVER_INFO_CHIP_CHARS] for p in parts[:COVER_INFO_CHIP_MAX]]
+
+
+def cover_info_chips_block(raw: str) -> str:
+    """畫面小籤那一段條文。沒填就整段不出現。"""
+    chips = cover_info_chips(raw)
+    if not chips:
+        return ""
+    listed = "\n".join(f"    - {text}" for text in chips)
+    return (
+        "- SMALL FREE-STANDING INFORMATION CHIPS, laid on the photographs. Render EXACTLY these"
+        " strings, character for character, one chip each, in this order — they are part of the"
+        " listed text, not decoration you may edit, drop or add to:\n"
+        + listed
+        + "\n  Each chip is a small rounded plate — a solid dark or saturated panel with a thin"
+        " bright edge, or a bright panel with dark characters — carrying its characters small but"
+        " crisp, with an optional wordless pictogram at its left end (a map pin for a place, an"
+        " arrow for a change, a warning triangle for a risk). They do NOT form a column and they"
+        " do NOT share one size: each chip sits on its own, near whatever it refers to — a place"
+        " chip low in its panel, a figure chip beside the subject it measures.\n"
+        "  PLACEMENT IS CONSTRAINED: no chip may cover a headline character, sit inside the navy"
+        " header band or the bottom strip, cross the diagonal seam, or touch a frame edge. NO CHIP"
+        " MAY SIT IN EITHER OUTER TOP CORNER OR IN THE TOP THIRD OF THE FRAME — software pastes"
+        " the 示意圖 label just under the outer top corner afterwards, and a chip drawn up there"
+        " comes out with that label printed across it.\n"
+    )
+
+
+# 等級名稱 0-4 搬進 creativity.py（P2），與 main.CG_CREATIVITY_LEVEL_NAMES 共用
+# 同一份字典——理由同上（main.py 那份的註解）。留舊名稱當別名，呼叫端不用跟著改。
+COVER_AI_TITLE_LEVEL_MIN = creativity.LEVEL_MIN
+COVER_AI_TITLE_LEVEL_MAX = creativity.LEVEL_MAX
+COVER_AI_TITLE_LEVEL_NAMES = creativity.LEVEL_NAMES
+
+# 字句逐字／繁中臺灣用字／不准生新字／不准觸邊四條搬進 creativity.py
+# （target="image"，與 YT 共用，措辭以這裡——十點——為準，見該檔案開頭說明）。
+# 這裡留下的只剩十點版型專屬的東西：標頭帶／底部窄條／雙欄縫線。
+_TITLE_FIXED_BLOCK = (
+    "- WHAT IS STILL FIXED, AND IS NOT A DESIGN DECISION: "
+    + creativity.fixed_block(target="image")
+    + "\nThe header band across the top and the slim navy strip along the bottom stay as described,"
+    " and NO part of the headline may sit inside them or overlap them."
+    " The WHOLE header band and the small area just below its outer top corner stay clean and"
+    " empty — software pastes the channel logo, the programme tag, the date, the red ON AIR tag"
+    " and the 示意圖 label there afterwards, so nothing you draw belongs in that band at either"
+    " end."
+    " A brand mark carried by an object inside the photograph (a livery, a storefront, a product)"
+    " is part of that photograph and is not one of your decorative marks — it stays on its object"
+    " and never migrates onto the headline or into either navy band."
+    " In the two-panel layout, each headline stays ENTIRELY INSIDE ITS OWN PANEL and never crosses"
+    " the diagonal seam or strays into the other panel: freeing the placement frees where it sits"
+    " WITHIN its panel, not which panel it belongs to.\n"
+)
+
+# ---- 內容觸發的逐行指示與招式池（2026-09-11 第九批）----
+#
+# 使用者：「十點不一樣創意程度，我認為 1~4 都還可以更有變化」「標題的顏色其實也可以
+# 解放，不必綁住一定要白黃紅順序，也不用綁到同一句同一色」，並附 17 張真實封面當範本
+# （D:\Downloads\AICG測試\十點不一樣範本）。
+#
+# 為什麼不是再把條文寫得更大聲：2026-09-10 那輪已經試過。四級當時只差在**字的表面**
+# （描邊層數、材質、色數），縮圖上根本看不出差別。範本裡真正在跳的是**形狀**——
+# 標題塊佔多大、行排得齊不齊、旁邊掛了幾件東西。所以四級改綁三個**數字**主軸：
+#   標題塊佔畫面高度％ / 字級落差倍數 / 附加元件件數
+# 數字是 2026-09-10 斜切線那次唯一壓得住模型的東西（形容詞會被圖模平均掉）。
+#
+# 顏色則從「行序」改成「語意」，而且**釘在資料行上**。L2 以後的條文早就寫著
+# 「白黃紅只是提示，可以忽略」，實拍卻照樣白黃紅——因為 main._lines_block 把
+# (white)/(yellow)/(red) 直接寫在每一行後面，條文區離得太遠壓不過去（同一個教訓
+# 見上面反色底字那段註解）。所以 1 級起就不再輸出顏色標記，改由程式偵測內容，
+# 把「這一行該怎麼處理」寫在那一行上。
+#
+# 範本裡的招式來源（都用無字版本，FIXED (e) 原樣成立）：
+#   行末掛圖示(11 日本暴雨!後接雨雲、印尼災難!後接火焰)、圓形放大鏡 inset＋紅圈箭頭(04/07)、
+#   思考泡泡群(02/10)、底部圓形圖示列且數量呼應標題數字(12「6種」配 6 個圓圖示)、
+#   筆刷底線(07/12)、故事材質填字(05「丹寧」直接填牛仔布紋)、去背主體站在字旁(13)、
+#   爆裂色塊(01/04)、粗箭頭(04/16)。
+# 範本裡**帶字**的那些（數據徽章 52.3%、國旗國名籤、地名籤、流程圖標籤、引言框、
+# 底部文字籤條）不進池子：那些是新的中文字，撞 FIXED (e)，要走既有「側邊標籤」
+# 那種使用者自己填的欄位。
+
+_FULLWIDTH_DIGITS = str.maketrans("０１２３４５６７８９", "0123456789")
+_COVER_HOOK_RE = re.compile(r"[！!？?]\s*$")
+_COVER_FIGURE_RE = re.compile(r"[0-9０-９]+(?:[.．][0-9０-９]+)?\s*[%％]?")
+_COVER_QUOTED_RE = re.compile(r"[「『“\"][^」』”\"]{1,12}[」』”\"]")
+def cover_line_annotation(text: str, level: int) -> str:
+    """一行標題該怎麼處理——釘在資料行後面，不寫在條文區。
+
+    0 級回空字串（維持白／黃／紅那條線，一個字元都不變）。
+    """
+    if level < 1 or not text:
+        return ""
+    notes: list[str] = []
+    if level >= 2 and _COVER_HOOK_RE.search(text):
+        notes.append("THIS IS THE HOOK ROW — set it at the block's LARGEST size")
+    figure = _COVER_FIGURE_RE.search(text)
+    if figure and figure.group(0).strip():
+        notes.append(
+            "PULL THE FIGURE " + figure.group(0).strip() + " OUT OF THE ROW: set it markedly"
+            " larger than the characters beside it AND in a different colour from them"
+        )
+    quoted = _COVER_QUOTED_RE.search(text)
+    if quoted:
+        treatment = (
+            " or sets it knocked out of a filled block" if level >= 2 else ""
+        )
+        notes.append(
+            "the quoted phrase " + quoted.group(0) + " takes its own colour" + treatment
+            + ", different from the rest of this row"
+        )
+    if not notes:
+        notes.append(
+            # word → TERM：「word」在無空格的中文裡沒有邊界，模型就按字數切
+            # （「哈拉德」被切成「哈拉」＋「德」）。邊界的定義寫在 COLOUR 規則本體。
+            #
+            # 2026-09-11 實拍驗收：光是改成 TERM 還不夠。這一條原本無條件命令
+            # 「這一行中途要換色、不得整行同色」，而「哈拉德」整行**就是一個詞**
+            # ——遵守它就必然把名字切開。兩條規則正面矛盾，模型在 L1 選了聽這一條。
+            # 修法照 repo 的老規矩：矛盾要拆掉，不能靠另一條去壓。所以這裡直接把
+            # 「整行只有一個詞」的情形寫成明路，並說清楚那時對比從哪裡來。
+            # 不用程式判斷是不是單一詞：中文沒有空格，斷詞本來就是要用讀的
+            # （同 COLOUR 規則本體那段），程式數不出來。
+            "switch colour PART-WAY THROUGH this row on the one TERM that carries the news"
+            " (the place, the name, the verdict) — colour EVERY character of that term, never"
+            " part of it. IF THIS WHOLE ROW IS ONE SINGLE TERM (a name, a place, one word),"
+            " there is no place to switch: give the ENTIRE row one colour and let the contrast"
+            " come from the rows above and below it instead — splitting the term to obey the"
+            " switch is the worse error of the two"
+        )
+    return "  ← " + "; ".join(notes) + "."
+
+
+# ---- 變化池（2026-09-11 第四輪；P3 起實體搬進 creativity.py）----
+# 池子本體與抽籤序列（creativity.draw）現在住在 creativity.py——十點跟 YT
+# 共用同一批池子，同一份持有權，理由跟 target="image" 的 FIXED 條文一樣：
+# 改一處、忘了改另一處的病灶。這裡留下同名別名，不是因為偷懶：既有測試
+# （tests/test_cover_title_creativity.py 等）直接寫 editor_formats.COVER_*，
+# 搬家不該連帶逼著改一堆呼叫點，跟 P2 的 LEVEL_NAMES 走同一個模式
+# ——這幾個名字是「同一個物件」的別名，不是各自留一份副本。
+COVER_PLATE_SHAPES = creativity.COVER_PLATE_SHAPES
+COVER_STAGGER_PATTERNS = creativity.COVER_STAGGER_PATTERNS
+COVER_TYPEFACES = creativity.COVER_TYPEFACES
+COVER_PALETTES = creativity.COVER_PALETTES
+COVER_ANCHORS = creativity.COVER_ANCHORS
+COVER_TILT_DIRECTIONS = creativity.COVER_TILT_DIRECTIONS
+
+# 招式池的兩個池子也搬進 creativity.py 了；件數表（COVER_ACCESSORY_COUNTS）
+# 與怎麼抽、怎麼拼幾何提示（cover_accessories()）留在這裡——那是十點專屬
+# 邏輯，跟 titles／full_width 耦合，不是跨拉桿共用的機制。
+COVER_ACCESSORY_SHAPES = creativity.COVER_ACCESSORY_SHAPES
+COVER_ACCESSORY_POOL = creativity.COVER_ACCESSORY_POOL
+COVER_FLAG_ACCESSORY = creativity.COVER_FLAG_ACCESSORY
+
+
+# 2026-09-11 第二輪拿掉「數量呼應」：程式算得出 6，模型畫得出 3。
+# 「說 6 大卻畫 3 個」比沒有這排圖示更糟，而這個精度不是 prompt 壓得住的。
+# 所以改成池子裡一件普通的圖示列，不宣稱任何數字。
+
+
+# 件數表與抽籤本體 2026-09-15（Stage 2-5）搬進 creativity.py：那一段跟版型無關，
+# CG 線（A1／A2）要原樣重用。這裡留同名別名與 adapter，既有呼叫點與測試不用改，
+# 跟 P2 的 LEVEL_NAMES、P3 的池子走同一個模式——是「同一個物件」，不是各留一份。
+COVER_ACCESSORY_COUNTS = creativity.COVER_ACCESSORY_COUNTS
+_FLAG_ACCESSORY_MIN_COUNT = creativity.FLAG_ACCESSORY_MIN_COUNT
+_FLAG_MENTION_RE = creativity._FLAG_MENTION_RE
+_visuals_mention_flag = creativity.visuals_mention_flag
+
+
+def _accessory_geometry_note(full_width: bool) -> str:
+    """釘在每一件招式後面的幾何。
+
+    共用那條總則 bullet 一直都寫著同樣的話，實拍照樣犯規（放大鏡貼上右角、
+    圖示列橫跨切線）——因為它坐在一長串否定句中間。顏色那邊已經證明過：
+    模型讀的是編號清單那幾行，指示就要釘在那幾行後面。
+    """
+    # 短到不能再短：DESIGN BRIEF 靠的就是位置與短，每行拖長等於把自己稀釋掉。
+    # “貼紙在那裡”的理由寫在上面那條總則，這裡只下命令。
+    note = "  ← MIDDLE OR LOWER AREA ONLY, never the top third"
+    if not full_width:
+        # 雙切才有切線。版面是程式知道的事，別叫模型自己判斷。
+        note += ", never across the centre seam"
+    return note + "."
+
+
+# 圖示類招式（icon／bubbles／iconrow）的共通指示與判定，2026-09-15 一併搬進
+# creativity.py——它管的是池子裡那三條條目的內容，不是十點的版型。既有測試
+# （test_cover_icon_subject_guidance_20260911）指名 editor_formats 這兩個名字，
+# 留別名接住。
+_ICON_LIKE_KEYS = creativity._ICON_LIKE_KEYS
+_ICON_SUBJECT_GUIDANCE = creativity._ICON_SUBJECT_GUIDANCE
+
+
+def cover_accessories(level: int, titles=(), seed=None, full_width: bool = False,
+                      rng=None, visuals=()) -> list[str]:
+    """十點封面的招式 adapter：抽籤走共用的 creativity.accessories，幾何自己補。
+
+    公開的參數與名稱一個都沒變（既有呼叫點與測試指名這一支），但抽籤本體已經搬到
+    creativity.py——十點的版型資訊（`titles`、`full_width`）不進那支共用函式，
+    只由這裡換算成一句幾何提示交過去。
+
+    `titles` 目前不參與抽籤（2026-09-11 第二輪拿掉「數量呼應」後就沒有用途了），
+    保留在簽名上是因為既有呼叫端與測試都還帶著它。
+
+    `rng` 由 cover_design_brief 傳進來，讓所有變化軸共用同一顆——一個 seed
+    就決定整張的長相，才重現得出來。單獨呼叫時退回共用函式自己開一顆。
+
+    `visuals`（2026-09-11 第十批）：畫面描述（十點傳 (visual_left, visual_right)，
+    YT 傳單一字串）。旗子的確定性換入規則見 creativity.accessories。
+    """
+    return creativity.accessories(
+        level,
+        counts=COVER_ACCESSORY_COUNTS,
+        rng=rng,
+        seed=seed,
+        visuals=visuals,
+        placement_note=_accessory_geometry_note(full_width),
+    )
+
+
+# ---- AI 標題疊在程式拼好的底圖上（2026-09-13 使用者裁決）----
+#
+# 「原圖放置＋AI 標題」以前一律強制程式壓字（真照不進模型）。使用者裁決改成允許：
+# 原圖（或雙切時每格各自 AI改圖 後拼成的底圖）當唯一附圖送進模型，由模型在上面畫字。
+# 這一段釘在 CANVAS 正後方——與設計綱要同一個理由：L4 的 prompt 上萬字元，
+# 附在最尾巴的 AIEDIT 區塊到那時已經被稀釋，模型會把整張重新構圖。
+AI_TITLE_BASE_IMAGE_NOTE = """=== THE ATTACHED IMAGE IS THE FINISHED PICTURE ===
+One image is attached. It is the COMPLETE photograph layer of this cover, already composed edge to edge — its panels, seam, crops and framing are final. Reproduce it as the picture: same subjects, same framing, same left/right arrangement, same crops. On top of it add ONLY the typography and graphic furniture described below. Do not replace it with another scene, do not re-compose, re-crop, mirror or zoom it, and do not move anything from one side to the other.
+
+"""
+
+
+def with_base_image_note(prompt: str, has_base: bool) -> str:
+    """有程式拼好的底圖才注入，釘在第一個 TEXT TO RENDER 段之前（十點＝CANVAS 與設計綱要之後，
+    YT＝整份 prompt 開頭）。沒有底圖原樣回傳。不做成模板佔位：既有測試直接 format 模板，
+    多一個必填欄位會全部炸掉；執行期注入兩邊都不用改。"""
+    if not has_base:
+        return prompt
+    marker = "=== TEXT TO RENDER"
+    if marker not in prompt:
+        return AI_TITLE_BASE_IMAGE_NOTE + prompt
+    return prompt.replace(marker, AI_TITLE_BASE_IMAGE_NOTE + marker, 1)
+
+
+# ---- 設計綱要：插在 CANVAS 正後方（2026-09-11 第二輪）----
+#
+# 第一輪把整份級距條文放在 TYPOGRAPHY 段尾，實拍（創意梯子-260911 A／B 兩組）四級長得
+# 一模一樣、照樣白→黃→紅。查出來的兩件事：
+#   (1) L4 的完整 prompt 14,195 字元，級距條文坐在第 8,000 字元之後。模型唯一乖乖
+#       照做過的東西（2026-09-10 那條斜切線的數字）寫在 **CANVAS 第一段**。
+#       招式件數 L2 要 1 件（做到了）、L3 要 2 件、L4 要 3 件（全沒做）——
+#       是「愈往後愈失效」的斜坡，不是開關壞掉。
+#   (2) 顏色標記拿掉後，模板裡那條 COLOUR EACH LINE EXACTLY AS LABELLED 變成孤兒，
+#       模型就照 Line 1/2/3 把白黃紅硬套上去。矛盾要**拆掉**，不能只靠後面 OVERRIDE。
+#
+# 所以數字全部搬到這裡，而且只有數字：塊高％、落差倍數、錯位、傾斜、反白字數、招式件數、
+# 配色鐵則。後面 TYPOGRAPHY 段尾那塊條文只留「怎麼做」的質感描述，不再重複數字。
+# 幅度（塊高％／落差倍數／招式件數／反白字數）各級固定——那是使用者認可的梯度，
+# RNG 一律不碰。配色改成模板，由 COVER_PALETTES 抽色填進去：換的是「哪幾個顏色」，
+# 不是「用幾個顏色」。
+#
+# 2026-09-11 收尾：塊高從 25/35/45/55% 降到 18/24/30/36%。
+# 使用者：「標題好像字偏大，圖片的比例反而變小了」——不是錯覺，是我加出來的。
+# 今天以前 prompt 裡**根本沒有標題高度的規定**（舊句只講寬度「約佔畫面左半邊」），
+# 高度一直是模型自己決定。我一口氣訂了 25–55%，而拿使用者自己的範本量，
+# 實際成品的標題塊大約只佔畫面高度 **18–25%**——L3／L4 等於是實際的兩倍，
+# 再乘上最大 3 倍的字級落差，照片就被擠掉了。
+# 新的一組讓 L1 貼齊現行成品，L4 仍明顯最大；梯度間距 10 → 6 個百分點，
+# 四級的區分改由板形／配色／招式件數那幾軸扛（它們本來就比塊高更顯眼）。
+COVER_TITLE_BRIEF_SPECS = {
+    1: dict(height="18%", ratio=None, stagger=False, tilt=False, knockouts=0, typeface=False, anchor=False,
+            colours="TWO colours only: {0} dominant, {2} for emphasis"),
+    2: dict(height="24%", ratio="1.8", stagger=True, tilt=False, knockouts=1, typeface=True, anchor=False,
+            colours="THREE colours: {0} dominant, {1} second, {2} on the word that carries the news"),
+    3: dict(height="30%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True, anchor=True,
+            colours="THREE colours plus ONE accent: {0} dominant, {1} second, {2} on the word that carries the news, {3} as the accent"),
+    4: dict(height="36%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True, anchor=True,
+            colours="start from {0}, {1}, {2} and {3}, then add what else you need — palette is fully open; no chroma-key green"),
+}
+
+
+def _headline_has_hook(title: str, *, full_width: bool) -> bool:
+    """這條標題拆出來的行裡，有沒有一行以 ！／？ 收尾。"""
+    lines = compose.cover_title_lines((title or "").strip(), full_width=full_width)
+    return any(_COVER_HOOK_RE.search(line) for line in lines)
+
+
+def _size_hierarchy_line(ratio: str, titles, full_width: bool) -> str:
+    """字級落差那一行：鉤子最大／由上往下遞增／兩者都有。"""
+    flags = [
+        _headline_has_hook(title, full_width=full_width)
+        for title in titles
+        if (title or "").strip()
+    ]
+    hook_rule = (
+        f"the row ending in ！or ？ is the largest, about {ratio} times the height of the"
+        " smallest row, and the row that explains it tucks under it"
+    )
+    grow_rule = (
+        f"the rows GROW FROM TOP TO BOTTOM — the last row is about {ratio} times the height of"
+        " the first, the middle row sitting between them"
+    )
+    if flags and all(flags):
+        body = hook_rule
+    elif flags and not any(flags):
+        body = grow_rule
+    else:
+        body = (
+            f"in a headline that HAS a row ending in ！or ？, {hook_rule}; in a headline with NO"
+            f" such row, {grow_rule}"
+        )
+    return f"- Row sizes differ: {body}."
+
+
+def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = False,
+                       visuals=("", "")) -> str:
+    """CANVAS 正後方那塊。愈短愈好——這是模型真的會讀的位置。
+
+    2026-09-11 第四輪起，這裡同時是**變化池的出口**：底板形狀、錯位方式、字體骨架、
+    配色、標題落點、傾斜方向、招式，全部由同一顆 rng 依固定順序抽。
+    一顆 seed ＝ 一種長相，重現得出來。
+
+    幅度（塊高％／落差倍數／招式件數／反白字數）不在池子裡：那是梯子本身。
+
+    `visuals`（第十批）：(visual_left, visual_right) 畫面描述，只用來判斷這張照片
+    裡有沒有旗子（見 cover_accessories 的 visuals 參數）；預設一對空字串，不影響
+    既有呼叫端與 fixture——沒有旗子可提就不會觸發換入。
+    """
+    spec = COVER_TITLE_BRIEF_SPECS.get(level)
+    if not spec:
+        return ""
+    # 抽籤順序固定，動了順序就換掉所有既有 seed 的長相（測試會抓到）。
+    # P3（2026-09-11）起序列本身交給 creativity.draw()：十點要 anchor 這一顆
+    # （YT 不要），所以 anchor=True。draw() 回傳的 .rng 是抽完這 6 顆之後
+    # 同一顆亂數——下面 cover_accessories() 要接著它繼續抽招式，不能另外
+    # 開一顆 random.Random(seed)。
+    d = creativity.draw(seed, anchor=True)
+    rng = d.rng
+    plate, stagger, typeface, palette, anchor, tilt_dir = (
+        d.plate, d.stagger, d.typeface, d.palette, d.anchor, d.tilt_dir,
+    )
+
+    rows = [
+        "=== HEADLINE DESIGN BRIEF — THESE NUMBERS ARE AS FIXED AS THE SEAM GEOMETRY ABOVE, AND THEY OVERRIDE ANY TYPOGRAPHY WORDING FURTHER DOWN ===",
+        f"- Headline block height: about {spec['height']} of the frame height (per panel)."
+        + (" It is the loudest thing in the frame." if level >= 3
+           else " The photograph keeps the rest of the frame — do not let the type grow past this."),
+    ]
+    if spec["ratio"]:
+        rows.append(_size_hierarchy_line(spec["ratio"], titles, full_width))
+    else:
+        rows.append("- Every row is the SAME size at this setting.")
+    rows.append(
+        f"- Rows are STAGGERED: {stagger}. No two rows share a left edge."
+        if spec["stagger"]
+        else "- Rows stay flush with one another, aligned in the corner they are assigned."
+    )
+    # 板形：1 級整排同一種（跟 _L1 那句「share ONE corner treatment」對齊），
+    # 2 級起同一種語彙下各行自己變化。
+    rows.append(
+        "- Each row sits on its OWN plate, bar or ribbon — never one rectangle behind the whole"
+        f" block. The plates are {plate}"
+        + (", all cut the same way." if level < 2 else ", and no two are cut alike.")
+    )
+    if spec["typeface"]:
+        # 「You choose the typeface」寫了七批，成品每次都同一種黑體：許可句推不動模型。
+        rows.append(f"- Letterforms: {typeface}. Every character stays fully legible.")
+    if spec["anchor"]:
+        # 3 級起條文說 PLACEMENT IS FREED——解放之後總得有人決定放哪，
+        # 交給模型它就放回左下角，所以由程式指定。
+        rows.append(f"- The headline block sits {anchor}.")
+    if spec["tilt"]:
+        rows.append(f"- The whole block is rotated 5 to 8 degrees off horizontal, {tilt_dir}.")
+    if spec["knockouts"]:
+        word, verb = ("word", "sits") if spec["knockouts"] == 1 else ("words", "sit")
+        rows.append(
+            f"- {spec['knockouts']} {word} of the headline {verb} KNOCKED OUT of a filled colour"
+            " block (the characters are the empty space inside the shape)"
+            + (", each block a different colour." if spec["knockouts"] > 1 else ".")
+        )
+    rows.append(
+        "- COLOUR FOLLOWS MEANING, NEVER ROW ORDER. Colouring row 1 white, row 2 yellow and row 3"
+        f" red is BANNED. Use {spec['colours'].format(*palette)}."
+        " A colour switch may happen part-way through a row."
+    )
+    # 禁綠條文不放這裡：十點 prompt 另帶 cover_title_colour_rule（整段禁令），brief 有字數上限。
+    picked = cover_accessories(level, titles=titles, full_width=full_width, rng=rng,
+                               visuals=visuals)
+    if picked:
+        rows.append(
+            f"- Draw EXACTLY {len(picked)} piece{'' if len(picked) == 1 else 's'} of supporting artwork, listed here and no"
+            " others. They are pictures, never captions: not one carries a letter, a digit or a"
+            " label, none covers a character, enters the top band or the bottom strip, or touches"
+            " an edge. NONE OF THEM MAY SIT IN EITHER OUTER TOP CORNER OR IN THE TOP THIRD OF THE"
+            " FRAME: a label is pasted there afterwards. Obey each piece's own placement note."
+        )
+        rows.extend(f"  {i}. {text}" for i, text in enumerate(picked, start=1))
+    return "\n".join(rows) + "\n\n"
+
+
+# 2026-09-14 使用者鐵則：創意階梯產出的**任何文字都不可以是綠色**——成品疊在攝影棚
+# 綠屏前，綠色系會被去背吃掉、當場穿幫。適用所有版型、所有等級，含描邊、陰影、
+# 反色底字的色塊、小籤、日期牌。放在配色規則本體（每一級都會帶到），不放 OVERRIDE
+# 段——2026-09-11 已證明離得遠的條文壓不過釘在行上的指示。
+COVER_NO_GREEN_RULE = (
+    "- NO chroma-key green ON TEXT — THIS OUTRANKS EVERY PALETTE INSTRUCTION. The finished"
+    " image is keyed over a studio green screen, so chroma-key green or neon/lime key green on"
+    " a character, an outline, a shadow, a filled block behind characters, a tag, a chip or a"
+    " plate will be keyed out on air. Deep green, dark green and olive green remain allowed;"
+    " only the studio-key colours are forbidden. This applies at every creativity level.\n"
+)
+
+# brief 版（CANVAS 後面那塊有 3000 字上限，塞不下整段）：一行就夠，完整條文在配色規則。
+COVER_NO_GREEN_ROW = (
+    "- NO chroma-key green ON TEXT — no chroma-key green or neon/lime key green on a character,"
+    " outline, shadow, filled block, tag or plate: the image is keyed over a studio green screen."
+    " Deep green, dark green and olive green remain allowed. This outranks the palette."
+)
+
+
+def cover_title_colour_rule(level: int) -> str:
+    """逐行配色那一條。0 級照舊；1 級起把矛盾**拆掉**，不是靠後面 OVERRIDE 壓。"""
+    if level < 1:
+        return (
+            "- COLOUR EACH LINE EXACTLY AS LABELLED in that list: (white) = solid white,"
+            " (yellow) = bright golden yellow, (red) = vivid red with a white outline. Follow the"
+            " labels literally — never recolour a line, and never give a whole headline one flat"
+            " colour.\n"
+        ) + COVER_NO_GREEN_RULE
+    # 2026-09-11 使用者：「名詞應該整個套色 不是單一字套色 不合邏輯」。實拍把
+    # 「哈拉德」切成「哈拉」＋變色的「德」——那是國王的名字，拆開讀起來像兩件事。
+    # 根因跟「葉門青年運動」被腰斬同一個：中文沒有空格，只說「換一個 word」模型
+    # 就按字數切。所以這裡明講**邊界怎麼找**（用讀的，不是用數的）並附上那個錯例。
+    # 放在配色規則本體而不是逐行註解：這樣三個配色分支（數字／引號／預設）全部受約束。
+    return (
+        "- COLOUR: follow the DESIGN BRIEF above and each row's own note in the list above."
+        " The order of the rows is NOT a colour order, and no headline may be one flat colour.\n"
+        "- A COLOUR CHANGE FALLS ON A TERM BOUNDARY, NEVER INSIDE A TERM. Chinese is written"
+        " without spaces between words, so find where a term ends by READING it, not by counting"
+        " characters. A personal name, a place name, an organisation, a job title, a figure with"
+        " its unit — each is ONE unbroken unit, and every character of it takes the SAME colour."
+        " Colouring 「哈拉德」as 「哈拉」plus a differently coloured 「德」is wrong: it is one"
+        " king's name, and splitting it reads as two separate things.\n"
+    ) + COVER_NO_GREEN_RULE
+
+
+# 每一級的條文（TYPOGRAPHY 段尾）。2026-09-11 第二輪起這裡**只留質感與做法**，
+# 數字全部搬到 CANVAS 後面的 DESIGN BRIEF——同一個數字寫兩次，遠的那次只會稀釋近的那次。
+# 開頭仍帶 DESIGNED TITLE 記號＋OVERRIDE 宣告（呼叫端與測試指名這兩個字串）。
+_L1 = """- DESIGNED TITLE (level 1 of 4 — light) — OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE, and follow the DESIGN BRIEF near the top of this prompt. Required, not offered:
+  * A THICK DARK OUTLINE on every character plus a hard offset drop shadow — not a thin stroke, not a soft blur.
+  * A SURFACE MATERIAL on the characters (a gradient, a soft bevel or a sheen) instead of one flat fill.
+  * The plates behind the rows share ONE corner treatment: all rounded, all square, or all cut on the same slant.
+"""
+
+_L2 = """- DESIGNED TITLE (level 2 of 4 — designed) — OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE, and follow the DESIGN BRIEF near the top of this prompt. This is a broadcast title card, not body text; a tame, evenly-set stack is a failure. Required, not offered:
+  * THE PLATES NO LONGER MATCH EACH OTHER: one row reversed out of a solid colour, another on an open outline, another on a slanted ribbon — assembled parts, not a paragraph on a rectangle.
+  * FINISH: saturated FLAT poster colour over a thick black outline, a hard offset drop shadow and a tight coloured inner edge. High contrast, slight forward lean. Not a soft pastel wash, and not one uniform polished metallic fill.
+  * THE DESIGN BRIEF NEAR THE TOP OF THIS PROMPT ALREADY FIXES the letterforms and the colours — follow it exactly, do not substitute your own. What is left to you: the outline and shadow treatment, and the decorative frames or shapes behind or around the words. Be bold with those.
+- WHAT THIS CANCELS: one-line-per-row no longer binds as a SHAPE — stagger the rows, indent them, run one row larger over another (the rows themselves, and how many there are, are still fixed; see below). THE PLACEMENT STILL BINDS: the block stays in the lower-left (or lower-right) area it was assigned. ONE EXCEPTION TO THE SIZE HIERARCHY: when the listed rows are one continuous phrase, sentence or proper name simply broken across rows, keep them at ONE size — enlarging half of a single name breaks it apart.
+"""
+
+_L3 = """- DESIGNED TITLE (level 3 of 4 — loud) — OVERRIDE EVERY TYPOGRAPHY INSTRUCTION ABOVE WHEREVER THEY DISAGREE, and follow the DESIGN BRIEF near the top of this prompt. This is a broadcast title card and it goes loud; a tame, evenly-set stack is a failure. Required, not offered:
+  * THE PLATES NO LONGER MATCH EACH OTHER: one row reversed out of a solid colour, another on an open outline, another on a slanted ribbon.
+  * PLACEMENT IS FREED: the block no longer has to sit in the lower corner it was assigned. THE DESIGN BRIEF SAYS WHERE IT GOES INSTEAD — obey that line, and keep the whole block inside its own panel.
+  * THE BLOCK INTERLOCKS WITH THE PHOTOGRAPH instead of sitting in a clear corner: let a plate pass BEHIND the main subject, or let the subject's silhouette break across the edge of a plate. Not one character may be hidden by doing this.
+  * MULTI-LAYER EDGES AND DEPTH: stack outlines (a thick black one, then a white or coloured one outside it) and give the characters a three-dimensional extrusion with a surface picked from the story — molten metal, neon, cracked stone, wet chrome.
+  * The knocked-out word's block has a TORN, BRUSHED OR SLANTED edge, and it is the word that carries the shock: the illness, the place, the figure, the verdict.
+  * FINISH: saturated FLAT poster colour over a thick black outline and a hard offset drop shadow. Not a soft pastel wash, and not one uniform polished metallic fill.
+  * THE DESIGN BRIEF NEAR THE TOP OF THIS PROMPT ALREADY FIXES the letterforms, the colours and where the block sits — follow it exactly, do not substitute your own. What is left to you: the outline and shadow treatment, the decorative frames or shapes behind or around the words, the emphasis, and the scale of each part. Be bold with those.
+- WHAT THIS CANCELS: the instruction to keep the headline in the lower-left (or lower-right) area no longer binds; one-line-per-row no longer binds as a SHAPE — stagger the rows, indent them, run one row larger over another, or set a short row beside a long one (the rows themselves, and how many there are, are still fixed; see below). ONE EXCEPTION TO THE SIZE HIERARCHY: when the listed rows are one continuous phrase, sentence or proper name simply broken across rows, keep them at ONE size — enlarging half of a single name breaks it apart.
+"""
+
+# 4 = 3 的全部＋幅度。數字（55%／3 倍／傾斜／兩個反白字）都在 DESIGN BRIEF 裡，
+# 這裡只補「更深的邊、爆裂裝飾、第二焦點」，外加把可讀性護欄再講一次：
+# 幅度愈大，模型愈容易把字推到邊上或蓋掉筆畫。
+_L4_EXTRA = """- GO FURTHER — THIS IS THE LOUDEST SETTING. Everything above still applies; now push it to the edge of what still reads:
+  * DEEPEN THE EDGES: a third outline layer outside the two required above, and an extrusion deep enough to read as a solid object standing off the photograph.
+  * ENERGY BEHIND THE WORDS: radiating speed lines, sparks, shards, a torn or splashed colour shape, a burst of glow — wordless, aimed so the eye is thrown at the loudest row.
+  * ONE OF THE REQUIRED ARTWORK PIECES BECOMES A SECOND FOCAL POINT: enlarge it until it holds its own against the headline and compose the two together — still wordless, still inside its own panel.
+  * The photograph darkens overall behind all of this so it still reads.
+  * EVEN HERE: every character stays complete, unobstructed and legible; nothing touches or is clipped by any frame edge; nothing enters the header band or the bottom strip; and in the two-panel layout nothing crosses the seam. Loud is not the same as broken.
+"""
+
+_L4 = _L3.replace("level 3 of 4 — loud)", "level 4 of 4 — loudest)") + _L4_EXTRA
+
+COVER_AI_TITLE_LEVEL_BLOCKS = {1: _L1, 2: _L2, 3: _L3, 4: _L4}
+
+
+def cover_ai_title_style_clause(level: int, *, titles=(), seed=None) -> str:
+    """0＝完全不追加（現行白／黃／紅排版）；1–4 追加該級的設計條文＋招式段＋不變的 FIXED 區塊。
+
+    招式段（2026-09-11）夾在設計條文與 FIXED 之間：件數由等級決定、抽哪幾件由程式抽，
+    所以同一則新聞重生會換一組——這就是使用者要的「更有變化」。seed 留給測試釘死。
+    """
+    block = COVER_AI_TITLE_LEVEL_BLOCKS.get(level)
+    if not block:
+        return ""
+    return block + _TITLE_FIXED_BLOCK
+
+
+# 舊的 ON/OFF 兩檔對應到拉桿的兩端（plain=0、designed=4）。舊呼叫端與既有測試靠這個。
+COVER_TITLE_STYLE_LEVELS = {
+    COVER_TITLE_STYLE_PLAIN: 0,
+    COVER_TITLE_STYLE_DESIGNED: COVER_AI_TITLE_LEVEL_MAX,
+}
+
+# 名字留著：第七批以前的呼叫端與測試都指名這一個常數，它就是最高級的條文。
+# 2026-09-11 起招式是隨機抽的，所以這個模組層常數釘 seed=0——不釘的話同一個常數
+# 每次 import 都不一樣，比對它的測試會時好時壞。實際出圖不帶 seed（才會每次換一組）。
+COVER_AI_TITLE_STYLE_DESIGNED_CLAUSE = cover_ai_title_style_clause(
+    COVER_AI_TITLE_LEVEL_MAX, seed=0
+)
+
+
+# 畫面描述留空時由 AI 依標題補（2026-09-03 使用者要求：兩欄改選填）。
+# 為什麼要補而不是直接把標題丟給生圖模型：標題是新聞語彙（「重創水電產能」），
+# 不是畫面語彙。直接餵過去，模型只能猜，而且很容易把標題的字又畫進圖裡一次。
+# 先請文字模型翻成「鏡頭前看得到什麼」，生圖端才有具體的東西可以畫。
+COVER_VISUAL_DERIVE_SYSTEM = """You turn Taiwanese TV news headlines into shot descriptions for a news cover photograph.
+
+For each headline you are given, describe the single photograph that should sit behind it. Return one description per side.
+
+Rules for every description:
+- Describe only what a camera would see: place, subject, action, weather, light, lens feel. Concrete and photographable.
+- Traditional Chinese (Taiwan), one sentence, roughly twenty to forty characters. No bullet points.
+- NEVER mention text, captions, headlines, numbers or charts — the photograph carries no caption and no graphics.
+- BRANDS: ONLY THOSE THE HEADLINE OR THE SUPPLIED DESCRIPTION NAMES. When the story is about a named brand, company or product, say so in the description and let it appear with its real mark on the objects that belong to it — its own signage, packaging, product body, vehicle livery, screen or jersey. Every OTHER brandable surface in the scene stays de-identified: blank surfaces or generic abstract marks, never a readable brand name the story does not name, and never an invented one. Never put one brand's mark on another brand's object.
+- Do not restate the headline. Turn its meaning into a scene.
+- If a headline or the supplied description writes a specific personal name, the photograph should be a portrait-style shot of that person as its subject, face towards the camera. A job title, office, country or organisation without a personal name is not a named person — use anonymous figures, back views, crowds, objects or places. You may describe a role or title in the shot, but that does not license filling a named-person field.
+- If a headline is about data, money or policy, choose a real-world scene that stands for it (a building, a counter, hands, equipment), never a graph.
+- If a side's description is already supplied, repeat it back unchanged — but still list the named real people it shows, and only those whose personal names appear verbatim in the headline, the supplied description, or the user's explicit input.
+- END EVERY DESCRIPTION YOU WRITE with one short clause naming the light and the palette, chosen by what the story is: disaster, crime, war and accidents get dark, desaturated, high-contrast light; health, family, education and human-interest stories get warm, soft, low-contrast light; weather, sea, cold and environment stories get cool blue-grey light; money, technology and industry get clean, hard, slightly cold light. Never write the same clause for both sides when the two stories differ in kind.
+
+Also return, per side, "portrait_subjects_left" / "portrait_subjects_right": every specific named real person whose face that side's photograph would show, names copied VERBATIM from the headline, the supplied description, or the user's explicit input (no title, no organisation), at most three per side; an empty array when no personal name appears in that material. Never infer a name from a title, event, country, organisation or common knowledge. "portrait_subjects_left_en" / "portrait_subjects_right_en": the same people, same order, same length, each copied VERBATIM from that material when an English or original-Latin spelling is present; empty string when it is not. Never fill an English name from Wikipedia, translation or common knowledge.
+"""
+
+# ---- 標題斷句（2026-09-14 使用者裁決：斷句交給消化模型，規則只當退路）----
+# 只要詞組，不要行：一行放幾個字由版面寬度決定（compose 量像素），模型不知道；
+# 它只負責「哪裡是一個詞的邊界」。紅線：接回去必須等於原段，一個字都不能改。
+TITLE_BREAK_SYSTEM = """You segment Taiwanese TV news headline fragments into phrases so a layout engine can break lines only between phrases.
+
+Rules:
+- For each input string, return its phrases in order. Concatenating the phrases MUST reproduce the input exactly — same characters, same order, nothing added, dropped, translated or reordered.
+- A phrase is the smallest unit that must never be split across two lines: a personal name, a place name (台灣, 台積電, 格陵蘭), an organisation, a job title, a figure with its unit (9000億, 42度, 35%關稅), a quoted term with its quotes (「擴張版」), a verb with its object when they read as one beat (上看9000億, 發布地圖).
+- Prefer 2–4 phrases per input of 2–5 characters each; never return a single phrase for an input longer than 5 characters unless it truly is one unbreakable term.
+- Output JSON only."""
+
+TITLE_BREAK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "segments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "phrases": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["text", "phrases"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["segments"],
+    "additionalProperties": False,
+}
+
+COVER_VISUAL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "visual_left": {"type": "string"},
+        "visual_right": {"type": "string"},
+        "portrait_subjects_left": {"type": "array", "items": {"type": "string"}},
+        "portrait_subjects_left_en": {"type": "array", "items": {"type": "string"}},
+        "portrait_subjects_right": {"type": "array", "items": {"type": "string"}},
+        "portrait_subjects_right_en": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "visual_left", "visual_right",
+        "portrait_subjects_left", "portrait_subjects_left_en",
+        "portrait_subjects_right", "portrait_subjects_right_en",
+    ],
+    "additionalProperties": False,
+}
+
+
+# ============================================================
+# YT 直播封面（2026-09-05 使用者需求）
+#
+# 使用情境：直播開播前要一張 YouTube 封面。使用者只給一句標題（半形空格分兩段）、
+# 選一個副標、要不要附圖；LIVE 章、日期、Logo、白／黃兩色描邊標題全部由
+# compose.compose_yt_cover 用字型與正版素材疊上去——封面上的錯字或變形 Logo
+# 是對外事故，這條線上沒有任何文字交給生圖模型。
+#
+# 底圖三條路（依附圖決定，見 main.editor_yt_cover）：
+#   有 asis 附圖 → 程式直接裁 16:9 當底圖，不打生圖模型（範例：C 肝針筒、引擎蓋）
+#   有 scene／portrait／map 附圖 → 生圖模型帶附圖生無文字底圖
+#   沒附圖 → 文字模型先依標題補畫面描述（可含具名真人，走主流程肖像查照），再生底圖
+#
+# 一套版型（使用者裁決 2026-09-05：不拆三種子規格）。範例裡男護理師那張 Logo 與
+# LIVE 左右互換、第三行警語、漸層字都不納入。
+# ============================================================
+
+# 兩個獨立開關（頻道實際版面：原音呈現在 LIVE 章上方、AI即時翻譯在日期下方，可並存）
+YT_COVER_ORIGINAL_AUDIO_LABEL = "原音呈現"
+YT_COVER_AI_TRANSLATION_LABEL = "AI即時翻譯"
+
+# 兩種 YT 直播版面，同一條 /api/editor/yt-cover：news＝國內外新聞直播（LIVE 章左上、副標）；
+# hourly＝整點直播（Logo 左上、LIVE 章右上＋選填整點時間、紅底日期、無副標）
+YT_COVER_LAYOUT_NEWS = "news"
+YT_COVER_LAYOUT_HOURLY = "hourly"
+YT_COVER_LAYOUT_HOT = "hot"          # 今日熱搜（2026-09-06 型錄 H 類）：紅色系、無日期無 LIVE
+# 24H LIVE（2026-09-13）：hourly 的鏡像——Logo 換兩層版移右上、章換成左上的 24H LIVE
+# 角標素材、標題從兩行白黃改成一行深紅斜體。**純合成版**，沒有 AI 標題路徑。
+YT_COVER_LAYOUT_LIVE24 = "live24"
+# live24 的底圖模式（2026-09-13 使用者裁決：「前台加一題底圖模式」）。
+# 為什麼要多一個欄位：漸層與疊圖都要「兩格都有圖」，共用同一個觸發訊號分不開。
+LIVE24_BG_FULL = "full"        # 滿版：一張鋪滿
+LIVE24_BG_BLEND = "blend"      # 雙切漸層：兩張羽化拼接（預設，維持接線當天的行為）
+LIVE24_BG_INSET = "inset"      # 雙切疊圖：大底圖＋右側白框斜照片
+LIVE24_BG_MODES = (LIVE24_BG_FULL, LIVE24_BG_BLEND, LIVE24_BG_INSET)
+LIVE24_BG_LABELS = {
+    LIVE24_BG_FULL: "滿版",
+    LIVE24_BG_BLEND: "雙切漸層",
+    LIVE24_BG_INSET: "雙切疊圖",
+}
+YT_COVER_LAYOUTS = (
+    YT_COVER_LAYOUT_NEWS, YT_COVER_LAYOUT_HOURLY, YT_COVER_LAYOUT_HOT,
+    YT_COVER_LAYOUT_LIVE24,
+)
+
+# 標題分段：使用者用**恰好一個**半形空格分兩段就直接切；零個或兩個以上空格
+# 交給文字模型判斷（範例 C 肝那張第二行本身就含空格「11人確診 疾管署說明」，
+# 所以「遇到空格就切」不成立）。AI 的切法必須用原字元重組回原標題，否則不採用。
+_YT_TITLE_SPLIT_RE = re.compile(r" +")
+
+
+def split_live_title(title: str) -> tuple[str, str] | None:
+    """恰好一個半形空格 → (第一行, 第二行)；其餘回 None 交給 AI。"""
+    text = title.strip()
+    parts = [p for p in _YT_TITLE_SPLIT_RE.split(text) if p]
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return None
+
+
+def title_split_is_faithful(title: str, line1: str, line2: str) -> bool:
+    """AI 切出的兩行去掉所有空白後必須等於原標題去掉所有空白——改字就不採用。"""
+    squash = lambda s: re.sub(r"\s+", "", s)  # noqa: E731
+    return bool(squash(line1)) and bool(squash(line2)) and (
+        squash(line1) + squash(line2) == squash(title)
+    )
+
+
+def realign_split_to_title(title: str, line1: str) -> tuple[str, str]:
+    """把 AI 的分段點套回**原標題**，保留原有空格。
+
+    AI 常把「11人確診 疾管署說明」回成「11人確診疾管署說明」——字沒改、空格掉了，
+    faithful 檢查會過，但範例上那個空格是編輯刻意留的。所以只取 AI 的分段位置，
+    兩行的字元從原標題切，不用 AI 回傳的字串。
+    """
+    text = title.strip()
+    target = len(re.sub(r"\s+", "", line1))
+    seen = 0
+    for index, char in enumerate(text):
+        if not char.isspace():
+            seen += 1
+            if seen == target:
+                return text[: index + 1].strip(), text[index + 1 :].strip()
+    return fallback_split_title(text)
+
+
+def fallback_split_title(title: str) -> tuple[str, str]:
+    """AI 也切不出合法結果時的最後退路：先用第一個空格，沒有空格就對半切。
+
+    對半切一定能出圖但不一定通順；寧可出一張要人工改行的圖，也不要整個 500。
+    """
+    text = title.strip()
+    if " " in text:
+        head, _, tail = text.partition(" ")
+        if head.strip() and tail.strip():
+            return head.strip(), tail.strip()
+    # 2026-09-14：不再純對半——走 compose 那支（模型邊界優先、規則退路），跟十點同一套。
+    from compose import _split_line_near_middle
+
+    head, tail = _split_line_near_middle(text)
+    if head.strip() and tail.strip():
+        return head, tail
+    mid = max(1, len(text) // 2)
+    return text[:mid], text[mid:]
+
+
+# 十點不一樣封面（合成版）的標題分行：使用者用空白（半形／全形）或換行自己分，
+# 最多 3 行；沒分且超過 COVER_TITLE_AUTO_SPLIT_LEN 個字就對切成兩行。
+# 紅線同 YT：只切、不改字——去掉分隔符後必須等於原標題。
+COVER_TITLE_AUTO_SPLIT_LEN = 7
+COVER_TITLE_MAX_LINES = 3
+# 2026-09-09 使用者：標題裡的「9/12」被當成分段，封面切出「9」與「12開放民眾參觀」。
+# 斜線兩邊都是數字時就是日期／比數，不是分隔符；其餘用法（羅馬/浴場）照舊分段。
+_COVER_TITLE_SPLIT_RE = re.compile(r"[ \u3000\n\r｜|]+|(?<!\d)/+|/+(?!\d)")
+
+
+def split_cover_title(title: str) -> list[str]:
+    text = (title or "").strip()
+    if not text:
+        return []
+    parts = [p for p in _COVER_TITLE_SPLIT_RE.split(text) if p]
+    if len(parts) > COVER_TITLE_MAX_LINES:
+        parts = parts[: COVER_TITLE_MAX_LINES - 1] + ["".join(parts[COVER_TITLE_MAX_LINES - 1 :])]
+    if len(parts) == 1 and len(parts[0]) > COVER_TITLE_AUTO_SPLIT_LEN:
+        # 2026-09-13 使用者回報「勞保撥補上看1300億元大關」被切成「…看1／300億…」、
+        # 「擴張版」被腰斬：這裡原本是純粹對切。改走 compose 那套（數字／括號／專有名詞
+        # 不切、虛詞邊界優先），跟超寬防呆同一支函式，斷句只有一種規則。
+        # compose 在函式內才 import 本模組，這裡也延後 import 避免循環。
+        from compose import _split_line_near_middle
+
+        head, tail = _split_line_near_middle(parts[0])
+        parts = [head, tail] if head.strip() and tail.strip() else parts
+    return parts
+
+
+# ---- 封面標題自動消化（2026-09-06 使用者裁決：貼新聞內文 → AI 出標題 → 回填欄位，
+# 編輯看過再自己按生成，不直接接生圖）----
+#
+# 十點不一樣：兩個標題（左格、右格）各自是同一則新聞的兩個切面，每個標題用半形空格
+# 分成 **3 段**（每段就是封面上的一行，白／黃／紅；2026-09-08 使用者回報只出 2 段就沒有紅字、
+# 或生圖階段瞎掰第三段，改成一律 3 段）。YT 直播：一句標題用一個半形空格分兩段（版型固定兩行）。
+# 忠實度規則由 main.CONTENT_FIDELITY_RULES 接在後面（同主流程），標題只能用原文有的事實。
+COVER_TITLE_DIGEST_SYSTEM_TEN = """You write the headlines for a Taiwanese prime-time news programme cover (十點不一樣) from one news article.
+
+FIRST decide how many stories the article carries, and say so in "topics":
+- "topics" is 1 when the whole article is about ONE event, even if it describes several aspects of it (what happened and its impact, the scene and the numbers, the cause and the response). Different angles on the same event are still one story.
+- "topics" is 2 when the article carries TWO genuinely different events — different subjects, different places or different incidents that merely sit in the same article.
+- Never answer 2 just because the article is long, and never merge two unrelated events into one headline.
+
+THEN write the headlines.
+- When "topics" is 1: write ONE headline into "title_left" for the core of that story, and leave "title_right" as an empty string.
+- When "topics" is 2: write "title_left" for the story that appears FIRST in the article and "title_right" for the one that appears second. Keep the two headlines about their own story only — never repeat the same facts in both.
+- Each headline is 2 OR 3 segments separated by ONE half-width space; each segment 4–7 characters, NEVER more than 7 (a longer segment shrinks every line on the cover). Each segment becomes one printed line. Prefer 3 segments — with 3 the headline runs 12–18 characters excluding spaces and fills the cover. Use 2 segments (8–14 characters excluding spaces) when the story is genuinely said in fewer words, or when the only way to reach 3 would be to cut a name or a fixed phrase in half. NEVER pad a short headline up to 3 segments with filler.
+- A SEGMENT BOUNDARY IS A READING BREAK, NOT A CHARACTER COUNT. Every segment has to stand on its own as a phrase. 「葉門青年運動」is the name of an organisation, so 「葉門青年 運動 奪下紅海咽喉」is wrong — it reads as young people in Yemen taking exercise. The correct answer is 「葉門青年運動 奪下紅海咽喉」in 2 segments. The same holds for place names, personal names, organisation names, titles and fixed four-character phrases: never let a segment boundary fall inside one.
+- No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
+- Traditional Chinese only (Taiwan usage). Never Simplified forms.
+
+ALSO SUGGEST THE TWO OPTIONAL CHIP FIELDS. Both are printed on the cover exactly as you write them, so every character has to come from the article. When the article does not support one, return an empty array — an empty field is correct and normal, a padded one is a defect.
+- "side_labels": 3 to 6 short chips for a column down one side, ONLY when the article actually enumerates parallel items — symptoms, causes, steps, warning signs, categories. Each 2 to 6 characters, a noun or a short noun phrase, no punctuation. If the article does not enumerate anything, return [].
+- "info_chips": at most 2 small free-standing chips. One may be the PLACE the story happens, written as the article writes it (「日本・名古屋」「臺南」). One may be the single most telling FIGURE with its unit or subject attached (「降41%」「5萬名確診」「7級強風」). Each at most 10 characters. Never invent or round a figure, never guess a place, and never repeat something the headline already says.
+"""
+
+# 十點不一樣（滿版）：只有一個標題，一律 3 段（每段一行，白／黃／紅）。
+COVER_TITLE_DIGEST_SYSTEM_TEN_FULL = """You write the single headline for a Taiwanese prime-time news programme cover (十點不一樣, full-bleed single-photo layout) from one news article.
+
+Return JSON with "title".
+- One punchy Traditional Chinese (Taiwan) headline for the core of the story.
+- 2 OR 3 segments separated by ONE half-width space; each segment 4–7 characters, NEVER more than 7. Each segment becomes one printed line. Prefer 3 segments — with 3 the headline runs 12–18 characters excluding spaces and fills the cover. Use 2 segments (8–14 characters excluding spaces) when the story is genuinely said in fewer words, or when the only way to reach 3 would be to cut a name or a fixed phrase in half. NEVER pad a short headline up to 3 segments with filler.
+- A SEGMENT BOUNDARY IS A READING BREAK, NOT A CHARACTER COUNT. Every segment has to stand on its own as a phrase. 「葉門青年運動」is the name of an organisation, so 「葉門青年 運動 奪下紅海咽喉」is wrong — it reads as young people in Yemen taking exercise. The correct answer is 「葉門青年運動 奪下紅海咽喉」in 2 segments. The same holds for place names, personal names, organisation names, titles and fixed four-character phrases: never let a segment boundary fall inside one.
+- No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
+- Traditional Chinese only (Taiwan usage). Never Simplified forms.
+
+ALSO SUGGEST THE TWO OPTIONAL CHIP FIELDS. Both are printed on the cover exactly as you write them, so every character has to come from the article. When the article does not support one, return an empty array — an empty field is correct and normal, a padded one is a defect.
+- "side_labels": 3 to 6 short chips for a column down one side, ONLY when the article actually enumerates parallel items — symptoms, causes, steps, warning signs, categories. Each 2 to 6 characters, a noun or a short noun phrase, no punctuation. If the article does not enumerate anything, return [].
+- "info_chips": at most 2 small free-standing chips. One may be the PLACE the story happens, written as the article writes it (「日本・名古屋」「臺南」). One may be the single most telling FIGURE with its unit or subject attached (「降41%」「5萬名確診」「7級強風」). Each at most 10 characters. Never invent or round a figure, never guess a place, and never repeat something the headline already says.
+"""
+
+COVER_TITLE_DIGEST_SYSTEM_YT = """You write the headline for a Taiwanese TV news live-stream thumbnail from one news article.
+
+Return JSON with "title".
+- One Traditional Chinese (Taiwan) headline made of exactly TWO segments separated by ONE half-width space; each segment 5–12 characters. The two segments are printed as two lines: the first states the event, the second the key detail or consequence.
+- No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
+- Traditional Chinese only (Taiwan usage). Never Simplified forms.
+"""
+
+TEN_DIGEST_SEGMENT_MIN = 4
+TEN_DIGEST_SEGMENT_MAX = 7
+TEN_DIGEST_TOTAL_MIN = 12
+TEN_DIGEST_TOTAL_MAX = 18
+# 2026-09-11：段數放寬成 2 或 3（見 ten_digest_violations 的註解）。
+TEN_DIGEST_MIN_SEGMENTS = 2
+TEN_DIGEST_MAX_SEGMENTS = 3
+# 兩段版的總字數：每段 4–7 字，所以 8–14。刻意用同一組段長上下限推出來，
+# 而不是另外憑感覺訂一個數字（2026-09-11「訂數字之前先量」那條教訓）。
+TEN_DIGEST_TOTAL_MIN_TWO = TEN_DIGEST_SEGMENT_MIN * 2
+TEN_DIGEST_TOTAL_MAX_TWO = TEN_DIGEST_SEGMENT_MAX * 2
+
+
+def ten_digest_total_range(segment_count: int) -> tuple[int, int]:
+    """這個段數下，整條標題（不含空白）的合理字數區間。"""
+    if segment_count <= 2:
+        return TEN_DIGEST_TOTAL_MIN_TWO, TEN_DIGEST_TOTAL_MAX_TWO
+    return TEN_DIGEST_TOTAL_MIN, TEN_DIGEST_TOTAL_MAX
+
+
+def ten_digest_violations(data: dict | None) -> list[str]:
+    """十點消化標題的段落規格驗證：每段 4–7 字，2 段或 3 段，總字數依段數而定。
+
+    回違規描述清單（空＝合格）。同時看 title_left／title_right（雙切）與 title（滿版）。
+
+    2026-09-11：原本要求**剛好 3 段**（2026-09-08 裁決，理由是只出 2 段就沒有紅字、
+    或生圖階段自己瞎掰第三段）。使用者回報「葉門青年運動 奪下紅海咽喉」被硬湊成
+    三行、把組織名腰斬成「葉門青年／運動」之後翻案：段數交給模型依語意判斷，
+    兩段就白＋黃，不再為了紅字去切一個切不開的詞。
+    總字數的下限跟著段數走——2 段的標題本來就比較短，拿 3 段的 12 字去卡它，
+    等於用另一條路把「一律 3 段」逼回來。
+    """
+    if not isinstance(data, dict):
+        return ["not a JSON object"]
+    problems = []
+    for key in ("title_left", "title_right", "title"):
+        text = str(data.get(key) or "").strip()
+        if not text:
+            continue
+        segments = [seg for seg in split_cover_title(text) if seg.strip()]
+        total = sum(len(seg) for seg in segments)
+        if not TEN_DIGEST_MIN_SEGMENTS <= len(segments) <= TEN_DIGEST_MAX_SEGMENTS:
+            problems.append(
+                f'"{key}" has {len(segments)} segments, must be '
+                f"{TEN_DIGEST_MIN_SEGMENTS} or {TEN_DIGEST_MAX_SEGMENTS}"
+            )
+        for seg in segments:
+            if not TEN_DIGEST_SEGMENT_MIN <= len(seg) <= TEN_DIGEST_SEGMENT_MAX:
+                problems.append(f'"{key}" segment 「{seg}」 is {len(seg)} characters, must be {TEN_DIGEST_SEGMENT_MIN}–{TEN_DIGEST_SEGMENT_MAX}')
+        low, high = ten_digest_total_range(len(segments))
+        if not low <= total <= high:
+            problems.append(
+                f'"{key}" is {total} characters excluding spaces across '
+                f"{len(segments)} segments, must be {low}–{high}"
+            )
+    return problems
+
+
+def ten_digest_retry_note(data: dict | None) -> str:
+    """重問時附在 system prompt 後面的違規說明。"""
+    lines = "\n".join(f"- {item}" for item in ten_digest_violations(data))
+    return ("YOUR PREVIOUS ANSWER BROKE THESE RULES — rewrite the headline(s) so every rule holds:\n"
+            + lines + "\nCount the characters of each segment before you answer.")
+
+
+# 兩個籤欄位（2026-09-11）：strict schema 下一樣要列進 required，
+# 「這篇沒有」用空陣列表達，不是把欄位省略掉。
+_DIGEST_CHIP_PROPS = {
+    "side_labels": {"type": "array", "items": {"type": "string"}},
+    "info_chips": {"type": "array", "items": {"type": "string"}},
+}
+
+COVER_TITLE_DIGEST_SCHEMA_TEN = {
+    "type": "object",
+    "properties": {
+        # strict schema 下每個屬性都得列進 required，所以「單主題」是用 title_right
+        # 回空字串表達，不是把欄位省略掉。
+        # enum 不能掛在 integer 上：Gemini 的 responseSchema 子集只吃字串 enum，
+        # strict ＋ provider.require_parameters 之下整包請求會被上游退成 400
+        # （2026-09-17 B77，實測 2.6 秒回 400）。判定邏輯本來就只比對 == 1，
+        # 值域由 prompt 條文約束即可。
+        "topics": {"type": "integer"},
+        "title_left": {"type": "string"},
+        "title_right": {"type": "string"},
+        **_DIGEST_CHIP_PROPS,
+    },
+    "required": ["topics", "title_left", "title_right", "side_labels", "info_chips"],
+    "additionalProperties": False,
+}
+
+# 滿版走自己的 schema（以前借 YT 那個，只有 title，籤欄位塞不進去）
+COVER_TITLE_DIGEST_SCHEMA_TEN_FULL = {
+    "type": "object",
+    "properties": {"title": {"type": "string"}, **_DIGEST_CHIP_PROPS},
+    "required": ["title", "side_labels", "info_chips"],
+    "additionalProperties": False,
+}
+# YT 直播「直標」（2026-09-09 使用者：貼一段文字 → 自動生兩段標題＋判定來源）。
+#
+# 與其他封面的差別有三個，都寫進條文裡：
+# 1. 版面是**兩行直排**，字數上限照「格數」算不是字元數（連續英數字併成一格，
+#    見 compose._vertical_cells）。上限直接由 compose 的常數帶進來，不手抄。
+# 2. 使用者貼的常常是外電通稿（英文 slug ＋ 場次 ＋ Restrictions），要翻成繁中。
+# 3. 來源要自己判：外電通稿的版權方寫在 Must credit／Restrictions 那幾行。
+#    只回來源名，「畫面來源：」由 compose.vstrip_source_text 自動補，不要自己寫。
+VSTRIP_TITLE_DIGEST_SYSTEM = """You write the two-line vertical caption strip (直標) for a Taiwanese TV news live stream, from whatever the editor pasted in.
+
+The pasted text is often a raw foreign wire despatch: an English slug line, a one-paragraph description, an audio note, a scheduled time, a dateline, an item number, and a restrictions note. It may equally be a Chinese news article. Read whichever it is and work from the facts in it.
+
+Return JSON with "title", "title_second" and "source".
+
+THE TWO TITLES
+- "title" is the upper (main) line and "title_second" the lower (sub) line. Both are Traditional Chinese, Taiwan usage and Taiwan terminology. Never Simplified forms, never Japanese forms.
+- They are ONE caption read top to bottom, not two separate headlines: "title" states WHAT is happening or WHO is involved, and "title_second" adds the detail that makes it newsworthy — where, when, what was said, what the consequence is. The second line must not repeat the first.
+- Length is counted in PRINTED CELLS, not characters: every Chinese character is one cell, a run of consecutive digits or Latin letters is ONE cell together (「30」is one cell, not two), and spaces take no cell at all. "title" must be at most {main_max} cells and "title_second" at most {sub_max} cells. Aim a little under those limits — a line at the limit fills the whole height of the frame.
+- No punctuation at the end of either line. Inside a line use only 「」 if you must quote; no commas, no full stops, no emoji.
+- Use only facts that are in the pasted text. Never add a figure, a date, a place or a claim that is not there. If the material is thin, write a shorter caption rather than inventing detail.
+
+THE SOURCE
+- "source" is the party whose footage this is, written the way it is credited on air, in Traditional Chinese where a standard Taiwanese rendering exists and otherwise in its own language.
+- Take it from an explicit credit requirement first — a line such as "Must credit X", "Mandatory credit: X", or a restrictions note naming X. That is the answer whenever it appears.
+- If there is no credit requirement, use the wire agency or broadcaster that the material names as the supplier. If neither is named anywhere, return an empty string rather than guessing: the editor will fill it in.
+- Write ONLY the name. Do NOT write 「畫面來源」, 「來源」, a colon, or any other prefix — the program adds that itself.
+"""
+
+VSTRIP_TITLE_DIGEST_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "title_second": {"type": "string"},
+        "source": {"type": "string"},
+    },
+    "required": ["title", "title_second", "source"],
+    "additionalProperties": False,
+}
+
+
+def vstrip_title_digest_system(main_max: int, sub_max: int) -> str:
+    """格數上限由 compose 的常數帶進來——手抄一份遲早跟版面對不上。"""
+    return VSTRIP_TITLE_DIGEST_SYSTEM.format(main_max=main_max, sub_max=sub_max)
+
+
+COVER_TITLE_DIGEST_SCHEMA_YT = {
+    "type": "object",
+    "properties": {"title": {"type": "string"}},
+    "required": ["title"],
+    "additionalProperties": False,
+}
+
+# YT 整點直播「雙則」（2026-09-08 WP2）：整點封面常常一次帶兩則新聞，版面是
+# **同一張底圖、上下兩行標題**（上白＝第一則、下黃＝第二則），每一行就是一則新聞的
+# 完整標題，不是同一句拆兩段。所以消化這一步要先判定內文是 1 個還是 2 個主題——
+# 判定那一段與十點逐字相同，差別只在標題長什麼樣。
+COVER_TITLE_DIGEST_SYSTEM_YT_HOURLY = """You write the headlines for a Taiwanese TV news hourly live-stream thumbnail from one news article.
+
+FIRST decide how many stories the article carries, and say so in "topics":
+- "topics" is 1 when the whole article is about ONE event, even if it describes several aspects of it (what happened and its impact, the scene and the numbers, the cause and the response). Different angles on the same event are still one story.
+- "topics" is 2 when the article carries TWO genuinely different events — different subjects, different places or different incidents that merely sit in the same article.
+- Never answer 2 just because the article is long, and never merge two unrelated events into one headline.
+
+THEN write the headlines.
+- When "topics" is 1: write ONE headline into "title" and leave "title_second" as an empty string. That headline is made of exactly TWO segments separated by ONE half-width space, each segment 5–12 characters; the two segments are printed as two lines, the first stating the event and the second the key detail or consequence.
+- When "topics" is 2: write "title" for the story that appears FIRST in the article and "title_second" for the one that appears second. Each of the two is ONE continuous headline printed as ONE full-width line, so it carries NO space at all and must be at most 18 characters. Keep each headline about its own story only — never repeat the same facts in both.
+- No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
+- Traditional Chinese only (Taiwan usage). Never Simplified forms.
+"""
+
+COVER_TITLE_DIGEST_SCHEMA_YT_HOURLY = {
+    "type": "object",
+    "properties": {
+        # 同十點：strict schema 下每個屬性都要列進 required，單主題是用 title_second
+        # 回空字串表達，不是把欄位省略掉。
+        # enum 不能掛在 integer 上，原因同 COVER_TITLE_DIGEST_SCHEMA_TEN（B77）。
+        "topics": {"type": "integer"},
+        "title": {"type": "string"},
+        "title_second": {"type": "string"},
+    },
+    "required": ["topics", "title", "title_second"],
+    "additionalProperties": False,
+}
+
+
+def yt_cover_is_dual(layout: str, title_second: str) -> bool:
+    """這一次的 YT 封面是不是整點「雙則」（一張封面帶兩則新聞）。
+
+    2026-09-08 使用者裁決：判定只有一條規則——整點版型＋第二標題有值＝雙則。
+    國內外新聞直播與今日熱搜沒有這個版面，帶了第二標題也忽略。
+    """
+    return layout == YT_COVER_LAYOUT_HOURLY and bool((title_second or "").strip())
+
+
+# ---- 合成版底圖的創意階梯（2026-09-13 使用者：「套創意階梯 TRY 一輪」）----
+#
+# 在此之前 YT 的創意階梯**只接在 AI 標題那條路**（yt_layout_rules／yt_title_top／
+# yt_fixed_block 全在 _yt_cover_full_image 裡）。合成版底圖走的是下面這個模板，
+# 一個創意變數都沒有——所以 live24 這種純合成版的版型，拉桿等於完全沒作用。
+#
+# 這裡補的是**攝影指向**，不是版面：合成版的版面全部由程式壓，模型只負責那張照片。
+# 每一級都要重申「疊字區照舊留白」——放大戲劇性最容易換來的就是主體壓進下三分之一。
+_YT_BG_CREATIVITY: dict[int, str] = {
+    0: "",
+    1: """
+- LOOK (level 1): shape the light a little harder than a plain news still — one clear key light, visible falloff, a touch more contrast. Keep the framing straightforward.""",
+    2: """
+- LOOK (level 2): make a deliberate photographic choice rather than a neutral record — a longer lens with the background falling out of focus, or a low angle that puts the subject against sky. Push the colour grade towards one dominant temperature. The overlay areas below still stay clear.""",
+    3: """
+- LOOK (level 3): shoot it like a title card. Strong directional or rim light, a tilted or unusually low/high camera, atmosphere in the air (haze, spray, dust, rain), a graded palette with one saturated accent. Motion is welcome — a blurred pass, streaked lights. The overlay areas below still stay clear.""",
+    4: """
+- LOOK (level 4): the most cinematic version of this scene. Extreme lighting, heavy atmosphere, a bold camera position, deep colour grading, long exposure or motion streaks if the subject allows. It must still read as a news photograph of THIS subject — not an abstract, not an illustration, not a composite of several scenes. The overlay areas below still stay clear.""",
+}
+
+
+def yt_background_creativity(level: int) -> str:
+    """合成版底圖的攝影指向。0 級回空字串＝現行行為一個像素都沒變。"""
+    return _YT_BG_CREATIVITY.get(max(0, min(4, int(level or 0))), "")
+
+
+# headline_note：疊在底圖上的標題有幾行。整點／國內外／熱搜是兩行，live24 是一行——
+# 講錯會讓模型留錯地方的白（2026-09-13）。
+YT_COVER_HEADLINE_NOTE_TWO = "two lines of large headline type will be placed across the lower part of the frame"
+YT_COVER_HEADLINE_NOTE_ONE = "one line of large headline type will be placed across the lower part of the frame"
+
+YT_COVER_VISUAL_PROMPT_TEMPLATE = """Generate a text-free photographic background for a live-stream news thumbnail.
+
+Subject:
+{visual}
+
+Requirements:
+- 16:9 horizontal, photographic, broadcast news quality, dramatic lighting, high contrast.
+- ABSOLUTELY NO text, no numbers, no letters, no captions, no logos, no watermarks, no signage, no readable writing of any kind anywhere in the image.
+- No borders, no frames, no split-screen, no collage: one single continuous scene.{creativity}
+- COMPOSITION FOR OVERLAYS: {headline_note} afterwards, and a badge will sit in each upper corner. Keep the main subject in the upper-middle of the frame, keep the lower third free of essential detail (a plain or darker area there is ideal), and keep the extreme corners free of faces and key objects.
+"""
+
+# 標題由 AI 生成模式（2026-09-06 使用者試做後裁決：兩種並存、預設 AI 生成）。
+# 整張封面連標題字、底帶都交給生圖模型；程式只後貼 LIVE 章／日期／標示／Logo。
+# 左上、右上（整點版還有左中日期位）要留空，貼上去的固定元素才不會壓到模型畫的東西。
+YT_COVER_TITLE_MODE_AI = "ai"
+YT_COVER_TITLE_MODE_COMPOSITE = "composite"
+YT_COVER_TITLE_MODES = (YT_COVER_TITLE_MODE_AI, YT_COVER_TITLE_MODE_COMPOSITE)
+
+
+# 創意 0 → 標題**預設**程式壓字（2026-09-14 使用者裁決，十點／整點／新聞直播／熱搜／live24 全套；
+# 同日晚由「一律」放寬成「預設」）。0 級的 AI 標題只是「規矩排版」，模型畫出來理論上跟程式壓字
+# 一樣，卻多了三種已實拍過的風險：錯字、原圖放置那格被整張重畫而漂移（第三輪案 04、創意階梯輪
+# C08）、字太大撞整點日期紅條（2026-09-13 極短標題那條局部修補，現已被本規則涵蓋而移除）。
+# 所以預設關閉——但**不再鎖死**：前台勾選框在 0 級是可勾的（預設不勾），使用者明點就照辦，
+# 上面那三種風險由他自己承擔。1 級起標題造型（底板、材質字面、立體字）只有模型畫得出來，勾選框
+# 反過來鎖成必勾；原圖放置的格子跟著整張重畫、接受漂移——主動開創意就是選了風格優先。
+# 追加修改帶回底圖（has_background）不動：標題已經畫在上面了，改成 composite 會再壓一層。
+# 十點的 mode 與 YT 的 title_mode 用同一組字串（ai／composite），所以共用這一支。
+def title_mode_for_creativity(
+    creativity: int,
+    title_mode: str | None,
+    has_background: bool,
+    zero_program_text: bool = True,
+) -> str:
+    """回傳這張封面實際該走的標題模式。
+
+    明點了 ai／composite 就照辦（這是「開放」的那一半）；只有**沒指定**（None，API 呼叫端省略
+    欄位）才套預設：這個版型吃創意 0 程式壓字規則、等級 0、又沒帶現成底圖 → composite，其餘 ai。
+    前台一律明送，所以這條預設只服務直接打 API 的呼叫端——但它得跟前台的預設一致，
+    否則省略欄位的呼叫端會拿到 0 級的 AI 標題（就是使用者要關掉的那個）。
+    """
+    if title_mode is not None:
+        return title_mode
+    if zero_program_text and creativity < 1 and not has_background:
+        return YT_COVER_TITLE_MODE_COMPOSITE
+    return YT_COVER_TITLE_MODE_AI
+
+# 底部壓色框開關（2026-09-08 使用者裁決；同日晚改預設 ON）。合成版由 compose 的 bottom_band
+# 決定畫不畫，AI 版只能靠 prompt——所以 LAYOUT 的第一條與 IMAGERY 的結尾都要換句話說，
+# 不然模型看到「filling the frame behind the band」還是會自己畫一條帶子出來。
+# 開的時候明講「半透明約六成」，與合成版的 compose.YT_BAND_ALPHA=153 對齊。
+#
+# 2026-09-09 使用者回報：合成版早就修過（框高不超過標題第二行、而且半透明），AI 版
+# 的框還是又高又不透明。根因就在這兩條——寫的是「lower 40%」，而合成版的框上緣是
+# compose.YT_BAND_TOP_RATIO=0.778，只佔畫面下方 22%，差了將近一倍。改寫成**關係式**
+# 描述（框只在下面那一行字後面，上緣從第一行的基線淡入）：模型跟得動「behind the
+# lower line」，跟不動百分比；比例留著但改成正確的值，只當輔助。
+#
+# 2026-09-09（第三批）實測：上面那版改寫還是沒用，成品的框仍從畫面 58% 高度起跳、
+# 兩行字都蓋進去。根因是模板本身——這一條的**下一行**寫著標題「in the lower 40% of
+# the frame」，模型把那個 40% 拿去撐色框；而且色框條排在標題條**前面**，照這個 repo
+# 的慣例（位置在後＋明文 OVERRIDE 才贏）等於被後面的數字壓過去。
+# 兩件事一起改：把 {band_clause} 移到標題那一條之後，並在條文裡明說 40% 是給文字塊
+# 的、不是給色框的，框高改用「兩行標題塊的一半」這種相對量描述。
+#
+# 2026-09-09（第四批）使用者：還是太高，要壓到第二段黃字標題。第三批把百分比整個
+# 拿掉、只留關係式描述，模型手上就只剩上面那個 40% 可抄。這一版把合成版的真實數字
+# （compose.YT_BAND_TOP_RATIO=0.778 → 只佔下方 22%）明寫回去，數字與關係式並存，
+# 並點名是「白字的基線」「黃字的上緣」——顏色比行序具體，模型跟得動。
+# 同一批另修兩行標字級：模板要求每一行 filling almost the full width，字少的那一行
+# 就被放大去撐滿，兩行大小差一截。改成「共用一個字級、由較長那行決定」。
+_BAND_CLAUSE_TEMPLATE = (
+    "- THE COLOUR BAND — TAKE THE NUMBER FROM THIS BULLET, NOT FROM THE 「lower 40%」 FIGURE ABOVE "
+    "(that figure sizes the TEXT BLOCK and says nothing about the band): a translucent {colour} band "
+    "with a subtle {texture} texture lies along the BOTTOM EDGE of the frame. ITS TOP EDGE IS AT {top}% "
+    "OF THE FRAME HEIGHT MEASURED DOWN FROM THE TOP, so the band covers ONLY THE BOTTOM {rest}% of the "
+    "picture and nothing above that line. Concretely: the top edge is a soft fade running level with "
+    "the BASELINE (the feet) of the WHITE upper headline line, so the whole white line stands on the "
+    "bare photograph with no band behind it, and the band reaches full strength just above the top of "
+    "the GOLDEN YELLOW lower line, then runs to the bottom edge. It is a shallow strip about one fifth "
+    "of the picture: NOT a panel over the lower third, NOT the lower 40%, NOT half the frame. It is "
+    "translucent (about 60% opaque): the photograph stays clearly visible through it."
+)
+# 2026-09-09：百分比改成從 compose 的常數算，不再手抄。合成版的框一調（這批 0.778→0.770），
+# 抄在 prompt 裡的數字就會過期，而第三批的教訓正是「模型手上有什麼數字就抄什麼」。
+_BAND_TOP_PERCENT = round(compose.YT_BAND_TOP_RATIO * 100)
+YT_COVER_BAND_CLAUSE_NEWS_ON = _BAND_CLAUSE_TEMPLATE.format(
+    colour="deep-navy", texture="circuit-board / tech-block",
+    top=_BAND_TOP_PERCENT, rest=100 - _BAND_TOP_PERCENT,
+)
+YT_COVER_BAND_CLAUSE_HOT_ON = _BAND_CLAUSE_TEMPLATE.format(
+    colour="DEEP CRIMSON / near-black", texture="red circuit-board / tech-block",
+    top=_BAND_TOP_PERCENT, rest=100 - _BAND_TOP_PERCENT,
+)
+YT_COVER_BAND_CLAUSE_OFF = "- There is NO solid colour band, panel or strip behind the headline: the photograph runs uninterrupted to the bottom edge and stays fully visible. The headline's readability comes from its thick outline and drop shadow alone."
+YT_COVER_BAND_IMAGERY_TAIL_ON = " behind the band"
+YT_COVER_BAND_IMAGERY_TAIL_OFF = ""
+
+
+def yt_cover_band_fields(layout: str, bottom_band: bool) -> dict:
+    """AI 標題模板的底帶兩個欄位。整點版沒有底帶，兩個欄位都用不到（模板裡沒有這兩個佔位）。"""
+    if bottom_band:
+        clause = YT_COVER_BAND_CLAUSE_HOT_ON if layout == YT_COVER_LAYOUT_HOT else YT_COVER_BAND_CLAUSE_NEWS_ON
+        return {"band_clause": clause, "band_imagery_tail": YT_COVER_BAND_IMAGERY_TAIL_ON}
+    return {"band_clause": YT_COVER_BAND_CLAUSE_OFF, "band_imagery_tail": YT_COVER_BAND_IMAGERY_TAIL_OFF}
+
+
+# 2026-09-11 第十批：news／hot 補上 hourly 已經驗過有效的那句「標題要落到底部
+# 邊緣」數字化約束。查證（見階段 C 回報，實拍熱搜四級底緣都卡在 88%）：這兩個
+# 版型原本只給 TOP 的百分比，「底部」只寫成一個沒有數字的形容詞「near the bottom
+# edge」——這個 repo 已經證實過，形容詞壓不住反覆出現的硬規則，這裡輸給的是同一份
+# prompt 裡出現三次的「不准碰邊」（HARD CONSTRAINTS 一次、FIXED 區塊兩次），模型
+# 挑了最保守的那句、抓一段安全距離。跟 hourly 那句（`{title_top:.0%}` 佔位符，
+# main._yt_cover_full_image 本來就對三個版型都傳這個值，不用改呼叫端）同源，只是
+# 拿掉日期牌／LIVE 章的用語——news／hot 都沒有日期牌可提。
+#
+# news 與 hot 共用同一個常數，不是各寫一次：這兩個版型的標題規格本來就刻意釘成
+# 一樣（見 tests/test_yt_title_parity.py），這句要是各寫一次，下次改其中一份
+# 漏改另一份，兩個版型又會悄悄分岔——跟 `_YT_PLAIN_LAYOUT["hot"] =
+# _YT_PLAIN_LAYOUT["news"]` 那行擋的是同一件事。
+#
+# 「接近但不觸碰」講清楚，不讓模型再一次只能二選一：直接點名這句跟「不准碰邊」的
+# 關係——貼近到跟全篇「不准碰邊」給的同一種細縫，不是另外空出一段安全邊界。
+_YT_TITLE_REACHES_BOTTOM_CLAUSE = (
+    "- THE BLOCK REACHES DOWN NEAR THE BOTTOM EDGE, NOT JUST NEAR ITS OWN TOP: the"
+    " TOP of the first row lands at or below {title_top:.0%} of the frame height,"
+    " and both headline lines fill the space from there down to the bottom edge —"
+    " close to it, the same closeness 'nothing touches or is clipped by any edge'"
+    " already allows everywhere else on this cover, not a wide safety gap."
+    " Stopping well short of the edge wastes the height the brief above just fixed.\n"
+)
+
+YT_COVER_FULL_PROMPT_NEWS = """Design a complete Taiwanese TV news LIVE-stream thumbnail (YouTube cover), 16:9.
+
+=== TEXT TO RENDER (Traditional Chinese, Taiwan) ===
+Render EXACTLY these strings, character for character, nothing else:
+- Headline line 1 (upper line): {line1}
+- Headline line 2 (lower line): {line2}
+
+{design_brief}=== LAYOUT ===
+{layout_rules}{band_clause}
+- Keep the UPPER-LEFT corner (a block about 24% wide and 40% tall) completely free of text or busy detail: a red LIVE badge and a date tab are pasted there afterwards.
+- Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a channel logo tab is pasted there afterwards.
+""" + _YT_TITLE_REACHES_BOTTOM_CLAUSE + """
+=== IMAGERY ===
+{visual}
+Photographic, dramatically lit, news-documentary quality, filling the frame{band_imagery_tail}.
+
+=== HARD CONSTRAINTS ===
+- Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
+- No other text anywhere: no captions, no dates, no LIVE word, no logos, no watermark, no tickers, no 示意圖 label.
+- Nothing may touch or be clipped by any edge.
+{fixed_block}
+"""
+
+# 日期條那一條（2026-09-11 創意階梯）。座標**一律由 compose 的 box 產生**，不再手打
+# 百分比——今天早上那個 bug 就是手打的百分比跟程式實際貼附座標對不上（prompt 寫
+# 「標題第一行正上方」，程式貼固定絕對座標）。
+#
+# 0 級：程式自己畫板，模型只要把那塊留白。
+# 1 級起：模型畫板，風格跟創意等級走，但**一個字都不准寫**——日期由程式壓上去。
+# 2026-09-11 pre-test 三張（見 compose.YT_HOURLY_DATE_TAB_BOX 的註解）確認模型
+# 收到四邊各自的絕對百分比時畫得進去，而且板上不會自己長出字。
+_DATE_PLATE_STYLES = {
+    1: "a clean tab with hard right angles, close in feel to the headline's own plate",
+    2: "a tab with one corner clipped off on a slant",
+    3: "a tab slanted into a parallelogram, leaning slightly forward, with a bright inner edge",
+    4: "a torn-edged or ribbon-like tab with a folded-back end, the boldest treatment on the cover",
+}
+# ---- YT 整點的創意階梯（2026-09-11 使用者：「整個生圖都套用創意階梯 1~4，
+# 包括標題構圖全都在創意設計範圍，跟十點不一樣對齊」）----
+#
+# 機制照搬十點（同一批變化池、同一顆 rng、同樣的抽籤順序），**數字自己量**：
+# 十點的 18/24/30/36% 是量十點成品訂的，YT 整點只有兩行但字更大，尺度不同。
+#
+# 2026-09-11 實測（`scratchpad/measure_yt_title_block.py`，已排除日期牌）：
+#   程式壓字版（已驗收的播出標準）兩行標題佔畫面高 **29.2%**；
+#   模型自己畫 32.7–36.2%，而且四級之間沒有單調趨勢（L1 最大、L2 最小）
+#   ——證實在此之前拉桿對標題構圖完全沒有作用。
+# 使用者裁決塊高 26/31/36/41%：L1 比播出標準再小一點讓照片突出，L4 放到 41%，
+# 跨度 1.58 倍。
+#
+# 2026-09-11 第十批：上面那組數字訂錯了。L1 要求的 26% 比程式壓字版的 29.2% 還小
+# ——階梯第一階是往下踩，模型不肯縮，實拍 L1 兩個版型都畫成 33% 左右（等於根本
+# 沒吃到這一級的指示），L2 的 31% 也才剛追平 29.2%，等於「L1／L2 幾乎沒有級距」。
+# 十點那邊 P2 改版時守過同一條規矩「訂數字前先量現行成品」，這次訂 YT 塊高沒有
+# 照做，是我的疏失。改成 32/36/40/44%：L1 貼齊 29.2% 那個播出標準再往上一點（不
+# 是往下踩），L4 維持在明顯最大的位置，跨度收到 1.375 倍——比十點四級 18→36%
+# 的 2 倍窄，因為 YT 整點只有兩行、字本來就比十點大，不需要十點那麼大的跨度才
+# 看得出級距。
+#
+# 字級落差照搬十點（使用者裁決）。這與模板原本那條
+# 「THE TWO HEADLINE LINES ARE SET AT ONE SINGLE TYPE SIZE」正面衝突，
+# 所以 1 級起把那條**拆掉**而不是覆蓋（見 yt_hourly_layout_rules）。
+# 那條原本是為了擋「短行被撐大去湊滿寬度」，放寬後要盯的就是這個回歸。
+#
+# 不搬的東西：落點（YT 的標題固定在左下，日期牌還要跟著它，放開會散掉）、
+# 側邊標籤與畫面小籤（另案）、三行邏輯與雙切幾何。
+YT_BRIEF_SPECS = {
+    1: dict(height="32%", ratio=None, stagger=False, tilt=False, knockouts=0, typeface=False,
+            colours="TWO colours only: {0} dominant, {2} for emphasis"),
+    2: dict(height="36%", ratio="1.8", stagger=True, tilt=False, knockouts=1, typeface=True,
+            colours="THREE colours: {0} dominant, {1} second, {2} on the word that carries the news"),
+    3: dict(height="40%", ratio="2.5", stagger=True, tilt=False, knockouts=1, typeface=True,
+            colours="THREE colours plus ONE accent: {0} dominant, {1} second, {2} on the word that carries the news, {3} as the accent"),
+    4: dict(height="44%", ratio="3", stagger=True, tilt=True, knockouts=2, typeface=True,
+            colours="start from {0}, {1}, {2} and {3}, then add what else you need — palette is fully open; no chroma-key green"),
+}
+# 兩行標題的字底。程式壓字版實測落在 97.9%，取整。
+YT_HOURLY_TITLE_BOTTOM_RATIO = 0.98
+# 日期牌與標題之間的呼吸空間（佔畫面高）。
+YT_HOURLY_DATE_TITLE_GAP_RATIO = 0.02
+# 日期牌高，與 compose.YT_HOURLY_DATE_TAB_HEIGHT_RATIO 同值；這裡不 import compose
+# （會循環），所以各持一份，測試釘住兩邊相等。
+YT_HOURLY_DATE_TAB_HEIGHT_RATIO = 0.095
+
+
+def _yt_block_height(level: int) -> float:
+    spec = YT_BRIEF_SPECS.get(level)
+    return int(spec["height"].rstrip("%")) / 100 if spec else 0.0
+
+
+def yt_title_top(level: int) -> float:
+    """這一級的標題第一行字頂該落在哪（佔畫面高）。0 級維持模板原本的 66%。"""
+    if level < 1:
+        return 0.66
+    return round(YT_HOURLY_TITLE_BOTTOM_RATIO - _yt_block_height(level), 4)
+
+
+def yt_hourly_date_guide_box(level: int) -> tuple[float, float, float, float]:
+    """日期牌的護欄框：坐在該級標題的正上方。
+
+    塊高一變，標題頂就變，牌也得跟著上移——護欄框寫死的話，L4 的標題頂會爬到
+    57%，而護欄還停在 52–61.5%，兩條指示自相矛盾（今天的第二條鐵律）。
+    """
+    bottom = yt_title_top(level) - YT_HOURLY_DATE_TITLE_GAP_RATIO
+    return (
+        COVER_YT_MARGIN_RATIO,
+        round(bottom - YT_HOURLY_DATE_TAB_HEIGHT_RATIO, 4),
+        round(COVER_YT_MARGIN_RATIO + 0.30, 4),
+        round(bottom, 4),
+    )
+
+
+# 與 compose.YT_MARGIN_RATIO 同值（見上，不 import compose）。
+COVER_YT_MARGIN_RATIO = 0.026
+
+
+# ---- 字級上限（2026-09-13 使用者回報）----
+#
+# 回報：整點 0 級「標題字少時字級太大，會被程式壓的日期紅條蓋到」。實拍為證
+# （東北季風／今起增強，4＋4 字，字頂爬到約 60%，日期條下緣在 61.5%）。
+#
+# 這不是「漏掉一條約束」，而是**現行條文正面叫模型放大**：原本那句寫
+# 「Choose that size from the LONGER line — it is the size at which the LONGER line
+# spans almost the full width」。兩行一樣長時「短行不准撐大」根本不會觸發，而
+# 「長行要撐到接近滿寬」還在生效——四個字要撐滿 1920，字就必然巨大，塊高爆掉。
+#
+# 原本唯一的防線是模板裡那句「字頂要在畫面高 66% 以下」——純位置的百分比框，
+# 而模型不遵守百分比框已經是本專案的定論（見 project_aicg_live24_template 的實測，
+# 以及 YT 塊高 L1 要 26% 它畫 33%）。所以改用**絕對字高上限**。
+#
+# 數字不是新編的：程式壓字版用 compose.YT_HOURLY_TITLE_SIZE_RATIO = 0.15（單字高
+# ＝畫面高 15%），產出的 29.2% 塊高就是使用者驗收過的播出標準。把那個數字直接
+# 告訴模型。
+#
+# 「撐滿寬」與「字高上限」在四字標題上直接衝突，所以**明寫誰贏**（whichever is
+# smaller），不是留著兩句讓模型自己挑——矛盾句留著讓新規則去壓舊規則，2026-09-11
+# 一天之內踩了三次。
+#
+# 只給整點（cap 有值），news／hot 傳空字串＝送出去的字一個都沒變：那兩個版型沒有
+# 程式壓的日期條可撞，而且它們的模板另有一句
+# `_YT_TITLE_REACHES_BOTTOM_CLAUSE`「從字頂一路填到底緣」，加上限就是製造新矛盾。
+#
+# 與 compose.YT_HOURLY_TITLE_SIZE_RATIO 同值；這裡不 import compose（會循環），
+# 所以各持一份，測試釘住兩邊相等（同 YT_HOURLY_DATE_TAB_HEIGHT_RATIO 的做法）。
+YT_HOURLY_TITLE_CAP_RATIO = 0.15
+
+_SHARED_SIZE_CLAUSE = (
+    "- THE TWO HEADLINE LINES ARE SET AT ONE SINGLE TYPE SIZE: identical cap height,"
+    " identical stroke weight, identical character width. Choose that size from the"
+    " LONGER line — it is the size at which the LONGER line spans almost the full width —"
+    " then set the SHORTER line at that SAME size, so the shorter line simply {tail}."
+    " NEVER enlarge the shorter line to make it reach the same width as the other one."
+    " A line with far fewer characters MUST end up visibly shorter, never bigger;"
+    " two lines at different type sizes is a defect.\n"
+    "{cap}"
+)
+
+
+def _yt_size_cap_clause(ratio: float) -> str:
+    """字高天花板。自成一條，不插進上一條的破折號中間。
+
+    2026-09-13：第一版把它塞進「Choose that size from the LONGER line — ... —
+    then set the SHORTER line」那組破折號裡，結果「then set the SHORTER line」被
+    推到三行之後，跟拆編號那次一樣把最後一段擠掉（本專案第三條教訓）。
+    """
+    return (
+        f"- THAT SIZE HAS A CEILING: no character is taller than {ratio:.0%} of the frame"
+        " height. This CEILING BEATS 'spans almost the full width' whenever the two"
+        " disagree — take whichever is smaller. A headline of only three or four"
+        " characters therefore does NOT grow to span the frame: it stays at the ceiling"
+        " and simply ends early, leaving the photograph visible beside it. Type past the"
+        " ceiling runs up into the date tab that sits above the headline.\n"
+    )
+# 0 級的三條，各版型的原文一字不改。1 級起由 _loud_layout_rules 取代。
+# YT 三個版型只差在「靠左／置中」與開場那句的措辭；拆的位置與理由完全相同。
+_YT_PLAIN_LAYOUT = {
+    # live24 的 0 級不會走到這裡（0 級是程式壓字），留一筆只為了別讓 KeyError
+    # 在有人改接線時才爆出來。
+    YT_COVER_LAYOUT_LIVE24: "",
+    "hourly": (
+        "- Both headline lines sit in the lower third, LEFT-ALIGNED near the left edge,"
+        " stacked, each on one line, huge and heavy Chinese display type. No band behind"
+        " them: the type sits directly on the photograph.\n"
+        + _SHARED_SIZE_CLAUSE.format(
+            cap=_yt_size_cap_clause(YT_HOURLY_TITLE_CAP_RATIO),
+            tail="ends earlier and leaves empty space to its right",
+        )
+        + "- Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline."
+        " Flat type: no gradient, no metallic, no 3-D.\n"
+    ),
+    # news 與 hot 的這三條本來就一字不差（兩條線的標題規格刻意釘成一樣，
+    # 見 tests/test_yt_title_parity.py），差別在底帶與保留區，那兩者不在這裡。
+    "news": (
+        "- Both headline lines are CENTRED horizontally in the lower 40% of the frame, stacked,"
+        " each on one line, in heavy black-weight (weight, not colour) Chinese display type, with"
+        " TIGHT LEADING so the two lines sit close together as one block. Keep the strokes clean"
+        " and separated — the counters (the enclosed white spaces inside characters) must stay"
+        " open; do not thicken the type until the strokes merge.\n"
+        + _SHARED_SIZE_CLAUSE.format(
+            cap="",  # news／hot 不設上限，理由見 YT_HOURLY_TITLE_CAP_RATIO 註解
+            tail="comes out narrower and sits centred with empty space at both ends",
+        )
+        + "- Line 1: solid white. Line 2: bright golden yellow. Both with a thick black outline."
+        " Flat type: no gradient, no metallic, no 3-D.\n"
+    ),
+}
+_YT_PLAIN_LAYOUT["hot"] = _YT_PLAIN_LAYOUT["news"]
+
+
+def _loud_layout_rules(level: int, *, centred: bool, single_line: bool = False) -> str:
+    """1 級起的 LAYOUT 三條：**拆掉**與創意梯子打架的那兩條，換成讓路的說法。
+
+    拆而不是覆蓋：2026-09-11 一天之內因為留著矛盾句踩了三次，模型每次都挑最寬鬆
+    或最靠近的那句遵守。
+    """
+    where = (
+        "CENTRED horizontally in the lower part of the frame"
+        if centred
+        else "in the LOWER LEFT of the frame, LEFT-ALIGNED near the left edge"
+    )
+    narrower = "comes out narrower" if centred else "ends earlier"
+    if single_line:
+        # live24 是單行版型。兩行版的措辭（stacked／row sizes／shorter line）在這裡
+        # 全部無意義，留著只會跟模板的「ONE line, never split」互相矛盾。
+        return (
+            f"- The headline sits {where}, on ONE single row, huge and heavy Chinese display"
+            " type. THE DESIGN BRIEF NEAR THE TOP OF THIS PROMPT FIXES its block height and its"
+            " colours — follow it exactly and do not substitute your own.\n"
+            "- IT IS ONE ROW. Never break it, stack it or reflow it into two; a long headline is"
+            " handled by condensing the characters, never by adding a second row.\n"
+            "- Every character keeps a thick dark outline and a hard offset drop shadow so it"
+            " reads over photography.\n"
+            + _YT_STYLE_CLAUSES[min(level, 4)]
+        )
+    return (
+        f"- Both headline lines sit {where}, stacked, each on one line, huge and heavy Chinese"
+        " display type. THE DESIGN BRIEF NEAR THE TOP OF THIS PROMPT FIXES their block height,"
+        " their relative sizes and their colours — follow it exactly and do not substitute"
+        " your own.\n"
+        "- ROW SIZES AND ROW COLOURS COME FROM THAT BRIEF, NOT FROM THE ROW ORDER. There is no"
+        " rule here that the two lines share one size, and no rule that line 1 is white and line 2"
+        " yellow. What still binds: the SHORTER line may never be stretched or letter-spaced to"
+        f" reach the width of the longer one — if the brief makes it smaller it simply {narrower},"
+        " and if the brief makes it the larger row it is larger because the brief says so,"
+        " never to fill the width.\n"
+        "- Every character keeps a thick dark outline and a hard offset drop shadow so it reads"
+        " over photography.\n"
+        + _YT_STYLE_CLAUSES[min(level, 4)]
+    )
+
+
+def yt_layout_rules(level: int, layout: str = "hourly") -> str:
+    """LAYOUT 段裡會被創意階梯改掉的那幾條。0 級一字不改，1 級起換成創意版。"""
+    if level < 1:
+        return _YT_PLAIN_LAYOUT[layout]
+    return _loud_layout_rules(
+        level, centred=layout in ("news", "hot"),
+        single_line=layout == YT_COVER_LAYOUT_LIVE24,
+    )
+
+
+def yt_hourly_layout_rules(level: int) -> str:
+    """整點版的薄包裝（既有呼叫端與測試用）。"""
+    return yt_layout_rules(level, "hourly")
+
+
+# 每一級的質感條文，比照十點的 _L1–_L4（cover_ai_title_style_clause）。
+#
+# 2026-09-11 使用者驗收 L1：「只有紅標有設計，其他都跟 0 沒有兩樣。」屬實，而且是
+# 必然的——這裡原本整段不存在。L1 的 spec 旗標全是關的（不錯位、不換字體、不反白、
+# 同字級），塊高 26% 與 0 級的 29% 又看不太出來，所以少了質感條文就真的沒有差別。
+#
+# 更關鍵的是：0 級那句「Flat type: no gradient, no metallic, no 3-D」在 1 級起被
+# **拆掉**了（拆矛盾句是對的），但沒有換上正面的命令——模型少了禁令不會自己變花，
+# 它會維持原樣。**拆禁令必須配下命令**，這是今天第四次踩到同一個形狀的坑。
+_YT_STYLE_CLAUSES = {
+    1: "- FINISH (level 1 of 4 — light). Required, not offered:\n"
+       "  * A SURFACE MATERIAL on the characters — a gradient, a soft bevel or a sheen — instead"
+       " of one flat fill.\n"
+       "  * Each row sits on its own plate, and the two plates share ONE corner treatment:"
+       " both rounded, both square, or both cut on the same slant.\n",
+    2: "- FINISH (level 2 of 4 — designed). This is a broadcast title card, not body text; a tame,"
+       " evenly-set stack is a failure. Required, not offered:\n"
+       "  * THE TWO PLATES NO LONGER MATCH: one row reversed out of a solid colour, the other on"
+       " an open outline or a slanted ribbon — assembled parts, not a paragraph on a rectangle.\n"
+       "  * Saturated FLAT poster colour over a thick black outline, a hard offset drop shadow and"
+       " a tight coloured inner edge. High contrast, slight forward lean.\n",
+    3: "- FINISH (level 3 of 4 — loud). Required, not offered:\n"
+       "  * THE BLOCK INTERLOCKS WITH THE PHOTOGRAPH instead of sitting in a clear corner: let a"
+       " plate pass BEHIND the main subject, or let the subject's silhouette break across the edge"
+       " of a plate. Not one character may be hidden by doing this.\n"
+       "  * Saturated FLAT poster colour over a thick black outline, a hard offset drop shadow and"
+       " a tight coloured inner edge.\n",
+    4: "- FINISH (level 4 of 4 — the loudest this cover goes). Required, not offered:\n"
+       "  * THE BLOCK INTERLOCKS WITH THE PHOTOGRAPH: a plate passes behind the main subject, or"
+       " the subject breaks across a plate edge. Not one character may be hidden.\n"
+       "  * Saturated FLAT poster colour, thick black outline, hard offset drop shadow, tight"
+       " coloured inner edge, and one burst or streak shape driving out from behind the block.\n"
+       "  * EVEN HERE: every character stays complete, unobstructed and legible, and nothing"
+       " touches a frame edge. Loud is not the same as broken.\n",
+}
+
+
+def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
+                    bottom_band: bool = False, visual: str = "") -> str:
+    """CANVAS 正後方那塊。與十點的 cover_design_brief 同一批池子、同一個抽籤順序。
+
+    順序刻意跟十點一致（plate → stagger → typeface → palette → tilt），只少了
+    anchor——YT 的標題固定在左下，日期牌還要跟著它，落點放開會把整塊拆散。
+    幅度（塊高／落差／反白字數／招式件數）是梯子本身，不進池子。
+
+    `visual`（第十批）：畫面描述，只用來判斷有沒有旗子（見 cover_accessories）；
+    預設空字串，不影響既有呼叫端與 fixture。
+    """
+    spec = YT_BRIEF_SPECS.get(level)
+    if not spec:
+        return ""
+    # live24 只有一行。下面每一條「兩行」的措辭都要改寫，不能留著矛盾句
+    # ——2026-09-11 一天之內因為留矛盾句踩了三次，模型每次都挑最寬鬆的那句遵守。
+    single_line = layout == YT_COVER_LAYOUT_LIVE24
+    # 日期牌只有整點是交給模型畫的；news 的日期由程式貼在左上角，hot 根本沒有日期。
+    has_date_tab = layout == "hourly"
+    # 底帶（紅／藍套色，2026-09-11 起預設關）。開著的時候整幅底帶與「每行各自一塊
+    # 底板」是兩個互相打架的指示——今天已經因為留著矛盾句踩了四次，所以這裡明講
+    # 兩者的關係，而不是讓模型自己挑一個遵守。
+    band_on = bottom_band and layout != "hourly"
+    # P4（2026-09-11）起序列本身交給 creativity.draw()：YT 標題固定左下，
+    # 落點放開會拆散日期牌，所以 anchor=False——這一顆跟十點共用同一批池子、
+    # 同一個抽籤順序，只是少抽 anchor 那一顆（見 creativity.draw() 的說明）。
+    # d.rng 是抽完這五顆之後同一顆亂數，下面 cover_accessories() 要接著它繼續
+    # 抽招式，不能另外開一顆 random.Random(seed)——已用 fixture 逐字元核對過，
+    # 換接線前後 156 筆（3 layout × 4 level × 13 seed）輸出完全一致。
+    d = creativity.draw(seed, anchor=False)
+    rng = d.rng
+    plate, stagger, typeface, palette, tilt_dir = (
+        d.plate, d.stagger, d.typeface, d.palette, d.tilt_dir,
+    )
+
+    top = yt_title_top(level)
+    rows = [
+        "=== HEADLINE DESIGN BRIEF — THESE NUMBERS ARE FIXED AND THEY OVERRIDE ANY TYPOGRAPHY WORDING FURTHER DOWN ===",
+        f"- Headline block height: about {spec['height']} of the frame height, its baseline near"
+        f" the bottom edge, so the TOP of the {'row' if single_line else 'first row'} lands around"
+        f" {top:.0%} of the frame height."
+        + (" It is the loudest thing in the frame." if level >= 3
+           else " The photograph keeps the rest of the frame — do not let the type grow past this."),
+    ]
+    if single_line:
+        # 單行沒有「行與行的落差」與「錯位」可言——那兩條是兩行版的梯子。
+        # 換成同一級該有的音量，但落在一行之內：字級落差改成句內的重音。
+        if spec["ratio"]:
+            rows.append(
+                "- ONE ROW, so there is no row-to-row size step. Instead put the emphasis INSIDE"
+                " the row: the key noun or number is the largest thing in the line, about"
+                f" {spec['ratio']} times the height of the smallest characters in it, and the"
+                " rest tucks around it. The row still reads as one continuous line."
+            )
+        else:
+            rows.append("- ONE ROW at an even size throughout.")
+    else:
+        if spec["ratio"]:
+            rows.append(_size_hierarchy_line(spec["ratio"], lines, False))
+        else:
+            rows.append("- Both rows are the SAME size at this setting.")
+        rows.append(
+            f"- The two rows are STAGGERED: {stagger}. They do not share a left edge."
+            if spec["stagger"]
+            else "- The two rows stay flush with one another, aligned on the same left edge."
+        )
+    if band_on:
+        # 底帶是使用者開的，它贏——底板退成「字後面的小塊」，不再是整行的載體。
+        rows.append(
+            "- A TRANSLUCENT COLOUR BAND ALREADY RUNS BEHIND THE HEADLINE (described further"
+            " down, and the user asked for it). Do NOT add a second full-width bar. Each row may"
+            f" still carry a SHORT plate of its own, sitting ON the band and no wider than that"
+            f" row's characters — {plate}"
+            + (", both cut the same way." if level < 2 else ", and the two are not cut alike.")
+            + " The band stays the widest element; nothing you draw spans further than it does."
+        )
+    elif single_line:
+        rows.append(
+            "- The row sits on its OWN plate, bar or ribbon, no wider than its own characters"
+            f" — never a band across the frame. The plate is {plate}."
+        )
+    else:
+        rows.append(
+            "- Each row sits on its OWN plate, bar or ribbon — never one rectangle behind both"
+            f" rows, and never a band across the frame. The plates are {plate}"
+            + (", both cut the same way." if level < 2 else ", and the two are not cut alike.")
+        )
+    if spec["typeface"]:
+        rows.append(f"- Letterforms: {typeface}. Every character stays fully legible.")
+    if spec["tilt"]:
+        rows.append(
+            f"- The whole headline block is rotated 5 to 8 degrees off horizontal, {tilt_dir}."
+            + (" THE DATE TAB ROTATES WITH IT — it belongs to the block." if has_date_tab else "")
+        )
+    if spec["knockouts"]:
+        word, verb = ("word", "sits") if spec["knockouts"] == 1 else ("words", "sit")
+        rows.append(
+            f"- {spec['knockouts']} {word} of the headline {verb} KNOCKED OUT of a filled colour"
+            " block (the characters are the empty space inside the shape)"
+            + (", each block a different colour." if spec["knockouts"] > 1 else ".")
+        )
+    rows.append(
+        (
+            "- COLOUR FOLLOWS MEANING. Use {} — the palette is fully open, and a colour switch"
+            " may happen part-way through the row.".format(spec["colours"].format(*palette))
+            if single_line else
+            "- COLOUR FOLLOWS MEANING, NEVER ROW ORDER. Colouring row 1 white and row 2 yellow is"
+            f" BANNED. Use {spec['colours'].format(*palette)}."
+            " A colour switch may happen part-way through a row."
+        )
+    )
+    rows.append(COVER_NO_GREEN_ROW)
+    # 配色池會遞四個顏色過去，日期牌是頻道識別的一部分，不跟著抽（house style）。
+    if has_date_tab:
+        rows.append(
+            "- THE DATE TAB IS NOT PART OF THAT PALETTE: it stays vivid red with white characters"
+            " whatever the rows do."
+        )
+    picked = cover_accessories(level, titles=lines, full_width=False, rng=rng,
+                               visuals=visual)
+    if picked:
+        rows.append(
+            f"- Draw EXACTLY {len(picked)} piece{'' if len(picked) == 1 else 's'} of supporting"
+            " artwork, listed here and no others. They are pictures, never captions: not one"
+            " carries a letter, a digit or a label, none covers a character or touches an edge."
+            " NONE OF THEM MAY SIT IN EITHER TOP CORNER"
+            + (" OR ON THE DATE TAB" if has_date_tab else "")
+            + ": badges and labels are pasted there afterwards."
+            " Obey each piece's own placement note."
+        )
+        rows.extend(f"  {i}. {text}" for i, text in enumerate(picked, start=1))
+    return "\n".join(rows) + "\n\n"
+
+
+def _where(box: tuple[float, float, float, float]) -> str:
+    x0, y0, x1, y1 = box
+    return (
+        f"its LEFT edge at {x0:.0%} of the frame WIDTH, its RIGHT edge at {x1:.0%} of the WIDTH,"
+        f" its TOP edge at {y0:.0%} of the frame HEIGHT, its BOTTOM edge at {y1:.0%} of the HEIGHT"
+    )
+
+
+def yt_hourly_date_clause(
+    level: int, box: tuple[float, float, float, float], date_text: str = ""
+) -> str:
+    """整點封面裡關於日期牌的那一段。
+
+    0 級：程式畫牌，模型只要把那塊留白。
+    1–4 級（2026-09-11 使用者裁決）：整個牌交給模型——紅框、風格、**連日期數字**
+    都是它畫的，但**位置是固定的**：TVBS Logo 正下方、靠左對齊、跟 Logo 留一段
+    間距（box 來自 compose.YT_HOURLY_DATE_AI_BOX，由 Logo 保留區推出來）。
+    等級只決定牌的造型有多放。
+
+    日期必須進 TEXT TO RENDER 的逐字清單（見 yt_hourly_date_text_line），才吃得到
+    「照抄、不准多寫一個字」那條約束；只在版面段描述牌長什麼樣是不夠的。
+    """
+    if level < 1:
+        return (
+            "- Keep one strip free of everything — no text, no subject, no busy detail:"
+            f" {_where(box)}. A red date tab is pasted into it afterwards, at that exact place.\n"
+        )
+    # 1 級起護欄框依該級的塊高算——塊高一變標題頂就變，牌得跟著上移。
+    box = yt_hourly_date_guide_box(level)
+    shape = _DATE_PLATE_STYLES.get(level, _DATE_PLATE_STYLES[4])
+    return (
+        f"- THE DATE TAB: draw {shape}, filled vivid red with a thick black outline and a hard"
+        " offset drop shadow, and set the date inside it in bold white characters. It belongs to"
+        " the same design as the headline — same outline weight, same shadow direction — not a"
+        " sticker laid on top.\n"
+        "  IT BELONGS TO THE HEADLINE AND SITS WITH IT: place it immediately ABOVE headline"
+        " line 1, its LEFT edge flush with the left edge of the headline, so the tab and the two"
+        " headline lines read as one stacked block. It never sits beside the headline, never"
+        " below it, and never drifts off on its own.\n"
+        f"  AS A GUIDE, THAT LANDS IT AROUND HERE: {_where(box)}. Follow the headline if the two"
+        " disagree — the tab's job is to sit on top of the headline, and this box is only telling"
+        " you roughly where that is.\n"
+        f"  THE CHARACTERS ON IT ARE EXACTLY「{date_text}」— every digit and every slash as listed"
+        " above, nothing added, nothing dropped, nothing reordered. A wrong digit here is the one"
+        " mistake nobody catches before broadcast.\n"
+    )
+
+
+def yt_hourly_date_text_line(level: int, date_text: str) -> str:
+    """TEXT TO RENDER 清單裡的日期那一行。0 級不列（程式壓的，模型不准畫）。"""
+    if level < 1 or not date_text.strip():
+        return ""
+    return f"- The date, on its own tab: {date_text.strip()}"
+
+
+def yt_hourly_date_ban(level: int) -> str:
+    """HARD CONSTRAINTS 裡「不准寫日期」那半句，1 級起要拆掉。
+
+    不能留著讓後面的條文去覆蓋它——2026-09-11 同一天踩過三次：矛盾的兩句放在一起，
+    模型挑最寬鬆或最靠近的那句遵守，結果無法預測。要改行為就把矛盾那句刪掉。
+    """
+    return "" if level >= 1 else "no dates, "
+
+
+YT_COVER_FULL_PROMPT_HOURLY = """Design a complete Taiwanese TV news LIVE-stream thumbnail (YouTube cover) for an on-the-hour news bulletin, 16:9.
+
+=== TEXT TO RENDER (Traditional Chinese, Taiwan) ===
+Render EXACTLY these strings, character for character, nothing else:
+- Headline line 1 (upper line): {line1}
+- Headline line 2 (lower line): {line2}
+{date_text_line}
+{design_brief}=== LAYOUT ===
+{layout_rules}- Keep the UPPER-LEFT corner ({logo_keep_out}) free: a small channel logo is pasted there afterwards.
+- Keep the UPPER-RIGHT corner ({badge_keep_out}) free: a red LIVE badge with the broadcast time is pasted there afterwards.
+{date_clause}- BECAUSE OF THAT, HEADLINE LINE 1 STARTS LOW: the TOP of its characters must sit at or below {title_top:.0%} of the frame height, and both headline lines fit between there and the bottom edge. Setting the headline higher runs it into the date tab.
+
+=== IMAGERY ===
+{visual}
+Photographic, news-documentary quality, filling the frame.
+{split_note}
+=== HARD CONSTRAINTS ===
+- Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms. Every digit likewise: a date is read as a fact, so a malformed or wrong digit is a factual error, not a typographic one.
+- No text anywhere other than the strings listed at the top: {date_ban}no times, no LIVE word, no logos, no watermark, no tickers, no 示意圖 label, no captions.
+- Nothing may touch or be clipped by any edge.
+{fixed_block}"""
+
+
+# ---- live24 的 AI 標題模板（2026-09-13 使用者：「標題完全沒有被創意階梯影響 這是錯的」）----
+#
+# 原本我把 live24 裁成純合成版，理由是標題規格太精確怕模型打不中。那是**使用者沒
+# 要求過的限縮**，而且跟站上其他版型不一致——十點／整點／熱搜的創意階梯都是靠
+# 標題生效的。使用者裁決：跟其他版型一樣走 AI 標題。
+#
+# 與 hourly 模板的差別：
+#   * **一行**標題，不是兩行（那個版型只有一句）
+#   * 角標在**左上**、Logo 在**右上**（hourly 相反）
+#   * 沒有日期佔位——日期是程式壓在角標的玻璃板上，模型一個字都不准畫
+#   * 標題外觀寫進 prompt：範本量到的深紅 (159,19,20)、淺灰白描邊、向右上約 3.5°、
+#     窄長體。0 級走程式壓字，那些數字才是像素級精準的；1 級起交給模型，這裡只能
+#     用文字描述，本來就會飄——這是使用者知情選擇的代價。
+YT_COVER_FULL_PROMPT_LIVE24 = """Design a complete Taiwanese TV news 24-hour LIVE-stream thumbnail (YouTube cover), 16:9.
+
+=== TEXT TO RENDER (Traditional Chinese, Taiwan) ===
+Render EXACTLY this one string, character for character, nothing else:
+- Headline (ONE single line, never broken across two rows): {line1}
+
+{design_brief}=== LAYOUT ===
+{layout_rules}- Keep the UPPER-LEFT corner ({badge_keep_out}) free: a 24H LIVE badge carrying the date is pasted there afterwards.
+- Keep the UPPER-RIGHT corner ({logo_keep_out}) free: a channel logo is pasted there afterwards.
+- BECAUSE OF THAT, THE HEADLINE STARTS LOW: the TOP of its characters must sit at or below {title_top:.0%} of the frame height, and the line fits between there and the bottom edge.
+
+=== HEADLINE LOOK ===
+- ONE line. Never split it onto two rows, never stack it, never reflow it — however long it is, it stays a single row running left to right.
+- Heavy CONDENSED display type — the characters are noticeably taller than they are wide, packed tight, so one line can span most of the frame width.
+- Deep broadcast RED characters with a pale grey-white outline and a dark drop shadow, so they stand off the photograph.
+- The whole line tilts gently UP TOWARDS THE RIGHT — a few degrees, as one rigid block. Do not rotate the characters individually.
+- It sits low and left, its left edge near the left margin.
+
+=== IMAGERY ===
+{visual}
+Photographic, news-documentary quality, filling the frame.
+
+=== HARD CONSTRAINTS ===
+- Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
+- No text anywhere other than the one headline string listed above: NO date, NO digits, NO clock time, NO "24H", NO "LIVE", no logos, no watermark, no tickers, no 示意圖 label, no captions. The date and the 24H LIVE mark are pasted in afterwards — drawing them here produces a duplicate.
+- Nothing may touch or be clipped by any edge.
+{fixed_block}"""
+
+
+# 創意階梯不准碰的東西（2026-09-11）。YT 在此之前**一條都沒有**——十點有
+# _TITLE_FIXED_BLOCK (a)–(g)、CG 有 _CG_CREATIVITY_FIXED (a)–(i)，只有 YT 裸奔。
+# 實拍 L1 的配色跑掉（指定紅底白字，畫成白底黑字）就是它擋得住的那一種。
+# 0 級不注入：那一級根本沒有創意條文，沒有東西需要被框住。
+#
+# 日期那句本來就會被 yt_fixed_block() 依 layout 整條抽掉（news/hot 沒有日期
+# 牌，見下方 yt_fixed_block），所以這裡也不帶編號——不編號才不用在乎「抽掉
+# 一句之後前後怎麼接」。
+_YT_FIXED_DATE_LINE = """THE DATE IS A FACT, NOT A GRAPHIC ELEMENT. Its digits and slashes are exactly as listed; a wrong digit is a factual error on air. The tab carrying it stays vivid red with white characters, and it stays attached to the top of the headline block.
+"""
+
+# 字句逐字／繁中臺灣用字／不准生新字／不准觸邊四條搬進 creativity.py
+# （target="image"，與十點共用，措辭以十點為準——十點先上線且經過實拍調校，
+# 這裡原本是手動抄改的，見該檔案開頭說明）。留在這裡的只剩 YT 版型專屬的：
+# 不准觸邊那條點名日期牌的補強句（2026-09-10 教訓：排除條文埋在一長串否定句
+# 中間，模型照樣會犯，見 commit 73ae198——共用句只講「不准觸邊」這個一般
+# 規則，日期牌是不是也算在內要在這裡自己點名一次）、日期牌語意、保留角落、
+# 可讀性重申、「缺字寧可不做」收尾。
+_YT_FIXED_BLOCK = (
+    "\nWHAT THE CREATIVITY SETTING NEVER CHANGES — THIS PARAGRAPH OUTRANKS THE DESIGN BRIEF:\n"
+    + creativity.fixed_block(target="image")
+    + " That includes the headline block and the date tab: neither may touch or be clipped by a"
+    " frame edge either.\n"
+    + _YT_FIXED_DATE_LINE
+    + "EVERY CHARACTER STAYS COMPLETE, UNOBSTRUCTED AND LEGIBLE at broadcast distance. Decoration"
+    " that crosses a stroke, a shadow that swallows a stroke, or type squeezed until the counters"
+    " close, is a defect — not a style. Loud is not the same as broken.\n"
+    "THE TWO RESERVED CORNERS STAY CLEAN whatever the brief says: a channel logo and a LIVE badge"
+    " are pasted over them afterwards, so nothing you draw belongs there.\n"
+    "IF A LEVER CANNOT BE SATISFIED WITHOUT ADDING WORDS OR BREAKING A CHARACTER, THE LEVER"
+    " LOSES.\n"
+)
+
+
+def yt_fixed_block(level: int, layout: str = "hourly") -> str:
+    """創意階梯不准碰的那一段。0 級沒有創意條文，也就沒有東西需要框住。
+
+    (b) 日期那條只有整點適用——news 的日期由程式貼在左上角，hot 沒有日期。
+    """
+    if level < 1:
+        return ""
+    if layout == "hourly":
+        return _YT_FIXED_BLOCK
+    return _YT_FIXED_BLOCK.replace(_YT_FIXED_DATE_LINE, "")
+
+# 雙則的兩景分割（2026-09-10 使用者實拍指出）：模板原本對分割位置**一個字都沒有講**，
+# 兩段畫面描述只是用「｜」串起來丟給模型，切在哪裡全憑它自己高興——實拍兩張分別落在
+# 畫面 59% 與 64%，都偏右，而且兩張還不一樣。
+# 偏右的具體壞處：右景被壓窄，主體被擠到最右邊，剛好撞上程式後貼的 LIVE／整點時間章。
+# 注意這只是「用文字要求」，不是幾何保證——真的要精準，得走程式拼接那條路
+# （compose.blend_backgrounds_lr，接縫定在 0.40）。
+YT_COVER_DUAL_SPLIT_NOTE = """
+=== TWO SCENES, ONE FRAME ===
+- The frame shows TWO SEPARATE NEWS SCENES side by side. The description above lists them in order, separated by "｜": the FIRST belongs to headline line 1, the SECOND belongs to headline line 2.
+- The FIRST scene occupies the LEFT part of the frame, the SECOND occupies the RIGHT part.
+- THE DIVIDING LINE SITS AT ABOUT 40% OF THE FRAME WIDTH MEASURED FROM THE LEFT EDGE — clearly LEFT of centre, so the right-hand scene is the WIDER of the two (about 60% of the width). NEVER place the division at or right of the centre line: the upper-right corner carries a badge that is pasted on afterwards, and a narrow right-hand scene pushes its subject straight under that badge.
+- The join is a soft blend, not a drawn border: no line, no frame, no gap, no gutter, no split-screen bar.
+"""
+
+YT_COVER_FULL_PROMPT_HOT = """Design a complete Taiwanese TV news "trending topics" thumbnail (YouTube cover), 16:9. It is NOT a live stream: no date, no time, no LIVE word.
+
+=== TEXT TO RENDER (Traditional Chinese, Taiwan) ===
+Render EXACTLY these strings, character for character, nothing else:
+- Headline line 1 (upper line): {line1}
+- Headline line 2 (lower line): {line2}
+
+{design_brief}=== LAYOUT ===
+{layout_rules}{band_clause}
+- Keep the UPPER-LEFT corner (a block about 30% wide and 16% tall) completely free of text or busy detail: a red-and-white "trending" tag is pasted there afterwards.
+- Keep the UPPER-RIGHT corner (a block about 20% wide and 16% tall) completely free: a red channel logo tab is pasted there afterwards.
+- Keep the very top edge free: a thin red strip is pasted along it afterwards.
+""" + _YT_TITLE_REACHES_BOTTOM_CLAUSE + """
+=== IMAGERY ===
+{visual}
+Photographic, news-documentary quality, filling the frame{band_imagery_tail}.
+
+=== HARD CONSTRAINTS ===
+- Every Chinese character must be correctly formed, complete and legible. No garbled strokes, no invented characters, no Japanese or Simplified forms.
+- No other text anywhere: no captions, no dates, no times, no LIVE word, no logos, no watermark, no tickers, no 示意圖 label.
+- Nothing may touch or be clipped by any edge.
+{fixed_block}"""
+
+# 生圖 prompt 最後一段。肖像規則（PORTRAIT_MODES）與附圖規則（USER_REFERENCE_MODES）
+# 都寫著「VARIABLE FIELDS 裡的示意圖標籤要保持可見」——這條線根本沒有 VARIABLE
+# FIELDS，模型看到那句會自己畫一個「示意圖」字樣上去。所以固定在**最後**加這段
+# override：標籤由程式疊，底圖一個字都不准有。
+YT_COVER_TEXT_FREE_OVERRIDE = """==================================================
+TEXT-FREE BACKGROUND (OVERRIDES EVERY EARLIER RULE ABOUT LABELS)
+==================================================
+- This image is a text-free background. Software adds every headline, badge and label afterwards.
+- Render NO text of any kind: no 示意圖 label, no caption, no name, no date, no logo, no watermark. Any earlier instruction that asks for a 示意圖 label or for text from VARIABLE FIELDS does not apply here — there are no variable fields.
+- Everything else in the earlier blocks (likeness, pose, scene fidelity, use of the attached references) still binds in full."""
+
+# 標題 → 畫面描述（＋分段、＋具名真人）。與十點不一樣的 COVER_VISUAL_DERIVE_SYSTEM
+# 最大的差別：**允許具名真人**——網站主流程本來就允許最多三張具名真人臉（後端
+# 查參考照），直播封面照範例（挪威國王）也要畫本人。人名交給 portrait_subjects，
+# 由 main.apply_portrait_to_image_request 走主流程查照，不在這裡決定怎麼畫臉。
+YT_COVER_DERIVE_SYSTEM = """You prepare a Taiwanese TV news live-stream thumbnail from one headline.
+
+You are given the headline, and told whether it is already split into two lines.
+
+1. "line1" / "line2" — the headline broken into TWO display lines.
+   - If the input says the split is already decided, copy the two given lines back EXACTLY.
+   - Otherwise split the headline at the most natural phrase boundary so the two lines are roughly balanced. Use ONLY the original characters in the original order: never add, drop, reorder or rewrite a single character, never translate. Removing all spaces from line1+line2 must give back the headline with its spaces removed.
+
+2. "visual" — the single photograph that sits behind the headline.
+   - Describe only what a camera would see: place, subject, action, weather, light, lens feel. Concrete and photographable.
+   - Traditional Chinese (Taiwan), one sentence, roughly twenty to forty characters. No bullet points.
+   - NEVER mention text, captions, headlines, numbers, charts, logos or watermarks — the photograph carries no writing at all.
+   - Do not restate the headline. Turn its meaning into a scene.
+   - If the headline writes a specific personal name, the photograph should be a portrait-style shot of that person as its subject. A job title, office, country or organisation without a personal name is not a named person — use anonymous figures, back views, crowds, objects or places. You may describe a role or title in the shot, but that does not license filling a named-person field.
+   - If the headline is about data, money or policy, choose a real-world scene that stands for it, never a graph.
+
+3. "portrait_subjects" — every specific named real person whose face the photograph would show, names copied VERBATIM from the headline or the user's explicit input (no title, no organisation), at most three. Empty array when no personal name appears in that material. Never infer a name from a title, event, country, organisation or common knowledge. "portrait_subjects_en" — the same people, same order, same length, each copied VERBATIM from that material when an English or original-Latin spelling is present; empty string when it is not. Never fill an English name from Wikipedia, translation or common knowledge.
+"""
+
+YT_COVER_DERIVE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "line1": {"type": "string"},
+        "line2": {"type": "string"},
+        "visual": {"type": "string"},
+        "portrait_subjects": {"type": "array", "items": {"type": "string"}},
+        "portrait_subjects_en": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["line1", "line2", "visual", "portrait_subjects", "portrait_subjects_en"],
+    "additionalProperties": False,
+}
+
+
+EDITOR_FORMATS = {
+    DEFAULT_FORMAT: {
+        "label": "預設（現行）",
+        "pipeline": PIPELINE_GENERATE,
+        "digest_rules": "",
+        "hole_side": None,
+    },
+    # 2026-09-08 使用者裁決（WP1）：左切／右切合併成一個版型，挖空方向改由請求欄位
+    # hole_side 決定（前端是版型下方一組按鈕）。表裡的 hole_side 是**預設值**，
+    # hole_side_from_request 才是「這個版型允許請求覆寫方向」的開關——舊別名沒有這個
+    # 旗標，所以 LINE／WorkCord 送 broadcast_right 而不帶欄位時方向不會被翻成左。
+    "broadcast": {
+        "label": "播出鏡面",
+        "pipeline": PIPELINE_GENERATE,
+        "digest_rules": _broadcast_rules("left"),
+        "hole_side": "left",
+        "hole_side_from_request": True,
+    },
+    # 十點不一樣封面：ai／composite 兩種模式並存，由前端「標題由 AI 生成」勾選框切換
+    # （2026-09-06 使用者裁決比照 YT 直播封面，不再拆成兩個下拉項目）。
+    # cover_mode 是預設值；實際模式由 TenCoverRequest.mode 決定。
+    # 2026-09-08 使用者裁決（WP1）：滿版／雙切也合併成一個版型，版面由「第二標題有沒有
+    # 值」自動判定（TenCoverRequest.layout 留空時；明示 layout 仍以請求為準），
+    # 所以這裡的 cover_layout 是 "auto"，不再是固定的 split／full。
+    "ten_cover": {
+        "label": "十點不一樣",
+        "pipeline": PIPELINE_COVER,
+        "cover_mode": COVER_MODE_AI,
+        "cover_layout": COVER_LAYOUT_AUTO,
+        "digest_rules": "",
+        "hole_side": None,
+    },
+    # YT 直播封面：底圖來自附圖或 AI，所有文字與 Logo／LIVE 章由 compose.compose_yt_cover 疊
+    "yt_live_cover": {
+        "label": "YT國內外新聞直播",
+        "pipeline": PIPELINE_YT_COVER,
+        "yt_layout": YT_COVER_LAYOUT_NEWS,
+        "digest_rules": "",
+        "hole_side": None,
+    },
+    # YT 直播直標（2026-09-08 WP3）：不是封面，是疊在直播訊號上的透明底 PNG。
+    # 沒有底圖、沒有生圖、沒有 AI——所有東西由 compose.compose_yt_overlay 畫。
+    # 2026-09-09 使用者：下拉往上移一格排在「國內外新聞直播」後面，標籤前面加全形減號
+    # 「－」，跟真正的封面版型在視覺上分開（它不生封面）。
+    "yt_vstrip": {
+        "label": "－YT直播直標",
+        "pipeline": PIPELINE_YT_OVERLAY,
+        "digest_rules": "",
+        "hole_side": None,
+    },
+    # YT 整點直播：同一條底圖流程，版面換成 compose.compose_yt_hourly_cover（整點時間選填）
+    "yt_hourly_cover": {
+        "label": "YT整點直播",
+        "pipeline": PIPELINE_YT_COVER,
+        "yt_layout": YT_COVER_LAYOUT_HOURLY,
+        "digest_rules": "",
+        "hole_side": None,
+    },
+    # YT 24H LIVE：同一條底圖流程，版面換成 compose.compose_yt_live24_cover。
+    # 單行標題、程式壓字；兩個附圖位都有東西才走雙切漸層（2026-09-13 使用者裁決）。
+    "yt_live24_cover": {
+        "label": "YT24H LIVE",
+        "pipeline": PIPELINE_YT_COVER,
+        "yt_layout": YT_COVER_LAYOUT_LIVE24,
+        "digest_rules": "",
+        "hole_side": None,
+    },
+    # YT 今日熱搜：同一條底圖流程，版面換成 compose.compose_yt_hot_cover（無日期無 LIVE）
+    "yt_hot_cover": {
+        "label": "YT今日熱搜",
+        "pipeline": PIPELINE_YT_COVER,
+        "yt_layout": YT_COVER_LAYOUT_HOT,
+        "digest_rules": "",
+        "hole_side": None,
+    },
+}
+
+EDITOR_FORMAT_KEYS = tuple(EDITOR_FORMATS)
+
+# B51（2026-09-15 全版型盤查）：會走「先生圖、後貼固定元素」這條路的封面版型——
+# 十點不一樣＋四種 YT 直播封面。這五個版型追加修改（/api/images/refine）一律不能
+# 置對位框，否則會把角標／Logo／節目標籤跟著縮放或推出版面。單一常數集中定義，
+# 白名單校驗（ImageRefineRequest.cover_kind）與呼叫端都從這裡取，不要各自複製一份。
+COVER_REFINE_KINDS = frozenset(
+    {"ten_cover", "yt_live_cover", "yt_hourly_cover", "yt_live24_cover", "yt_hot_cover"}
+)
+
+
+# 舊 key 的別名（2026-09-08 WP1 合併留下的相容層）。前端下拉不再列出這三個，但
+# LINE／WorkCord、舊的請求紀錄與既有測試仍會送過來，所以後端照舊解析得出來、行為
+# 逐字元不變：兩個播出鏡面別名各自釘死一側（不吃請求的 hole_side），
+# ten_cover_full 等同 ten_cover＋layout=full。
+EDITOR_FORMAT_ALIASES = {
+    "broadcast_left": {
+        "label": "播出鏡面（左側挖空）",
+        "pipeline": PIPELINE_GENERATE,
+        "digest_rules": _broadcast_rules("left"),
+        "hole_side": "left",
+    },
+    "broadcast_right": {
+        "label": "播出鏡面（右側挖空）",
+        "pipeline": PIPELINE_GENERATE,
+        "digest_rules": _broadcast_rules("right"),
+        "hole_side": "right",
+    },
+    "ten_cover_full": {
+        "label": "十點不一樣（滿版）",
+        "pipeline": PIPELINE_COVER,
+        "cover_mode": COVER_MODE_AI,
+        "cover_layout": COVER_LAYOUT_FULL,
+        "digest_rules": "",
+        "hole_side": None,
+    },
+}
+
+EDITOR_FORMAT_ALIAS_KEYS = tuple(EDITOR_FORMAT_ALIASES)
+
+
+# ============================================================
+# 版型能力矩陣（2026-09-14 模組化第 1 步）
+#
+# 「哪個版型有什麼功能」以前散在四個端點的 if 與 app.js 每個版型的 hides 裡，
+# 對齊缺口要靠翻程式才找得到（2026-09-14 TODO.md 的盤點表就是這樣翻出來的）。
+# 這張表是唯一真相：後端端點讀它，GET /api/editor/formats 吐給前端，app.js 的
+# 靜態表由 tests/test_format_capabilities_20260914 釘住必須一致。
+# 對齊缺口從此是「把 False 翻成 True 並接線」，不是「找 if」。
+#
+# 欄位語意：
+#   slots            一標一附圖位（每格自己的清單＋用途）；False＝走共用附圖區
+#   shared_refs      前台顯示共用「附參考圖」區（slots 版型收起來免得兩個入口）
+#   asis_max         單格原圖放置自動切格的上限（超過回 400）；0＝這條規則不適用
+#   fusion           多張 AI改圖 走融合版措辭
+#   creativity_scope 創意階梯管什麼：layout（CG 版面槓桿）／title／title_date（整點連日期牌）／None
+#   zero_program_text 創意 0 標題預設程式壓字（title_mode_for_creativity；可由使用者明點覆蓋）
+#   text_only_recompose 哪些版面支援「只改文字」（底圖不重生）；空＝不支援
+#   refine / instruction / engine 追加修改／指令欄／引擎選擇 有沒有
+#   digest_controls / safe_frame / stamp 消化控制列／安全框／蓋章 有沒有
+# ============================================================
+CREATIVITY_SCOPE_LAYOUT = "layout"
+CREATIVITY_SCOPE_TITLE = "title"
+CREATIVITY_SCOPE_TITLE_DATE = "title_date"
+
+
+@dataclass(frozen=True)
+class Capability:
+    slots: bool
+    shared_refs: bool
+    asis_max: int
+    fusion: bool
+    creativity_scope: str | None
+    zero_program_text: bool
+    text_only_recompose: tuple[str, ...]
+    refine: bool
+    instruction: bool
+    engine: bool
+    digest_controls: bool
+    safe_frame: bool
+    stamp: bool
+
+
+_CG_CAPABILITY = Capability(
+    slots=False, shared_refs=True, asis_max=0, fusion=True,
+    creativity_scope=CREATIVITY_SCOPE_LAYOUT, zero_program_text=False, text_only_recompose=(),
+    refine=True, instruction=True, engine=True, digest_controls=True, safe_frame=True, stamp=True,
+)
+# YT 四版型（2026-09-14 對齊）：全部一標一附圖位、共用附圖區收起來。國內外新聞直播與今日熱搜
+# 原本走共用區的上傳順序（哪張進哪格看不出來也指不了），整點 2026-09-10 改成附圖位時那兩個
+# 沒跟上——當時怕「一標一圖會把 2 張雙切／3 張三切砍掉」，但 2026-09-13 起單則的附圖位整份
+# 清單併進共用清單，1 整版／2 雙切／3 三切／4 四切那條路照走，這個顧慮已不成立。
+# 只改文字：YT 的合成版（創意 0）單則／雙則都本來就有（ytCoverRecomposeBtn＋帶 background 回來
+# 零 API 重疊文字），2026-09-14 盤點表把它寫成「只有十點滿版」是錯的，這裡照事實填。
+YT_TEXT_ONLY_SINGLE = ("single",)
+YT_TEXT_ONLY_BOTH = ("single", "dual")
+_YT_SLOT_CAPABILITY = Capability(
+    slots=True, shared_refs=False, asis_max=4, fusion=True,
+    creativity_scope=CREATIVITY_SCOPE_TITLE, zero_program_text=True, text_only_recompose=YT_TEXT_ONLY_SINGLE,
+    refine=True, instruction=True, engine=True, digest_controls=False, safe_frame=False, stamp=False,
+)
+
+FORMAT_CAPABILITIES: dict[str, Capability] = {
+    DEFAULT_FORMAT: _CG_CAPABILITY,
+    "broadcast": _CG_CAPABILITY,
+    "ten_cover": Capability(
+        slots=True, shared_refs=False, asis_max=4, fusion=True,
+        creativity_scope=CREATIVITY_SCOPE_TITLE, zero_program_text=True,
+        text_only_recompose=(COVER_LAYOUT_FULL, COVER_LAYOUT_SPLIT),   # 雙切 2026-09-14 補上
+        refine=True, instruction=True, engine=True, digest_controls=False, safe_frame=False, stamp=False,
+    ),
+    "yt_live_cover": _YT_SLOT_CAPABILITY,
+    "yt_vstrip": Capability(
+        slots=False, shared_refs=False, asis_max=0, fusion=False,
+        creativity_scope=None, zero_program_text=False, text_only_recompose=(),
+        refine=False, instruction=False, engine=False, digest_controls=False, safe_frame=False, stamp=False,
+    ),
+    "yt_hourly_cover": Capability(**{**asdict(_YT_SLOT_CAPABILITY),
+                                     "creativity_scope": CREATIVITY_SCOPE_TITLE_DATE,
+                                     "text_only_recompose": YT_TEXT_ONLY_BOTH}),
+    "yt_live24_cover": Capability(**{**asdict(_YT_SLOT_CAPABILITY), "text_only_recompose": YT_TEXT_ONLY_BOTH}),
+    "yt_hot_cover": _YT_SLOT_CAPABILITY,
+}
+assert set(FORMAT_CAPABILITIES) == set(EDITOR_FORMATS), "每個版型都要有能力矩陣"
+
+# 別名（broadcast_left／right、ten_cover_full）沿用本尊那筆
+_CAPABILITY_ALIASES = {"broadcast_left": "broadcast", "broadcast_right": "broadcast", "ten_cover_full": "ten_cover"}
+assert set(_CAPABILITY_ALIASES) == set(EDITOR_FORMAT_ALIASES)
+
+# YT 端點收的是 layout 不是版型 key
+_YT_LAYOUT_FORMAT_KEYS = {
+    YT_COVER_LAYOUT_NEWS: "yt_live_cover",
+    YT_COVER_LAYOUT_HOURLY: "yt_hourly_cover",
+    YT_COVER_LAYOUT_LIVE24: "yt_live24_cover",
+    YT_COVER_LAYOUT_HOT: "yt_hot_cover",
+}
+assert set(_YT_LAYOUT_FORMAT_KEYS) == set(YT_COVER_LAYOUTS)
+
+
+def capability_for(key: str | None) -> Capability:
+    """版型 key（含別名）→ 能力；不認得的 key 回預設 CG 那筆（跟 get() 同一種寬容）。"""
+    key = _CAPABILITY_ALIASES.get(key or "", key or "")
+    return FORMAT_CAPABILITIES.get(key, FORMAT_CAPABILITIES[DEFAULT_FORMAT])
+
+
+def yt_format_key(layout: str) -> str:
+    return _YT_LAYOUT_FORMAT_KEYS[layout]
+
+
+def hides_for(key: str | None) -> dict[str, bool]:
+    """app.js 每個版型的 hides 物件，由能力推導（只列要收起來的，跟前台手寫的形狀一樣）。"""
+    cap = capability_for(key)
+    hides = {
+        "digestControls": not cap.digest_controls,
+        "safeFrame": not cap.safe_frame,
+        "stamp": not cap.stamp,
+        "engine": not cap.engine,
+        "instruction": not cap.instruction,
+        "refUpload": not cap.shared_refs,
+        "refine": not cap.refine,
+    }
+    return {name: True for name, hidden in hides.items() if hidden}
+
+
+def format_catalogue() -> list[dict]:
+    """GET /api/editor/formats 的內容：版型 key、名稱、pipeline、版面、能力、hides（hint 只在 app.js）。"""
+    rows = []
+    for key, spec in EDITOR_FORMATS.items():
+        rows.append({
+            "key": key,
+            "label": spec["label"],
+            "pipeline": spec["pipeline"],
+            "yt_layout": spec.get("yt_layout"),
+            "cover_layout": spec.get("cover_layout"),
+            "capabilities": {**asdict(FORMAT_CAPABILITIES[key]),
+                             "text_only_recompose": list(FORMAT_CAPABILITIES[key].text_only_recompose)},
+            "hides": hides_for(key),
+        })
+    return rows
+
+
+def get(key: str | None) -> dict:
+    """取版型定義；未知或空值一律退回 default（呼叫端不用自己判空）。
+
+    先查正式表，再查別名表——別名是完整的一筆定義，不是薄指標，所以
+    `get("broadcast_left")["digest_rules"]` 這種既有寫法照樣拿得到東西。
+    """
+    name = key or DEFAULT_FORMAT
+    if name in EDITOR_FORMATS:
+        return EDITOR_FORMATS[name]
+    return EDITOR_FORMAT_ALIASES.get(name, EDITOR_FORMATS[DEFAULT_FORMAT])
+
+
+def resolve_hole_side(key: str | None, side: str | None = None) -> str | None:
+    """這一次生成實際要挖哪一側。
+
+    沒有挖空側的版型一律 None。有的版型：允許請求覆寫（新的 broadcast）時才看
+    `side`，且只認 left／right；別名與其他情況一律用表裡釘死的那一側。
+    """
+    fmt = get(key)
+    base = fmt.get("hole_side")
+    if not base:
+        return None
+    if fmt.get("hole_side_from_request") and side in HOLE_SIDES:
+        return side
+    return base
+
+
+def digest_rules(
+    key: str | None,
+    role: str,
+    stamp: bool | None = None,
+    density: str | None = None,
+    side: str | None = None,
+) -> str:
+    """消化階段要注入的規則。非編輯角色一律空字串——第三層防呆。
+
+    stamp 與 density 都只影響播出鏡面：stamp False 時第 5／6 條換成「沒有蓋章」版本；
+    density 為 "standard"（字多）或 "maximum"（字超多）時第 6 條加一段「每卡兩行」。其餘版型兩者都不看。
+    side 同樣只有播出鏡面在看，而且只有新的 broadcast 版型吃得到（見 resolve_hole_side）：
+    消化端要把內容趕到挖空側的另外半邊，方向講錯的話整張圖的重點會被影片蓋掉。
+    播出鏡面一律現算——stamp 沒表態且非字多時，算出來跟預先算好的那份逐字元相同。
+    """
+    if role != "編輯":
+        return ""
+    resolved = resolve_hole_side(key, side)
+    if resolved:
+        return _broadcast_rules(resolved, stamp=stamp, density=density)
+    return get(key)["digest_rules"]
+
+
+def cover_layout(key: str | None) -> str:
+    """十點封面的版面：auto＝依第二標題自動判定、full＝滿版；不是十點封面時回空字串。"""
+    return get(key).get("cover_layout", "")
+
+
+def resolve_cover_layout(layout: str | None, title_right: str) -> str:
+    """十點封面這一次是滿版還是雙切。
+
+    2026-09-08 使用者裁決：兩個版型合併，改由「第二標題有沒有值」判定——有＝雙切、
+    空＝滿版。請求明示 layout（舊呼叫端、ten_cover_full 別名）時仍以請求為準。
+    """
+    if layout in COVER_LAYOUTS:
+        return layout
+    return COVER_LAYOUT_SPLIT if (title_right or "").strip() else COVER_LAYOUT_FULL
+
+
+def cover_mode(key: str | None) -> str:
+    """封面走哪一種做法；不是封面版型時回空字串。"""
+    return get(key).get("cover_mode", "")
+
+
+def hole_side(key: str | None, role: str, side: str | None = None) -> str | None:
+    if role != "編輯":
+        return None
+    return resolve_hole_side(key, side)

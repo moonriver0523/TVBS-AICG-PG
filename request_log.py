@@ -34,9 +34,22 @@ LOG_DIR = pathlib.Path(
 )
 RETENTION_DAYS = int(os.getenv("REQUEST_LOG_RETENTION_DAYS", "14"))
 
-# 新聞原文可能很長（filter 上限 5000 字），完整留著才有回查價值；但 prompt 是
-# 規則拼出來的、每筆都差不多，留全文只會把檔案灌爆，截斷即可。
-MAX_PROMPT_CHARS = 4000
+# 新聞原文可能很長（filter 上限 5000 字），完整留著才有回查價值；prompt 的前半段
+# 是規則拼出來的、每筆都差不多，所以本來截在 4000。
+#
+# 2026-09-16 調高到 24000（B29／F39）：4000 這個值把**後半段**也一起切掉了，而後半段
+# 才是每筆不一樣的部分。實測正式站 09-15 曹雪卿那 22 筆，8 筆 prompt 剛好 4000 字，
+# 逐筆看截點全部斷在 `STRUCTURE (LAYOUT RULES)` 中段，`VARIABLE FIELDS` 整段在截點
+# 之後——也就是「這次實際生出幾塊內文」在紀錄裡一個字都沒留，B57／B60 只好付費重測。
+# 本機 logs 再查：118 筆走消化生圖的紀錄**沒有一筆**落在 4000 以內，等於這條路徑
+# 的 prompt 一律被截。
+#
+# 24000 的來由是**量過的，不是估的**：拿 `news_prompt.build_prompt()`（純函式）餵本機
+# log 裡最長的 style(1255)／structure(2840)／variable(336)，跑遍 role×safe_frame×no_text×
+# type_label×portrait_mode 全部組合，最壞 19786 字（`VARIABLE FIELDS` 起點落在 5878–6305）。
+# 取 24000 是那個實測上限再加兩成餘裕，實務上等於整份 prompt 都留得下來，不必再猜
+# 「這次被切掉的是哪一段」。新聞原文本來就完整留（≤5000），多這十幾 KB 不改變量級。
+MAX_PROMPT_CHARS = 24000
 
 
 def new_request_id() -> str:
@@ -82,6 +95,7 @@ def log_generation(
     portrait_subject: str = "",
     portrait_mode: str = "",
     portrait_photo_source: str = "",
+    seed: int | None = None,
 ) -> None:
     """記一筆成功的生成。任何例外都吞掉——記錄失敗不該波及請求本身。"""
     if not ENABLED:
@@ -108,6 +122,9 @@ def log_generation(
                 "portrait_subject": portrait_subject,
                 "portrait_mode": portrait_mode,
                 "portrait_photo_source": portrait_photo_source,
+                # 變化池的 seed（F0／D1）。使用者回報「這一張好」時，靠它把同一種
+                # 長相抽回來——這就是 D1 說的「印在成品籤上」的資料落點。
+                "seed": seed,
                 "prompt": prompt[:MAX_PROMPT_CHARS],
             }
         )

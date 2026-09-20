@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
+import compose  # noqa: E402
 import safe_area_spec  # noqa: E402
 
 OUT = REPO / "docs" / "assets" / "report" / "safe-frame-spec.png"
@@ -33,15 +34,8 @@ LINE = (196, 206, 218)
 
 
 def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    """找一個裝得出繁體中文的字型；找不到就退回預設（英數仍可讀）。"""
-    for name in ("msjhbd.ttc" if bold else "msjh.ttc", "msjh.ttc", "mingliu.ttc"):
-        path = Path("C:/Windows/Fonts") / name
-        if path.exists():
-            try:
-                return ImageFont.truetype(str(path), size)
-            except OSError:
-                continue
-    return ImageFont.load_default()
+    """與線上壓字同一套字型（repo 自帶台北黑體 Bold），示意圖才跟成品長一樣。"""
+    return compose._font(size)
 
 
 def main() -> None:

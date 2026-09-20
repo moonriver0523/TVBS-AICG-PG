@@ -23,7 +23,7 @@ def image_prompt(role: str = "記者", engine: str = "gemini", safe_frame: bool 
 class DigestStageTests(unittest.TestCase):
     def test_block_present_for_every_variant(self):
         for role in ("記者", "編輯"):
-            for density in ("standard", "simplified"):
+            for density in ("standard", "simplified", "verbatim"):
                 for type_label in CHART_TYPE_CHOICES:
                     with self.subTest(role=role, density=density, type_label=type_label):
                         prompt = build_digest_instructions(role, density, type_label)
@@ -36,7 +36,7 @@ class DigestStageTests(unittest.TestCase):
         # 2026-08-05 改成陣列：要列出畫面上每一位具名真人，漏列第二個人正是那天的事故成因。
         prompt = build_digest_instructions("記者", "standard", "情境示意圖")
         for phrase in (
-            "NO UNSOURCED BRANDS",
+            "BRANDS: ONLY THOSE IN THE SOURCE",
             "NAMED REAL PEOPLE",
             "as faithfully to its real appearance as your knowledge allows",
             "LABEL WHAT IS NOT REAL",

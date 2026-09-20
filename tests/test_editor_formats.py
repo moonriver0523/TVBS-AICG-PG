@@ -1,0 +1,629 @@
+"""編輯專屬版型（2026-09-03）：防呆、幾何、與 app.js 的同步。
+
+三條紅線：
+1. **記者不可以拿到編輯的版型規則。** 這是使用者提需求時第一個講的顧慮。
+   前端有兩層（下拉不顯示、切回記者重置），這裡守後端那層。
+2. **挖空框必須剛好 16:9。** 那個框的整個存在意義就是給後製放影片對位，
+   1.7785 這種「差不多」會讓影片邊緣露出底圖。
+3. **前後端版型清單必須同步。** 只改一邊不會有執行期錯誤，只會讓使用者選了
+   一個後端不認得的 key，然後靜靜退回 default——圖出來少一個洞卻沒人知道。
+"""
+
+import hashlib
+import io
+import os
+import pathlib
+import re
+import unittest
+
+from PIL import Image, ImageChops
+
+os.environ.setdefault("OPENAI_API_KEY", "test-key")
+
+import compose  # noqa: E402
+import editor_formats  # noqa: E402
+import safe_area_spec  # noqa: E402
+from main import build_digest_instructions  # noqa: E402
+
+APP_JS = pathlib.Path(__file__).resolve().parent.parent / "app.js"
+BROADCAST_MARKER = "BROADCAST INSERT LAYOUT"
+
+
+ALL_KEYS = editor_formats.EDITOR_FORMAT_KEYS + editor_formats.EDITOR_FORMAT_ALIAS_KEYS
+
+
+class RoleGuardTests(unittest.TestCase):
+    def test_reporter_never_gets_editor_rules(self):
+        for key in ALL_KEYS:
+            with self.subTest(key=key):
+                self.assertEqual(editor_formats.digest_rules(key, "記者"), "")
+                self.assertIsNone(editor_formats.hole_side(key, "記者"))
+
+    def test_reporter_digest_prompt_is_untouched(self):
+        plain = build_digest_instructions("記者", "standard", "資料圖表")
+        for key in ALL_KEYS:
+            with self.subTest(key=key):
+                self.assertEqual(
+                    build_digest_instructions("記者", "standard", "資料圖表", editor_format=key),
+                    plain,
+                    "記者的消化指令不得因為編輯版型而改變一個字",
+                )
+
+    def test_editor_default_injects_nothing(self):
+        self.assertEqual(
+            build_digest_instructions("編輯", "standard", "資料圖表"),
+            build_digest_instructions(
+                "編輯", "standard", "資料圖表", editor_format=editor_formats.DEFAULT_FORMAT
+            ),
+        )
+
+    def test_unknown_format_falls_back_to_default(self):
+        self.assertEqual(editor_formats.get("no-such-format"), editor_formats.get(None))
+        self.assertEqual(editor_formats.digest_rules("no-such-format", "編輯"), "")
+
+
+class BroadcastDigestRulesTests(unittest.TestCase):
+    def test_only_broadcast_formats_inject_the_block(self):
+        for key in ALL_KEYS:
+            with self.subTest(key=key):
+                text = build_digest_instructions("編輯", "simplified", "資料圖表", editor_format=key)
+                self.assertEqual(BROADCAST_MARKER in text, key.startswith("broadcast"))
+
+    def test_each_side_talks_about_its_own_side(self):
+        left = build_digest_instructions("編輯", "simplified", "資料圖表", editor_format="broadcast_left")
+        right = build_digest_instructions("編輯", "simplified", "資料圖表", editor_format="broadcast_right")
+        self.assertIn("the left half of the frame, centred vertically", left)
+        self.assertIn("the right half of the frame, centred vertically", right)
+        self.assertNotIn("the right half of the frame, centred vertically", left)
+        self.assertNotIn("the left half of the frame, centred vertically", right)
+
+    def test_hole_is_vertically_centred(self):
+        # 2026-09-03 使用者裁決：不要置底，往上靠中間
+        for side in compose.BROADCAST_SIDES:
+            with self.subTest(side=side):
+                _, y0, _, y1 = compose.broadcast_hole_rect(safe_area_spec.BASE_CANVAS, side)
+                self.assertLess(
+                    abs((y0 + y1) // 2 - safe_area_spec.BASE_CANVAS[1] // 2), 6,
+                    "挖空框的垂直中心應該貼近畫布中心",
+                )
+
+    def test_rules_carry_no_digits(self):
+        # 數字會被模型當文字畫進圖裡（docs/error-cases/2026-07-23-像素安全框-分析.md）。
+        # 條列編號本身不算，只檢查句子內容。
+        for key in ("broadcast_left", "broadcast_right"):
+            with self.subTest(key=key):
+                body = editor_formats.get(key)["digest_rules"]
+                sentences = re.sub(r"(?m)^\d+\.", "", body)
+                # 三點的「three」刻意用英文字，不用阿拉伯數字
+                self.assertNotRegex(sentences, r"\d", "版型規則裡不得出現任何數字")
+
+    def test_rules_override_the_centred_layout_sentence(self):
+        text = editor_formats.get("broadcast_left")["digest_rules"]
+        self.assertIn("FOR THIS FORMAT THE BODY IS NOT CENTRED", text)
+
+
+class BroadcastStampSwitchTests(unittest.TestCase):
+    """2026-09-07：蓋章 OFF 在播出鏡面失效——第 6 條無條件要求 <蓋章> 且注入在 OFF 之後。"""
+
+    def test_stamp_off_removes_the_mandatory_stamp_line(self):
+        for key in ("broadcast_left", "broadcast_right"):
+            off = editor_formats.digest_rules(key, "編輯", stamp=False)
+            self.assertIn("no <蓋章> line", off)
+            self.assertIn("NO STAMP BANNER", off)
+            self.assertNotIn("then one <蓋章> line", off)
+            self.assertNotIn("stamp banner sits inside", off)
+            # 其餘條文（挖空、三行卡片）照舊
+            self.assertIn("exactly three [內文小標] lines", off)
+            self.assertIn("reserved for a video window", off)
+
+    def test_stamp_on_or_unset_keeps_the_original_rules(self):
+        for key in ("broadcast_left", "broadcast_right"):
+            base = editor_formats.digest_rules(key, "編輯")
+            self.assertIn("then one <蓋章> line", base)
+            self.assertEqual(editor_formats.digest_rules(key, "編輯", stamp=True), base)
+            self.assertEqual(editor_formats.digest_rules(key, "編輯", stamp=None), base)
+
+    def test_stamp_off_keeps_sides_straight(self):
+        # 2026-09-09（第三批）：OFF 也要填滿底帶，第 5 條改成把最後一張卡下移跨全寬，
+        # 剩下的卡留在內容半邊——左右不能寫反。
+        left = editor_formats.digest_rules("broadcast_left", "編輯", stamp=False)
+        self.assertIn("remaining cards stay stacked in the right half", left)
+        self.assertIn("from the left edge across to the right edge", left)
+        right = editor_formats.digest_rules("broadcast_right", "編輯", stamp=False)
+        self.assertIn("remaining cards stay stacked in the left half", right)
+        self.assertIn("from the right edge across to the left edge", right)
+
+    def test_off_rules_still_carry_no_digits(self):
+        for key in ("broadcast_left", "broadcast_right"):
+            body = editor_formats.digest_rules(key, "編輯", stamp=False)
+            self.assertNotRegex(re.sub(r"(?m)^\d+\.", "", body), r"\d")
+
+    def test_full_prompt_off_has_no_mandatory_stamp(self):
+        from main import build_digest_instructions
+        text = build_digest_instructions(role="編輯", density="simplified", type_label="資料圖表",
+                                         stamp=False, editor_format="broadcast_left")
+        self.assertIn("STAMP BANNER: OFF", text)
+        self.assertNotIn("then one <蓋章> line", text)
+        self.assertIn("no <蓋章> line", text)
+
+
+class StampDefaultTests(unittest.TestCase):
+    def test_web_default_is_off(self):
+        js = io.open(APP_JS, encoding="utf-8").read()
+        self.assertRegex(js, r"\n\s*stamp:\s*false,")
+        html = io.open(APP_JS.parent / "index.html", encoding="utf-8").read()
+        self.assertIn(">蓋章 OFF</button>", html)
+        self.assertNotIn(">蓋章 ON</button>", html)
+
+
+class HoleGeometryTests(unittest.TestCase):
+    CANVAS = safe_area_spec.BASE_CANVAS
+
+    def test_hole_is_exactly_16_by_9(self):
+        for side in compose.BROADCAST_SIDES:
+            with self.subTest(side=side):
+                x0, y0, x1, y1 = compose.broadcast_hole_rect(self.CANVAS, side)
+                width, height = x1 - x0, y1 - y0
+                self.assertEqual(width * 9, height * 16, f"{width}x{height} 不是剛好 16:9")
+
+    def test_hole_stays_inside_the_safe_area(self):
+        sx0, sy0, sx1, sy1 = safe_area_spec.safe_rect(
+            *self.CANVAS, safe_area_spec.EDITOR_FRAME_PROFILE
+        )
+        for side in compose.BROADCAST_SIDES:
+            with self.subTest(side=side):
+                x0, y0, x1, y1 = compose.broadcast_hole_rect(self.CANVAS, side)
+                self.assertGreaterEqual(x0, sx0)
+                self.assertGreaterEqual(y0, sy0)
+                self.assertLessEqual(x1, sx1)
+                self.assertLessEqual(y1, sy1)
+
+    def test_sides_land_on_opposite_halves(self):
+        left = compose.broadcast_hole_rect(self.CANVAS, "left")
+        right = compose.broadcast_hole_rect(self.CANVAS, "right")
+        self.assertLess(left[2], self.CANVAS[0] / 2 + 1)
+        self.assertGreater(right[0], self.CANVAS[0] / 2 - 1)
+
+    def test_high_res_hole_uses_height_scaled_legacy_pixels(self):
+        self.assertEqual(
+            compose.broadcast_hole_rect(
+                (2560, 1440), "left", safe_area_spec.EDITOR_FRAME_PROFILE
+            ),
+            (135, 423, 1191, 1017),
+        )
+        self.assertEqual(
+            compose.broadcast_hole_rect(
+                (3360, 1440), "right", safe_area_spec.EDITOR_FRAME_PROFILE
+            ),
+            (1817, 333, 3193, 1107),
+        )
+        self.assertEqual(compose._scaled_pixel(24, 1440), 32)
+        self.assertEqual(compose._scaled_pixel(26, 1440), 35)
+        self.assertEqual(compose._scaled_pixel(3, 1440), 4)
+        self.assertEqual(compose._scaled_pixel(30, 1440), 40)
+        self.assertEqual(compose._scaled_pixel(24, 1080), 24)
+        self.assertEqual(compose._scaled_pixel(30, 1080), 30)
+
+    def test_unknown_side_is_rejected(self):
+        with self.assertRaises(compose.ComposeError):
+            compose.broadcast_hole_rect(self.CANVAS, "middle")
+
+
+def _solid(size, colour=(20, 30, 60)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, colour).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+class ComposeOutputTests(unittest.TestCase):
+    def test_hole_is_actually_painted(self):
+        holed = compose.apply_broadcast_hole(_solid(safe_area_spec.BASE_CANVAS), "left")
+        with Image.open(io.BytesIO(holed)) as image:
+            x0, y0, x1, y1 = compose.broadcast_hole_rect(image.size, "left")
+            centre = image.convert("RGB").getpixel(((x0 + x1) // 2, (y0 + y1) // 2))
+            self.assertEqual(centre, compose.HOLE_FILL)
+            # 對側同高度必須還是原本的底圖，不能整條被蓋掉
+            outside = image.convert("RGB").getpixel((image.width - 60, (y0 + y1) // 2))
+            self.assertEqual(outside, (20, 30, 60))
+
+    def test_base_canvas_compose_is_byte_identical_to_the_golden(self):
+        output = compose.apply_broadcast_hole(
+            _solid(safe_area_spec.BASE_CANVAS, (12, 34, 56)),
+            "left",
+            canvas=safe_area_spec.BASE_CANVAS,
+            profile=safe_area_spec.EDITOR_FRAME_PROFILE,
+        )
+        self.assertEqual(
+            hashlib.sha256(output).hexdigest(),
+            "2b7843eec6f50498c2175c789eef8faf56a34ff010a61508c0d381b6623b4dc4",
+        )
+
+    def test_high_res_watermark_scales_with_the_canvas_height(self):
+        base = _solid(safe_area_spec.BASE_CANVAS, (12, 34, 56))
+        high = _solid((2560, 1440), (12, 34, 56))
+        base_without = Image.open(
+            io.BytesIO(
+                compose.apply_broadcast_hole(
+                    base, "left", canvas=safe_area_spec.BASE_CANVAS, watermark=False
+                )
+            )
+        ).convert("RGB")
+        base_with = Image.open(io.BytesIO(compose.apply_broadcast_hole(base, "left"))).convert("RGB")
+        high_without = Image.open(
+            io.BytesIO(
+                compose.apply_broadcast_hole(
+                    high, "left", canvas=(2560, 1440), watermark=False
+                )
+            )
+        ).convert("RGB")
+        high_with = Image.open(
+            io.BytesIO(compose.apply_broadcast_hole(high, "left", canvas=(2560, 1440)))
+        ).convert("RGB")
+        base_box = ImageChops.difference(base_with, base_without).getbbox()
+        high_box = ImageChops.difference(high_with, high_without).getbbox()
+        self.assertIsNotNone(base_box)
+        self.assertIsNotNone(high_box)
+        self.assertGreater(high_box[2] - high_box[0], base_box[2] - base_box[0])
+        self.assertGreater(high_box[3] - high_box[1], base_box[3] - base_box[1])
+
+    def test_cover_output_is_full_hd(self):
+        cover = compose.compose_ten_cover(
+            _solid((512, 512), (40, 60, 90)),
+            _solid((512, 512), (90, 40, 40)),
+            title_left="政府明年勞保撥補上看1300億",
+            title_right="病理醫師月薪65萬仍缺工",
+            date_text="2026/09/03",
+        )
+        with Image.open(io.BytesIO(cover)) as image:
+            self.assertEqual(image.size, compose.COVER_CANVAS)
+
+    def test_cover_rejects_unknown_badge(self):
+        with self.assertRaises(compose.ComposeError):
+            compose.compose_ten_cover(
+                _solid((64, 64)), _solid((64, 64)),
+                title_left="A", title_right="B", date_text="", badge="nope",
+            )
+
+    def test_logo_is_the_dotted_wordmark_from_the_reference(self):
+        # 2026-09-03 使用者指定改用範例圖上那顆（帶點陣圖樣），不是純字標。
+        # 純字標仍留在 tvbs-logo-white-plain.png 當備援。
+        with Image.open(compose.TVBS_LOGO_WHITE) as logo:
+            ratio = logo.width / logo.height
+        self.assertLess(ratio, 2.35, "看起來還是舊的純字標（比例太寬）")
+        self.assertTrue(
+            (compose.BRAND_DIR / "tvbs-logo-white-plain.png").exists(),
+            "舊的純字標備援不見了",
+        )
+
+    def test_v_left_stroke_reaches_the_t_stem_top(self):
+        """2026-09-09：兩個 Logo 檔的「V」左筆畫上半截都被截掉，看起來像沒點的 i。
+
+        正版 wordmark（使用者提供的播出畫面截圖）裡，V 左筆畫的上緣與 T 直劃的
+        上緣切齊、平切收邊；修好後補回的就是這一截。這裡取上半截裡的點當哨兵，
+        避免哪天又被舊素材蓋回去。
+        """
+        cases = [
+            # 檔名, V 左筆畫上半截裡必須不透明的取樣點 (x, y)
+            ("tvbs-logo-white.png", [(90, 55), (88, 60), (86, 65)]),
+            ("tvbs-logo-white-plain.png", [(330, 93), (325, 105), (318, 120)]),
+        ]
+        for name, points in cases:
+            with self.subTest(name), Image.open(compose.BRAND_DIR / name) as logo:
+                alpha = logo.convert("RGBA").split()[3]
+                for x, y in points:
+                    self.assertGreater(
+                        alpha.getpixel((x, y)), 200,
+                        f"{name} 的 V 左筆畫在 ({x},{y}) 是空的——上半截又被截掉了",
+                    )
+
+    def test_white_logo_asset_exists_and_is_white(self):
+        self.assertTrue(compose.TVBS_LOGO_WHITE.exists(), "白色 Logo 素材不見了")
+        with Image.open(compose.TVBS_LOGO_WHITE) as logo:
+            self.assertEqual(logo.mode, "RGBA", "Logo 必須去背，否則會帶一塊方底")
+            opaque = [px for px in logo.convert("RGBA").getdata() if px[3] > 200]
+            self.assertTrue(opaque, "Logo 沒有任何不透明像素")
+            # 使用者指定要白色版本，不是原始的藍色
+            self.assertTrue(
+                all(px[0] > 240 and px[1] > 240 and px[2] > 240 for px in opaque),
+                "Logo 不是白色的",
+            )
+
+
+class CoverPromptTests(unittest.TestCase):
+    """純 prompt 版封面（2026-09-03 取代合成版當預設）。
+
+    唯一的後製只剩 Logo，所以 prompt 必須自己扛住兩件事：
+    使用者給的字要逐字畫出來、而且不准模型自己畫台標。
+    """
+
+    def render(self, **overrides):
+        fields = {
+            "badge_text": "ON AIR",
+            "date_text": "2026/09/03",
+            # 2026-09-07 起模板收的是拆好的行，不是整條標題
+            "title_left_lines": "  Line 1: 政府明年勞保撥補\n  Line 2: 上看1300億",
+            "title_right_lines": "  Line 1: 病理醫師月薪65萬\n  Line 2: 仍缺工",
+            "visual_left": "政府大樓與金幣",
+            "visual_right": "病理科實驗室",
+            # 2026-09-08 設計標題開關：預設 plain＝不追加任何一段
+            "title_style_clause": "",
+            # 側邊標籤（2026-09-10）：沒填就是空字串，prompt 與過去逐字元相同
+            "side_labels_block": "",
+            # 2026-09-11：0 級＝沒有設計綱要、配色條文照舊
+            "title_design_brief": "",
+            "title_colour_rule": editor_formats.cover_title_colour_rule(0),
+        }
+        fields.update(overrides)
+        return editor_formats.COVER_AI_PROMPT_TEMPLATE.format(**fields)
+
+    def test_every_user_string_reaches_the_prompt(self):
+        prompt = self.render()
+        for needle in (
+            "十點不一樣", "AI示意圖",
+            "政府明年勞保撥補", "上看1300億", "病理醫師月薪65萬", "仍缺工",
+            "政府大樓與金幣", "病理科實驗室",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, prompt)
+
+    def test_the_date_and_on_air_tag_are_no_longer_asked_of_the_model(self):
+        """2026-09-10：兩者改由程式貼（compose.paste_cover_header_right）。
+
+        原本寫在 prompt 給模型畫，而 ensure_ai_header_band 補厚標頭帶時會把模型畫的
+        日期與紅標切成上下兩截、下面留一層殘影——固定素材本來就不該交給模型。
+        prompt 這邊要一併拿掉，否則模型照畫、程式再蓋，等於白花 token 又多一個變因。
+        """
+        prompt = self.render()
+        self.assertNotIn("2026/09/03", prompt)
+        self.assertIn("Draw NOTHING in the header band", prompt)
+        self.assertIn("keep the WHOLE band clean empty navy", prompt)
+
+    def test_prompt_forbids_the_model_drawing_a_logo(self):
+        prompt = self.render()
+        self.assertIn("NO television channel logo", prompt)
+        self.assertIn("upper-LEFT corner", prompt)
+
+    def test_programme_name_is_pasted_not_drawn(self):
+        # 2026-09-07 使用者裁決：節目標籤改貼正版模板，模型不畫節目名、標頭帶左半留白
+        prompt = self.render()
+        self.assertIn("do NOT write the programme name", prompt)
+        self.assertIn("LEFT HALF", prompt)
+        self.assertNotIn("Programme name, as a SMALL blue rounded tag", prompt)
+        self.assertNotIn("FLAT, SOLID WHITE", prompt)
+
+    def test_headlines_colour_and_line_count_follow_the_labels(self):
+        """2026-09-08：配色改成依**段落**標在每一行上，不再是「第 1 行白、第 2 行黃」。
+
+        根因是 AI 整張版把 3 行併成 2 行、只上白黃兩色（使用者回報）。行數與顏色現在
+        都逐行標在 {title_left_lines} 清單裡，模板只要求模型照標記印。
+        """
+        prompt = self.render()
+        self.assertIn("STACKED ON THE LINES GIVEN ABOVE", prompt)
+        self.assertIn("THE NUMBER OF LINES AND WHERE THEY BREAK ARE FIXED", prompt)
+        self.assertIn("never merge two listed lines onto one row", prompt)
+        self.assertIn("COLOUR EACH LINE EXACTLY AS LABELLED", prompt)
+        self.assertIn("never recolour a line", prompt)
+
+    def test_prompt_forbids_extra_text(self):
+        self.assertIn("Do not translate them", self.render())
+        self.assertIn("No text other than the strings listed above", self.render())
+
+    def test_ai_mode_is_the_default_cover(self):
+        self.assertEqual(
+            editor_formats.cover_mode("ten_cover"), editor_formats.COVER_MODE_AI
+        )
+
+    def test_composite_is_a_checkbox_not_a_second_format(self):
+        # 2026-09-06 使用者裁決：比照 YT 直播封面，合成版改成「標題由 AI 生成」勾選框，
+        # 不再是下拉清單裡的第二個項目。後端 composite 路徑必須還在（勾選框關閉時走它）。
+        self.assertNotIn("ten_cover_composite", editor_formats.EDITOR_FORMAT_KEYS)
+        self.assertTrue(hasattr(compose, "compose_ten_cover"))
+        index_html = (pathlib.Path(__file__).resolve().parent.parent / "index.html").read_text(encoding="utf-8")
+        m = re.search(r'<input id="coverAiTitle" type="checkbox"[^>]*>', index_html)
+        self.assertIsNotNone(m, "index.html 缺十點封面的「標題由 AI 生成」勾選框")
+        # 2026-09-14 使用者裁決：創意 0 標題預設程式壓字、1 級起交 AI。同日晚放寬：0 級的勾選框
+        # 可以自己勾（預設不勾），鎖定改由 JS 依等級切，HTML 不再寫死 disabled。
+        # 找的是**屬性**形式（onchange 裡的 this.checked、class 裡的 disabled:opacity-40 不算）
+        self.assertIsNone(re.search(r'\s(checked|disabled)(\s|/|>|=)', m.group(0)),
+                          "0 級的勾選框要可勾、且不預設勾起")
+        app_js = APP_JS.read_text(encoding="utf-8")
+        self.assertIn("const composite = !state.coverAiTitle", app_js)
+        self.assertIn("mode: composite ? 'composite' : 'ai'", app_js)
+
+
+class CoverVisualFallbackTests(unittest.TestCase):
+    """畫面描述改選填（2026-09-03 使用者要求）：留空由 AI 依標題補，有填照使用者的。"""
+
+    def req(self, **kw):
+        from main import TenCoverRequest
+        fields = {"title_left": "政府明年勞保撥補上看1300億", "title_right": "病理醫師月薪65萬仍缺工"}
+        fields.update(kw)
+        return TenCoverRequest(**fields)
+
+    def test_both_fields_are_optional(self):
+        request = self.req()
+        self.assertEqual(request.visual_left, "")
+        self.assertEqual(request.visual_right, "")
+
+    def test_both_supplied_still_asks_for_portrait_subjects(self):
+        # 2026-09-07：描述都填了也要打一次文字模型——不打就沒有肖像名單，具名真人會被畫成背影。
+        # 使用者填的描述仍然優先，AI 只提供名單。
+        import json
+        import main
+        from types import SimpleNamespace
+        called = []
+
+        def fake(**kw):
+            called.append(kw)
+            payload = {"visual_left": "AI 亂改的描述", "visual_right": "AI 亂改的描述",
+                       "portrait_subjects_left": ["梅爾茨"], "portrait_subjects_left_en": ["Friedrich Merz"],
+                       "portrait_subjects_right": [], "portrait_subjects_right_en": []}
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(payload, ensure_ascii=False)))])
+
+        original = main.digest_completion
+        main.digest_completion = fake
+        try:
+            result = main.resolve_cover_visuals(self.req(visual_left="政府大樓", visual_right="實驗室"))
+        finally:
+            main.digest_completion = original
+        self.assertEqual(tuple(result), ("政府大樓", "實驗室"))
+        self.assertEqual(len(called), 1)
+        self.assertEqual(main.cover_portraits(result, 0), (["梅爾茨"], ["Friedrich Merz"]))
+        self.assertEqual(main.cover_portraits(result, 1), ([], []))
+
+    def test_user_value_wins_over_the_derived_one(self):
+        import main
+        original = main.digest_completion
+
+        class _Fake:
+            choices = [type("C", (), {"message": type("M", (), {"content": '{"visual_left":"AI左","visual_right":"AI右"}'})()})()]
+
+        main.digest_completion = lambda **kw: _Fake()
+        try:
+            left, right = main.resolve_cover_visuals(self.req(visual_left="使用者左"))
+        finally:
+            main.digest_completion = original
+        self.assertEqual(left, "使用者左", "使用者填的不可以被 AI 蓋掉")
+        self.assertEqual(right, "AI右")
+
+    def test_api_failure_falls_back_to_the_headline(self):
+        import main
+        original = main.digest_completion
+
+        def boom(**kw):
+            raise RuntimeError("upstream down")
+
+        main.digest_completion = boom
+        try:
+            left, right = main.resolve_cover_visuals(self.req())
+        finally:
+            main.digest_completion = original
+        # 補描述失敗不該讓整張封面失敗
+        self.assertEqual(left, "政府明年勞保撥補上看1300億")
+        self.assertEqual(right, "病理醫師月薪65萬仍缺工")
+
+    def test_derive_prompt_forbids_text_in_the_photo(self):
+        prompt = editor_formats.COVER_VISUAL_DERIVE_SYSTEM
+        self.assertIn("NEVER mention text", prompt)
+        self.assertIn("Do not restate the headline", prompt)
+        self.assertIn("If a side's description is already supplied", prompt)
+
+    def test_response_reports_the_visuals_actually_used(self):
+        from main import TenCoverResponse
+        response = TenCoverResponse(
+            image_data_base64="x", mime_type="image/png", model="m",
+            visual_left="L", visual_right="R",
+        )
+        self.assertEqual((response.visual_left, response.visual_right), ("L", "R"))
+
+
+class FrontendParityTests(unittest.TestCase):
+    """app.js 的 EDITOR_FORMATS 與 editor_formats.py 必須同步。"""
+
+    def js_entries(self) -> dict[str, str]:
+        """把 app.js 的 EDITOR_FORMATS 切成 {key: 那一筆的原始文字}。
+
+        刻意先切成一筆一筆再各自比對：整段一起 findall 會讓 .*? 跨越好幾筆，
+        把後面那筆的欄位配到前面那個 key 上（實測就是這樣紅的）。
+        """
+        source = io.open(APP_JS, encoding="utf-8").read()
+        block = re.search(r"const EDITOR_FORMATS = \{(.*?)\n\};", source, re.S)
+        self.assertIsNotNone(block, "app.js 裡找不到 EDITOR_FORMATS")
+        body = block.group(1)
+        headers = list(re.finditer(r"(?m)^    (\w+):\s*\{", body))
+        entries = {}
+        for index, match in enumerate(headers):
+            end = headers[index + 1].start() if index + 1 < len(headers) else len(body)
+            entries[match.group(1)] = body[match.start():end]
+        return entries
+
+    def js_formats(self) -> dict[str, str]:
+        return {
+            key: re.search(r"label:\s*'([^']+)'", text).group(1)
+            for key, text in self.js_entries().items()
+        }
+
+    def test_keys_match(self):
+        self.assertEqual(
+            sorted(self.js_formats()), sorted(editor_formats.EDITOR_FORMAT_KEYS)
+        )
+
+    def test_labels_match(self):
+        for key, label in self.js_formats().items():
+            with self.subTest(key=key):
+                self.assertEqual(label, editor_formats.EDITOR_FORMATS[key]["label"])
+
+    def test_cover_modes_match(self):
+        for key, text in self.js_entries().items():
+            found = re.search(r"coverMode:\s*'(\w+)'", text)
+            with self.subTest(key=key):
+                self.assertEqual(
+                    found.group(1) if found else "", editor_formats.cover_mode(key)
+                )
+
+    def test_hole_sides_match(self):
+        for key, text in self.js_entries().items():
+            raw = re.search(r"hole:\s*(null|'\w+')", text).group(1)
+            with self.subTest(key=key):
+                self.assertEqual(
+                    None if raw == "null" else raw.strip("'"),
+                    editor_formats.EDITOR_FORMATS[key]["hole_side"],
+                )
+
+
+
+class LockScopeTests(FrontendParityTests):
+    """2026-09-04 使用者回報「播出鏡面下面的按鈕全都不能選」。
+
+    查下來我當初鎖了四個，只有版面形式是真的必要——它跟挖空框互相打架。
+    安全框（ON／OFF 都是合法安全區，挖空框都算得出正確位置）、蓋章、字多字少
+    都只是建議值，鎖住是我鎖過頭。使用者裁決：只鎖版面形式。
+    """
+
+    def test_broadcast_locks_only_the_chart_type(self):
+        # 2026-09-08 WP1：左切／右切合併成單一個 broadcast
+        for key in ("broadcast",):
+            with self.subTest(key=key):
+                entry = self.js_entries()[key]
+                locks = re.search(r"locks:\s*\{([^}]*)\}", entry).group(1)
+                self.assertIn("chartType", locks)
+                for freed in ("safeFrame", "stamp", "density"):
+                    self.assertNotIn(freed, locks, f"{freed} 不該再被鎖住")
+
+    def test_broadcast_still_presets_the_recommended_values(self):
+        # 解鎖不等於不幫忙：切過去仍要幫使用者調好，只是調完可以改
+        for key in ("broadcast",):
+            with self.subTest(key=key):
+                presets = re.search(r"presets:\s*\{([^}]*)\}", self.js_entries()[key])
+                self.assertIsNotNone(presets, "播出鏡面應該還有預設值")
+                for field in ("safeFrame", "density"):
+                    self.assertIn(field, presets.group(1))
+                # 2026-09-07：preset 不碰蓋章——否則使用者關掉的蓋章一切版型就被切回 ON
+                self.assertNotIn("stamp", presets.group(1))
+
+    def test_cover_hides_the_controls_it_cannot_use(self):
+        # /api/editor/cover 不收 density／stamp／safe_frame／tone，
+        # 留一排點不動的灰按鈕只會被當成壞掉——收起來，不是鎖起來
+        for key in ("ten_cover",):
+            with self.subTest(key=key):
+                entry = self.js_entries()[key]
+                hides = re.search(r"hides:\s*\{([^}]*)\}", entry)
+                self.assertIsNotNone(hides, "封面應該把用不到的控制項收起來")
+                for field in ("digestControls", "safeFrame", "stamp"):
+                    self.assertIn(field, hides.group(1))
+                self.assertNotIn("chartType", re.search(r"locks:\s*\{([^}]*)\}", entry).group(1))
+
+    def test_default_format_locks_and_hides_nothing(self):
+        entry = self.js_entries()["default"]
+        self.assertNotIn("hides", entry)
+        self.assertEqual(re.search(r"locks:\s*\{([^}]*)\}", entry).group(1).strip(), "")
+
+    def test_cover_still_lets_the_user_pick_the_engine(self):
+        # provider 是 TenCoverRequest 真的會用到的欄位，不可以一起收掉
+        for key in ("ten_cover",):
+            with self.subTest(key=key):
+                hides = re.search(r"hides:\s*\{([^}]*)\}", self.js_entries()[key]).group(1)
+                self.assertNotIn("engine", hides)
+
+if __name__ == "__main__":
+    unittest.main()

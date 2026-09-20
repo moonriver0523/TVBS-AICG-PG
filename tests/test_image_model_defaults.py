@@ -7,6 +7,7 @@ aspect_ratio 時 OpenRouter 靜靜忽略、不報錯——安全框要 21:9 卻�
 
 import base64
 import io
+import json
 import os
 import sys
 import unittest
@@ -40,10 +41,41 @@ class ModelDefaultsTests(unittest.TestCase):
             main.OPENROUTER_GPT_IMAGE_MODEL, f"openai/{main.NATIVE_GPT_IMAGE_MODEL}"
         )
 
+    def test_openrouter_gpt_gets_an_explicit_size(self):
+        """OpenRouter 上的 GPT Image 一定要送明確的 size，只靠 aspect_ratio 會被丟掉。
+
+        2026-09-10 線上事故：GPT Image 2.5（sunburst／flare）在 OpenRouter 上完全不理會
+        aspect_ratio，一律回 1536x1024（3:2），images/models 端點卻宣告支援 16:9／21:9。
+        同一支腳本只改成送 size 就全對（1536x864、1280x720、1680x720，帶參考圖也對），
+        對照組 gpt-image-2 的 aspect_ratio 則正常。這條測試守的是那個 size 有被送出去。
+        """
+        for ratio, expected in (("16:9", "1280x720"), ("21:9", "1680x720")):
+            with self.subTest(ratio=ratio):
+                self.assertEqual(
+                    main._openrouter_gpt_size(main.OPENROUTER_GPT_IMAGE_MODEL, ratio),
+                    expected,
+                )
+        # 只有 openai/gpt-image 系列要送；Gemini 那條吃的是 resolution，送 size 會壞
+        self.assertIsNone(
+            main._openrouter_gpt_size(main.OPENROUTER_GEMINI_IMAGE_MODEL, "16:9")
+        )
+        # 表上沒有的比例就不硬湊一個尺寸出來
+        self.assertIsNone(
+            main._openrouter_gpt_size(main.OPENROUTER_GPT_IMAGE_MODEL, "5:4")
+        )
+
     def test_both_transports_use_the_same_gemini_model(self):
         self.assertEqual(
             main.OPENROUTER_GEMINI_IMAGE_MODEL, f"google/{main.NATIVE_GEMINI_IMAGE_MODEL}"
         )
+
+    def test_gpt_image_2_5_pair_is_on_the_ratio_table(self):
+        """新模型沒登記到表上，assert_aspect_ratio_supported 會走「未知模型照送不擋」，
+        21:9 就重新變回可以被靜靜忽略——正是 2026-08-01 查了整晚的那個坑。
+        """
+        for model in ("openai/gpt-image-2.5-sunburst", "openai/gpt-image-2.5-flare"):
+            with self.subTest(model=model):
+                self.assertIn("21:9", main.MODEL_ASPECT_RATIOS[model])
 
     def test_default_gpt_model_can_actually_do_the_safe_frame_ratio(self):
         """安全框是 21:9，預設模型做不到的話整條流程的前提就不成立。"""
@@ -55,6 +87,65 @@ class ModelDefaultsTests(unittest.TestCase):
             main.SAFE_FRAME_ASPECT_RATIO,
             main.MODEL_ASPECT_RATIOS[main.OPENROUTER_GEMINI_IMAGE_MODEL],
         )
+
+
+class HighResolutionDecisionTableTests(unittest.TestCase):
+    ASPECTS = {
+        "16:9": ("1280x720", (2560, 1440)),
+        "21:9": ("1680x720", (3360, 1440)),
+    }
+    DENSITIES = ("", "low", "minimal", "simplified", "verbatim", "standard", "maximum")
+
+    def _request(self, role, density, provider, aspect):
+        return ImageGenerateRequest(
+            prompt="p",
+            provider=provider,
+            aspect_ratio=aspect,
+            density=density,
+            safe_frame_profile=role,
+        )
+
+    def test_flag_off_keeps_every_role_density_provider_ratio_unchanged(self):
+        for role in ("記者", "編輯"):
+            for density in self.DENSITIES:
+                for provider in ("gpt", "gemini"):
+                    for aspect, (gpt_size, _) in self.ASPECTS.items():
+                        with self.subTest(role=role, density=density, provider=provider, aspect=aspect):
+                            with patch.object(main, "HIGH_RES_EDITOR_ENABLED", False):
+                                expected_size = gpt_size if provider == "gpt" else "1K"
+                                self.assertEqual(
+                                    main.image_generation_size(
+                                        self._request(role, density, provider, aspect)
+                                    ),
+                                    (expected_size, main.safe_area_spec.BASE_CANVAS),
+                                )
+
+    def test_flag_on_only_editor_standard_and_maximum_hit_high_resolution(self):
+        for role in ("記者", "編輯"):
+            for density in self.DENSITIES:
+                for provider in ("gpt", "gemini"):
+                    for aspect, (old_size, high_canvas) in self.ASPECTS.items():
+                        with self.subTest(role=role, density=density, provider=provider, aspect=aspect):
+                            with patch.object(main, "HIGH_RES_EDITOR_ENABLED", True):
+                                high = role == "編輯" and density in {"standard", "maximum"}
+                                expected_size = (
+                                    main.HIGH_RES_GPT_IMAGE_SIZES[aspect]
+                                    if high and provider == "gpt"
+                                    else old_size if provider == "gpt" else "1K"
+                                )
+                                expected_canvas = high_canvas if high else main.safe_area_spec.BASE_CANVAS
+                                self.assertEqual(
+                                    main.image_generation_size(
+                                        self._request(role, density, provider, aspect)
+                                    ),
+                                    (expected_size, expected_canvas),
+                                )
+
+    def test_image_request_density_is_optional_for_old_callers(self):
+        self.assertEqual(ImageGenerateRequest(prompt="p").density, "")
+
+    def test_high_resolution_flag_defaults_to_off(self):
+        self.assertFalse(main.HIGH_RES_EDITOR_ENABLED)
 
 
 class AspectRatioGuardTests(unittest.TestCase):
@@ -135,6 +226,79 @@ class NativeGptSizeTests(unittest.TestCase):
             with self.assertRaises(HTTPException):
                 main.generate_gpt_image(ImageGenerateRequest(prompt="p", aspect_ratio="21:9"))
         self.assertEqual(captured.get("size"), "1680x720")
+        self.assertEqual(captured.get("timeout"), main.NATIVE_IMAGE_TIMEOUT_SECONDS)
+
+    def test_native_edit_also_carries_the_openrouter_aligned_timeout(self):
+        captured = {}
+
+        class FakeImages:
+            def edit(self, **kwargs):
+                captured.update(kwargs)
+                raise HTTPException(status_code=599, detail="stop here")
+
+        class FakeClient:
+            images = FakeImages()
+
+        req = ImageGenerateRequest(
+            prompt="p",
+            aspect_ratio="16:9",
+            reference_image_data_url="data:image/png;base64,AAAA",
+        )
+        with patch.object(main, "openai_client", FakeClient()), patch.object(
+            main, "_native_reference_files", return_value=[("r.png", io.BytesIO(b"x"), "image/png")]
+        ):
+            with self.assertRaises(HTTPException):
+                main.generate_gpt_image(req)
+        self.assertEqual(captured.get("timeout"), 180)
+        self.assertEqual(main.NATIVE_IMAGE_TIMEOUT_SECONDS, 180)
+
+    def test_native_and_openrouter_receive_the_same_high_res_size(self):
+        req = ImageGenerateRequest(
+            prompt="p",
+            provider="gpt",
+            aspect_ratio="16:9",
+            density="standard",
+            safe_frame_profile="編輯",
+        )
+        native = {}
+
+        class FakeImages:
+            def generate(self, **kwargs):
+                native.update(kwargs)
+                raise HTTPException(status_code=599, detail="stop here")
+
+        class FakeClient:
+            images = FakeImages()
+
+        with patch.object(main, "HIGH_RES_EDITOR_ENABLED", True), patch.object(
+            main, "openai_client", FakeClient()
+        ):
+            with self.assertRaises(HTTPException):
+                main.generate_gpt_image(req)
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"data":[{"b64_json":"a"}]}'
+
+        openrouter = {}
+
+        def fake_urlopen(request, **kwargs):
+            openrouter.update(json.loads(request.data.decode("utf-8")))
+            return FakeResponse()
+
+        with patch.object(main, "HIGH_RES_EDITOR_ENABLED", True), patch.dict(
+            os.environ, {"OPENROUTER_API_KEY": "k"}, clear=False
+        ), patch.object(main, "urlopen", side_effect=fake_urlopen):
+            main.generate_via_openrouter(main.OPENROUTER_GPT_IMAGE_MODEL, req)
+
+        self.assertEqual(native["size"], "2560x1440")
+        self.assertEqual(openrouter["size"], native["size"])
 
     def test_unmappable_ratio_fails_loudly(self):
         with self.assertRaises(HTTPException) as ctx:

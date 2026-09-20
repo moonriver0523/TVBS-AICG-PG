@@ -391,6 +391,64 @@ class EndpointWiringTests(unittest.TestCase):
         self.assertEqual(result.mime_type, "image/png")
         self.assertEqual(result.model, "fake-model")
 
+    def test_high_res_editor_frame_uses_the_resolved_canvas_and_keeps_source(self):
+        import base64
+
+        raw = self.raw_response((1280, 720))
+        req = ImageGenerateRequest(
+            prompt="p",
+            provider="gpt",
+            density="standard",
+            safe_frame=True,
+            safe_frame_profile=safe_area_spec.EDITOR_PROFILE,
+        )
+        with patch.object(main, "HIGH_RES_EDITOR_ENABLED", True), patch.object(
+            main, "generate_image_raw", return_value=raw
+        ):
+            result = generate_image(req)
+        with Image.open(io.BytesIO(base64.b64decode(result.image_data_base64))) as img:
+            self.assertEqual(img.size, (2560, 1440))
+        self.assertEqual(result.source_image_base64, raw.image_data_base64)
+        with Image.open(io.BytesIO(base64.b64decode(result.source_image_base64))) as img:
+            self.assertEqual(img.size, (1280, 720))
+
+    def test_high_res_editor_off_keeps_the_stretch_to_zone_semantics(self):
+        import base64
+
+        raw = self.raw_response((1280, 720))
+        req = ImageGenerateRequest(
+            prompt="p",
+            provider="gpt",
+            density="maximum",
+            safe_frame=False,
+            safe_frame_profile=safe_area_spec.EDITOR_PROFILE,
+        )
+        expected = safe_area_spec.safe_rect(
+            2560, 1440, safe_area_spec.EDITOR_PROFILE
+        )
+        with patch.object(main, "HIGH_RES_EDITOR_ENABLED", True), patch.object(
+            main, "generate_image_raw", return_value=raw
+        ):
+            result = generate_image(req)
+        with Image.open(io.BytesIO(base64.b64decode(result.image_data_base64))) as img:
+            self.assertEqual(img.size, (expected[2] - expected[0], expected[3] - expected[1]))
+
+    def test_high_res_safe_rect_scales_each_normalized_edge(self):
+        self.assertEqual(safe_frame.DEFAULT_CANVAS, safe_area_spec.BASE_CANVAS)
+        expected = {
+            (1920, 1080): (140, 109, 1774, 860),
+            (2560, 1440): (187, 145, 2365, 1147),
+            (3360, 1440): (245, 145, 3104, 1147),
+        }
+        for canvas, rect in expected.items():
+            with self.subTest(canvas=canvas):
+                self.assertEqual(
+                    safe_area_spec.safe_rect(
+                        *canvas, safe_area_spec.REPORTER_PROFILE
+                    ),
+                    rect,
+                )
+
     def test_framing_failure_raises_instead_of_downgrading(self):
         broken = ImageGenerateResponse(
             image_data_base64="bm90LWFuLWltYWdl", mime_type="image/png", model="m"

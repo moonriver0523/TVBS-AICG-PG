@@ -62,6 +62,10 @@ class ConstantParityTests(unittest.TestCase):
     def test_editor_text_rules(self):
         self.assert_same("EDITOR_TEXT_RULES", news_prompt.EDITOR_TEXT_RULES)
 
+    def test_no_text_image_override(self):
+        """2026-09-14 D14／F20：無字檔的生圖端覆蓋，兩邊必須逐字相同。"""
+        self.assert_same("NO_TEXT_IMAGE_OVERRIDE", news_prompt.NO_TEXT_IMAGE_OVERRIDE)
+
     def test_reporter_safe_area(self):
         self.assert_same("REPORTER_SAFE_AREA", news_prompt.REPORTER_SAFE_AREA)
 
@@ -147,6 +151,9 @@ class ConstantParityTests(unittest.TestCase):
     def test_directional_colour_rules(self):
         self.assert_same("TW_DIRECTIONAL_COLOR_RULES", news_prompt.TW_DIRECTIONAL_COLOR_RULES)
 
+    def test_text_placement_rules(self):
+        self.assert_same("TEXT_PLACEMENT_RULES", news_prompt.TEXT_PLACEMENT_RULES)
+
     def test_map_accuracy_image_rules(self):
         self.assert_same("MAP_ACCURACY_IMAGE_RULES", news_prompt.MAP_ACCURACY_IMAGE_RULES)
 
@@ -154,6 +161,15 @@ class ConstantParityTests(unittest.TestCase):
         js_value = js_quoted_const("MAP_TYPE_LABEL", self.source)
         self.assertIsNotNone(js_value, "app.js 裡找不到 MAP_TYPE_LABEL")
         self.assertEqual(js_value, news_prompt.MAP_TYPE_LABEL)
+
+    def test_aiedit_reference_rules(self):
+        self.assert_same("USER_REFERENCE_AIEDIT_RULES", news_prompt.USER_REFERENCE_AIEDIT_RULES)
+
+    def test_aiedit_fusion_reference_rules(self):
+        self.assert_same(
+            "USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE",
+            news_prompt.USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE,
+        )
 
 
 class BuiltPromptShapeTests(unittest.TestCase):
@@ -345,6 +361,22 @@ class AspectRatioParityTests(unittest.TestCase):
         self.assertIn("state.safeFrame", body)
         self.assertIn("SAFE_FRAME_ASPECT_RATIO", body)
         self.assertIn("DEFAULT_ASPECT_RATIO", body)
+
+
+class FinalImageBaselineOwnershipTests(unittest.TestCase):
+    """B61／B62：這條鐵律的 ownership 在後端，前端不得鏡像一份。"""
+
+    def test_app_js_has_no_baseline_constant(self):
+        source = js_source()
+        self.assertNotIn("FINAL_IMAGE_BASELINE", source)
+        self.assertNotIn("=== FINAL IMAGE POLICY BASELINE ===", source)
+
+    def test_hybrid_js_has_no_baseline_and_posts_to_images_generate(self):
+        hybrid = pathlib.Path(__file__).resolve().parent.parent / "hybrid.js"
+        source = hybrid.read_text(encoding="utf-8")
+        self.assertNotIn("FINAL_IMAGE_BASELINE", source)
+        self.assertNotIn("=== FINAL IMAGE POLICY BASELINE ===", source)
+        self.assertIn("/api/images/generate", source)
 
 
 if __name__ == "__main__":

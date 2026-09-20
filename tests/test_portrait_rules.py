@@ -22,7 +22,9 @@ import photo_lookup  # noqa: E402
 from main import (  # noqa: E402
     DIGEST_OUTPUT_SCHEMA,
     GenerateResponse,
+    GenerateRequest,
     ImageGenerateRequest,
+    apply_photo_availability,
     apply_portrait_to_image_request,
     resolve_portrait,
     supports_reference_image,
@@ -36,6 +38,18 @@ PHOTO = photo_lookup.ReferencePhoto(
     source_page="https://zh.wikipedia.org/wiki/%E6%9F%90%E4%BA%BA",
     lang="zh",
 )
+
+# F40：完全查無此人（第 4 層）與確認有條目但沒照片（第 3 層）的假 outcome，
+# 供不想實連網路的測試直接餵值。
+NO_ENTRY_OUTCOME = photo_lookup.PortraitLookupOutcome(
+    photo=None, entry_found=False, matched_name=None, language=None
+)
+
+
+def _entry_only_outcome(name: str) -> photo_lookup.PortraitLookupOutcome:
+    return photo_lookup.PortraitLookupOutcome(
+        photo=None, entry_found=True, matched_name=name, language="zh"
+    )
 
 
 def _prompt(portrait_mode: str) -> str:
@@ -55,21 +69,29 @@ class PortraitPromptBlockTests(unittest.TestCase):
         prompt = _prompt("reference")
         self.assertIn("NAMED REAL PERSON — PORTRAIT TREATMENT", prompt)
         self.assertIn("reference photograph of the named real person is attached", prompt)
-        self.assertIn("hand-painted editorial portrait illustration", prompt)
-        self.assertNotIn("NO REFERENCE AVAILABLE", prompt)
+        # B66（2026-09-16）：寫實為主、只帶一點插畫筆觸，舊的「手繪插畫」措辭已換掉
+        self.assertIn("realistic editorial news portrait", prompt)
+        self.assertIn("light illustrative touch", prompt)
+        self.assertNotIn("hand-painted editorial portrait illustration", prompt)
+        self.assertNotIn("NO PERSON IN THIS SCENE", prompt)
 
     def test_no_reference_mode_forbids_drawing_the_face(self):
+        """F40 第 4 層：連條目都查不到時改成「無人場景」，不是背影／剪影退路。"""
         prompt = _prompt("no_reference")
-        self.assertIn("NAMED REAL PEOPLE — NO REFERENCE AVAILABLE", prompt)
-        self.assertIn("MUST NOT draw the face of ANY named real person", prompt)
+        self.assertIn("NAMED REAL PEOPLE — NO PERSON IN THIS SCENE", prompt)
+        self.assertIn("designed WITHOUT that person as a figure at all", prompt)
+        # 「畫出背影就是錯的」裁決落地：第 4 層規則本身不建議、甚至不提「背影／剪影」
+        # 這類字眼當退路選項，改成一律禁止任何人形圖案，斷絕模型往那個方向想。
+        self.assertNotIn("back view", news_prompt.PORTRAIT_NO_REFERENCE_RULES)
+        self.assertNotIn("silhouette", news_prompt.PORTRAIT_NO_REFERENCE_RULES)
         # 沒有照片時絕不能出現「參考附圖」的指示，否則模型只能憑印象捏臉
         self.assertNotIn("is attached to this request", prompt)
 
     def test_no_reference_block_covers_multi_person_layouts(self):
         """2026-08-05 事故：兩格肖像只附一張照片，沒照片那格被編出來還掛真名。"""
         prompt = _prompt("no_reference")
-        self.assertIn("two or more portraits side by side", prompt)
-        self.assertIn("never beside an invented face", prompt)
+        self.assertIn("two or more of them side by side", prompt)
+        self.assertIn("no figure of any kind represents them visually", prompt)
 
     def test_none_mode_injects_no_portrait_block(self):
         prompt = _prompt("none")
@@ -117,8 +139,28 @@ class PortraitDigestContractTests(unittest.TestCase):
         self.assertIn("EVERY specific named real person", main.REAL_WORLD_FIDELITY_RULES)
         self.assertIn("listing only the first is a defect", main.REAL_WORLD_FIDELITY_RULES)
 
+    def test_names_are_extracted_verbatim_never_inferred(self):
+        rules = main.REAL_WORLD_FIDELITY_RULES
+        self.assertIn("copied VERBATIM", rules)
+        self.assertIn("never infer a person from a job title", rules)
+        self.assertIn("總統", rules)
+        self.assertIn("執行長", rules)
+        self.assertIn("common knowledge", rules)
+        self.assertNotIn("from your own knowledge", rules)
+
+    def test_english_name_stays_empty_when_the_source_has_none(self):
+        rules = main.REAL_WORLD_FIDELITY_RULES
+        self.assertIn("MUST be an empty string", rules)
+        self.assertIn('portrait_subjects_en=[""]', rules)
+        self.assertNotIn("otherwise from your own knowledge of the person", rules)
+
 
 class ResolvePortraitTests(unittest.TestCase):
+    def setUp(self):
+        # 用到的人名（某人／查無此人）與其他測試檔共用同一個行程內快取，
+        # 不清乾淨會讓某一輪的 mock 結果被下一輪誤判成快取命中。
+        photo_lookup.clear_photo_lookup_cache()
+
     def test_no_subject_means_no_portrait_handling(self):
         self.assertEqual(resolve_portrait([], "gpt"), ("none", None))
 
@@ -130,15 +172,18 @@ class ResolvePortraitTests(unittest.TestCase):
         self.assertIs(photo, PHOTO)
 
     def test_missing_photo_falls_back_to_no_reference(self):
+        """沒照片、也查無條目（F40 第 4 層）→ no_reference。"""
         with patch.object(photo_lookup, "find_reference_photo", return_value=None):
-            with patch.object(main, "supports_reference_image", return_value=True):
-                mode, photo = resolve_portrait(["查無此人"], "gpt")
+            with patch.object(photo_lookup, "find_portrait_outcome", return_value=NO_ENTRY_OUTCOME):
+                with patch.object(main, "supports_reference_image", return_value=True):
+                    mode, photo = resolve_portrait(["查無此人"], "gpt")
         self.assertEqual((mode, photo), ("no_reference", None))
 
     def test_lookup_failure_does_not_break_generation(self):
         with patch.object(photo_lookup, "find_reference_photo", side_effect=OSError("boom")):
-            with patch.object(main, "supports_reference_image", return_value=True):
-                mode, photo = resolve_portrait(["某人"], "gpt")
+            with patch.object(photo_lookup, "find_portrait_outcome", side_effect=OSError("boom")):
+                with patch.object(main, "supports_reference_image", return_value=True):
+                    mode, photo = resolve_portrait(["某人"], "gpt")
         self.assertEqual((mode, photo), ("no_reference", None))
 
     def test_backend_without_reference_channel_never_claims_an_attachment(self):
@@ -174,10 +219,14 @@ class ResolvePortraitTests(unittest.TestCase):
         def lookup(name, **kwargs):
             return None if name == "吳軒彤" else PHOTO
 
+        def outcome(name, **kwargs):
+            return NO_ENTRY_OUTCOME if name == "吳軒彤" else _entry_only_outcome(name)
+
         with patch.object(photo_lookup, "find_reference_photo", side_effect=lookup):
-            with patch.object(main, "supports_reference_image", return_value=True):
-                with patch.object(main, "supports_multiple_reference_images", return_value=True):
-                    mode, photos = main.resolve_portraits(["鄭明典", "吳軒彤"], "gpt")
+            with patch.object(photo_lookup, "find_portrait_outcome", side_effect=outcome):
+                with patch.object(main, "supports_reference_image", return_value=True):
+                    with patch.object(main, "supports_multiple_reference_images", return_value=True):
+                        mode, photos = main.resolve_portraits(["鄭明典", "吳軒彤"], "gpt")
         self.assertEqual((mode, photos), ("no_reference", []))
 
     def test_more_than_three_people_is_not_truncated(self):
@@ -225,9 +274,12 @@ class EnglishNameLookupTests(unittest.TestCase):
     `Ahmad Vahidi` 查得到。
     """
 
+    def setUp(self):
+        photo_lookup.clear_photo_lookup_cache()
+
     def test_english_name_is_tried_when_the_chinese_name_misses(self):
         def by_name(name, *_args):
-            return PHOTO if name == "Ahmad Vahidi" else None
+            return (True, PHOTO) if name == "Ahmad Vahidi" else (False, None)
 
         with patch.object(photo_lookup, "_lookup_lang", side_effect=by_name):
             photo = photo_lookup.find_reference_photo("瓦希迪", alt_names=["Ahmad Vahidi"])
@@ -235,12 +287,12 @@ class EnglishNameLookupTests(unittest.TestCase):
 
     def test_chinese_name_wins_when_both_resolve(self):
         """中文條目優先——臺灣新聞的人物用中文維基的照片較貼近本地認知。"""
-        with patch.object(photo_lookup, "_lookup_lang", return_value=PHOTO):
+        with patch.object(photo_lookup, "_lookup_lang", return_value=(True, PHOTO)):
             photo = photo_lookup.find_reference_photo("賴清德", alt_names=["Lai Ching-te"])
         self.assertIs(photo, PHOTO)
 
     def test_blank_english_name_is_ignored(self):
-        with patch.object(photo_lookup, "_lookup_lang", return_value=None) as lookup:
+        with patch.object(photo_lookup, "_lookup_lang", return_value=(False, None)) as lookup:
             self.assertIsNone(
                 photo_lookup.find_reference_photo("某人", alt_names=["", "  "], langs=("zh",))
             )
@@ -301,7 +353,7 @@ class ExcludePeopleDigestTests(unittest.TestCase):
 
 
 class ResolveDigestPortraitsTests(unittest.TestCase):
-    """兩段式消化：查不到照片就重新消化一次，只重試一次。"""
+    """兩段式消化：只有第 4 層才重新消化，第 3 層留在版面並通知。"""
 
     def _digest(self, subjects):
         return main.GenerateResponse(
@@ -313,7 +365,14 @@ class ResolveDigestPortraitsTests(unittest.TestCase):
         return main.NewsImageGenerateRequest(news_text="新聞內容" * 10)
 
     def test_no_retry_when_every_photo_is_found(self):
-        with patch.object(photo_lookup, "find_reference_photo", return_value=PHOTO):
+        photo_outcome = photo_lookup.PortraitLookupOutcome(
+            photo=PHOTO, entry_found=True, matched_name="甲", language="zh"
+        )
+        with patch.object(
+            main,
+            "lookup_portrait_outcomes",
+            return_value={"甲": photo_outcome, "乙": photo_outcome},
+        ):
             with patch.object(main, "supports_reference_image", return_value=True):
                 with patch.object(main, "generate") as regenerate:
                     digest, photos = main.resolve_digest_portraits(
@@ -324,11 +383,18 @@ class ResolveDigestPortraitsTests(unittest.TestCase):
         self.assertEqual(digest.portrait_subjects, ["甲", "乙"])
 
     def test_missing_photo_triggers_exactly_one_redigest(self):
-        def lookup(name, **kwargs):
-            return None if name == "吳軒彤" else PHOTO
-
         retried = self._digest(["鄭明典"])
-        with patch.object(photo_lookup, "find_reference_photo", side_effect=lookup):
+        photo_outcome = photo_lookup.PortraitLookupOutcome(
+            photo=PHOTO, entry_found=True, matched_name="鄭明典", language="zh"
+        )
+        with patch.object(
+            main,
+            "lookup_portrait_outcomes",
+            side_effect=[
+                {"鄭明典": photo_outcome, "吳軒彤": NO_ENTRY_OUTCOME},
+                {"鄭明典": photo_outcome},
+            ],
+        ):
             with patch.object(main, "supports_reference_image", return_value=True):
                 with patch.object(main, "generate", return_value=retried) as regenerate:
                     digest, photos = main.resolve_digest_portraits(
@@ -343,7 +409,14 @@ class ResolveDigestPortraitsTests(unittest.TestCase):
     def test_second_pass_still_missing_gives_up_instead_of_looping(self):
         """第二次消化又挑出沒照片的人時不再重試——無限重試會一直燒消化費用。"""
         retried = self._digest(["另一個查不到的人"])
-        with patch.object(photo_lookup, "find_reference_photo", return_value=None):
+        with patch.object(
+            main,
+            "lookup_portrait_outcomes",
+            side_effect=[
+                {"甲": NO_ENTRY_OUTCOME},
+                {"另一個查不到的人": NO_ENTRY_OUTCOME},
+            ],
+        ):
             with patch.object(main, "supports_reference_image", return_value=True):
                 with patch.object(main, "generate", return_value=retried) as regenerate:
                     digest, photos = main.resolve_digest_portraits(
@@ -353,8 +426,81 @@ class ResolveDigestPortraitsTests(unittest.TestCase):
         self.assertEqual(photos, {})
         # 交給 resolve_portraits 退回全員不畫臉
         with patch.object(main, "supports_reference_image", return_value=True):
-            mode, _ = main.resolve_portraits(digest.portrait_subjects, "gpt", photos=photos)
+            mode, _ = main.resolve_portraits(
+                digest.portrait_subjects,
+                "gpt",
+                photos=photos,
+                outcomes={"另一個查不到的人": NO_ENTRY_OUTCOME},
+            )
         self.assertEqual(mode, "no_reference")
+
+    def test_entry_only_stays_in_line_layout_and_records_notice(self):
+        main.reset_portrait_notices()
+        entry_only = _entry_only_outcome("甲")
+        with patch.object(
+            main, "lookup_portrait_outcomes", return_value={"甲": entry_only}
+        ):
+            with patch.object(main, "supports_reference_image", return_value=True):
+                with patch.object(main, "generate") as regenerate:
+                    digest, photos = main.resolve_digest_portraits(
+                        self._digest(["甲"]), self._req(), "gpt"
+                    )
+        regenerate.assert_not_called()
+        self.assertEqual(digest.portrait_subjects, ["甲"])
+        self.assertEqual(photos, {})
+        self.assertEqual(len(main.collected_portrait_notices()), 1)
+
+
+class ApplyPhotoAvailabilityTests(unittest.TestCase):
+    """網頁版消化端也必須在 F40 第 3／4 層分流。"""
+
+    def _result(self, names):
+        return GenerateResponse(
+            style="s", structure="t", variable="v", chart_type="資料圖表",
+            portrait_subjects=names,
+        )
+
+    def _request(self, portrait_photo_count=0):
+        return GenerateRequest(
+            news_text="新聞內容", type_label="自動判斷", portrait_photo_count=portrait_photo_count
+        )
+
+    def test_entry_only_stays_in_layout_and_records_notice(self):
+        main.reset_portrait_notices()
+        with patch.object(
+            main,
+            "lookup_portrait_outcomes",
+            return_value={"甲": _entry_only_outcome("甲")},
+        ):
+            with patch.object(main, "generate") as regenerate:
+                result = apply_photo_availability(self._result(["甲"]), self._request())
+        regenerate.assert_not_called()
+        self.assertEqual(result.portrait_subjects, ["甲"])
+        self.assertEqual(len(main.collected_portrait_notices()), 1)
+
+    def test_no_entry_is_the_only_case_that_redigests(self):
+        retried = self._result([])
+        with patch.object(
+            main,
+            "lookup_portrait_outcomes",
+            return_value={"甲": NO_ENTRY_OUTCOME},
+        ):
+            with patch.object(main, "generate", return_value=retried) as regenerate:
+                result = apply_photo_availability(self._result(["甲"]), self._request())
+        regenerate.assert_called_once()
+        self.assertEqual(regenerate.call_args.args[0].exclude_people, ["甲"])
+        self.assertIs(result, retried)
+
+    def test_mixed_entry_only_and_no_entry_excludes_only_no_entry(self):
+        retried = self._result(["甲"])
+        with patch.object(
+            main,
+            "lookup_portrait_outcomes",
+            return_value={"甲": _entry_only_outcome("甲"), "乙": NO_ENTRY_OUTCOME},
+        ):
+            with patch.object(main, "generate", return_value=retried) as regenerate:
+                apply_photo_availability(self._result(["甲", "乙"]), self._request())
+        self.assertEqual(regenerate.call_args.args[0].exclude_people, ["乙"])
 
 
 class CleanPortraitSubjectsTests(unittest.TestCase):
@@ -380,12 +526,30 @@ class SupportsReferenceImageTests(unittest.TestCase):
             self.assertTrue(supports_reference_image("gpt"))
             self.assertTrue(supports_reference_image("gemini"))
 
-    def test_native_openai_has_no_reference_channel(self):
+    def test_native_openai_sends_single_reference_via_images_edit(self):
+        """2026-09-16（B64）：原生 GPT 送得出單張參考圖，這裡原本釘的是相反的事實。
+
+        2026-09-10 起 generate_gpt_image 有參考圖就改走 images.edit；這支判斷沒跟著
+        改，肖像參考照在原生後端被整批丟掉、真人題退回背影。兩種拼法（native／
+        openai）都要成立——路由只看「是不是 openrouter＋有 key」。
+        """
+        for backend in ("native", "openai"):
+            with self.subTest(backend=backend):
+                with patch.dict(
+                    os.environ,
+                    {"IMAGE_BACKEND": backend, "OPENROUTER_API_KEY": ""},
+                    clear=False,
+                ):
+                    self.assertTrue(supports_reference_image("gpt"))
+                    self.assertTrue(supports_reference_image("gemini"))
+
+    def test_openrouter_without_key_falls_back_to_native(self):
+        """沒有 key 時 generate_image_raw 會落到原生，能力判斷必須跟著落。"""
         with patch.dict(
-            os.environ, {"IMAGE_BACKEND": "native", "OPENROUTER_API_KEY": ""}, clear=False
+            os.environ, {"IMAGE_BACKEND": "openrouter", "OPENROUTER_API_KEY": ""}, clear=False
         ):
-            self.assertFalse(supports_reference_image("gpt"))
-            self.assertTrue(supports_reference_image("gemini"))
+            self.assertFalse(main.using_openrouter_images())
+            self.assertTrue(supports_reference_image("gpt"))
 
 
 class ReferenceImagePayloadTests(unittest.TestCase):
@@ -434,6 +598,9 @@ class PhotoLookupTests(unittest.TestCase):
     3.（首圖缺才有）wbgetclaims P18
     4. 下載圖片
     """
+
+    def setUp(self):
+        photo_lookup.clear_photo_lookup_cache()
 
     @staticmethod
     def _page(*, qid="Q1", thumbnail=True, missing=False) -> bytes:
@@ -554,11 +721,20 @@ class ApplyPortraitToImageRequestTests(unittest.TestCase):
         def lookup(name, **kwargs):
             return None if name == "吳軒彤" else PHOTO
 
+        def outcome_lookup(subjects, english=None):
+            return {
+                name: photo_lookup.PortraitLookupOutcome(
+                    photo=None, entry_found=False, matched_name=None, language=None
+                )
+                for name in subjects
+            }
+
         with patch.object(photo_lookup, "find_reference_photo", side_effect=lookup):
-            with patch.object(main, "supports_reference_image", return_value=True):
-                with patch.object(main, "supports_multiple_reference_images", return_value=True):
-                    out = apply_portrait_to_image_request(req)
-        self.assertIn("NO REFERENCE AVAILABLE", out.prompt)
+            with patch.object(main, "lookup_portrait_outcomes", side_effect=outcome_lookup):
+                with patch.object(main, "supports_reference_image", return_value=True):
+                    with patch.object(main, "supports_multiple_reference_images", return_value=True):
+                        out = apply_portrait_to_image_request(req)
+        self.assertIn("NO PERSON IN THIS SCENE", out.prompt)
         self.assertEqual(out.reference_image_data_url, "")
         self.assertEqual(out.portrait_reference_data_urls, [])
 
@@ -607,6 +783,101 @@ class ApplyPortraitToImageRequestTests(unittest.TestCase):
             with patch.object(main, "supports_reference_image", return_value=True):
                 out = apply_portrait_to_image_request(req)
         self.assertEqual(out.prompt.count("NAMED REAL PERSON — PORTRAIT TREATMENT"), 1)
+
+
+class F40FourTierDecisionTests(unittest.TestCase):
+    """F40（2026-09-16 使用者裁決）：四層分流，優先序固定。
+
+    1 使用者上傳 portrait → 直接用（既有測試覆蓋，見 ApplyPortraitToImageRequestTests）
+    2 維基有合格照片 → 附照片走 reference 規則（既有測試覆蓋）
+    3 維基有條目但沒有合格照片 → 允許模型自畫＋回 notice（本類新增）
+    4 連條目都查不到 → 無人場景，不回 notice（本類新增）
+    """
+
+    def setUp(self):
+        photo_lookup.clear_photo_lookup_cache()
+        main.reset_portrait_notices()
+
+    def test_entry_only_single_subject(self):
+        outcome = _entry_only_outcome("查得到條目的人")
+        with patch.object(main, "supports_reference_image", return_value=True):
+            mode, photos = main.resolve_portraits(
+                ["查得到條目的人"], "gpt", outcomes={"查得到條目的人": outcome}
+            )
+        self.assertEqual((mode, photos), ("entry_only", []))
+
+    def test_entry_only_prompt_block_allows_context_drawn_likeness(self):
+        prompt = _prompt("entry_only")
+        self.assertIn("NAMED REAL PERSON — NO VERIFIED PHOTOGRAPH, DRAW FROM CONTEXT", prompt)
+        self.assertIn("Draw a plausible likeness consistent with that context", prompt)
+        # 使用者明確裁定：不要在圖上標「長相為 AI 推測」，這句免責文字不進畫面
+        self.assertNotIn("長相為 AI 推測", prompt)
+        self.assertNotIn("AI 推測", prompt)
+
+    def test_no_entry_falls_back_to_no_person_scene(self):
+        with patch.object(main, "supports_reference_image", return_value=True):
+            mode, photos = main.resolve_portraits(
+                ["查無此人"], "gpt", outcomes={"查無此人": NO_ENTRY_OUTCOME}
+            )
+        self.assertEqual((mode, photos), ("no_reference", []))
+
+    def test_mixed_missing_falls_back_to_no_person_scene_not_entry_only(self):
+        """一位有條目、一位連條目都沒有：全有或全無，退到最保守的無人場景。"""
+        outcomes = {"有條目的人": _entry_only_outcome("有條目的人"), "查無此人": NO_ENTRY_OUTCOME}
+        with patch.object(main, "supports_reference_image", return_value=True):
+            with patch.object(main, "supports_multiple_reference_images", return_value=True):
+                mode, photos = main.resolve_portraits(
+                    ["有條目的人", "查無此人"], "gpt", outcomes=outcomes
+                )
+        self.assertEqual((mode, photos), ("no_reference", []))
+
+    def test_apply_portrait_to_image_request_records_entry_only_notice(self):
+        req = ImageGenerateRequest(
+            prompt="base prompt", portrait_subjects=["查得到條目的人"], provider="gpt"
+        )
+        outcome = _entry_only_outcome("查得到條目的人")
+        with patch.object(main, "lookup_portrait_photos", return_value=({}, ["查得到條目的人"])):
+            with patch.object(main, "lookup_portrait_outcomes", return_value={"查得到條目的人": outcome}):
+                with patch.object(main, "supports_reference_image", return_value=True):
+                    out = apply_portrait_to_image_request(req)
+        self.assertIn("NO VERIFIED PHOTOGRAPH, DRAW FROM CONTEXT", out.prompt)
+        # 不畫進圖裡的免責聲明改成回 notice，走 main._portrait_notices（response 層見
+        # ImageGenerateResponse.notices，本測試只釘住 apply_portrait_to_image_request
+        # 有把它記進去）
+        notices = main.collected_portrait_notices()
+        self.assertEqual(len(notices), 1)
+        self.assertIn("查得到條目的人", notices[0])
+        self.assertIn("並非本人的精確肖像", notices[0])
+
+    def test_no_entry_records_no_notice(self):
+        req = ImageGenerateRequest(
+            prompt="base prompt", portrait_subjects=["查無此人"], provider="gpt"
+        )
+        with patch.object(main, "lookup_portrait_photos", return_value=({}, ["查無此人"])):
+            with patch.object(main, "lookup_portrait_outcomes", return_value={"查無此人": NO_ENTRY_OUTCOME}):
+                with patch.object(main, "supports_reference_image", return_value=True):
+                    apply_portrait_to_image_request(req)
+        self.assertEqual(main.collected_portrait_notices(), [])
+
+    def test_empty_subjects_prompt_still_carries_final_baseline(self):
+        """空 subjects 不繞過 Stage 4 的鐵律層（FINAL_IMAGE_BASELINE）。"""
+        req = ImageGenerateRequest(prompt="base prompt", provider="gpt")
+        out = apply_portrait_to_image_request(req)
+        self.assertIs(out, req)  # 沒有 subjects 時這支本身不動 prompt
+        baselined = news_prompt.ensure_final_image_baseline(out.prompt)
+        self.assertIn(news_prompt.FINAL_IMAGE_BASELINE_MARKER, baselined)
+
+    def test_b66_realism_wording_is_consistent_across_the_three_reference_constants(self):
+        """B66：三組「查到參考照」常數的措辭要一致——寫實為主、只帶一點插畫筆觸。"""
+        for rules in (
+            news_prompt.PORTRAIT_WITH_REFERENCE_RULES,
+            news_prompt.PORTRAIT_MULTI_WITH_REFERENCE_RULES,
+            news_prompt.USER_REFERENCE_PORTRAIT_RULES,
+        ):
+            self.assertIn("realistic editorial news portrait", rules)
+            self.assertIn("light illustrative touch", rules)
+            self.assertNotIn("hand-painted editorial portrait illustration", rules)
+            self.assertNotIn("must be readable as an illustration", rules)
 
 
 if __name__ == "__main__":

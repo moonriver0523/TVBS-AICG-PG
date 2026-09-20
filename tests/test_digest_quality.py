@@ -108,9 +108,136 @@ class QualityCheckTests(unittest.TestCase):
         self.assertEqual(digest_quality_problem(ok, "stop"), "")
 
 
+class ChannelLeakTests(unittest.TestCase):
+    """2026-09-05：gpt-5.6-terra 把角色／頻道標記洩漏進內容。
+
+    最危險的不是整段亂碼被擋下，是只夾兩個異常字元的那種——未達
+    DIGEST_MAX_STRAY_CHARS，其餘是 CJK 與 ASCII 所以拉丁字母比例也過關，
+    於是原樣進入最終 prompt 送去生圖。真正的指紋是頻道標記本身。
+    """
+
+    def test_channel_marker_in_variable_is_rejected(self):
+        leaked = with_field(
+            "variable",
+            GOOD["variable"] + "}} դժ assistant to=system.summary  天天中彩票不json: {",
+        )
+        self.assertIn("variable", digest_quality_problem(leaked, "stop"))
+
+    def test_final_channel_marker_is_rejected(self):
+        leaked = with_field("variable", GOOD["variable"] + " assistant to=final")
+        self.assertIn("variable", digest_quality_problem(leaked, "stop"))
+
+    def test_channel_marker_in_structure_is_rejected(self):
+        leaked = with_field("structure", GOOD["structure"] + " assistant to=assistant.final")
+        self.assertIn("structure", digest_quality_problem(leaked, "stop"))
+
+    def test_numerusform_token_is_rejected(self):
+        leaked = with_field("variable", GOOD["variable"] + " numerusformassistant")
+        self.assertIn("variable", digest_quality_problem(leaked, "stop"))
+
+    def test_ordinary_text_mentioning_assistant_still_passes(self):
+        # 「assistant」單獨出現是正常英文字，不能一看到就擋
+        ok = with_field("variable", "[標題]AI assistant 進駐新聞編輯台")
+        self.assertEqual(digest_quality_problem(ok, "stop"), "")
+
+
+class SimplifiedCharacterTests(unittest.TestCase):
+    """簡體與異體字不准進成品。
+
+    2026-09-05 第十輪實測：variable 出現「貨櫃車起火脱困」，用的是「脱」
+    （U+8131）不是臺灣標準的「脫」（U+812B），成品照樣印出來。消化端
+    只有一句「台灣繁體中文」夾在字數規定裡，擋不住這種單字級的異體形。
+    這是程式判得出來的事——今天已經證明加 prompt 規則會推高思考量、
+    程式檢查不會，所以擋在品質閘而不是再寫一條規則。
+    """
+
+    def test_the_observed_variant_form_is_rejected(self):
+        bad = with_field("variable", GOOD["variable"] + "\n[內文小標]駕駛脱困")
+        self.assertIn("variable", digest_quality_problem(bad, "stop"))
+
+    def test_common_simplified_characters_are_rejected(self):
+        for ch, word in (("这", "这裡"), ("说", "说明"), ("车", "车禍"), ("电", "电力")):
+            with self.subTest(ch=ch):
+                bad = with_field("variable", GOOD["variable"] + "\n[內文小標]" + word)
+                self.assertIn("variable", digest_quality_problem(bad, "stop"))
+
+    def test_the_message_names_the_offending_character(self):
+        bad = with_field("variable", GOOD["variable"] + "\n[內文小標]駕駛脱困")
+        self.assertIn("脱", digest_quality_problem(bad, "stop"))
+
+    def test_normal_traditional_text_still_passes(self):
+        ok = with_field(
+            "variable",
+            "[標題]貨櫃車起火 駕駛脫困\n[內文小標]臺鐵誤點 台積電停工\n<蓋章>電力調度吃緊",
+        )
+        self.assertEqual(digest_quality_problem(ok, "stop"), "")
+
+    def test_structure_and_style_are_not_checked(self):
+        # style/structure 是寫給生圖模型的英文指令，不是畫面文字，不適用
+        ok = dict(GOOD)
+        ok["structure"] = GOOD["structure"] + " Place the 车 icon top-left."
+        self.assertEqual(digest_quality_problem(ok, "stop"), "")
+
+    def test_traditional_orthodox_characters_are_never_listed(self):
+        """繁簡同形的正字一個都不能進清單。
+
+        2026-09-11：清單原本收了「致」。它是臺灣標準正字（導致／一致／致命），
+        模型每次都寫得出來，於是每次 attempt 都被打回，最後撞死線收 503——
+        不是偶發誤判，是必然失敗。這些字在正常的臺灣新聞文字裡到處都是，
+        任何一個被收進去都會複製同一場事故，所以釘死整組而不是只釘「致」。
+        """
+        for word in (
+            "導致人員受傷",
+            "一致通過",
+            "致命傷",
+            "總統致詞",
+        ):
+            with self.subTest(word=word):
+                ok = with_field("variable", "[標題]測試\n[內文小標]" + word)
+                self.assertEqual(digest_quality_problem(ok, "stop"), "")
+
+
+class RawExcerptTests(unittest.TestCase):
+    """解析失敗時記到日誌的摘要要看得到尾巴。
+
+    2026-09-05 的病因整個在尾巴（脫軌後吐純空白直到撞天花板），舊版只記前 800
+    字元，日誌永遠只看得到正常的開頭，只好在本機重跑才找得到病因。
+    """
+
+    def test_short_output_is_kept_whole(self):
+        raw = '{"style":"ok","variable":"[標題]測試"}'
+        self.assertIn("測試", main.digest_excerpt(raw))
+
+    def test_long_output_keeps_the_tail(self):
+        raw = '{"style":"' + "頭" * 2000 + '","variable":"' + "尾巴標記" + '"}'
+        excerpt = main.digest_excerpt(raw)
+        self.assertIn("尾巴標記", excerpt)
+        self.assertIn("中間省略", excerpt)
+
+    def test_whitespace_padding_is_reported_not_dumped(self):
+        raw = '{"style":"開頭"' + " \n" * 4000 + ',"variable":"x"}'
+        excerpt = main.digest_excerpt(raw)
+        self.assertLess(len(excerpt), 1200)
+        self.assertIn("空白佔", excerpt)
+
+
 class TokenBudgetTests(unittest.TestCase):
     def test_map_budget_is_larger_than_default(self):
         self.assertGreater(MAP_DIGEST_MAX_TOKENS, DIGEST_MAX_TOKENS)
+
+    def test_budgets_cover_the_measured_worst_case(self):
+        """預算要容得下思考 token 的尖峰，不是只容得下正文。
+
+        2026-09-05 用 8000 的寬鬆上限量過記者／編輯 × 自動判斷／資料圖表
+        共 16 次（claude-sonnet-5）：正文很穩定，872-1259；思考變異極大，
+        560-4873；total 落在 1459-6042，最兇的是編輯＋自動判斷。
+        同日一度把地圖類收到 3000，上線後編輯＋地圖 5 次 attempt 全部
+        finish=length，其中兩次 raw content 整個空白——預算在吐出第一個字
+        之前就被思考用光。這兩個下限是那次回歸的防線，不要再往下調。
+        """
+        self.assertGreaterEqual(MAP_DIGEST_MAX_TOKENS, 9000)
+        self.assertGreaterEqual(DIGEST_MAX_TOKENS, 5000)
+        self.assertLess(DIGEST_MAX_TOKENS, MAP_DIGEST_MAX_TOKENS)
 
     def test_map_and_auto_types_get_the_larger_budget(self):
         # 自動判斷也要給，因為 AI 可能選地圖
@@ -155,6 +282,21 @@ class HeadlineSubjectRuleTests(unittest.TestCase):
     def test_rule_names_the_failure_mode(self):
         prompt = main.build_digest_instructions("記者", "standard", MAP_TYPE_LABEL)
         self.assertIn("merely reacted, commented, protested or announced a response", prompt)
+
+
+class DensityBlockCountTests(unittest.TestCase):
+    def test_existing_short_variable_still_passes_without_a_density(self):
+        """舊呼叫不傳 density 時不得突然被塊數下限擋下。"""
+        self.assertEqual(digest_quality_problem(GOOD, "stop"), "")
+
+    def test_shortfall_names_observed_and_required(self):
+        variable = "[標題] 標題\n[內文小標] 只有一點"
+        problem = digest_quality_problem(
+            with_field("variable", variable), "stop", density="standard"
+        )
+        self.assertIn("observed=1", problem)
+        self.assertIn("required=5", problem)
+        self.assertIn("[內文小標]", problem)
 
 
 if __name__ == "__main__":
