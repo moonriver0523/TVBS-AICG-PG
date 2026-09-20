@@ -6310,9 +6310,29 @@ def _cover_ai(
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
     raw = base64.b64decode(result.image_data_base64)
     if transparent_mode:
-        raw = compose.overlay_title_layer_over_cover_band(
-            base, raw, band_top_ratio=compose.cover_title_band_top_ratio(),
-        )
+        try:
+            raw = compose.overlay_title_layer_over_cover_band(
+                base, raw, band_top_ratio=compose.cover_title_band_top_ratio(),
+            )
+        except compose.ComposeError as exc:
+            # 2026-09-20 使用者裁定：四道閘任一沒過不要回 400，退回程式壓字，但要明講。
+            # 退的是**標題怎麼畫**，不是照片——base 本來就沒經過模型，這裡直接拿它走
+            # 合成版那條路（compose_ten_cover 自己會貼標頭／Logo／圓章，所以不能再
+            # 套 _post_paste，那會貼第二次）。transparent_mode 只在滿版成立
+            # （protect_base 只有滿版端點會給 True），所以這裡固定走單一標題。
+            print(f"[cover:title-layer] 閘門沒過，退回程式壓字：{exc}", flush=True)
+            _record_portrait_notice(
+                f"AI 標題圖層沒通過檢查（{exc}）。這張已改用程式壓字的標題，"
+                "版面與字體會跟 AI 標題不一樣；想要 AI 標題請重新生成一次。"
+            )
+            cover = compose.compose_ten_cover(
+                base, None,
+                title_left=req.title_left.strip(), title_right="",
+                date_text=date_text, badge=req.badge,
+                left_is_ai=False, right_is_ai=False,
+                left_source_text=req.source_left.strip(),
+            )
+            return cover, f"{result.model}＋ten-cover:title-layer-fallback", base, "image/png"
     elif protect_base and base is not None:
         raw = compose.restore_photo_outside_title_band(
             base, raw, band_top_ratio=compose.cover_title_band_top_ratio(),
@@ -7966,6 +7986,9 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         )
 
     ai_title = req.title_mode == editor_formats.YT_COVER_TITLE_MODE_AI
+    # B55 閘門沒過退回程式壓字時翻成 True（2026-09-20 使用者裁定），見下面的
+    # overlay_title_layer_over_yt_cover 呼叫處；決定 is_ai 與回應裡的 title_mode。
+    title_layer_fallback = False
     # F43 信任邊界（2026-09-20 獨立複查 gpt-5.6-sol 第一項）：`background_is_ai` 是
     # 前端把上一輪回應原樣帶回來的值，後端沒有從位元組重算。以前帶錯只會讓
     # 「AI示意圖」漏標（消極遺漏）；F43 之後同一個值還決定要不要貼「畫面來源：○○○」
@@ -8029,10 +8052,24 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             )
             if base is not None and not dual and base_model == "yt-cover:asis":
                 if transparent_mode:
-                    background = compose.overlay_title_layer_over_yt_cover(
-                        base, background, layout=req.layout,
-                        original_audio=original_audio, ai_translation=ai_translation, ai_note=False,
-                    )
+                    try:
+                        background = compose.overlay_title_layer_over_yt_cover(
+                            base, background, layout=req.layout,
+                            original_audio=original_audio, ai_translation=ai_translation, ai_note=False,
+                        )
+                    except compose.ComposeError as exc:
+                        # 2026-09-20 使用者裁定：閘門沒過退回程式壓字，但要明講。
+                        # 底圖換回未經模型的 base，並把 ai_title 關掉——下面那組
+                        # compose_yt_*_cover 的 `draw_titles=not ai_title` 就會改成
+                        # 由 Pillow 壓標題（＝title_mode="composite" 的那條路）。
+                        print(f"[yt-cover:title-layer] 閘門沒過，退回程式壓字：{exc}", flush=True)
+                        _record_portrait_notice(
+                            f"AI 標題圖層沒通過檢查（{exc}）。這張已改用程式壓字的標題，"
+                            "版面與字體會跟 AI 標題不一樣；想要 AI 標題請重新生成一次。"
+                        )
+                        background, ai_title = base, False
+                        image_model = f"{image_model}＋yt-cover:title-layer-fallback"
+                        title_layer_fallback = True
                 else:
                     background = compose.restore_yt_cover_photo(
                         base, background, layout=req.layout,
@@ -8040,7 +8077,9 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                     )
             if base_models:
                 image_model = "、".join([*base_models, image_model])
-            is_ai = True
+            # 退回程式壓字時畫面上的照片就是使用者那張未經模型的原圖（title_mode=
+            # "composite" 的語意），不該再標「AI示意圖」——標了等於對觀眾說這張是 AI 生的。
+            is_ai = not title_layer_fallback
         elif dual and not req.background_image_base64:
             background, is_ai, image_model = yt_dual_background(
                 panel_reqs, plans,
@@ -8168,7 +8207,12 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         visual=visual,
         background_is_ai=is_ai,
         source_text="" if is_ai else source_text,
-        title_mode=req.title_mode,
+        # 退回程式壓字時照實回報成品的模式（2026-09-20）：畫面上的標題確實是 Pillow 畫的，
+        # 回 "ai" 會讓前端以為拿到的是 AI 標題版，下一次「只改文字」也會用錯的假設。
+        title_mode=(
+            editor_formats.YT_COVER_TITLE_MODE_COMPOSITE if title_layer_fallback
+            else req.title_mode
+        ),
         dual=dual,
         seed=req.seed,
         notices=collected_portrait_notices(),

@@ -3691,15 +3691,20 @@ def restore_yt_cover_photo(
 # alpha 判定的雜訊容忍：反鋸齒邊緣、JPEG-like 壓縮偽影會讓「理論上全透明」的像素
 # 落在 1-15 之間，門檻抓在肉眼看不出差異、又能濾掉這類雜訊的位置。
 TITLE_LAYER_ALPHA_THRESHOLD = 16
+# 標題圖層「畫太少」的下限（2026-09-20 使用者裁定 1%）。第四道閘原本只擋「完全沒畫」，
+# 但只吐出幾十個像素殘渣的圖層疊出來一樣是「幾乎沒有標題的原圖」。一行大標題實際
+# 遠超過可疊區的 1%，所以這個數字只擋得到殘渣，誤擋正常成品的機率極低。
+TITLE_LAYER_MIN_PAINT_RATIO = 0.01
 
 
 def _overlay_title_layer_core(
     base_img: Image.Image, layer_img: Image.Image, *,
     protect_boxes: list[tuple[int, int, int, int]],
     max_paint_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+    min_paint_ratio: float = TITLE_LAYER_MIN_PAINT_RATIO,
     alpha_threshold: int = TITLE_LAYER_ALPHA_THRESHOLD,
 ) -> Image.Image:
-    """三道閘＋疊圖的核心邏輯，在 PIL Image 層級操作。base_img 必須是 RGB，
+    """四道閘＋疊圖的核心邏輯，在 PIL Image 層級操作。base_img 必須是 RGB，
     layer_img 必須是 RGBA（呼叫端負責轉檔與縮放對齊）。"""
     width, height = base_img.size
     alpha = layer_img.split()[3]
@@ -3734,8 +3739,11 @@ def _overlay_title_layer_core(
     editable_mask = ImageChops.invert(protect_mask)
     editable_pixel_count = editable_mask.histogram()[255]
     painted_in_editable = ImageChops.multiply(painted, editable_mask)
+    paint_ratio = (
+        painted_in_editable.histogram()[255] / editable_pixel_count
+        if editable_pixel_count else 0.0
+    )
     if editable_pixel_count:
-        paint_ratio = painted_in_editable.histogram()[255] / editable_pixel_count
         if paint_ratio > max_paint_ratio:
             raise ComposeError(
                 "生圖模型的標題圖層畫的範圍過大（"
@@ -3748,14 +3756,20 @@ def _overlay_title_layer_core(
     # (b) 沒有畫過的像素、(c) 比例 0——三道全過，程式會**成功回傳一張跟原圖一模一樣、
     # 一個字都沒有的成品**。那比擋下來更糟：400 使用者看得見，靜默的無字成品會直接
     # 被當成品拿去上鏡。
-    # ⚠ 這一道只擋「完全沒畫」這個零歧義的情況。**畫得極少**（例如只吐出幾十個像素的
-    # 殘渣）同樣會產生近乎無字的成品，但要擋它就得訂一個「標題至少該占多少面積」的
-    # 數字，而本 repo 沒有現成可沿用的門檻——另訂數字屬於裁決事項，已記進帳本 B55 的
-    # 待裁清單，這裡不自行決定。
+    # 2026-09-20 使用者裁定：下限訂 1%（`TITLE_LAYER_MIN_PAINT_RATIO`）。原本這一道
+    # 只擋「完全沒畫」這個零歧義的情況，但**畫得極少**（只吐出幾十個像素的殘渣）
+    # 同樣會產生近乎無字的成品。1% 這個數字的意義：一行大標題實際遠超過可疊區的 1%，
+    # 所以它只擋得到殘渣，誤擋正常成品的機率極低。
     if painted_in_editable.getbbox() is None:
         raise ComposeError(
             "生圖模型回傳的標題圖層是空的（整張完全透明，沒有畫任何標題），"
             "已擋下這次生成——照原樣疊圖只會得到一張沒有標題的原圖，請重試"
+        )
+    if editable_pixel_count and paint_ratio < min_paint_ratio:
+        raise ComposeError(
+            "生圖模型的標題圖層幾乎是空的（"
+            f"可疊區域內只有 {paint_ratio:.2%} 的像素被畫過，下限 {min_paint_ratio:.0%}），"
+            "已擋下這次生成——疊出來會是一張幾乎沒有標題的原圖，請重試"
         )
 
     # 疊圖前先把「低於判定門檻」的 alpha 真的歸零（2026-09-20 獨立複查補）。

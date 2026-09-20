@@ -20,9 +20,18 @@ provider=="gemini" 維持原本的差異遮罩回貼（哪怕那條路本來就�
 (a) 模型必須真的回透明底——alpha 全不透明視為模型忽略了 background=transparent。
 (b) 保護區（頁首帶／Logo／角標）內 alpha 必須全為 0——那些位置由程式後貼，模型碰了就擋。
 (c) 面積防呆：可疊區域裡非透明像素比例超過門檻＝模型畫的是整片背景不是標題。
-(d) 空圖層防呆：可疊區域裡一個像素都沒畫＝疊出來會是一張沒有標題的原圖。
-任何一道沒過就丟 ComposeError，經 main._compose_error_status 轉成 400（使用者能自己
-重試，不是程式錯誤）。
+(d) 空圖層／殘渣防呆：可疊區域裡一個像素都沒畫，或畫到的比例低於
+    `TITLE_LAYER_MIN_PAINT_RATIO`（1%，2026-09-20 使用者裁定）＝疊出來會是一張
+    幾乎沒有標題的原圖。
+
+**任何一道沒過的處理方式在 2026-09-20 由使用者改判**：原本一律丟 ComposeError、
+經 `main._compose_error_status` 轉成 400 要使用者自己重試；現在改成**退回程式壓字**
+（走 `title_mode="composite"` 那條路，照片仍是使用者那張未經模型的原圖），
+並在回應的 `notices` 裡明講「這張已改用程式壓字，版面與字體跟 AI 標題不一樣」。
+理由是 gpt 已經是編輯身分的預設路徑，閘門一擋使用者只能空手重按。
+退回時 `background_is_ai` 翻成 False、`title_mode` 照實回 `"composite"`——
+畫面上的照片確實沒經過模型，標成 AI 或回報成 AI 標題版都是在說謊。
+（`compose` 那層仍然丟 ComposeError，改判只發生在 `main` 的兩個呼叫端。）
 
 (d) 與「疊圖前先把低於門檻的 alpha 歸零」都是 2026-09-20 獨立複查（gpt-5.6-sol）之後
 補的——原本只有 (a)(b)(c) 三道，而那三道全是「畫太多／畫錯地方」的上限，放行之後疊出來
@@ -96,11 +105,20 @@ class OverlayTitleLayerCoreUnitTests(unittest.TestCase):
         self.band_top = round(self.height * self.band_top_ratio)
         self.base = _rgb_png(RED, (self.width, self.height))
 
+    def _title_box(self, band_mid: int) -> list[int]:
+        """一塊「像真的標題」的實心區（900×60 ≈ 可疊區的 3.6%）。
+
+        2026-09-20 使用者裁定第四道閘加下限 1% 之後，原本 300×40 的示意方塊只有
+        0.67%，會被新的下限擋掉——那不是回歸，是示意方塊本來就比真標題小一個量級。
+        改用有量過的尺寸，下限本身另外用 OnePercentFloorTests 直接驗。
+        """
+        return [200, band_mid - 30, 1100, band_mid + 30]
+
     def test_pixels_outside_the_layer_are_bit_exact_with_base(self):
         """alpha=0 的地方保證是逐位元原圖，不是「很像」——這是這條路跟差異遮罩
         最本質的差別，直接斷言像素值而不是「看起來對不對」。"""
         band_mid = self.band_top + (self.height - self.band_top) // 2
-        box = [200, band_mid - 20, 500, band_mid + 20]
+        box = self._title_box(band_mid)
         layer = _rgba_layer_png((self.width, self.height), opaque_box=box)
         out = compose.overlay_title_layer_over_cover_band(
             self.base, layer, band_top_ratio=self.band_top_ratio,
@@ -150,9 +168,7 @@ class OverlayTitleLayerCoreUnitTests(unittest.TestCase):
 
     def test_small_localized_paint_passes_under_the_ratio_cap(self):
         band_mid = self.band_top + (self.height - self.band_top) // 2
-        layer = _rgba_layer_png(
-            (self.width, self.height), opaque_box=[200, band_mid - 20, 500, band_mid + 20],
-        )
+        layer = _rgba_layer_png((self.width, self.height), opaque_box=self._title_box(band_mid))
         # 不應該丟例外
         compose.overlay_title_layer_over_cover_band(
             self.base, layer, band_top_ratio=self.band_top_ratio, max_paint_ratio=0.5,
@@ -169,13 +185,36 @@ class OverlayTitleLayerCoreUnitTests(unittest.TestCase):
     def test_output_has_no_alpha_channel_left_over(self):
         """回傳一律是 RGB PNG——疊完就是成品，不該把透明通道漏給下游的置框／貼 Logo。"""
         band_mid = self.band_top + (self.height - self.band_top) // 2
-        layer = _rgba_layer_png(
-            (self.width, self.height), opaque_box=[200, band_mid - 20, 500, band_mid + 20],
-        )
+        layer = _rgba_layer_png((self.width, self.height), opaque_box=self._title_box(band_mid))
         out = compose.overlay_title_layer_over_cover_band(
             self.base, layer, band_top_ratio=self.band_top_ratio,
         )
         self.assertEqual(Image.open(io.BytesIO(out)).mode, "RGB")
+
+    def test_the_one_percent_floor_blocks_a_few_stray_pixels(self):
+        """第四道閘的下限（2026-09-20 使用者裁定 1%）：只吐出殘渣一樣要擋。
+        原本第四道只擋「完全沒畫」，殘渣會通過、疊出一張幾乎沒有標題的原圖。"""
+        band_mid = self.band_top + (self.height - self.band_top) // 2
+        layer = _rgba_layer_png(
+            (self.width, self.height), opaque_box=[200, band_mid, 260, band_mid + 20],
+        )
+        with self.assertRaises(compose.ComposeError) as ctx:
+            compose.overlay_title_layer_over_cover_band(
+                self.base, layer, band_top_ratio=self.band_top_ratio,
+            )
+        self.assertIn("幾乎是空的", str(ctx.exception))
+
+    def test_a_real_sized_title_clears_the_floor_with_room_to_spare(self):
+        """釘住「1% 只擋得到殘渣」這個前提：像真標題的區塊要遠高於下限。
+        量到的數字寫進斷言，之後有人調門檻時會看到餘裕剩多少。"""
+        band_mid = self.band_top + (self.height - self.band_top) // 2
+        box = self._title_box(band_mid)
+        painted = (box[2] - box[0]) * (box[3] - box[1])
+        ratio = painted / (self.width * self.height)
+        self.assertGreater(
+            ratio, compose.TITLE_LAYER_MIN_PAINT_RATIO * 2.5,
+            f"示意標題只占畫布 {ratio:.2%}，離下限太近，這個 fixture 撐不起「餘裕」的說法",
+        )
 
 
 class OverlayTitleLayerIndependentReviewTests(unittest.TestCase):
@@ -331,7 +370,13 @@ class TenCoverEndpointWiringTests(unittest.TestCase):
         # 兩份 note 互斥：矛盾的「重現整張照片」措辭不該同時出現
         self.assertNotIn("THE ATTACHED IMAGE IS THE FINISHED PICTURE", captured["req"].prompt)
 
-    def test_a_fully_opaque_response_is_rejected_with_400(self):
+    def test_a_fully_opaque_response_falls_back_to_program_drawn_titles(self):
+        """2026-09-20 使用者裁定：閘門沒過**不要回 400**，退回程式壓字，但要明講。
+
+        以前這支斷言 400。改判的理由是 gpt 已經是編輯身分的預設路徑，閘門一擋
+        使用者就只能空手重按；退回程式壓字至少一定拿得到可上鏡的成品。代價是
+        版面與字體跟 AI 標題不一樣，所以必須在 notices 裡講清楚，不能靜默替換。
+        """
         def fake_raw(req):
             return SimpleNamespace(
                 image_data_base64=base64.b64encode(_rgb_png((10, 10, 10), compose.COVER_CANVAS)).decode(),
@@ -340,8 +385,34 @@ class TenCoverEndpointWiringTests(unittest.TestCase):
 
         body = {**self.BODY, "slot_left": [{"data_url": _data_url(_rgb_png(RED, (640, 640))), "purpose": "asis"}]}
         res = self._post(body, fake_raw)
-        self.assertEqual(res.status_code, 400, res.text)
-        self.assertIn("透明", res.text)
+        self.assertEqual(res.status_code, 200, res.text)
+        data = res.json()
+        notices = " ".join(data.get("notices") or [])
+        self.assertIn("程式壓字", notices, "退回了卻沒告訴使用者，等於靜默替換")
+        self.assertIn("沒有回傳透明底", notices, "notice 要帶上真正的原因")
+        # 十點的 response.model 是由 req.mode 組出來的，退回標記只進落檔（request_log
+        # 的 image_model），不在回應裡——這裡以 notices 為準，不硬套欄位。
+
+    def test_the_fallback_still_returns_the_untouched_photo(self):
+        """退的是「標題怎麼畫」，不是照片——底圖本來就沒經過模型，必須逐位元保留。"""
+        def fake_raw(req):
+            return SimpleNamespace(
+                image_data_base64=base64.b64encode(_rgb_png((10, 10, 10), compose.COVER_CANVAS)).decode(),
+                model="fake", mime_type="image/png",
+            )
+
+        body = {**self.BODY, "slot_left": [{"data_url": _data_url(_rgb_png(RED, (640, 640))), "purpose": "asis"}]}
+        res = self._post(body, fake_raw)
+        self.assertEqual(res.status_code, 200, res.text)
+        cover = Image.open(io.BytesIO(base64.b64decode(res.json()["image_data_base64"]))).convert("RGB")
+        w, h = cover.size
+        # 畫面正中偏上（標題壓在下半部、標頭在最上緣）應該還是使用者那張紅底照片
+        # compose_ten_cover 會在照片上鋪一層很淡的壓暗，不是逐位元相同——這裡驗的是
+        # 「畫面仍然是使用者那張紅底照片」，不是「零變化」（零變化的斷言在
+        # OverlayTitleLayerCoreUnitTests，那條路才有像素保證）。
+        r, g, b = cover.getpixel((w // 2, round(h * 0.45)))
+        self.assertGreater(r, 150, "主色不再是紅的，底圖被換掉了")
+        self.assertLess(max(g, b), 80)
 
     def test_photo_pixels_outside_the_title_area_survive_bit_exact(self):
         def fake_raw(req):
@@ -420,7 +491,15 @@ class YtCoverEndpointWiringTests(unittest.TestCase):
                     f"{layout}：舊的 AI_TITLE_BASE_IMAGE_NOTE 還在，兩句話互相矛盾",
                 )
 
-    def test_single_asis_gpt_full_opaque_response_is_rejected(self):
+    def test_single_asis_gpt_full_opaque_response_falls_back_to_program_drawn_titles(self):
+        """同十點：2026-09-20 使用者裁定改成退回程式壓字，不再回 400。
+
+        YT 這邊多驗兩件十點沒有的事：
+        - `background_is_ai` 要翻成 False——退回之後畫面上的照片就是使用者那張未經
+          模型的原圖，再標「AI示意圖」等於對觀眾說這張是 AI 生的。
+        - `title_mode` 要照實回 "composite"——回 "ai" 會讓前端以為拿到 AI 標題版，
+          下一次「只改文字」會用錯的假設帶回來。
+        """
         def fake_raw(req):
             return SimpleNamespace(
                 image_data_base64=base64.b64encode(_rgb_png((10, 10, 10), compose.YT_CANVAS)).decode(),
@@ -433,8 +512,13 @@ class YtCoverEndpointWiringTests(unittest.TestCase):
             "reference_images": [{"data_url": _data_url(_rgb_png(RED, (640, 640))), "purpose": "asis"}],
         }
         res = self._post(body, fake_raw)
-        self.assertEqual(res.status_code, 400, res.text)
-        self.assertIn("透明", res.text)
+        self.assertEqual(res.status_code, 200, res.text)
+        data = res.json()
+        notices = " ".join(data.get("notices") or [])
+        self.assertIn("程式壓字", notices, "退回了卻沒告訴使用者，等於靜默替換")
+        self.assertFalse(data["background_is_ai"], "照片沒經過模型，不該標成 AI 底圖")
+        self.assertEqual(data["title_mode"], "composite", "回報的模式要對得上成品")
+        self.assertIn("fallback", data["model"], "落檔／回應都看不出這張是退回來的")
 
 
 class AttachedImagePurposeContradictionTests(unittest.TestCase):
