@@ -3647,8 +3647,8 @@ def _overlay_title_layer_core(
     # (c) 面積防呆：可疊區域（畫布扣掉保護區）裡畫了多大比例。
     editable_mask = ImageChops.invert(protect_mask)
     editable_pixel_count = editable_mask.histogram()[255]
+    painted_in_editable = ImageChops.multiply(painted, editable_mask)
     if editable_pixel_count:
-        painted_in_editable = ImageChops.multiply(painted, editable_mask)
         paint_ratio = painted_in_editable.histogram()[255] / editable_pixel_count
         if paint_ratio > max_paint_ratio:
             raise ComposeError(
@@ -3657,8 +3657,36 @@ def _overlay_title_layer_core(
                 "已擋下這次生成——這代表模型畫的不是標題、是整片背景，請重試或降低標題創意等級"
             )
 
+    # (d) 空圖層防呆（2026-09-20 獨立複查補）：前三道全是「畫太多／畫錯地方」的上限，
+    # 沒有任何一道管「畫太少」。模型回一張**完全透明**的圖時 (a) 的 alpha 最小值是 0、
+    # (b) 沒有畫過的像素、(c) 比例 0——三道全過，程式會**成功回傳一張跟原圖一模一樣、
+    # 一個字都沒有的成品**。那比擋下來更糟：400 使用者看得見，靜默的無字成品會直接
+    # 被當成品拿去上鏡。
+    # ⚠ 這一道只擋「完全沒畫」這個零歧義的情況。**畫得極少**（例如只吐出幾十個像素的
+    # 殘渣）同樣會產生近乎無字的成品，但要擋它就得訂一個「標題至少該占多少面積」的
+    # 數字，而本 repo 沒有現成可沿用的門檻——另訂數字屬於裁決事項，已記進帳本 B55 的
+    # 待裁清單，這裡不自行決定。
+    if painted_in_editable.getbbox() is None:
+        raise ComposeError(
+            "生圖模型回傳的標題圖層是空的（整張完全透明，沒有畫任何標題），"
+            "已擋下這次生成——照原樣疊圖只會得到一張沒有標題的原圖，請重試"
+        )
+
+    # 疊圖前先把「低於判定門檻」的 alpha 真的歸零（2026-09-20 獨立複查補）。
+    # 三道閘一律用 painted（alpha > alpha_threshold）判定「這個像素模型有沒有畫」，
+    # 但 alpha_composite 吃的是**原始 alpha**——兩邊標準不一致的話，一張全畫布
+    # alpha=16 的薄層可以三道閘全過（處處「沒畫」），卻在疊圖時以 16/255 的比例
+    # 把整張照片染色，**連保護區都染**（實測：紅底 (255,0,0) 疊上 (0,0,255,16)
+    # 會變成 (239,0,16)）。這直接打破這條路唯一的賣點——「保證來自 alpha 通道，
+    # alpha=0 的像素定義上就是模型沒動過」。
+    # 低 alpha 不只出現在惡意情境：layer 尺寸與 base 不符時上面的 LANCZOS 縮放，
+    # 本來就會在字的邊緣內插出一圈 1~15 的殘值。
+    # 歸零後語意才真正對齊：三道閘認定「沒畫」的像素，疊圖時 base 原封不動漏出來。
+    cleaned = layer_img.copy()
+    cleaned.putalpha(ImageChops.multiply(alpha, painted))
+
     result = base_img.convert("RGBA")
-    result.alpha_composite(layer_img)
+    result.alpha_composite(cleaned)
     return result.convert("RGB")
 
 
