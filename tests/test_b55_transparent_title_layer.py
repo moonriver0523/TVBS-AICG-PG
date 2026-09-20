@@ -16,12 +16,17 @@ provider=="gemini" 維持原本的差異遮罩回貼（哪怕那條路本來就�
 沒有背景參照而變差）**沒有打過任何一次真正的付費生圖驗證**——這裡測的是三道閘本身的
 邏輯與資料流接線是否正確，不是模型行為本身。
 
-三道閘（見 compose._overlay_title_layer_core）：
+四道閘（見 compose._overlay_title_layer_core）：
 (a) 模型必須真的回透明底——alpha 全不透明視為模型忽略了 background=transparent。
 (b) 保護區（頁首帶／Logo／角標）內 alpha 必須全為 0——那些位置由程式後貼，模型碰了就擋。
 (c) 面積防呆：可疊區域裡非透明像素比例超過門檻＝模型畫的是整片背景不是標題。
+(d) 空圖層防呆：可疊區域裡一個像素都沒畫＝疊出來會是一張沒有標題的原圖。
 任何一道沒過就丟 ComposeError，經 main._compose_error_status 轉成 400（使用者能自己
 重試，不是程式錯誤）。
+
+(d) 與「疊圖前先把低於門檻的 alpha 歸零」都是 2026-09-20 獨立複查（gpt-5.6-sol）之後
+補的——原本只有 (a)(b)(c) 三道，而那三道全是「畫太多／畫錯地方」的上限，放行之後疊出來
+的東西對不對完全沒有人驗。見 OverlayTitleLayerIndependentReviewTests 的兩支說明。
 """
 import base64
 import io
@@ -165,6 +170,96 @@ class OverlayTitleLayerCoreUnitTests(unittest.TestCase):
         self.assertEqual(Image.open(io.BytesIO(out)).mode, "RGB")
 
 
+class OverlayTitleLayerIndependentReviewTests(unittest.TestCase):
+    """2026-09-20 獨立複查（gpt-5.6-sol）抓到、team-lead 實測重現後補的兩個洞。
+
+    這兩個都是「三道閘全過、程式回傳成功」，所以原本的測試一題都不會紅——它們全部
+    在驗「該擋的有沒有擋」，沒有一題在驗「放行之後疊出來的東西對不對」。
+    """
+
+    def setUp(self):
+        self.band_top_ratio = compose.cover_title_band_top_ratio()
+        self.width, self.height = compose.COVER_CANVAS
+        self.band_top = round(self.height * self.band_top_ratio)
+        self.base = _rgb_png(RED, (self.width, self.height))
+
+    def _layer(self, img):
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    def test_a_uniform_sub_threshold_alpha_wash_cannot_tint_the_photo(self):
+        """洞一：判定門檻與疊圖用的 alpha 必須是同一套標準。
+
+        三道閘一律用 `alpha > TITLE_LAYER_ALPHA_THRESHOLD` 判定「模型有沒有畫」，
+        但 alpha_composite 吃原始 alpha。修正前，一張全畫布 alpha=16 的薄層三道閘
+        全過（處處算「沒畫」），疊圖時卻以 16/255 把整張照片染色——實測紅底
+        (255,0,0) 變成 (239,0,16)，**連保護區都染**。這直接打破這條路唯一的賣點
+        「alpha=0 的像素定義上就是模型沒動過」。
+
+        低 alpha 不是只有惡意情境才有：layer 尺寸與 base 不符時的 LANCZOS 縮放，
+        本來就會在字的邊緣內插出一圈 1~15 的殘值。
+        """
+        threshold = compose.TITLE_LAYER_ALPHA_THRESHOLD
+        layer = Image.new("RGBA", (self.width, self.height), (0, 0, 255, threshold))
+        # 可疊區放一塊真正的標題，否則會先被「空圖層」那道擋下，測不到這一項。
+        title_box = [200, self.band_top + 50, 800, self.band_top + 150]
+        ImageDraw.Draw(layer).rectangle(title_box, fill=(255, 255, 255, 255))
+
+        out = compose.overlay_title_layer_over_cover_band(
+            self.base, self._layer(layer), band_top_ratio=self.band_top_ratio,
+        )
+        img = Image.open(io.BytesIO(out)).convert("RGB")
+        self.assertEqual(
+            img.getpixel((10, 10)), RED,
+            "保護區被低 alpha 薄霧染色了——判定門檻與疊圖標準沒有對齊",
+        )
+        self.assertEqual(
+            img.getpixel((self.width - 20, self.height - 20)), RED,
+            "可疊區裡『沒畫到』的地方也被染色了，原圖不再是逐位元保留",
+        )
+        self.assertEqual(
+            img.getpixel((300, self.band_top + 100)), (255, 255, 255),
+            "真正畫上去的標題反而不見了——歸零歸過頭",
+        )
+
+    def test_a_fully_transparent_layer_is_rejected_instead_of_silently_returning_the_photo(self):
+        """洞二：前三道閘全是「畫太多／畫錯地方」的上限，沒有一道管「畫太少」。
+
+        模型回一張完全透明的圖時：(a) alpha 最小值 0、(b) 沒有畫過的像素、
+        (c) 比例 0——三道全過，程式**成功回傳一張跟原圖一模一樣、一個字都沒有的
+        成品**。那比 400 更糟：400 使用者看得見，靜默的無字成品會被當成品拿去上鏡。
+        """
+        layer = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
+        with self.assertRaises(compose.ComposeError) as ctx:
+            compose.overlay_title_layer_over_cover_band(
+                self.base, self._layer(layer), band_top_ratio=self.band_top_ratio,
+            )
+        self.assertIn("空的", str(ctx.exception))
+
+    def test_a_layer_painted_only_inside_the_protected_band_is_still_rejected(self):
+        """補洞二時要小心別把 (b) 弄鬆：只在保護區畫東西仍然必須被 (b) 擋下，
+        不能因為「可疊區是空的」就改由新的那道回報、更不能放行。"""
+        layer = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
+        ImageDraw.Draw(layer).rectangle(
+            [100, 10, 400, self.band_top - 10], fill=(255, 255, 255, 255),
+        )
+        with self.assertRaises(compose.ComposeError) as ctx:
+            compose.overlay_title_layer_over_cover_band(
+                self.base, self._layer(layer), band_top_ratio=self.band_top_ratio,
+            )
+        self.assertIn("保留給程式後貼元素", str(ctx.exception))
+
+    def test_the_empty_layer_guard_reaches_the_endpoint_as_400(self):
+        """空圖層也要跟其他三道一樣經 _compose_error_status 轉成 400，不是 500。"""
+        self.assertEqual(
+            main._compose_error_status(
+                compose.ComposeError("生圖模型回傳的標題圖層是空的（整張完全透明，沒有畫任何標題）")
+            ),
+            400,
+        )
+
+
 class OverlayTitleLayerYtCoverUnitTests(unittest.TestCase):
     """YT 版本的三道閘沿用同一支核心，這裡只驗保護區換成 yt_cover_protect_boxes 有正確接上。"""
 
@@ -269,23 +364,53 @@ class YtCoverEndpointWiringTests(unittest.TestCase):
             return client.post("/api/editor/yt-cover", json=body, headers=_headers())
 
     def test_single_asis_gpt_uses_the_transparent_layer_path(self):
-        def fake_raw(req):
-            w, h = compose.YT_CANVAS
-            layer = _rgba_layer_png(
-                (w, h),
-                opaque_box=[round(w * 0.3), round(h * 0.82), round(w * 0.6), round(h * 0.88)],
-            )
-            return SimpleNamespace(
-                image_data_base64=base64.b64encode(layer).decode(), model="fake", mime_type="image/png",
-            )
+        """四個 YT 版型都要真的送出旗標與專用 note，不是只回 200。
 
-        body = {
-            "layout": "news", "title_mode": "ai", "creativity": 1, "provider": "gpt",
-            "date_text": "2026/09/16", "title": "前段 後段",
-            "reference_images": [{"data_url": _data_url(_rgb_png(RED, (640, 640))), "purpose": "asis"}],
-        }
-        res = self._post(body, fake_raw)
-        self.assertEqual(res.status_code, 200, res.text)
+        2026-09-20 獨立複查（gpt-5.6-sol）點名：這支原本只斷言 status_code == 200，
+        fake_raw 完全不看 req——YT／gpt 這條路就算漏設 transparent_background、
+        漏換 with_title_layer_note，測試照樣全綠。而 5 支既有測試又剛好在同一次改動裡
+        被切到 provider=="gemini"，等於**新的預設路徑（YtCoverRequest.provider 預設
+        就是 gpt）失去端對端覆蓋**。改成逐版型檢查 request 本身。
+        """
+        for layout in ("news", "hourly", "hot", "live24"):
+            with self.subTest(layout=layout):
+                seen = []
+
+                def fake_raw(req):
+                    seen.append(req)
+                    w, h = compose.YT_CANVAS
+                    layer = _rgba_layer_png(
+                        (w, h),
+                        opaque_box=[round(w * 0.3), round(h * 0.82), round(w * 0.6), round(h * 0.88)],
+                    )
+                    return SimpleNamespace(
+                        image_data_base64=base64.b64encode(layer).decode(),
+                        model="fake", mime_type="image/png",
+                    )
+
+                body = {
+                    "layout": layout, "title_mode": "ai", "creativity": 1, "provider": "gpt",
+                    "date_text": "2026/09/16", "title": "前段 後段",
+                    "reference_images": [
+                        {"data_url": _data_url(_rgb_png(RED, (640, 640))), "purpose": "asis"}
+                    ],
+                }
+                res = self._post(body, fake_raw)
+                self.assertEqual(res.status_code, 200, res.text)
+                self.assertTrue(seen, f"{layout}：根本沒有打到生圖端")
+                req = seen[-1]
+                self.assertTrue(
+                    req.transparent_background,
+                    f"{layout}：transparent_background 沒有設，模型不會回透明底",
+                )
+                self.assertIn(
+                    "TRANSPARENT OVERLAY", req.prompt,
+                    f"{layout}：沒有換成 with_title_layer_note 的專用 note",
+                )
+                self.assertNotIn(
+                    "Reproduce it as the picture", req.prompt,
+                    f"{layout}：舊的 AI_TITLE_BASE_IMAGE_NOTE 還在，兩句話互相矛盾",
+                )
 
     def test_single_asis_gpt_full_opaque_response_is_rejected(self):
         def fake_raw(req):

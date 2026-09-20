@@ -3920,8 +3920,8 @@ def frame_image_response(
 
 
 def _compose_error_status(exc: Exception) -> int:
-    """合成失敗的 HTTP 狀態：使用者能自己修的（標題太長、B55 面積防呆、修法甲的三道閘）
-    回 400，其餘 500。三道閘的訊息字面見 compose._overlay_title_layer_core：都是
+    """合成失敗的 HTTP 狀態：使用者能自己修的（標題太長、B55 面積防呆、修法甲的四道閘）
+    回 400，其餘 500。四道閘的訊息字面見 compose._overlay_title_layer_core：都是
     「重試就可能過」的失敗，不是程式錯誤，比照既有 B55 差異遮罩防呆一樣回 400。"""
     message = str(exc)
     if (
@@ -3930,6 +3930,7 @@ def _compose_error_status(exc: Exception) -> int:
         or "沒有回傳透明底的標題圖層" in message
         or "保留給程式後貼元素" in message
         or "標題圖層畫的範圍過大" in message
+        or "標題圖層是空的" in message
     ):
         return 400
     return 500
