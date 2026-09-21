@@ -148,6 +148,7 @@ def _row(record: dict) -> str:
             f'{": " + _esc(error_summary) if error_summary else ""}</div>'
         )
     row_class = ' class="failed"' if failed else ""
+    title_layer = _title_layer_block(record, month)
     return f"""
     <tr{row_class}>
       <td class="nowrap">{_esc(record.get("ts", ""))[:19].replace("T", " ")}</td>
@@ -170,8 +171,54 @@ def _row(record: dict) -> str:
           id: {_esc(record.get("request_id"))}
         </div>
         {error_block}
+        {title_layer}
       </td>
     </tr>"""
+
+
+def _title_layer_block(record: dict, month: str) -> str:
+    """B55 診斷（2026-09-21）：四道閘量到的數字＋被擋下的那張原始標題圖層。
+
+    沒走過透明圖層這條路的紀錄回空字串，那一列的顯示跟以前一模一樣。
+    """
+    diag = record.get("title_layer_diag")
+    if not diag:
+        return ""
+    diags = diag if isinstance(diag, list) else [diag]
+    lines = []
+    for d in diags:
+        if not isinstance(d, dict):
+            continue
+        gate = d.get("gate") or ""
+        verdict = f"擋下（第 {gate} 道閘）" if gate else "通過"
+        lines.append(
+            f'{_esc(d.get("path", ""))}：{verdict}'
+            f' · alpha {_esc(d.get("alpha_min"))}–{_esc(d.get("alpha_max"))}'
+            f'（門檻 {_esc(d.get("alpha_threshold"))}）'
+            f' · 保護區被畫 {_esc(d.get("protect_painted_pixels"))} px'
+            f' · 可疊區 {_esc(d.get("painted_in_editable_pixels"))}/'
+            f'{_esc(d.get("editable_pixels"))} px'
+            f'＝{(d.get("paint_ratio") or 0):.3%}'
+            f'（上限 {(d.get("max_paint_ratio") or 0):.0%}、'
+            f'下限 {(d.get("min_paint_ratio") or 0):.2%}）'
+            f' · 畫過範圍 {_esc(d.get("painted_bbox"))}'
+            f' · 圖層原始尺寸 {_esc(d.get("layer_raw_size"))}'
+            f'{"（有縮放）" if d.get("layer_resized") else ""}'
+        )
+    thumbs = ""
+    for name in record.get("extra_image_files") or []:
+        if not month:
+            continue
+        thumbs += (
+            f'<a href="/admin/image/{_esc(month)}/{_esc(name)}" target="_blank">'
+            f'模型回傳的標題圖層（{_esc(name)}）</a> '
+        )
+    return (
+        '<div class="meta muted">B55 標題圖層：<br>'
+        + "<br>".join(lines)
+        + (f"<br>{thumbs}" if thumbs else "")
+        + "</div>"
+    )
 
 
 _STYLE = """

@@ -3708,26 +3708,84 @@ TITLE_LAYER_ALPHA_THRESHOLD = 16
 TITLE_LAYER_MIN_PAINT_RATIO = 0.001
 
 
-def _overlay_title_layer_core(
+# ============================================================
+# B55 診斷（2026-09-21，使用者實機驗收「四道閘太嚴格，嘗試都沒有成功」之後加）
+#
+# 為什麼要有這一段：0921 使用者連打四次 原圖放置＋AI 標題，四次全部被閘門擋下、
+# 退回程式壓字，後台四筆成品的**位元組完全相同**（md5 `0f4d13e8…`）。
+# 當時程式只把「哪一句錯誤訊息」印到 stdout，沒有留下任何量到的數字，也沒有留下
+# 模型真正回傳的那張圖層——於是「是哪一道閘在擋、擋在多少、模型到底畫了什麼」
+# 全部無從得知，只能猜。這一段就是把那些數字與那張圖留下來。
+#
+# 設計原則：**只量不判**。四道閘的判斷邏輯、門檻常數一個字都沒有動
+# （`TITLE_LAYER_MIN_PAINT_RATIO`／`PHOTO_PROTECT_MAX_CHANGE_RATIO` 維持原值）——
+# 診斷要能證明「開了診斷之後閘門行為完全不變」，否則它自己就變成新的變因。
+# 對應的守門測試：tests/test_b55_transparent_title_layer.py 的
+# TitleLayerDiagnosticsTests（逐案比對「有無診斷」兩種呼叫的結果與訊息）。
+#
+# 成功的時候也要記。只記失敗的話拿到的是被截斷的分布，永遠不知道「正常的標題圖層
+# 畫多少比例」，也就永遠訂不出正確的門檻。
+# ============================================================
+
+class TitleLayerGateError(ComposeError):
+    """四道閘擋下時丟這個，附帶當下量到的每一個數字。
+
+    仍然是 `ComposeError` 的子類別——`main._compose_error_status` 與所有既有的
+    `except compose.ComposeError` 呼叫端行為完全不變，只是多了 `.diagnostics`
+    可以取用。"""
+
+    def __init__(self, message: str, diagnostics: dict):
+        super().__init__(message)
+        self.diagnostics = dict(diagnostics)
+
+
+def format_title_layer_diagnostics(diag: dict) -> str:
+    """把診斷數字縮成一句給人看的話（進 `notices`，使用者當場就看得到）。
+
+    刻意短：這句會接在閘門的錯誤訊息後面一起顯示，不是報表。完整數字在稽核歸檔的
+    `title_layer_diag` 欄位裡，後台那一列會印出來。"""
+    if not diag:
+        return ""
+    return (
+        f"［診斷］擋下的是第 {diag.get('gate', '?')} 道閘"
+        f"／alpha {diag.get('alpha_min', '?')}–{diag.get('alpha_max', '?')}"
+        f"（門檻 {diag.get('alpha_threshold', '?')}）"
+        f"／保護區被畫 {diag.get('protect_painted_pixels', '?')} px"
+        f"／可疊區畫了 {diag.get('paint_ratio', 0):.3%}"
+        f"（上限 {diag.get('max_paint_ratio', 0):.0%}、下限 {diag.get('min_paint_ratio', 0):.2%}）"
+    )
+
+
+def _stamp_title_layer_diag(
+    diagnostics: dict | None, layer_raw_size: tuple[int, int],
+    base_size: tuple[int, int], path: str,
+) -> None:
+    """補上核心函式量不到的兩件事：模型回傳的原始尺寸、以及走的是哪一條疊圖路徑。
+
+    呼叫端放在 `finally` 裡——閘門擋下時也要有這兩欄，否則看到一筆失敗紀錄會分不出
+    是「YT news 版型」還是「十點滿版」擋的。"""
+    if diagnostics is None:
+        return
+    diagnostics["path"] = path
+    diagnostics["layer_raw_size"] = f"{layer_raw_size[0]}x{layer_raw_size[1]}"
+    diagnostics["layer_resized"] = layer_raw_size != base_size
+
+
+def _measure_title_layer(
     base_img: Image.Image, layer_img: Image.Image, *,
     protect_boxes: list[tuple[int, int, int, int]],
-    max_paint_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
-    min_paint_ratio: float = TITLE_LAYER_MIN_PAINT_RATIO,
-    alpha_threshold: int = TITLE_LAYER_ALPHA_THRESHOLD,
-) -> Image.Image:
-    """四道閘＋疊圖的核心邏輯，在 PIL Image 層級操作。base_img 必須是 RGB，
-    layer_img 必須是 RGBA（呼叫端負責轉檔與縮放對齊）。"""
+    alpha_threshold: int,
+) -> dict:
+    """把四道閘要用到的每一個數字一次量完。**只量不判**，不丟任何例外。
+
+    刻意在跑任何一道閘之前就全部量好：閘 (a) 本來會在算保護區之前就丟出去，
+    那樣失敗筆就只剩 alpha 一個數字，拿到手也判不出是哪一種失敗。多量的成本是
+    兩三次全畫布的 PIL 運算（2M 像素等級），相對於一次 20~30 秒的生圖呼叫可忽略。
+    """
     width, height = base_img.size
     alpha = layer_img.split()[3]
     painted = alpha.point(lambda p: 255 if p > alpha_threshold else 0)
-
-    # (a) 全不透明防呆：alpha 的最小值都超過門檻，代表整張圖沒有一個像素是透明的，
-    # 模型沒有理會 background=transparent 這個請求。
-    if alpha.getextrema()[0] > alpha_threshold:
-        raise ComposeError(
-            "生圖模型沒有回傳透明底的標題圖層（畫面完全不透明），已擋下這次生成——"
-            "原圖放置規則要求模型只畫標題、其餘保持透明，請重試"
-        )
+    alpha_min, alpha_max = alpha.getextrema()
 
     protect_mask = Image.new("L", (width, height), 0)
     pd = ImageDraw.Draw(protect_mask)
@@ -3738,29 +3796,91 @@ def _overlay_title_layer_core(
         if x1 > x0 and y1 > y0:
             pd.rectangle([x0, y0, x1, y1], fill=255)
 
-    # (b) 保護區內不准有任何被畫過的像素——這一道跟面積無關，一個像素都不許。
     protect_violation = ImageChops.multiply(painted, protect_mask)
-    if protect_violation.getbbox() is not None:
-        raise ComposeError(
-            "生圖模型在保留給程式後貼元素（頁首帶／Logo／角標）的區域畫了東西，"
-            "已擋下這次生成——那一帶必須維持透明，請重試"
-        )
-
-    # (c) 面積防呆：可疊區域（畫布扣掉保護區）裡畫了多大比例。
     editable_mask = ImageChops.invert(protect_mask)
     editable_pixel_count = editable_mask.histogram()[255]
     painted_in_editable = ImageChops.multiply(painted, editable_mask)
+    painted_in_editable_count = painted_in_editable.histogram()[255]
     paint_ratio = (
-        painted_in_editable.histogram()[255] / editable_pixel_count
-        if editable_pixel_count else 0.0
+        painted_in_editable_count / editable_pixel_count if editable_pixel_count else 0.0
     )
+    # 畫過的像素的外接框：整片背景會是接近全畫布的框，真正的標題是一條帶狀。
+    # 光看比例分不出「一大塊半透明」與「散落各處的殘渣」，這個框分得出來。
+    bbox = painted_in_editable.getbbox()
+
+    return {
+        "canvas": f"{width}x{height}",
+        "alpha_min": alpha_min,
+        "alpha_max": alpha_max,
+        "alpha_threshold": alpha_threshold,
+        "protect_box_count": len(protect_boxes),
+        "protect_pixels": protect_mask.histogram()[255],
+        "protect_painted_pixels": protect_violation.histogram()[255],
+        "editable_pixels": editable_pixel_count,
+        "painted_in_editable_pixels": painted_in_editable_count,
+        "paint_ratio": paint_ratio,
+        "painted_bbox": list(bbox) if bbox else [],
+        # 下面兩個由 _overlay_title_layer_core 補上（門檻是它的參數）
+        "max_paint_ratio": 0.0,
+        "min_paint_ratio": 0.0,
+        "gate": "",
+        "verdict": "",
+    }, painted, painted_in_editable, protect_violation, alpha
+
+
+def _overlay_title_layer_core(
+    base_img: Image.Image, layer_img: Image.Image, *,
+    protect_boxes: list[tuple[int, int, int, int]],
+    max_paint_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+    min_paint_ratio: float = TITLE_LAYER_MIN_PAINT_RATIO,
+    alpha_threshold: int = TITLE_LAYER_ALPHA_THRESHOLD,
+    diagnostics: dict | None = None,
+) -> Image.Image:
+    """四道閘＋疊圖的核心邏輯，在 PIL Image 層級操作。base_img 必須是 RGB，
+    layer_img 必須是 RGBA（呼叫端負責轉檔與縮放對齊）。
+
+    `diagnostics`：傳一個 dict 進來就會被原地填入量到的數字（見 `_measure_title_layer`）。
+    不傳也完全正常運作——四道閘的判斷與訊息跟有沒有傳這個參數無關。
+    """
+    diag, painted, painted_in_editable, protect_violation, alpha = _measure_title_layer(
+        base_img, layer_img, protect_boxes=protect_boxes, alpha_threshold=alpha_threshold,
+    )
+    diag["max_paint_ratio"] = max_paint_ratio
+    diag["min_paint_ratio"] = min_paint_ratio
+    editable_pixel_count = diag["editable_pixels"]
+    paint_ratio = diag["paint_ratio"]
+
+    def _block(gate: str, message: str) -> TitleLayerGateError:
+        diag["gate"] = gate
+        diag["verdict"] = "blocked"
+        if diagnostics is not None:
+            diagnostics.clear()
+            diagnostics.update(diag)
+        return TitleLayerGateError(message, diag)
+
+    # (a) 全不透明防呆：alpha 的最小值都超過門檻，代表整張圖沒有一個像素是透明的，
+    # 模型沒有理會 background=transparent 這個請求。
+    if diag["alpha_min"] > alpha_threshold:
+        raise _block("a", (
+            "生圖模型沒有回傳透明底的標題圖層（畫面完全不透明），已擋下這次生成——"
+            "原圖放置規則要求模型只畫標題、其餘保持透明，請重試"
+        ))
+
+    # (b) 保護區內不准有任何被畫過的像素——這一道跟面積無關，一個像素都不許。
+    if protect_violation.getbbox() is not None:
+        raise _block("b", (
+            "生圖模型在保留給程式後貼元素（頁首帶／Logo／角標）的區域畫了東西，"
+            "已擋下這次生成——那一帶必須維持透明，請重試"
+        ))
+
+    # (c) 面積防呆：可疊區域（畫布扣掉保護區）裡畫了多大比例。
     if editable_pixel_count:
         if paint_ratio > max_paint_ratio:
-            raise ComposeError(
+            raise _block("c", (
                 "生圖模型的標題圖層畫的範圍過大（"
                 f"可疊區域內 {paint_ratio:.0%} 的像素非透明，上限 {max_paint_ratio:.0%}），"
                 "已擋下這次生成——這代表模型畫的不是標題、是整片背景，請重試或降低標題創意等級"
-            )
+            ))
 
     # (d) 空圖層防呆（2026-09-20 獨立複查補）：前三道全是「畫太多／畫錯地方」的上限，
     # 沒有任何一道管「畫太少」。模型回一張**完全透明**的圖時 (a) 的 alpha 最小值是 0、
@@ -3772,16 +3892,22 @@ def _overlay_title_layer_core(
     # 同樣會產生近乎無字的成品。1% 這個數字的意義：一行大標題實際遠超過可疊區的 1%，
     # 所以它只擋得到殘渣，誤擋正常成品的機率極低。
     if painted_in_editable.getbbox() is None:
-        raise ComposeError(
+        raise _block("d-empty", (
             "生圖模型回傳的標題圖層是空的（整張完全透明，沒有畫任何標題），"
             "已擋下這次生成——照原樣疊圖只會得到一張沒有標題的原圖，請重試"
-        )
+        ))
     if editable_pixel_count and paint_ratio < min_paint_ratio:
-        raise ComposeError(
+        raise _block("d-min", (
             "生圖模型的標題圖層幾乎是空的（"
             f"可疊區域內只有 {paint_ratio:.3%} 的像素被畫過，下限 {min_paint_ratio:.2%}），"
             "已擋下這次生成——疊出來會是一張幾乎沒有標題的原圖，請重試"
-        )
+        ))
+
+    diag["gate"] = ""
+    diag["verdict"] = "pass"
+    if diagnostics is not None:
+        diagnostics.clear()
+        diagnostics.update(diag)
 
     # 疊圖前先把「低於判定門檻」的 alpha 真的歸零（2026-09-20 獨立複查補）。
     # 三道閘一律用 painted（alpha > alpha_threshold）判定「這個像素模型有沒有畫」，
@@ -3804,20 +3930,29 @@ def _overlay_title_layer_core(
 def overlay_title_layer_over_cover_band(
     base_png: bytes, layer_png: bytes, *, band_top_ratio: float,
     max_paint_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+    diagnostics: dict | None = None,
 ) -> bytes:
     """十點封面（滿版）版本：保護區是標頭帶（`cover_title_band_top_ratio()` 以上），
     跟 `restore_photo_outside_title_band` 保護的區域完全一樣，只是保證機制換成
     上面那組 alpha 三道閘。回傳一律是 base 尺寸的 PNG。"""
     base_img = Image.open(io.BytesIO(base_png)).convert("RGB")
     layer_img = Image.open(io.BytesIO(layer_png)).convert("RGBA")
+    layer_raw_size = layer_img.size
     if layer_img.size != base_img.size:
         layer_img = layer_img.resize(base_img.size, Image.LANCZOS)
     width, height = base_img.size
     band_top = round(height * band_top_ratio)
     protect_boxes = [(0, 0, width, band_top)] if band_top < height else []
-    result = _overlay_title_layer_core(
-        base_img, layer_img, protect_boxes=protect_boxes, max_paint_ratio=max_paint_ratio,
-    )
+    try:
+        result = _overlay_title_layer_core(
+            base_img, layer_img, protect_boxes=protect_boxes,
+            max_paint_ratio=max_paint_ratio, diagnostics=diagnostics,
+        )
+    finally:
+        # 模型回傳的原始尺寸要留下來：跟 base 不一致就代表疊圖前做過 LANCZOS 縮放，
+        # 而縮放本來就會在字緣內插出 1~15 的殘值（見下方歸零那段）。失敗時也要記，
+        # 所以放 finally。
+        _stamp_title_layer_diag(diagnostics, layer_raw_size, base_img.size, "ten-cover")
     buffer = io.BytesIO()
     result.save(buffer, format="PNG")
     return buffer.getvalue()
@@ -3827,19 +3962,27 @@ def overlay_title_layer_over_yt_cover(
     base_png: bytes, layer_png: bytes, *, layout: str,
     original_audio: bool = False, ai_translation: bool = False, ai_note: bool = False,
     max_paint_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+    diagnostics: dict | None = None,
 ) -> bytes:
     """YT 四版型版本：保護區沿用 `yt_cover_protect_boxes()`，跟 `restore_yt_cover_photo`
     保護的區域完全一樣，只是保證機制換成 alpha 三道閘。回傳一律是 base 尺寸的 PNG。"""
     base_img = Image.open(io.BytesIO(base_png)).convert("RGB")
     layer_img = Image.open(io.BytesIO(layer_png)).convert("RGBA")
+    layer_raw_size = layer_img.size
     if layer_img.size != base_img.size:
         layer_img = layer_img.resize(base_img.size, Image.LANCZOS)
     protect_boxes = yt_cover_protect_boxes(
         layout, original_audio=original_audio, ai_translation=ai_translation, ai_note=ai_note,
     )
-    result = _overlay_title_layer_core(
-        base_img, layer_img, protect_boxes=protect_boxes, max_paint_ratio=max_paint_ratio,
-    )
+    try:
+        result = _overlay_title_layer_core(
+            base_img, layer_img, protect_boxes=protect_boxes,
+            max_paint_ratio=max_paint_ratio, diagnostics=diagnostics,
+        )
+    finally:
+        _stamp_title_layer_diag(
+            diagnostics, layer_raw_size, base_img.size, f"yt-cover:{layout}",
+        )
     buffer = io.BytesIO()
     result.save(buffer, format="PNG")
     return buffer.getvalue()
