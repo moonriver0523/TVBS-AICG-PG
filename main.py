@@ -6442,6 +6442,10 @@ def _cover_ai(
         try:
             raw = compose.overlay_title_layer_over_cover_band(
                 base, raw, band_top_ratio=compose.cover_title_band_top_ratio(),
+                # 高度上限依創意等級（B55，2026-09-22 使用者裁定 44/46/48/50%）。
+                # 這是「縮」不是「擋」，不會多出任何一種失敗情形，所以放在 try 裡
+                # 不影響下面 except 的語意。
+                max_height_ratio=compose.title_layer_max_height_ratio(level),
                 diagnostics=title_layer_diag,
             )
             _record_title_layer_diag(title_layer_diag, creativity=level)
@@ -8236,6 +8240,12 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                             # 畫牌、一邊把那塊列為禁畫區，正是 0921 使用者三次全被擋在
                             # 第 b 道閘的原因（2026-09-21 使用者裁決）。
                             protect_date_tab=not (req.creativity >= 1 and ai_title),
+                            # 高度上限依創意等級（B55，2026-09-22 使用者裁定
+                            # 44/46/48/50%），跟十點滿版共用同一張表——使用者是拿
+                            # 兩邊的成品一起驗收訂出這組數字的。
+                            max_height_ratio=compose.title_layer_max_height_ratio(
+                                req.creativity
+                            ),
                             diagnostics=title_layer_diag,
                         )
                         _record_title_layer_diag(title_layer_diag, creativity=req.creativity)

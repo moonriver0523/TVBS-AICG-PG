@@ -3886,6 +3886,83 @@ TITLE_LAYER_MAX_PAINT_RATIO = TITLE_LAYER_MAX_PAINT_RATIO_TEN
 
 
 # ============================================================
+# B55 標題圖層高度上限（2026-09-22 使用者裁定）
+# ============================================================
+#
+# 這一組跟上面那三個閘門常數**不是同一件事**：閘門是「擋下或放行」，這一組是
+# 「放行、但先把圖層等比例縮到上限之內」。沒有任何一張會因為這組數字失敗。
+#
+# 為什麼不是再調 prompt：prompt 那根槓桿已經用盡，實測證據如下（dev 後台
+# 2026-09-21 21:20~2026-09-22 00:54，全部是原圖放置＋AI 標題）：
+#
+#   十點 prompt 要 18/24/30/36%　→　實際畫出 45.0 / 50.0 / 61.0 / 69.0%
+#   YT   prompt 要 32/36/40/44%　→　實際畫出 －／－／53.9 / 46.9~59.0%
+#
+# 十點**要得比 YT 少**（18–36 對 32–44），卻**畫得比 YT 多**（45–69 對 47–59）。
+# 模型讀得到「標題要比內文大、L4 要比 L1 張揚」這種相對語氣，但不理會絕對百分比。
+# 同一件事的第二個證據：0921 把裝飾配件從 DESIGN BRIEF 源頭整組拿掉之後，
+# L4 從 88.4% 掉到 69.0%，L3 卻是 61.1% → 61.0%（動都沒動）。配件只解釋得了
+# 最上面那一級的爬升，解釋不了 45–61% 這個底。
+#
+# 數字怎麼訂（2026-09-22 使用者裁定「壓縮階梯 44/46/48/50」）：拿使用者自己驗收過的
+# 話當刻度——十點 L1 45.0%／L2 50.0% 是「偏高但可以接受」，L3 61.0%／L4 69.0% 是
+# 「誇張、完全遮住原圖」；YT 46.9~59.0% 是「勉強可以接受的邊緣」。50% 正好落在
+# 「可以接受」與「誇張」之間那條線上。保留 44/46/48 這三階是為了不把創意階梯的
+# 高低差完全抹平——單一 50% 會讓 L2 L3 L4 一樣高。
+#
+# 這組數字**取代**了 COVER_TITLE_BRIEF_SPECS／YT_BRIEF_SPECS 裡那些塊高百分比的
+# 實際作用。那些字串留在 prompt 裡沒有壞處（相對語氣仍然有效），但不要再把它們
+# 當成成品會長成什麼樣的預測——上面的實測已經證偽了。
+TITLE_LAYER_MAX_HEIGHT_RATIOS = {1: 0.44, 2: 0.46, 3: 0.48, 4: 0.50}
+
+# 縮放下限（2026-09-22 使用者裁定 0.6）。超過這個倍率就不再往下縮，寧可讓那一張
+# 仍然高於上限，也不要把字縮到看不清楚。只有極端個案會碰到：要縮到 0.6 倍代表
+# 原圖層高度超過 73%（以 L4 的 50% 上限算），實測最極端的一張是 88.4%。
+TITLE_LAYER_MIN_HEIGHT_SCALE = 0.60
+
+
+def title_layer_max_height_ratio(level: int | None) -> float:
+    """創意等級 → 圖層高度上限。表外的等級一律夾到 1~4 之間。
+
+    夾而不是回 0（關閉）：漏傳或傳錯等級時應該套**最寬鬆**的那一階（L4 的 50%），
+    而不是整個不設限——「不確定是哪一級」不是「這一張可以畫滿整個畫面」的理由。
+    """
+    if level is None:
+        return TITLE_LAYER_MAX_HEIGHT_RATIOS[4]
+    try:
+        clamped = min(4, max(1, int(level)))
+    except (TypeError, ValueError):
+        return TITLE_LAYER_MAX_HEIGHT_RATIOS[4]
+    return TITLE_LAYER_MAX_HEIGHT_RATIOS[clamped]
+
+
+def _shrink_title_layer(
+    layer_img: Image.Image, bbox: tuple[int, int, int, int], scale: float,
+) -> Image.Image:
+    """把整張圖層等比例縮小，並讓 `bbox` 的**底邊中點**留在原位。
+
+    錨在底邊中點而不是畫布中心，也不是字帶上緣：
+    - 底邊：標題一律坐在畫面下半部，底邊等於視覺上的基線。錨在上緣的話整條字帶會
+      往上飄，錨在畫布中心的話會往中間飄——兩種都會把字推向照片主體。
+    - 中點：左右一起內縮，字帶維持在原本的水平位置上；錨在左緣會整條往左偏。
+
+    縮完之後靠近頂端的保護區（標頭帶、角標 Logo）只會離字更遠，但這**不是**構造上
+    的保證——hourly 的日期牌在畫面中段，理論上有可能被往中間縮的像素碰到。所以
+    呼叫端縮完一定要重量一次，這支函式只負責幾何。
+    """
+    width, height = layer_img.size
+    scaled = layer_img.resize(
+        (max(1, round(width * scale)), max(1, round(height * scale))), Image.LANCZOS,
+    )
+    x0, _, x1, y1 = bbox
+    anchor_x = (x0 + x1) / 2
+    anchor_y = y1
+    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    canvas.paste(scaled, (round(anchor_x - anchor_x * scale), round(anchor_y - anchor_y * scale)))
+    return canvas
+
+
+# ============================================================
 # B55 診斷（2026-09-21，使用者實機驗收「四道閘太嚴格，嘗試都沒有成功」之後加）
 #
 # 為什麼要有這一段：0921 使用者連打四次 原圖放置＋AI 標題，四次全部被閘門擋下、
@@ -3930,6 +4007,14 @@ def format_title_layer_diagnostics(diag: dict) -> str:
         f"／保護區被畫 {diag.get('protect_painted_pixels', '?')} px"
         + ("（已丟棄，不計失敗）" if diag.get("protect_discarded") else "")
         + f"／圖層高度佔畫面 {diag.get('painted_bbox_height_ratio', 0):.1%}"
+        # 縮過的話兩個數字都要印：只印縮完的看不出模型本來畫多大，只印原始的
+        # 又對不上成品。沒縮就不印，維持這句話的長度。
+        + (
+            f"（已縮 {diag['height_scale']:.2f}×，原"
+            f" {diag.get('painted_bbox_height_ratio_before', 0):.1%}"
+            f"、上限 {diag.get('max_height_ratio', 0):.0%}）"
+            if diag.get("height_scale", 1.0) != 1.0 else ""
+        )
         + f"／可疊區畫了 {diag.get('paint_ratio', 0):.3%}"
         f"（上限 {diag.get('max_paint_ratio', 0):.0%}、下限 {diag.get('min_paint_ratio', 0):.2%}）"
     )
@@ -4018,6 +4103,7 @@ def _overlay_title_layer_core(
     protect_boxes: list[tuple[int, int, int, int]],
     max_paint_ratio: float = TITLE_LAYER_MAX_PAINT_RATIO,
     min_paint_ratio: float = TITLE_LAYER_MIN_PAINT_RATIO,
+    max_height_ratio: float = 0.0,
     alpha_threshold: int = TITLE_LAYER_ALPHA_THRESHOLD,
     discard_protect_paint: bool = False,
     diagnostics: dict | None = None,
@@ -4027,6 +4113,11 @@ def _overlay_title_layer_core(
 
     `diagnostics`：傳一個 dict 進來就會被原地填入量到的數字（見 `_measure_title_layer`）。
     不傳也完全正常運作——四道閘的判斷與訊息跟有沒有傳這個參數無關。
+
+    `max_height_ratio`：圖層高度上限（B55，2026-09-22 使用者裁定）。**不是第五道閘**
+    ——量到的高度超過它時不擋下，而是把整張圖層等比例縮到上限之內再疊。0 代表不縮。
+    刻意排在四道閘**全部通過之後**才跑，而且縮完踩到保護區就退回那張沒縮的：
+    這樣設計是為了讓這件事在構造上不可能把「原本會成功的一張」變成失敗。
 
     `discard_protect_paint=True`：閘 (b) 由「擋下」改成「丟掉」——保護區裡被畫過的
     像素不再是失敗條件，而是在疊圖前直接歸零。只有「prompt 自己叫模型畫那一塊」的
@@ -4097,6 +4188,45 @@ def _overlay_title_layer_core(
 
     diag["gate"] = ""
     diag["verdict"] = "pass"
+
+    # ---- 高度上限：縮，不是擋（B55，2026-09-22 使用者裁定）----------------
+    # 四道閘到這裡已經全過，以下任何一步不順都只是「維持原樣不縮」，不會失敗。
+    diag["max_height_ratio"] = max_height_ratio
+    diag["painted_bbox_height_ratio_before"] = diag["painted_bbox_height_ratio"]
+    diag["height_scale"] = 1.0
+    height_ratio = diag["painted_bbox_height_ratio"]
+    if max_height_ratio and height_ratio > max_height_ratio and diag["painted_bbox"]:
+        scale = max(max_height_ratio / height_ratio, TITLE_LAYER_MIN_HEIGHT_SCALE)
+        shrunk = _shrink_title_layer(layer_img, tuple(diag["painted_bbox"]), scale)
+        redo, re_painted, re_editable, re_violation, re_alpha = _measure_title_layer(
+            base_img, shrunk, protect_boxes=protect_boxes, alpha_threshold=alpha_threshold,
+        )
+        # 縮完必須自己重過閘 (b) 與 (d)：
+        # (b) 不是構造上安全的——hourly 的日期牌在畫面中段，往中心縮的像素碰得到它。
+        # (d) 著色量隨 scale² 掉，原本就貼近下限的圖層縮完可能掉到下限以下。
+        # (c) 不用重驗：縮完畫的只會更少，面積上限不可能由過變不過。
+        safe_protect = discard_protect_paint or re_violation.getbbox() is None
+        safe_paint = (
+            re_editable.getbbox() is not None
+            and (not diag["editable_pixels"] or redo["paint_ratio"] >= min_paint_ratio)
+        )
+        if safe_protect and safe_paint:
+            layer_img, painted, painted_in_editable, alpha = (
+                shrunk, re_painted, re_editable, re_alpha
+            )
+            # 診斷改報縮完的實際數字——後台那一列要回答的是「成品上的標題多高」，
+            # 不是「模型本來想畫多高」。想畫多高留在 ..._before 那一欄。
+            for key in (
+                "protect_painted_pixels", "painted_in_editable_pixels",
+                "paint_ratio", "painted_bbox", "painted_bbox_height_ratio",
+            ):
+                diag[key] = redo[key]
+            diag["height_scale"] = scale
+        else:
+            # 縮完反而不合格：退回那張已經過閘的原圖層。寧可高一點也不要踩保護區
+            # 或疊出一張幾乎沒字的成品。
+            diag["height_scale_rejected"] = scale
+
     if diagnostics is not None:
         diagnostics.clear()
         diagnostics.update(diag)
@@ -4127,6 +4257,7 @@ def _overlay_title_layer_core(
 def overlay_title_layer_over_cover_band(
     base_png: bytes, layer_png: bytes, *, band_top_ratio: float,
     max_paint_ratio: float = TITLE_LAYER_MAX_PAINT_RATIO_TEN,
+    max_height_ratio: float = 0.0,
     diagnostics: dict | None = None,
 ) -> bytes:
     """十點封面（滿版）版本：保護區是標頭帶（`cover_title_band_top_ratio()` 以上），
@@ -4153,8 +4284,8 @@ def overlay_title_layer_over_cover_band(
     try:
         result = _overlay_title_layer_core(
             base_img, layer_img, protect_boxes=protect_boxes,
-            max_paint_ratio=max_paint_ratio, discard_protect_paint=True,
-            diagnostics=diagnostics,
+            max_paint_ratio=max_paint_ratio, max_height_ratio=max_height_ratio,
+            discard_protect_paint=True, diagnostics=diagnostics,
         )
     finally:
         # 模型回傳的原始尺寸要留下來：跟 base 不一致就代表疊圖前做過 LANCZOS 縮放，
@@ -4170,6 +4301,7 @@ def overlay_title_layer_over_yt_cover(
     base_png: bytes, layer_png: bytes, *, layout: str,
     original_audio: bool = False, ai_translation: bool = False, ai_note: bool = False,
     max_paint_ratio: float = TITLE_LAYER_MAX_PAINT_RATIO_YT,
+    max_height_ratio: float = 0.0,
     protect_date_tab: bool = True,
     diagnostics: dict | None = None,
 ) -> bytes:
@@ -4192,7 +4324,8 @@ def overlay_title_layer_over_yt_cover(
     try:
         result = _overlay_title_layer_core(
             base_img, layer_img, protect_boxes=protect_boxes,
-            max_paint_ratio=max_paint_ratio, diagnostics=diagnostics,
+            max_paint_ratio=max_paint_ratio, max_height_ratio=max_height_ratio,
+            diagnostics=diagnostics,
         )
     finally:
         _stamp_title_layer_diag(
