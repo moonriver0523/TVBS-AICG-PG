@@ -48,7 +48,9 @@ def _authorized(request: Request) -> bool:
 
 
 def _esc(value) -> str:
-    return html.escape(str(value or ""))
+    # 不能寫 `value or ""`：診斷欄位裡的 0 是有意義的數值（alpha 最小值 0＝圖層裡
+    # 有完全透明的像素），被 falsy 吃掉就會印成「alpha –255」那種讀不出來的東西。
+    return html.escape("" if value is None else str(value))
 
 
 def _type_of(record: dict) -> str:

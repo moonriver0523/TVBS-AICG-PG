@@ -8147,6 +8147,11 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                         background = compose.overlay_title_layer_over_yt_cover(
                             base, background, layout=req.layout,
                             original_audio=original_audio, ai_translation=ai_translation, ai_note=False,
+                            # 日期牌只有程式自己畫時才要保護。這個條件必須跟下面
+                            # compose_yt_hourly_cover 的 draw_date 逐字相同——一邊叫模型
+                            # 畫牌、一邊把那塊列為禁畫區，正是 0921 使用者三次全被擋在
+                            # 第 b 道閘的原因（2026-09-21 使用者裁決）。
+                            protect_date_tab=not (req.creativity >= 1 and ai_title),
                             diagnostics=title_layer_diag,
                         )
                         _record_title_layer_diag(title_layer_diag)
