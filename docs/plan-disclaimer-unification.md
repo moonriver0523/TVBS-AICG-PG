@@ -491,3 +491,11 @@ if req.disclaimer_kind and not req.broadcast_hole:
 1. **洞框開啟時，新標籤的 legacy default 放哪裡？** 以前整枚被 skip，沒有可維持的標籤像素基準；直接沿用 `lower_right` 又必定壓住洞框浮水印。建議依洞框側選「對側上角」：左洞用 `upper_right`、右洞用 `upper_left`。理由是同時避開中央洞框與固定在右下的浮水印，而且這條路沒有舊標籤位置可被破壞。使用者若拖到別處，仍依 hard exclusion＋warning 規則處理。
 
 除這一項外，文案沒有新待裁：`WATERMARK_TEXT` 是否改名已被裁決 10 的「全站」涵蓋；直標目前沒有 AI provenance，後續是否畫 AI 標籤則屬既定統一介面施工範圍，不應由 compose 猜測。
+
+### 9.5 使用者裁決（2026-09-21，第二批）
+
+**裁決 12（對應 9.4 第 1 項）：洞框開啟時，新標籤預設位置採「依洞框側選對側上角」。**
+左洞（`broadcast_hole="left"`）→ `upper_right`；右洞（`broadcast_hole="right"`）→ `upper_left`。
+採納 9.4 的建議理由：同時避開中央洞框與固定在右下的浮水印，且這條路沒有既有標籤像素基準會被破壞。
+使用者拖到別處仍依 hard exclusion（洞框，擋下）＋ warning（浮水印與其他家具，只警示）規則處理，即裁決 2。
+實作時 legacy default 需依 `broadcast_hole` 值動態決定，不可寫成單一常數。
