@@ -86,11 +86,19 @@ def _rgb_png(colour, size) -> bytes:
     return buf.getvalue()
 
 
-def _rgba_layer_png(size, *, opaque_box=None, opaque_colour=(255, 255, 255, 255)) -> bytes:
-    """做一張透明底的標題圖層：全透明，只在 opaque_box 那塊畫實心色（模擬標題）。"""
+def _rgba_layer_png(
+    size, *, opaque_box=None, opaque_colour=(255, 255, 255, 255), extra_boxes=None,
+) -> bytes:
+    """做一張透明底的標題圖層：全透明，只在 opaque_box 那塊畫實心色（模擬標題）。
+
+    `extra_boxes`：再多畫幾塊（2026-09-21 補）。用來重現「標題之外模型還多畫了一條
+    標頭帶」這種真實圖層，一塊 box 表達不了。"""
     img = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
     if opaque_box is not None:
-        ImageDraw.Draw(img).rectangle(opaque_box, fill=opaque_colour)
+        draw.rectangle(opaque_box, fill=opaque_colour)
+    for box in extra_boxes or []:
+        draw.rectangle(box, fill=opaque_colour)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
@@ -143,8 +151,14 @@ class OverlayTitleLayerCoreUnitTests(unittest.TestCase):
             )
         self.assertIn("沒有回傳透明底的標題圖層", str(ctx.exception))
 
-    def test_painting_inside_the_protected_header_band_is_rejected(self):
-        """(b) 保護區內一個像素都不准畫——不是面積門檻，畫了就擋。"""
+    def test_painting_inside_the_protected_header_band_is_discarded_not_fatal(self):
+        """十點這條路（2026-09-21 使用者第二次回報誤判後改判）：保護區裡被畫過的
+        像素是**丟掉**，不是失敗條件。理由見 `overlay_title_layer_over_cover_band`
+        ——prompt 自己叫模型在那裡畫標頭帶，而那一帶最後會被程式整條蓋掉。
+
+        「只畫在保護區」這種圖層仍然過不了：丟掉之後它就是一張空圖層，改由第 (d)
+        道閘擋下。擋是一樣要擋的，換的只是哪一道、以及訊息說的是真正的病因。
+        """
         layer = _rgba_layer_png(
             (self.width, self.height), opaque_box=[0, 0, self.width, self.band_top],
         )
@@ -152,7 +166,33 @@ class OverlayTitleLayerCoreUnitTests(unittest.TestCase):
             compose.overlay_title_layer_over_cover_band(
                 self.base, layer, band_top_ratio=self.band_top_ratio,
             )
-        self.assertIn("保留給程式後貼元素", str(ctx.exception))
+        self.assertIn("標題圖層是空的", str(ctx.exception))
+        self.assertEqual(ctx.exception.diagnostics["gate"], "d-empty")
+
+    def test_a_band_plus_a_real_title_now_passes_and_the_band_is_dropped(self):
+        """使用者實際遇到的那一張：頂端一條實心帶＋字帶裡一塊真標題。
+
+        以前整張被擋下退回程式壓字（dev `20260921-180313`），現在要過，而且保護區
+        必須逐位元等於 base——丟掉不等於放行，那一帶的保證一點都沒鬆。"""
+        band_mid = self.band_top + (self.height - self.band_top) // 2
+        box = self._title_box(band_mid)
+        layer = _rgba_layer_png(
+            (self.width, self.height), opaque_box=box,
+            extra_boxes=[[0, 0, self.width, self.band_top]],
+        )
+        diag: dict = {}
+        out = compose.overlay_title_layer_over_cover_band(
+            self.base, layer, band_top_ratio=self.band_top_ratio, diagnostics=diag,
+        )
+        self.assertEqual(diag["verdict"], "pass")
+        self.assertGreater(diag["protect_painted_pixels"], 0)
+        self.assertTrue(diag["protect_discarded"])
+        img = Image.open(io.BytesIO(out)).convert("RGB")
+        base_img = Image.open(io.BytesIO(self.base)).convert("RGB")
+        for point in ((0, 0), (self.width - 1, 0), (self.width // 2, self.band_top - 1)):
+            with self.subTest(point=point):
+                self.assertEqual(img.getpixel(point), base_img.getpixel(point))
+        self.assertEqual(img.getpixel((box[0] + 10, box[1] + 10)), (255, 255, 255))
 
     def test_painting_too_much_of_the_editable_area_is_rejected(self):
         """(c) 面積防呆：字帶以下大半都不透明＝模型畫的是背景不是標題。"""
@@ -302,17 +342,29 @@ class OverlayTitleLayerIndependentReviewTests(unittest.TestCase):
         self.assertIn("空的", str(ctx.exception))
 
     def test_a_layer_painted_only_inside_the_protected_band_is_still_rejected(self):
-        """補洞二時要小心別把 (b) 弄鬆：只在保護區畫東西仍然必須被 (b) 擋下，
-        不能因為「可疊區是空的」就改由新的那道回報、更不能放行。"""
+        """補洞二時要小心別把保護區的保證弄鬆：只在保護區畫東西，兩條路都必須擋下，
+        不能因為「可疊區是空的」就放行。
+
+        2026-09-21 改判之後兩條路擋的道數不一樣，這裡兩條都測：
+        - YT 四版型維持閘 (b) 原樣（保護的是 Logo／角標，prompt 明講要留白）；
+        - 十點這條路的 (b) 改成丟棄（prompt 自己叫模型畫標頭帶），丟完變空圖層，
+          由閘 (d) 接手擋——重點是「擋不擋」，不是「哪一道擋」。
+        """
         layer = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
         ImageDraw.Draw(layer).rectangle(
             [100, 10, 400, self.band_top - 10], fill=(255, 255, 255, 255),
         )
+        layer_png = self._layer(layer)
+
+        with self.assertRaises(compose.ComposeError) as ctx:
+            compose.overlay_title_layer_over_yt_cover(self.base, layer_png, layout="news")
+        self.assertIn("保留給程式後貼元素", str(ctx.exception))
+
         with self.assertRaises(compose.ComposeError) as ctx:
             compose.overlay_title_layer_over_cover_band(
-                self.base, self._layer(layer), band_top_ratio=self.band_top_ratio,
+                self.base, layer_png, band_top_ratio=self.band_top_ratio,
             )
-        self.assertIn("保留給程式後貼元素", str(ctx.exception))
+        self.assertIn("空的", str(ctx.exception))
 
     def test_the_empty_layer_guard_reaches_the_endpoint_as_400(self):
         """空圖層也要跟其他三道一樣經 _compose_error_status 轉成 400，不是 500。"""

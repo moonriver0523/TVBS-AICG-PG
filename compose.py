@@ -3827,7 +3827,8 @@ def format_title_layer_diagnostics(diag: dict) -> str:
         f"／alpha {diag.get('alpha_min', '?')}–{diag.get('alpha_max', '?')}"
         f"（門檻 {diag.get('alpha_threshold', '?')}）"
         f"／保護區被畫 {diag.get('protect_painted_pixels', '?')} px"
-        f"／可疊區畫了 {diag.get('paint_ratio', 0):.3%}"
+        + ("（已丟棄，不計失敗）" if diag.get("protect_discarded") else "")
+        + f"／可疊區畫了 {diag.get('paint_ratio', 0):.3%}"
         f"（上限 {diag.get('max_paint_ratio', 0):.0%}、下限 {diag.get('min_paint_ratio', 0):.2%}）"
     )
 
@@ -3910,6 +3911,7 @@ def _overlay_title_layer_core(
     max_paint_ratio: float = TITLE_LAYER_MAX_PAINT_RATIO,
     min_paint_ratio: float = TITLE_LAYER_MIN_PAINT_RATIO,
     alpha_threshold: int = TITLE_LAYER_ALPHA_THRESHOLD,
+    discard_protect_paint: bool = False,
     diagnostics: dict | None = None,
 ) -> Image.Image:
     """四道閘＋疊圖的核心邏輯，在 PIL Image 層級操作。base_img 必須是 RGB，
@@ -3917,6 +3919,11 @@ def _overlay_title_layer_core(
 
     `diagnostics`：傳一個 dict 進來就會被原地填入量到的數字（見 `_measure_title_layer`）。
     不傳也完全正常運作——四道閘的判斷與訊息跟有沒有傳這個參數無關。
+
+    `discard_protect_paint=True`：閘 (b) 由「擋下」改成「丟掉」——保護區裡被畫過的
+    像素不再是失敗條件，而是在疊圖前直接歸零。只有「prompt 自己叫模型畫那一塊」的
+    路徑才可以開（見 `overlay_title_layer_over_cover_band`）。保護區提供的保證完全
+    沒變：那一帶最後一樣是 base 原封不動漏出來。
     """
     diag, painted, painted_in_editable, protect_violation, alpha = _measure_title_layer(
         base_img, layer_img, protect_boxes=protect_boxes, alpha_threshold=alpha_threshold,
@@ -3943,7 +3950,8 @@ def _overlay_title_layer_core(
         ))
 
     # (b) 保護區內不准有任何被畫過的像素——這一道跟面積無關，一個像素都不許。
-    if protect_violation.getbbox() is not None:
+    diag["protect_discarded"] = bool(discard_protect_paint)
+    if protect_violation.getbbox() is not None and not discard_protect_paint:
         raise _block("b", (
             "生圖模型在保留給程式後貼元素（頁首帶／Logo／角標）的區域畫了東西，"
             "已擋下這次生成——那一帶必須維持透明，請重試"
@@ -3995,8 +4003,13 @@ def _overlay_title_layer_core(
     # 低 alpha 不只出現在惡意情境：layer 尺寸與 base 不符時上面的 LANCZOS 縮放，
     # 本來就會在字的邊緣內插出一圈 1~15 的殘值。
     # 歸零後語意才真正對齊：三道閘認定「沒畫」的像素，疊圖時 base 原封不動漏出來。
+    # discard_protect_paint 時用 painted_in_editable（painted ∩ 可疊區）當遮罩：
+    # 保護區裡模型畫過的像素在這一步歸零，疊圖後那一帶仍是 base 原封不動。
+    # 這就是閘 (b) 本來要保證的事，只是從「整張擋掉」換成「只丟那一塊」。
     cleaned = layer_img.copy()
-    cleaned.putalpha(ImageChops.multiply(alpha, painted))
+    cleaned.putalpha(ImageChops.multiply(
+        alpha, painted_in_editable if discard_protect_paint else painted
+    ))
 
     result = base_img.convert("RGBA")
     result.alpha_composite(cleaned)
@@ -4019,10 +4032,21 @@ def overlay_title_layer_over_cover_band(
     width, height = base_img.size
     band_top = round(height * band_top_ratio)
     protect_boxes = [(0, 0, width, band_top)] if band_top < height else []
+    # 保護區的保證維持不變（那一帶最後一定是 base 原封不動），但這條路的處置方式是
+    # 「把模型畫在那裡的像素丟掉」而不是「整張退回程式壓字」。
+    #
+    # 2026-09-21 使用者回報的第二次誤判，dev 紀錄 `20260921-180313`：保護區被畫
+    # 117304 px＝1920×61，正好是頂端一條實心帶。真因跟日期牌那件同一類的設計矛盾——
+    # 十點的 prompt 模板自己寫著「Across the very top runs a deep-navy header band」，
+    # 模型照做畫了帶，判定卻把它算成竄改原圖。而那一帶本來就會被程式整條蓋掉
+    # （`main._cover_ai` 在疊完圖之後跑 `paste_cover_header_band`），模型畫在那裡的
+    # 東西一個像素都不會出現在成品上：為了看不見的像素把整張退掉是純粹的誤擋。
+    # 帶以下到字帶上緣那 11 px 的間隙不在程式重畫範圍內，丟掉一樣不會漏出來。
     try:
         result = _overlay_title_layer_core(
             base_img, layer_img, protect_boxes=protect_boxes,
-            max_paint_ratio=max_paint_ratio, diagnostics=diagnostics,
+            max_paint_ratio=max_paint_ratio, discard_protect_paint=True,
+            diagnostics=diagnostics,
         )
     finally:
         # 模型回傳的原始尺寸要留下來：跟 base 不一致就代表疊圖前做過 LANCZOS 縮放，
