@@ -669,7 +669,7 @@ def with_base_image_note(prompt: str, has_base: bool) -> str:
 AI_TITLE_LAYER_ONLY_NOTE = """=== YOU ARE DRAWING A TRANSPARENT OVERLAY, NOT A PHOTOGRAPH ===
 The attached image is a REFERENCE ONLY — it shows you the composition, the colours and where the photograph will sit, so your typography and design elements can be placed and coloured to work with it. Do NOT reproduce, redraw, repaint or recreate that photograph in your output.
 Your output canvas is TRANSPARENT (alpha channel, background="transparent"). Every pixel that is not part of the headline text or an explicit design element (a plate, a card shape, an accent stroke, a decorative device described below) MUST be fully transparent — alpha = 0. Leaving the transparent background empty is correct; painting any kind of tint, gradient, vignette, wash or texture across it is not — that would cover the photograph.
-Draw ONLY: the headline typography, and any design elements the instructions below explicitly ask for (plates behind text, accent shapes, wordless devices). Nothing else. Never fill the frame, never draw a solid or semi-transparent panel across the whole canvas, never approximate the photograph's colours as a background.
+Draw ONLY: the headline typography and the plates, bars or ribbons that sit directly behind its rows. Nothing else. No supporting artwork, no illustrations, no icons, no emblems, no wordless devices, no free-floating accent shapes — not one piece, however small. Never fill the frame, never draw a solid or semi-transparent panel across the whole canvas, never approximate the photograph's colours as a background.
 
 """
 
@@ -692,13 +692,18 @@ Draw ONLY: the headline typography, and any design elements the instructions bel
 #   (1) 畫布是空的，但**成品不是**——照參考圖裡人物的位置讓開，不要蓋臉；
 #   (2) 塊高就是 brief 那個數字，空畫布不是長大的理由（數字**重複釘在近端**——
 #       2026-09-11 已證明離 CANVAS 遠的條文壓不動模型，這段就在 prompt 最前面）；
-#   (3) 那個數字管的是**整份回傳的美術**，不只是字：底板、光暈、招式全部要塞進同一條
-#       帶裡。招式擺在標題**旁邊**或同一條帶的角落，不可以另起一排疊在下面把總高撐高
-#       ——19:16 那張多出來的一截正是這樣來的。
+#   (3) 那個數字管的是**整份回傳的美術**，不只是字：底板、光暈全部要塞進同一條帶裡。
+#
+# 2026-09-21 第二輪實拍（創意 1–4 各一張，dev 後台）：
+#   L1 45.0%／L2 50.0%／L3 64.9%／L4 88.4%（規格 18／24／30／36%）
+#   L4 可疊區已畫到 72.0%，c 閘上限 75%——再多一件就會被擋下。
+# 使用者裁決「只要設計標題字」，招式從源頭拿掉（見 cover_design_brief 的 layer_mode），
+# 所以這段原本那句「招式擺在標題旁邊、不要疊在下面」一併刪掉：招式都不畫了，
+# 那句話留著只會變成「你可以畫、但要擺旁邊」的許可。
 AI_TITLE_LAYER_SIZE_NOTE = """=== SIZE THE HEADLINE AS IF THE PHOTOGRAPH WERE ALREADY THERE ===
 The canvas you draw on is empty, but the finished picture is NOT. The reference image shows the people and the scene that will sit underneath your artwork. Lay the type out around them: never cover a face, and leave the main subject clearly readable.
 {height_rule}An empty canvas is NOT a reason to grow. The block is the same size it would be if you were painting straight onto that photograph — do not let the type, its plates, its glow or its supporting artwork expand to fill the frame just because the frame looks empty.
-That height covers the WHOLE artwork you return, not only the letters: plates, glow, accent strokes and every piece of supporting artwork must fit inside the same band. Supporting artwork goes BESIDE the headline or tucks into a corner of that band — never stacked underneath it as an extra row that makes the total taller.
+That height covers the WHOLE layer you return, not only the letters: the plates behind the rows and any glow or edge treatment count towards it and must fit inside the same band. You are returning type on plates and nothing else, so nothing may be stacked above or below the rows to make the total taller.
 
 """
 
@@ -817,7 +822,7 @@ def _size_hierarchy_line(ratio: str, titles, full_width: bool) -> str:
 
 
 def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = False,
-                       visuals=("", "")) -> str:
+                       visuals=("", ""), layer_mode: bool = False) -> str:
     """CANVAS 正後方那塊。愈短愈好——這是模型真的會讀的位置。
 
     2026-09-11 第四輪起，這裡同時是**變化池的出口**：底板形狀、錯位方式、字體骨架、
@@ -829,6 +834,16 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
     `visuals`（第十批）：(visual_left, visual_right) 畫面描述，只用來判斷這張照片
     裡有沒有旗子（見 cover_accessories 的 visuals 參數）；預設一對空字串，不影響
     既有呼叫端與 fixture——沒有旗子可提就不會觸發換入。
+
+    `layer_mode`（2026-09-21）：B55 修法甲那條透明標題圖層的路。實拍四級量到圖層
+    高度 45／50／64.9／88.4%，規格寫的是 18／24／30／36%；L4 的可疊區已經畫到
+    72.0%，離 c 閘上限 75% 只剩 3 個百分點，再多一件就會被擋下變成生圖失敗。
+    使用者裁決：這條路只要設計標題字，招式（supporting artwork）不畫——招式件數
+    正是 L2→L3→L4 那段爬升的來源（0／1／2／3 件）。純 AI 那條路不受影響：同一級
+    實拍是 38%、照片是模型自己畫的、它會自己讓開，縮掉只會傷到本來就正常的那條。
+
+    注意這只拿掉招式一根槓桿。塊高的**底**（L1 無招式仍量到 45%）是另一回事，
+    要動傾斜與字級落差倍數，等這一根驗收完再談——一次一根才歸得了因。
     """
     spec = COVER_TITLE_BRIEF_SPECS.get(level)
     if not spec:
@@ -888,8 +903,11 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
         " A colour switch may happen part-way through a row."
     )
     # 禁綠條文不放這裡：十點 prompt 另帶 cover_title_colour_rule（整段禁令），brief 有字數上限。
-    picked = cover_accessories(level, titles=titles, full_width=full_width, rng=rng,
-                               visuals=visuals)
+    # layer_mode 時整段不發：留著「畫 N 件招式」的指令、再另外叫模型別畫，就是
+    # 今天已經踩過三次的「prompt 叫它畫、守門當它竄改」同型矛盾。要拿掉就從源頭拿掉。
+    picked = () if layer_mode else cover_accessories(
+        level, titles=titles, full_width=full_width, rng=rng, visuals=visuals,
+    )
     if picked:
         rows.append(
             f"- Draw EXACTLY {len(picked)} piece{'' if len(picked) == 1 else 's'} of supporting artwork, listed here and no"
@@ -1951,7 +1969,8 @@ _YT_STYLE_CLAUSES = {
 
 
 def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
-                    bottom_band: bool = False, visual: str = "") -> str:
+                    bottom_band: bool = False, visual: str = "",
+                    layer_mode: bool = False) -> str:
     """CANVAS 正後方那塊。與十點的 cover_design_brief 同一批池子、同一個抽籤順序。
 
     順序刻意跟十點一致（plate → stagger → typeface → palette → tilt），只少了
@@ -2068,8 +2087,12 @@ def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
             "- THE DATE TAB IS NOT PART OF THAT PALETTE: it stays vivid red with white characters"
             " whatever the rows do."
         )
-    picked = cover_accessories(level, titles=lines, full_width=False, rng=rng,
-                               visuals=visual)
+    # layer_mode：同十點，透明標題圖層那條路只畫字，不畫招式（見 cover_design_brief
+    # 的說明）。YT 這邊**沒有實拍證據**——使用者只測了十點；跟著改是因為兩邊共用
+    # 同一個 with_title_layer_note 與同一套守門，留一邊不改等於留一個已知的雷。
+    picked = () if layer_mode else cover_accessories(
+        level, titles=lines, full_width=False, rng=rng, visuals=visual,
+    )
     if picked:
         rows.append(
             f"- Draw EXACTLY {len(picked)} piece{'' if len(picked) == 1 else 's'} of supporting"
