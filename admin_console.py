@@ -79,7 +79,8 @@ def _params_line(record: dict) -> str:
     return " · ".join([
         f"角色: {_esc(record.get('role')) or '－'}",
         f"份量: {_esc(record.get('density')) or '－'}",
-        # 不能直接 _esc(seed)：_esc 走 `value or ""`，seed 0 會被當成空值印成空白。
+        # seed 0 是合法值，要印出來而不是當成缺值。2026-09-21 _esc 已改成只把 None
+        # 當空值，這裡的 str() 其實不再必要，但留著也不會錯，就不動它。
         f"seed: {_esc(str(seed)) if seed is not None else '－'}",
     ])
 
