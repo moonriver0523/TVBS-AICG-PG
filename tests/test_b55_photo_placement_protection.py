@@ -263,7 +263,44 @@ class HeaderBandSurvivesPhotoProtectionTests(unittest.TestCase):
     def test_a_pure_ai_cover_still_lets_the_model_draw_its_own_band(self):
         """沒有原圖放置時照片沒被保護，模型畫的帶留得下來，程式不該再蓋一層。"""
         source = (ROOT / "main.py").read_text(encoding="utf-8")
-        self.assertIn("draw_header_band=protect_base and base is not None", source)
+        self.assertIn("if protect_base and base is not None:\n        raw = compose.paste_cover_header_band", source)
+
+    def test_the_band_is_in_the_refine_source_too(self):
+        """回傳的「追加修改源圖」（source_image_base64）也要有帶。
+
+        那張圖是使用者按「追加修改」時送回模型的底圖，改完再走一次 _post_paste
+        （`_cover_ai` 的 `req.background_image_base64` 那條路）。帶只補在成品上的話，
+        追加修改一趟回來就沒有帶了，而且那條路不會再補。
+        """
+        def fake_raw(req):
+            img = Image.new("RGB", compose.COVER_CANVAS, RED)
+            band_top = round(compose.COVER_CANVAS[1] * compose.cover_title_band_top_ratio())
+            ImageDraw.Draw(img).rectangle([200, band_top + 100, 700, band_top + 180], fill=GREEN)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return SimpleNamespace(
+                image_data_base64=base64.b64encode(buf.getvalue()).decode(),
+                model="fake", mime_type="image/png",
+            )
+
+        body = {**self.BODY, "slot_left": [
+            {"data_url": _data_url(_png_bytes(size=(640, 640), colour=RED)), "purpose": "asis"},
+        ]}
+        with patch.object(main, "generate_image_raw", side_effect=fake_raw), \
+             patch.object(main, "resolve_cover_visuals", return_value=("景", "景")):
+            first = client.post("/api/editor/cover", json=body, headers=_headers())
+        self.assertEqual(first.status_code, 200, first.text)
+        source = first.json().get("source_image_base64")
+        self.assertTrue(source, "追加修改要用的源圖沒有回來")
+
+        img = Image.open(io.BytesIO(base64.b64decode(source))).convert("RGB")
+        band_h = round(img.size[1] * compose.COVER_AI_HEADER_RATIO)
+        x = img.size[0] // 2
+        rows = [img.getpixel((x, y)) for y in range(4, band_h - 8)]
+        self.assertTrue(
+            all(self._near(p, compose.COVER_HEADER_FILL) for p in rows),
+            f"追加修改源圖裡沒有標頭帶：{rows[:6]}…",
+        )
 
 
 if __name__ == "__main__":
