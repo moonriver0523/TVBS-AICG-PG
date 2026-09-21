@@ -145,9 +145,16 @@ def archive_generation(
     user_id: str = "",
     user_email: str = "",
     user_name: str = "",
+    extra_images: dict[str, bytes] | None = None,
     **metadata,
 ) -> None:
-    """歸檔一次生成結果（成功帶圖；失敗不要求圖片）。例外一律吞掉，不波及請求本身。"""
+    """歸檔一次生成結果（成功帶圖；失敗不要求圖片）。例外一律吞掉，不波及請求本身。
+
+    `extra_images`：成品以外要一起存下來的圖，`{後綴: PNG bytes}`。2026-09-21 為
+    B55 診斷加的——閘門擋下時模型回傳的那張原始標題圖層要留證，不然只剩一句錯誤
+    訊息，「模型到底畫了什麼」永遠無從得知。存成 `<stem>-<後綴>.png`，跟成品同一個
+    月份目錄，所以 `read_image()`／`/admin/image/...` 不用改就讀得到。
+    """
     if not ENABLED:
         return
     try:
@@ -169,6 +176,17 @@ def archive_generation(
             image_name = f"{stem}.{ext}"
             (target / image_name).write_bytes(base64.b64decode(image_base64))
 
+        # 附帶圖（目前只有 B55 的標題圖層）。後綴只允許英數與連字號——它會直接
+        # 變成檔名的一部分，而檔名最後會進 `/admin/image/{month}/{filename}`。
+        extra_image_files: list[str] = []
+        for suffix, blob in (extra_images or {}).items():
+            safe = "".join(ch for ch in str(suffix) if ch.isalnum() or ch == "-")
+            if not safe or not blob:
+                continue
+            name = f"{stem}-{safe}.png"
+            (target / name).write_bytes(blob)
+            extra_image_files.append(name)
+
         if "prompt" in metadata and isinstance(metadata["prompt"], str):
             metadata["prompt"] = metadata["prompt"][:MAX_PROMPT_CHARS]
         if "error_summary" in metadata and isinstance(metadata["error_summary"], str):
@@ -189,6 +207,7 @@ def archive_generation(
             "user_email": user_email,
             "user_name": user_name,
             "image_file": image_name,
+            "extra_image_files": extra_image_files,
             "mime_type": mime_type,
             "status": status,
             **metadata,

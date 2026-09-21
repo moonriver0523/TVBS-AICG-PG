@@ -799,5 +799,206 @@ class NoteHelperUnitTests(unittest.TestCase):
         self.assertIn("Do NOT reproduce", editor_formats.AI_TITLE_LAYER_ONLY_NOTE)
 
 
+class TitleLayerDiagnosticsTests(unittest.TestCase):
+    """B55 診斷（2026-09-21）。
+
+    **這一整個 class 的重點只有一件事：證明「加了診斷之後，四道閘的行為一個字都沒變」。**
+    使用者的驗收是「太嚴格」，下一步要靠這些數字決定門檻怎麼調；如果診斷本身改動了
+    閘門判斷，量到的數字就沒有意義了。所以每一題都用同一組輸入跑「有傳 diagnostics」
+    與「沒傳 diagnostics」兩次，比對結果與錯誤訊息必須逐字相同。
+    """
+
+    BASE = (1920, 1080)
+
+    def _run(self, layer_png, *, diagnostics=None):
+        return compose.overlay_title_layer_over_yt_cover(
+            _rgb_png((255, 0, 0), self.BASE), layer_png,
+            layout="news", diagnostics=diagnostics,
+        )
+
+    def _both_ways(self, layer_png):
+        """回傳 (沒傳診斷的結果, 有傳診斷的結果, 診斷 dict)。
+
+        結果一律是 ('ok', png_bytes) 或 ('err', 訊息字串)，好逐字比對。"""
+        out = []
+        diag: dict = {}
+        for kwargs in ({}, {"diagnostics": diag}):
+            try:
+                out.append(("ok", self._run(layer_png, **kwargs)))
+            except compose.ComposeError as exc:
+                out.append(("err", str(exc)))
+        return out[0], out[1], diag
+
+    # ---- 行為不變（每一道閘各一題，外加通過的情形）----
+
+    def test_pass_is_identical_with_and_without_diagnostics(self):
+        layer = _rgba_layer_png(self.BASE, opaque_box=[100, 700, 900, 900])
+        without, with_diag, diag = self._both_ways(layer)
+        self.assertEqual(without[0], "ok")
+        self.assertEqual(without, with_diag, "疊出來的成品位元組必須完全相同")
+        self.assertEqual(diag["verdict"], "pass")
+        self.assertEqual(diag["gate"], "")
+
+    def test_gate_a_message_identical(self):
+        # 全不透明＝模型忽略 background=transparent
+        layer = _rgba_layer_png(
+            self.BASE, opaque_box=[0, 0, *self.BASE], opaque_colour=(0, 0, 255, 255)
+        )
+        without, with_diag, diag = self._both_ways(layer)
+        self.assertEqual(without[0], "err")
+        self.assertEqual(without, with_diag, "錯誤訊息必須逐字相同")
+        self.assertEqual(diag["gate"], "a")
+        self.assertEqual(diag["verdict"], "blocked")
+
+    def test_gate_b_message_identical(self):
+        # 只在保護區（頁首帶／角標那一帶）畫東西
+        boxes = compose.yt_cover_protect_boxes("news")
+        self.assertTrue(boxes, "這題的前提是 news 版型有保護區")
+        x0, y0, x1, y1 = boxes[0]
+        layer = _rgba_layer_png(self.BASE, opaque_box=[x0 + 1, y0 + 1, x1 - 1, y1 - 1])
+        without, with_diag, diag = self._both_ways(layer)
+        self.assertEqual(without[0], "err")
+        self.assertEqual(without, with_diag)
+        self.assertEqual(diag["gate"], "b")
+        self.assertGreater(diag["protect_painted_pixels"], 0)
+
+    def test_gate_d_empty_message_identical(self):
+        layer = _rgba_layer_png(self.BASE)          # 完全透明
+        without, with_diag, diag = self._both_ways(layer)
+        self.assertEqual(without[0], "err")
+        self.assertEqual(without, with_diag)
+        self.assertEqual(diag["gate"], "d-empty")
+        self.assertEqual(diag["painted_in_editable_pixels"], 0)
+
+    def test_gate_d_min_message_identical(self):
+        # 殘渣：小到低於 TITLE_LAYER_MIN_PAINT_RATIO
+        layer = _rgba_layer_png(self.BASE, opaque_box=[800, 800, 830, 810])
+        without, with_diag, diag = self._both_ways(layer)
+        self.assertEqual(without[0], "err")
+        self.assertEqual(without, with_diag)
+        self.assertEqual(diag["gate"], "d-min")
+        self.assertLess(diag["paint_ratio"], compose.TITLE_LAYER_MIN_PAINT_RATIO)
+
+    def test_thresholds_are_unchanged(self):
+        """門檻常數本輪不准動——改門檻是裁決事項，診斷只負責量。"""
+        self.assertEqual(compose.TITLE_LAYER_MIN_PAINT_RATIO, 0.001)
+        self.assertEqual(compose.TITLE_LAYER_ALPHA_THRESHOLD, 16)
+        self.assertEqual(compose.PHOTO_PROTECT_MAX_CHANGE_RATIO, 0.5)
+
+    # ---- 診斷內容本身 ----
+
+    def test_gate_error_is_still_a_compose_error(self):
+        """既有的 `except compose.ComposeError` 呼叫端不可以因為換了例外型別而漏接。"""
+        self.assertTrue(issubclass(compose.TitleLayerGateError, compose.ComposeError))
+
+    def test_gate_error_carries_the_numbers(self):
+        layer = _rgba_layer_png(self.BASE)
+        with self.assertRaises(compose.TitleLayerGateError) as ctx:
+            self._run(layer)
+        self.assertEqual(ctx.exception.diagnostics["gate"], "d-empty")
+
+    def test_diagnostics_record_the_path_and_layer_size(self):
+        """被擋下時也要知道是哪一條路徑、模型回的原始尺寸是多少（有沒有被縮放）。"""
+        layer = _rgba_layer_png((1280, 720))        # 尺寸跟 base 不同 → 會被 LANCZOS 縮放
+        diag: dict = {}
+        with self.assertRaises(compose.ComposeError):
+            self._run(layer, diagnostics=diag)
+        self.assertEqual(diag["path"], "yt-cover:news")
+        self.assertEqual(diag["layer_raw_size"], "1280x720")
+        self.assertTrue(diag["layer_resized"])
+
+    def test_ten_cover_path_is_labelled(self):
+        diag: dict = {}
+        with self.assertRaises(compose.ComposeError):
+            compose.overlay_title_layer_over_cover_band(
+                _rgb_png((255, 0, 0), self.BASE), _rgba_layer_png(self.BASE),
+                band_top_ratio=compose.cover_title_band_top_ratio(), diagnostics=diag,
+            )
+        self.assertEqual(diag["path"], "ten-cover")
+
+    def test_painted_bbox_separates_a_full_background_from_a_title_band(self):
+        """光看比例分不出「一大塊半透明」與「散落的殘渣」，外接框分得出來。"""
+        band: dict = {}
+        self._run(_rgba_layer_png(self.BASE, opaque_box=[100, 700, 900, 900]), diagnostics=band)
+        self.assertEqual(band["painted_bbox"], [100, 700, 901, 901])
+
+    def test_summary_line_names_the_gate(self):
+        layer = _rgba_layer_png(self.BASE)
+        diag: dict = {}
+        with self.assertRaises(compose.ComposeError):
+            self._run(layer, diagnostics=diag)
+        text = compose.format_title_layer_diagnostics(diag)
+        self.assertIn("d-empty", text)
+        self.assertIn("診斷", text)
+
+    def test_summary_is_empty_without_diagnostics(self):
+        self.assertEqual(compose.format_title_layer_diagnostics({}), "")
+
+
+class TitleLayerArchiveFieldsTests(unittest.TestCase):
+    """歸檔欄位：沒走過這條路的請求不可以多出任何欄位（否則所有既有紀錄的形狀都變了）。"""
+
+    def setUp(self):
+        main.reset_title_layer_diags()
+
+    def test_no_fields_when_path_not_taken(self):
+        self.assertEqual(main._title_layer_archive_fields(), {})
+
+    def test_success_records_diag_without_layer_image(self):
+        main._record_title_layer_diag({"gate": "", "verdict": "pass", "path": "yt-cover:news"})
+        fields = main._title_layer_archive_fields()
+        self.assertEqual(fields["title_layer_gate"], "pass")
+        self.assertNotIn("extra_images", fields, "成功筆的圖層已經疊進成品，不必另存")
+
+    def test_block_records_the_layer_image(self):
+        main._record_title_layer_diag({"gate": "c", "verdict": "blocked"}, b"PNGBYTES")
+        fields = main._title_layer_archive_fields()
+        self.assertEqual(fields["title_layer_gate"], "c")
+        self.assertEqual(fields["extra_images"], {"layer": b"PNGBYTES"})
+
+
+class TitleLayerArchiveWriteTests(unittest.TestCase):
+    """真的寫進歸檔目錄：後台要點得開那張圖層，檔名不能被後綴帶出目錄。"""
+
+    def _archive(self, tmp, **kwargs):
+        import importlib
+        import audit_archive
+
+        with patch.dict(os.environ, {"AUDIT_ARCHIVE_DIR": tmp}):
+            mod = importlib.reload(audit_archive)
+            try:
+                mod.archive_generation(**kwargs)
+            finally:
+                importlib.reload(audit_archive)
+
+    def test_extra_images_land_next_to_the_result(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._archive(
+                tmp,
+                request_id="deadbeef",
+                image_base64=base64.b64encode(_rgb_png((0, 0, 0), (8, 8))).decode("ascii"),
+                mime_type="image/png",
+                extra_images={"layer": _rgb_png((1, 2, 3), (8, 8))},
+            )
+            written = sorted(p.name for p in Path(tmp).rglob("*.png"))
+            self.assertEqual(len(written), 2, f"應該有成品與圖層兩張：{written}")
+            self.assertTrue(any(n.endswith("-layer.png") for n in written), written)
+
+    def test_suffix_cannot_escape_the_archive_dir(self):
+        """後綴會直接變成檔名的一部分，而檔名最後會進 /admin/image/{month}/{filename}。"""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self._archive(tmp, request_id="deadbeef", extra_images={"../../evil": b"x"})
+            root = Path(tmp).resolve()
+            for path in root.rglob("*.png"):
+                self.assertTrue(
+                    path.resolve().is_relative_to(root), f"跑出歸檔目錄：{path}"
+                )
+                self.assertNotIn("..", path.name)
+
+
 if __name__ == "__main__":
     unittest.main()

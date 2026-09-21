@@ -699,6 +699,9 @@ def _archive_generation(**kwargs) -> None:
     """
     try:
         kwargs.setdefault("status", audit_archive.STATUS_OK)
+        # `extra_images`（B55 診斷用的標題圖層）只進本機稽核歸檔，不進 GCS 備份——
+        # gcs_archive.archive_generation 不認得這個參數，展開進去會直接 TypeError。
+        extra_images = kwargs.pop("extra_images", None)
         if kwargs.get("image_base64"):
             gcs_archive.archive_generation(**kwargs)
 
@@ -711,6 +714,7 @@ def _archive_generation(**kwargs) -> None:
             user_id=user.get("user_id", ""),
             user_email=user.get("email", ""),
             user_name=user.get("name", ""),
+            extra_images=extra_images,
             **enriched,
         )
     except Exception as exc:  # noqa: BLE001 - 歸檔失敗只印出來，不能讓成功的生成變失敗
@@ -2142,6 +2146,64 @@ def collected_portrait_notices() -> list[str]:
 
 def _record_portrait_notice(text: str) -> None:
     _portrait_notices.set(_portrait_notices.get() + [text])
+
+
+# ============================================================
+# B55 診斷（2026-09-21，使用者實機驗收「太嚴格，嘗試都沒有成功」之後加）
+#
+# 用 ContextVar 的理由跟 _portrait_notices 完全一樣：十點那條路的 `_cover_ai()`
+# 回的是一個 tuple，要把診斷帶出去就得改它的回傳簽名與所有呼叫端；YT 那條路則是
+# 在函式中段。兩邊都只是「順手記一筆」，不值得為它動兩條主線的簽名。
+#
+# 記什麼：`compose._measure_title_layer` 量到的全部數字，外加被擋下時模型回傳的
+# 那張**原始標題圖層**。那張圖是這組診斷裡最有價值的一項——0921 的四次失敗只留下
+# 一句錯誤訊息，「模型是畫了深色底板、畫了漸層、還是根本沒理會 background=
+# transparent」三種假設一個都排除不掉。看一眼那張圖就分得出來。
+# ============================================================
+_title_layer_diags: contextvars.ContextVar[list[dict]] = contextvars.ContextVar(
+    "title_layer_diags", default=[]
+)
+_title_layer_blocked: contextvars.ContextVar[list[bytes]] = contextvars.ContextVar(
+    "title_layer_blocked", default=[]
+)
+
+
+def reset_title_layer_diags() -> None:
+    _title_layer_diags.set([])
+    _title_layer_blocked.set([])
+
+
+def _record_title_layer_diag(diag: dict, blocked_png: bytes = b"") -> None:
+    """記一次四道閘的量測結果。`blocked_png` 只在被擋下時給（成功筆的圖層已經疊進
+    成品，不必另存一份）。"""
+    if diag:
+        _title_layer_diags.set(_title_layer_diags.get() + [dict(diag)])
+    if blocked_png:
+        _title_layer_blocked.set(_title_layer_blocked.get() + [blocked_png])
+
+
+def _title_layer_archive_fields() -> dict:
+    """把本次請求記到的診斷整理成 `_archive_generation` 的 metadata 欄位。
+
+    沒有走過透明圖層這條路（gemini、composite 模式、沒有 asis）就回空 dict，
+    一個欄位都不會多出來——後台那一列的顯示也就跟以前完全一樣。"""
+    diags = _title_layer_diags.get()
+    if not diags:
+        return {}
+    fields: dict = {
+        "title_layer_diag": diags if len(diags) > 1 else diags[0],
+        # 給後台列表用的一句話：不用點開 JSON 就看得到是過還是被哪一道擋的。
+        "title_layer_gate": "、".join(
+            (d.get("gate") or "pass") for d in diags
+        ),
+    }
+    blocked = _title_layer_blocked.get()
+    if blocked:
+        fields["extra_images"] = {
+            (f"layer{i + 1}" if len(blocked) > 1 else "layer"): png
+            for i, png in enumerate(blocked)
+        }
+    return fields
 
 
 def portrait_entry_only_notice(names: list[str]) -> str:
@@ -6310,21 +6372,30 @@ def _cover_ai(
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
     raw = base64.b64decode(result.image_data_base64)
     if transparent_mode:
+        # B55 診斷（2026-09-21）：量到的數字與被擋下的那張原始圖層都要留下來，
+        # 理由見 _record_title_layer_diag 上方那段。
+        title_layer_diag: dict = {}
+        title_layer_raw = raw
         try:
             raw = compose.overlay_title_layer_over_cover_band(
                 base, raw, band_top_ratio=compose.cover_title_band_top_ratio(),
+                diagnostics=title_layer_diag,
             )
+            _record_title_layer_diag(title_layer_diag)
         except compose.ComposeError as exc:
             # 2026-09-20 使用者裁定：四道閘任一沒過不要回 400，退回程式壓字，但要明講。
             # 退的是**標題怎麼畫**，不是照片——base 本來就沒經過模型，這裡直接拿它走
             # 合成版那條路（compose_ten_cover 自己會貼標頭／Logo／圓章，所以不能再
             # 套 _post_paste，那會貼第二次）。transparent_mode 只在滿版成立
             # （protect_base 只有滿版端點會給 True），所以這裡固定走單一標題。
-            print(f"[cover:title-layer] 閘門沒過，退回程式壓字：{exc}", flush=True)
+            print(f"[cover:title-layer] 閘門沒過，退回程式壓字：{exc}"
+                  f" ｜{title_layer_diag}", flush=True)
             _record_portrait_notice(
                 f"AI 標題圖層沒通過檢查（{exc}）。這張已改用程式壓字的標題，"
                 "版面與字體會跟 AI 標題不一樣；想要 AI 標題請重新生成一次。"
+                + compose.format_title_layer_diagnostics(title_layer_diag)
             )
+            _record_title_layer_diag(title_layer_diag, title_layer_raw)
             # 斷句補打（2026-09-21 獨立複查第三輪）：端點入口的 apply_title_break_hints
             # 帶的是 composite=False（B75：AI 標題模式下 compose 不壓字，斷句沒人讀），
             # 所以走到這裡時**詞組邊界是空的**。現在這條路真的要用 Pillow 壓字了，
@@ -6859,6 +6930,8 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
     # 後當唯一附圖送進模型，由模型在上面畫標題（見 _cover_ai 的 base）。
     ai_over_base = has_asis and req.mode == editor_formats.COVER_MODE_AI and not req.background_image_base64
     ai_overlay = req.mode == editor_formats.COVER_MODE_AI and bool(req.background_image_base64)
+    # B55 診斷（2026-09-21）：本次請求的四道閘量測從乾淨的狀態開始記。
+    reset_title_layer_diags()
     # 「只改文字」（2026-09-08）：合成版帶回壓字前底圖＝底圖不重生，跟 ai_overlay 一樣零 API
     recomposite = req.mode == editor_formats.COVER_MODE_COMPOSITE and bool(req.background_image_base64)
     if has_asis or ai_overlay or recomposite:
@@ -6939,6 +7012,8 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         variable=req.title_left,
         prompt=f"FULL: {visual}",
         role="編輯",
+        # B55 診斷（2026-09-21）：同 YT 封面，見 _title_layer_archive_fields。
+        **_title_layer_archive_fields(),
         **portrait_fields,
         **meta,
     )
@@ -7996,6 +8071,11 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     # B55 閘門沒過退回程式壓字時翻成 True（2026-09-20 使用者裁定），見下面的
     # overlay_title_layer_over_yt_cover 呼叫處；決定 is_ai 與回應裡的 title_mode。
     title_layer_fallback = False
+    # B55 診斷（2026-09-21）：四道閘量到的數字，以及被擋下時模型回傳的那張原始圖層。
+    # 兩者都要進稽核歸檔——成功筆也要記，只記失敗筆拿到的是被截斷的分布，
+    # 永遠不知道「正常的標題圖層畫多少比例」，也就訂不出正確的門檻。
+    title_layer_diag: dict = {}
+    reset_title_layer_diags()
     # F43 信任邊界（2026-09-20 獨立複查 gpt-5.6-sol 第一項）：`background_is_ai` 是
     # 前端把上一輪回應原樣帶回來的值，後端沒有從位元組重算。以前帶錯只會讓
     # 「AI示意圖」漏標（消極遺漏）；F43 之後同一個值還決定要不要貼「畫面來源：○○○」
@@ -8059,21 +8139,30 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             )
             if base is not None and not dual and base_model == "yt-cover:asis":
                 if transparent_mode:
+                    # B55 診斷（2026-09-21）：模型回的那張圖層先留起來，閘門擋下時要
+                    # 連同量到的數字一起進稽核歸檔——0921 四次全擋、四張成品位元組
+                    # 相同，但模型到底畫了什麼完全沒留下來，只能猜。
+                    title_layer_raw = background
                     try:
                         background = compose.overlay_title_layer_over_yt_cover(
                             base, background, layout=req.layout,
                             original_audio=original_audio, ai_translation=ai_translation, ai_note=False,
+                            diagnostics=title_layer_diag,
                         )
+                        _record_title_layer_diag(title_layer_diag)
                     except compose.ComposeError as exc:
                         # 2026-09-20 使用者裁定：閘門沒過退回程式壓字，但要明講。
                         # 底圖換回未經模型的 base，並把 ai_title 關掉——下面那組
                         # compose_yt_*_cover 的 `draw_titles=not ai_title` 就會改成
                         # 由 Pillow 壓標題（＝title_mode="composite" 的那條路）。
-                        print(f"[yt-cover:title-layer] 閘門沒過，退回程式壓字：{exc}", flush=True)
+                        print(f"[yt-cover:title-layer] 閘門沒過，退回程式壓字：{exc}"
+                              f" ｜{title_layer_diag}", flush=True)
                         _record_portrait_notice(
                             f"AI 標題圖層沒通過檢查（{exc}）。這張已改用程式壓字的標題，"
                             "版面與字體會跟 AI 標題不一樣；想要 AI 標題請重新生成一次。"
+                            + compose.format_title_layer_diagnostics(title_layer_diag)
                         )
+                        _record_title_layer_diag(title_layer_diag, title_layer_raw)
                         background, ai_title = base, False
                         image_model = f"{image_model}＋yt-cover:title-layer-fallback"
                         title_layer_fallback = True
@@ -8206,6 +8295,10 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         prompt=log_prompt,
         role="編輯",
         portrait_subject="、".join(subjects),
+        # B55 診斷（2026-09-21）：量到的數字進 JSON，被擋下的那張原始圖層另存一個
+        # 檔（後台那一列會多一個「標題圖層」連結）。看一眼那張圖就能分辨模型是
+        # 畫了深色底板、畫了漸層、還是根本沒理會 background=transparent。
+        **_title_layer_archive_fields(),
         **meta,
     )
     return YtCoverResponse(
