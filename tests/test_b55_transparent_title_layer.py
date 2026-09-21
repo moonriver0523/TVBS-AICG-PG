@@ -936,22 +936,93 @@ class TitleLayerDiagnosticsTests(unittest.TestCase):
         """門檻是裁決事項，程式不准自己調——這條釘住目前這組被裁定的數字。
 
         2026-09-21：可疊區上限從「借用 PHOTO_PROTECT_MAX_CHANGE_RATIO（0.5）」改成
-        自己的 TITLE_LAYER_MAX_PAINT_RATIO=0.70（使用者看過三張實證圖層後裁決）；
-        另外兩個門檻沒動，差異遮罩那條路的 0.5 也沒動。
+        自己的常數（使用者看過三張實證圖層後裁決 0.70），當天稍晚再裁決**十點與 YT
+        拆成兩個數字**：十點 0.75、YT 0.85。另外兩個門檻沒動，差異遮罩那條路的
+        0.5 也沒動。
         """
         self.assertEqual(compose.TITLE_LAYER_MIN_PAINT_RATIO, 0.001)
         self.assertEqual(compose.TITLE_LAYER_ALPHA_THRESHOLD, 16)
-        self.assertEqual(compose.TITLE_LAYER_MAX_PAINT_RATIO, 0.70)
+        self.assertEqual(compose.TITLE_LAYER_MAX_PAINT_RATIO_TEN, 0.75)
+        self.assertEqual(compose.TITLE_LAYER_MAX_PAINT_RATIO_YT, 0.85)
         self.assertEqual(compose.PHOTO_PROTECT_MAX_CHANGE_RATIO, 0.5)
 
     def test_the_two_caps_are_separate_knobs(self):
         """合成一個常數就會「調標題圖層順手改掉照片保護」——兩者量的是不同東西。"""
         source = Path(compose.__file__).read_text(encoding="utf-8")
-        self.assertIn("TITLE_LAYER_MAX_PAINT_RATIO = ", source)
+        self.assertIn("TITLE_LAYER_MAX_PAINT_RATIO_TEN = ", source)
         self.assertIn("PHOTO_PROTECT_MAX_CHANGE_RATIO = ", source)
+        for cap in (compose.TITLE_LAYER_MAX_PAINT_RATIO_TEN,
+                    compose.TITLE_LAYER_MAX_PAINT_RATIO_YT):
+            with self.subTest(cap=cap):
+                self.assertNotEqual(cap, compose.PHOTO_PROTECT_MAX_CHANGE_RATIO)
+
+    def test_the_ten_and_yt_caps_are_separate_knobs(self):
+        """2026-09-21 使用者裁決「要拆 怕誤判」：十點與 YT 必須是兩個獨立的常數，
+        而且 YT 要比十點寬。
+
+        理由是分母不同——這道閘量的是「佔**可疊區**的比例」，而 YT 的可疊區比十點
+        小（news 67.5%／hourly 74.0% vs 十點 88.4%，佔畫面），同一份設計換算出來的
+        比例天生偏高，YT 那側會先撞到天花板。兩邊寫同一個數字等於讓 YT 吃虧。
+        """
         self.assertNotEqual(
-            compose.TITLE_LAYER_MAX_PAINT_RATIO, compose.PHOTO_PROTECT_MAX_CHANGE_RATIO
+            compose.TITLE_LAYER_MAX_PAINT_RATIO_TEN,
+            compose.TITLE_LAYER_MAX_PAINT_RATIO_YT,
         )
+        self.assertGreater(
+            compose.TITLE_LAYER_MAX_PAINT_RATIO_YT,
+            compose.TITLE_LAYER_MAX_PAINT_RATIO_TEN,
+        )
+
+    def test_each_overlay_function_defaults_to_its_own_cap(self):
+        """拆了常數但兩支函式還是吃同一個預設值＝等於沒拆。直接讀簽章的預設值，
+        不是讀原始碼字串——改參數名也躲不掉。"""
+        import inspect
+        self.assertEqual(
+            inspect.signature(compose.overlay_title_layer_over_cover_band)
+            .parameters["max_paint_ratio"].default,
+            compose.TITLE_LAYER_MAX_PAINT_RATIO_TEN,
+        )
+        self.assertEqual(
+            inspect.signature(compose.overlay_title_layer_over_yt_cover)
+            .parameters["max_paint_ratio"].default,
+            compose.TITLE_LAYER_MAX_PAINT_RATIO_YT,
+        )
+
+    def test_the_caps_actually_bite_at_the_ruled_numbers(self):
+        """不是只比對常數：實際做一張蓋住可疊區 ~80% 的圖層，十點必須擋、YT 必須過。
+
+        這一題才證明「拆開」有真的接到判斷上——80% 卡在兩個數字中間，同一張圖層
+        在兩條路上的結果必須不同。
+        """
+        size = (1920, 1080)
+        base = _rgb_png(RED, size)
+
+        def _cover(fraction: float) -> bytes:
+            """從畫面底部往上塗滿到指定的畫布比例（可疊區都在下半部）。"""
+            img = Image.new("RGBA", size, (0, 0, 0, 0))
+            top = round(size[1] * (1 - fraction))
+            ImageDraw.Draw(img).rectangle(
+                [0, top, size[0], size[1]], fill=(255, 255, 255, 255),
+            )
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return buf.getvalue()
+
+        ten_diag: dict = {}
+        with self.assertRaises(compose.ComposeError):
+            compose.overlay_title_layer_over_cover_band(
+                base, _cover(0.70), band_top_ratio=compose.cover_title_band_top_ratio(),
+                diagnostics=ten_diag,
+            )
+        self.assertEqual(ten_diag["gate"], "c")
+        self.assertGreater(ten_diag["paint_ratio"], 0.75)
+
+        yt_diag: dict = {}
+        compose.overlay_title_layer_over_yt_cover(
+            base, _cover(0.55), layout="news", diagnostics=yt_diag,
+        )
+        self.assertEqual(yt_diag["verdict"], "pass")
+        self.assertGreater(yt_diag["paint_ratio"], 0.75)
 
     # ---- 診斷內容本身 ----
 
