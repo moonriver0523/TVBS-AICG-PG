@@ -87,12 +87,76 @@ class ProtectBoxesUnitTests(unittest.TestCase):
 
     def test_hourly_has_a_separate_mid_screen_date_box_not_merged_into_top(self):
         """hourly 的日期紅牌卡在畫面中段，跟頂端 Logo/LIVE 章叢中間隔了一大段照片——
-        必須是獨立一個 box，不能為了保這塊牌把中間整條都鎖住（那樣會鎖到不該鎖的照片）。"""
+        必須是獨立一個 box，不能為了保這塊牌把中間整條都鎖住（那樣會鎖到不該鎖的照片）。
+
+        2026-09-21 改寫：頂端原本量成**一個** union 框，這題就靠 `tops[0]`／`tops[1]`
+        的順序假設抓間隙。現在左上 Logo 與右上 LIVE 章各自量框（見
+        `compose._fixed_element_boxes`），頂端變成兩個框，順序假設不再成立。
+        題目本身（日期牌獨立、中段照片沒被鎖）沒變，改成直接認出日期牌那一框。
+        """
         boxes = compose.yt_cover_protect_boxes("hourly", ai_note=False)
-        self.assertGreaterEqual(len(boxes), 2, "hourly 應該至少有頂端叢＋中段日期牌兩個獨立保護框")
-        tops = sorted(boxes, key=lambda b: b[1])
-        # 兩個框之間應該有明顯間隙（中段照片沒有被鎖住）
-        self.assertGreater(tops[1][1] - tops[0][3], 0, "頂端叢與日期牌之間應該留有未保護的照片區域")
+        self.assertGreaterEqual(len(boxes), 3, "hourly 應該有左上 Logo、右上 LIVE 章、中段日期牌")
+        h = compose.YT_CANVAS[1]
+        # 日期牌是唯一落在畫面中段的那一框；其餘都貼在頂端。
+        mid = [b for b in boxes if b[1] > h * 0.35]
+        top = [b for b in boxes if b[1] <= h * 0.35]
+        self.assertEqual(len(mid), 1, f"中段應該只有日期牌一框，實得 {mid}")
+        self.assertTrue(top, "頂端應該還有 Logo 與 LIVE 章")
+        self.assertGreater(
+            mid[0][1] - max(b[3] for b in top), 0,
+            "頂端元件與日期牌之間應該留有未保護的照片區域",
+        )
+
+    def test_the_top_elements_do_not_lock_the_photo_between_them(self):
+        """B55 誤判真因（2026-09-21）：左右兩件量成一個 union 框，中間那一整條照片
+        跟著被鎖，模型只要在那裡畫到標題上緣就被判成竄改、整張退回程式壓字。
+
+        三個版型的頂端都是「一左一右」，中間必須留白。
+        """
+        h = compose.YT_CANVAS[1]
+        for layout in ("news", "live24", "hourly"):
+            with self.subTest(layout=layout):
+                top = [
+                    b for b in compose.yt_cover_protect_boxes(layout, ai_note=False)
+                    if b[1] <= h * 0.35
+                ]
+                self.assertGreaterEqual(
+                    len(top), 2, f"{layout} 頂端應該至少左右兩個獨立框，實得 {top}",
+                )
+                # 除了橫跨全幅的頂線（news 有一條）以外，左右兩件之間要有未保護的間隙
+                gap_candidates = [b for b in top if b[2] - b[0] < compose.YT_CANVAS[0] * 0.9]
+                self.assertGreaterEqual(len(gap_candidates), 2, f"{layout} 找不到左右兩件")
+                left = min(gap_candidates, key=lambda b: b[0])
+                right = max(gap_candidates, key=lambda b: b[0])
+                self.assertGreater(
+                    right[0] - left[2], 0,
+                    f"{layout} 左右兩件之間應該留有未保護的照片（實得 {left} / {right}）",
+                )
+
+    def test_the_three_real_world_false_positives_are_now_outside_every_box(self):
+        """2026-09-21 dev 後台三張被第 b 道閘擋下、整張退回程式壓字的圖層。
+
+        三處違規外接框都是逐像素量出來的實際座標（73~82% 是 alpha 201 以上的實心
+        筆畫，不是縮放毛邊）。它們畫的是標題自己的上緣，沒有壓到任何固定元素——
+        舊的 union 框把元件之間的空白也鎖住，才會被判成竄改。
+
+        這題釘的是「這三個座標不可以再落進任何保護框」。框如果哪天又被合併回去，
+        這題會先紅。
+        """
+        cases = [
+            ("live24", (1715, 298, 1767, 322), "右上 Logo 下方（Logo 底部只到 y=202）"),
+            ("news", (1648, 320, 1884, 351), "右上斜標籤下方（斜標籤底部只到 y=165）"),
+            ("news", (1223, 342, 1398, 351), "LIVE 章與斜標籤之間（486 ↔ 1554）"),
+        ]
+        for layout, (vx0, vy0, vx1, vy1), where in cases:
+            with self.subTest(layout=layout, viol=(vx0, vy0, vx1, vy1)):
+                for bx0, by0, bx1, by1 in compose.yt_cover_protect_boxes(layout, ai_note=False):
+                    overlaps = vx0 < bx1 and bx0 < vx1 and vy0 < by1 and by0 < vy1
+                    self.assertFalse(
+                        overlaps,
+                        f"{layout} {where}：違規框 {(vx0, vy0, vx1, vy1)} 又被 "
+                        f"{(bx0, by0, bx1, by1)} 鎖住了",
+                    )
 
     def test_protect_boxes_do_not_reach_into_the_title_zone(self):
         """title 固定畫在畫面下半（各版型 baseline 都在 0.79 以後），保護區不能誤伸進去，

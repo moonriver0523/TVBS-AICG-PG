@@ -1017,12 +1017,30 @@ class TitleLayerDiagnosticsTests(unittest.TestCase):
         self.assertEqual(ten_diag["gate"], "c")
         self.assertGreater(ten_diag["paint_ratio"], 0.75)
 
+        # YT：從固定元素的最低點下面一列開始塗到底。
+        #
+        # 2026-09-21 改寫：原本寫死 _cover(0.55)，在舊的 union 保護框下剛好 >75%。
+        # 縮框之後可疊區變大，同一張圖層只剩 61.8%，這題就量不到「卡在兩個數字中間」
+        # 那件事了。改成依實際保護框算——這樣它也不會在下次調整框時再次失準。
+        # 不能再往上塗：越過固定元素就會先被第 b 道閘擋下，量到的是別的東西。
+        lowest = max(box[3] for box in compose.yt_cover_protect_boxes("news"))
+        layer = Image.new("RGBA", size, (0, 0, 0, 0))
+        ImageDraw.Draw(layer).rectangle(
+            [0, lowest + 1, size[0], size[1]], fill=(255, 255, 255, 255),
+        )
+        buf = io.BytesIO()
+        layer.save(buf, format="PNG")
+
         yt_diag: dict = {}
         compose.overlay_title_layer_over_yt_cover(
-            base, _cover(0.55), layout="news", diagnostics=yt_diag,
+            base, buf.getvalue(), layout="news", diagnostics=yt_diag,
         )
         self.assertEqual(yt_diag["verdict"], "pass")
+        self.assertEqual(yt_diag["protect_painted_pixels"], 0)
+        # 十點的上限是 0.75、YT 是 0.85：這個數字必須落在兩者中間，
+        # 同一張圖層才會在十點被擋、在 YT 通過。
         self.assertGreater(yt_diag["paint_ratio"], 0.75)
+        self.assertLess(yt_diag["paint_ratio"], 0.85)
 
     # ---- 診斷內容本身 ----
 
@@ -1333,12 +1351,34 @@ class TitleLayerSizeNoteTests(unittest.TestCase):
         self.assertIn("never cover a face", note)
 
     def test_the_note_covers_both_observed_defects(self):
-        """兩個缺陷各要有一句對得上的話：①字自己長大；②招式另起一排疊在下面，
-        把總高又撐高一截（19:16 那張多出來的那一截正是這樣來的）。"""
+        """兩個缺陷各要有一句對得上的話：①字自己長大；②總高被額外一排撐高。
+
+        2026-09-21 第二輪改寫：②原本寫成「招式要擺在標題旁邊、不可以疊在下面」，
+        那是在招式還會畫的前提下講的。使用者裁決招式整個不畫之後，那句話會變成
+        「你可以畫、只是要擺旁邊」的許可——正是今天踩過三次的同型矛盾，所以改成
+        「你回傳的就只有字跟底板，沒有東西可以疊上去」。
+        """
         note = self._note("36%")
-        self.assertIn("reason to grow", note)                     # ①
-        self.assertIn("supporting artwork must fit inside", note) # ②
-        self.assertIn("never stacked underneath", note)           # ②
+        self.assertIn("reason to grow", note)                      # ①
+        self.assertIn("type on plates and nothing else", note)     # ②
+        self.assertIn("nothing may be stacked", note)              # ②
+        # 舊措辭不可以殘留——留著就等於同時講「不要畫」跟「畫了要擺旁邊」。
+        self.assertNotIn("Supporting artwork goes BESIDE", note)
+
+    def test_the_layer_note_forbids_supporting_artwork_outright(self):
+        """實拍量到 L4 圖層高 88.4%、可疊區畫了 72.0%（c 閘上限 75%）。
+        使用者裁決「只要設計標題字」，所以這段 note 的許可清單必須收窄——
+        原句許可 plates／accent shapes／wordless devices，正好許可了要拿掉的東西。"""
+        note = self._note("36%")
+        self.assertIn("No supporting artwork", note)
+        for banned in ("wordless devices", "icons", "emblems"):
+            with self.subTest(banned=banned):
+                self.assertIn(banned, note)
+        # 底板要留——它被字的行框住，不是會往外長的東西。
+        self.assertIn("plates, bars or ribbons that sit directly behind its rows", note)
+        self.assertNotIn(
+            "any design elements the instructions below explicitly ask for", note,
+        )
 
     def test_the_size_note_only_rides_with_the_transparent_layer_note(self):
         """純 AI 版那條路（with_base_image_note）本來就正常，不可以被波及。"""
@@ -1352,6 +1392,89 @@ class TitleLayerSizeNoteTests(unittest.TestCase):
         self.assertIn("block_height=editor_formats.cover_title_block_height(level)", source)
         self.assertIn(
             "block_height=editor_formats.yt_title_block_height(req.creativity)", source,
+        )
+
+
+class LayerModeDropsSupportingArtworkTests(unittest.TestCase):
+    """2026-09-21 第二輪實拍（創意 1–4 各一張，dev 後台）：
+
+        L1 45.0%／L2 50.0%／L3 64.9%／L4 88.4%（規格 18／24／30／36%）
+        L4 可疊區已畫到 72.0%，c 閘上限 75%——再多一件就會被擋下變成生圖失敗。
+
+    使用者：「3 4 明顯太高 蓋住原圖範圍太大 因為有多加設計元素裝飾 把整體墊高了
+    考慮拿掉多餘元素 只要設計標題字」。招式件數正是 L2→L3→L4 的爬升來源
+    （0／1／2／3 件）。
+
+    注意這只拿掉一根槓桿：L1 完全沒有招式仍量到 45%，塊高的**底**是另一回事
+    （傾斜與字級落差倍數），等這一根驗收完再動——一次一根才歸得了因。
+    """
+
+    _SEED = 20260921
+
+    def _ten(self, level: int, *, layer_mode: bool) -> str:
+        return editor_formats.cover_design_brief(
+            level, titles=("台股重挫", "台積電領跌"), seed=self._SEED,
+            layer_mode=layer_mode,
+        )
+
+    def _yt(self, level: int, *, layer_mode: bool) -> str:
+        return editor_formats.yt_design_brief(
+            level, lines=("台股重挫", "台積電領跌"), seed=self._SEED,
+            layer_mode=layer_mode,
+        )
+
+    def test_the_ladder_still_asks_for_artwork_on_the_pure_ai_path(self):
+        """前提測試：如果純 AI 那條路本來就沒有招式，下面那些測試全是空的。"""
+        found = [lvl for lvl in (2, 3, 4)
+                 if "supporting artwork" in self._ten(lvl, layer_mode=False)]
+        self.assertEqual(found, [2, 3, 4])
+
+    def test_layer_mode_drops_every_piece_on_both_briefs(self):
+        for level in (1, 2, 3, 4):
+            with self.subTest(ten=level):
+                self.assertNotIn("supporting artwork", self._ten(level, layer_mode=True))
+            with self.subTest(yt=level):
+                self.assertNotIn("supporting artwork", self._yt(level, layer_mode=True))
+
+    def test_the_pure_ai_brief_is_byte_identical(self):
+        """病在圖層那條路，不在塊高那組數字。純 AI 版同一級實拍 38%、臉完整露出，
+        動到它就是把本來正常的東西一起縮掉——#38 就是這樣避免的，這裡照樣釘住。"""
+        for level in (1, 2, 3, 4):
+            with self.subTest(ten=level):
+                self.assertEqual(
+                    self._ten(level, layer_mode=False),
+                    editor_formats.cover_design_brief(
+                        level, titles=("台股重挫", "台積電領跌"), seed=self._SEED,
+                    ),
+                )
+            with self.subTest(yt=level):
+                self.assertEqual(
+                    self._yt(level, layer_mode=False),
+                    editor_formats.yt_design_brief(
+                        level, lines=("台股重挫", "台積電領跌"), seed=self._SEED,
+                    ),
+                )
+
+    def test_everything_except_the_artwork_survives(self):
+        """拿掉的是招式，不是整份 brief。塊高、字級落差、反白、配色都要還在
+        ——否則四級就分不出來了。"""
+        brief = self._ten(4, layer_mode=True)
+        self.assertIn("Headline block height: about 36%", brief)
+        self.assertIn("KNOCKED OUT", brief)
+        self.assertIn("COLOUR FOLLOWS MEANING", brief)
+        self.assertIn("plate", brief.lower())
+
+    def test_both_call_sites_gate_the_brief_on_the_same_condition(self):
+        """招式要不要發、要不要注入 layer note、要不要開 transparent_background，
+        三處必須是同一個條件。各寫各的就會出現「叫它畫招式又叫它別畫」的矛盾
+        ——今天已經因為這種矛盾誤判三次。"""
+        source = Path(compose.__file__).with_name("main.py").read_text(encoding="utf-8")
+        self.assertIn("layer_mode=transparent_mode", source)
+        self.assertIn("layer_mode=protect_base and base is not None", source)
+        # 十點：transparent_mode 必須在 DESIGN BRIEF 之前就算好，否則傳不進去。
+        self.assertLess(
+            source.index('transparent_mode = protect_base and base is not None'),
+            source.index("layer_mode=transparent_mode"),
         )
 
 

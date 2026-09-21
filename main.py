@@ -58,6 +58,7 @@ import editor_formats
 import gcs_archive
 import map_lookup
 import photo_lookup
+import name_aliases
 import request_log
 import safe_area_spec
 import safe_frame
@@ -6079,6 +6080,13 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
             "output, and the headline above is source material under the same rule): "
             + news_text
         )
+    # 簡稱對照（B82，2026-09-21）：「川習會」這類事件簡稱裡沒有逐字人名，推導模型
+    # 照 VERBATIM 規則不准認出他們，描述就退成「兩位領導人」、參考照零張、臉自己編。
+    # 這裡由程式查表把人名補成**已知事實**再交給模型——查表是確定性的，跟放寬護欄
+    # 讓模型自己聯想是兩回事。沒命中時回空字串，material 與加表之前逐字相同。
+    material += name_aliases.alias_hint_block(
+        req.title_left, req.title_right, left, right, news_text,
+    )
     # 使用者的指令欄（2026-09-08 WP1）：兩格共用，只當畫面提示。放在最後、明講它
     # 管的是「畫面長什麼樣」——不然模型會把它讀成「標題要改成這樣」。
     instruction = (getattr(req, "instruction", "") or "").strip()
@@ -6322,8 +6330,12 @@ def _cover_ai(
     titles = (req.title_left, req.title_right)
     # visuals=（2026-09-11 第十批）：畫面描述傳進去只為了讓招式段判斷有沒有旗子可用
     # （見 editor_formats.cover_accessories）——不影響其餘措辭。
+    # transparent_mode 提前算（原本在下面注入 note 的地方才算）：DESIGN BRIEF 要不要
+    # 帶招式，取決於走不走透明標題圖層那條路（2026-09-21 使用者裁決「只要設計標題字」）。
+    transparent_mode = protect_base and base is not None and req.provider == "gpt"
     design_brief = editor_formats.cover_design_brief(
-        level, titles=titles, seed=seed, full_width=(req.layout == "full"), visuals=visuals
+        level, titles=titles, seed=seed, full_width=(req.layout == "full"), visuals=visuals,
+        layer_mode=transparent_mode,
     )
     colour_rule = editor_formats.cover_title_colour_rule(level)
     # 3 級起才把反色底字釘在行清單上（條文本身也是 3 級起才要求）。
@@ -6366,7 +6378,7 @@ def _cover_ai(
     # ——這條路的 note 跟 AI_TITLE_BASE_IMAGE_NOTE 直接矛盾（一個要求重現照片、一個
     # 要求除了字以外全部透明），兩句不能同時注入，這裡二選一。provider=gemini 不支援
     # background=transparent（見 compose.py 那段長註解），原路（差異遮罩回貼）不動。
-    transparent_mode = protect_base and base is not None and req.provider == "gpt"
+    # transparent_mode 已在 DESIGN BRIEF 之前算好（招式要不要發取決於它）。
     prompt = (
         editor_formats.with_title_layer_note(
             # 塊高數字跟 DESIGN BRIEF 取自同一張表，不手打（2026-09-21）。
@@ -7483,6 +7495,8 @@ def derive_yt_cover_plan(
             "output, and the headline above is source material under the same rule): "
             + news_text.strip()
         )
+    # 簡稱對照（B82，2026-09-21）：同 resolve_cover_visuals 的理由與位置。
+    material += name_aliases.alias_hint_block(title, news_text)
     if instruction.strip():
         material += (
             "\n\nExtra instruction from the editor about how the photograph should look "
@@ -7788,6 +7802,10 @@ def _yt_cover_full_image(
                 # visual=（2026-09-11 第十批）：只為了讓招式段判斷這張照片裡有沒有
                 # 旗子可用（見 editor_formats.cover_accessories）。
                 visual=visual,
+                # 透明標題圖層那條路不畫招式（2026-09-21 使用者裁決）。條件跟下面
+                # transparent_background 與 with_title_layer_note 完全一致，
+                # 三處分岔同一個條件——有測試釘住不准各寫各的。
+                layer_mode=protect_base and base is not None,
             ),
             layout_rules=editor_formats.yt_layout_rules(req.creativity, req.layout),
             title_top=editor_formats.yt_title_top(req.creativity),
