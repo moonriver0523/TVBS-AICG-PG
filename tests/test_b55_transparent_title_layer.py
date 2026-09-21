@@ -1017,12 +1017,30 @@ class TitleLayerDiagnosticsTests(unittest.TestCase):
         self.assertEqual(ten_diag["gate"], "c")
         self.assertGreater(ten_diag["paint_ratio"], 0.75)
 
+        # YT：從固定元素的最低點下面一列開始塗到底。
+        #
+        # 2026-09-21 改寫：原本寫死 _cover(0.55)，在舊的 union 保護框下剛好 >75%。
+        # 縮框之後可疊區變大，同一張圖層只剩 61.8%，這題就量不到「卡在兩個數字中間」
+        # 那件事了。改成依實際保護框算——這樣它也不會在下次調整框時再次失準。
+        # 不能再往上塗：越過固定元素就會先被第 b 道閘擋下，量到的是別的東西。
+        lowest = max(box[3] for box in compose.yt_cover_protect_boxes("news"))
+        layer = Image.new("RGBA", size, (0, 0, 0, 0))
+        ImageDraw.Draw(layer).rectangle(
+            [0, lowest + 1, size[0], size[1]], fill=(255, 255, 255, 255),
+        )
+        buf = io.BytesIO()
+        layer.save(buf, format="PNG")
+
         yt_diag: dict = {}
         compose.overlay_title_layer_over_yt_cover(
-            base, _cover(0.55), layout="news", diagnostics=yt_diag,
+            base, buf.getvalue(), layout="news", diagnostics=yt_diag,
         )
         self.assertEqual(yt_diag["verdict"], "pass")
+        self.assertEqual(yt_diag["protect_painted_pixels"], 0)
+        # 十點的上限是 0.75、YT 是 0.85：這個數字必須落在兩者中間，
+        # 同一張圖層才會在十點被擋、在 YT 通過。
         self.assertGreater(yt_diag["paint_ratio"], 0.75)
+        self.assertLess(yt_diag["paint_ratio"], 0.85)
 
     # ---- 診斷內容本身 ----
 

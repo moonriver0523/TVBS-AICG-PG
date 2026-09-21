@@ -3545,24 +3545,73 @@ def _render_fixed_elements_bbox(render) -> tuple[int, int, int, int]:
     return bbox
 
 
+def _fixed_element_boxes(*renders) -> list[tuple[int, int, int, int]]:
+    """逐件量框，**不合併成一個 union**。畫不到任何東西的那件自動略過。
+
+    2026-09-21 實證（dev 後台三張被第 b 道閘擋下的圖層，逐像素量過）：union bbox
+    會把元件之間那一大片「其實什麼都沒畫」的空白一起鎖住。
+
+        news   union (0, 0, 1920, 350)
+               真正畫到東西的只有 頂線 (0,0,1920,24)、右上斜標籤 (1554,0,1920,165)、
+               左側 LIVE 章那一叢 (50,54,486,350)
+        live24 union (54, 49, 1855, 321)
+               真正畫到東西的只有 左上角標 (54,49,649,321)、右上 Logo (1590,57,1855,202)
+
+    三筆違規（live24 (1715,298,1767,322)／news (1648,320,1884,351)／
+    news (1223,342,1398,351)）全部落在那些空白裡——模型畫的是標題自己的上緣，
+    沒有壓到任何固定元素，卻因為落在 union 框內被判成竄改，整張退回程式壓字。
+    被畫到的像素 73~82% 是 alpha 201 以上的實心筆畫，不是縮放毛邊。
+
+    刻意**不**比照十點改成「丟棄不擋下」：十點那條標頭帶事後會被
+    `paste_cover_header_band` 整條重畫，丟掉看不出來；YT 這幾塊空白事後不會被重畫，
+    丟掉會在保護區下緣留一道橫切邊。縮框才是對的修法——框準了，第 b 道閘就只會在
+    真正壓到固定元素時才響。
+
+    兩條 provider 路徑共用這組框，語意也一致（框內一律是 base、模型不准貢獻），
+    所以縮框對 gpt 的 alpha 閘與 gemini 的差異遮罩是同一個方向，不會一邊過一邊被抹掉。
+    """
+    boxes: list[tuple[int, int, int, int]] = []
+    for render in renders:
+        canvas = Image.new("RGBA", YT_CANVAS, (0, 0, 0, 0))
+        render(canvas)
+        bbox = canvas.getbbox()
+        if bbox is not None:
+            boxes.append(bbox)
+    if not boxes:
+        raise ComposeError("B55 固定元素量測失敗：測量畫布上沒有任何像素，量測函式本身可能有誤")
+    return boxes
+
+
 def _yt_news_or_hot_fixed_boxes(
     *, original_audio: bool, ai_translation: bool, ai_note: bool, hot_header: bool,
 ) -> list[tuple[int, int, int, int]]:
     """news（`compose_yt_cover`）與 hot（`compose_yt_hot_cover`）共用的頂端固定元素：
-    頂線／Logo 斜標籤／LIVE 章或今日熱搜標籤／日期條／原音呈現／AI即時翻譯，
-    全部量在同一個 bbox 裡（都是頂端一叢，中間沒有另外卡一塊像 hourly 那樣）。
-    AI示意圖是右側獨立一塊，另外量、另外回傳，不跟頂端叢合併——避免中間那一大段
-    「其實沒有畫任何東西」的空白也被無謂地鎖住。
+    頂線／Logo 斜標籤／LIVE 章或今日熱搜標籤／日期條／原音呈現／AI即時翻譯。
+
+    2026-09-21 改為**逐件量框**（見 `_fixed_element_boxes` 的實證）：原本整叢量成
+    一個 bbox，頂線把寬度撐到 0→1920、左側日期條把高度撐到 350，結果 (0,0,1920,350)
+    這片裡有一大半是照片。三張被擋下的圖層違規處全都落在那片空白。
+
+    AI示意圖是右側獨立一塊，本來就另外量、另外回傳。
     """
     width, height = YT_CANVAS
     margin = round(width * YT_MARGIN_RATIO)
 
-    def render_top_cluster(canvas: Image.Image) -> None:
+    def render_header(canvas: Image.Image) -> None:
         if hot_header:
             _draw_hot_header(canvas)
         else:
             _draw_top_line(canvas)
+
+    def render_logo_tab(canvas: Image.Image) -> None:
+        # hot 版型沒有右上斜標籤（它的頁首是整條 hot header）
+        if not hot_header:
             _draw_logo_tab(canvas)
+
+    def render_left_cluster(canvas: Image.Image) -> None:
+        # 左上那一叢（原音呈現標＋LIVE 章＋日期條＋AI即時翻譯標）彼此相連，
+        # 量成一框是對的——它們在 x 方向本來就擠在 margin 附近。
+        # hot 且沒有原音呈現時這件什麼都不畫，`_fixed_element_boxes` 會自動略過。
         draw = ImageDraw.Draw(canvas)
         top = round(height * (YT_TOP_WITH_LABEL_RATIO if original_audio else YT_TOP_RATIO))
         if original_audio:
@@ -3589,7 +3638,7 @@ def _yt_news_or_hot_fixed_boxes(
                     YT_AI_TRANSLATION_LABEL, small, stroke=YT_TITLE_STROKE, stroke_width=4, anchor="la",
                 )
 
-    boxes = [_render_fixed_elements_bbox(render_top_cluster)]
+    boxes = _fixed_element_boxes(render_header, render_logo_tab, render_left_cluster)
     if ai_note:
         def render_ai_note(canvas: Image.Image) -> None:
             _draw_ai_note(canvas, round(height * YT_AI_NOTE_TOP_RATIO))
@@ -3600,15 +3649,20 @@ def _yt_news_or_hot_fixed_boxes(
 def _yt_hourly_fixed_boxes(
     *, ai_note: bool, has_time: bool, include_date_tab: bool = True,
 ) -> list[tuple[int, int, int, int]]:
-    """整點直播：左上小 Logo＋右上 LIVE 章（可能帶整點時間帶）算一叢；日期紅牌
+    """整點直播：左上小 Logo 與右上 LIVE 章（可能帶整點時間帶）**各自量框**；日期紅牌
     （YT_HOURLY_DATE_TAB_BOX）卡在畫面中段、跟頂端那叢中間隔了一大段照片，
     分開量、分開保護，不要為了保這塊牌把中段整條也鎖住。
+
+    2026-09-21：左右兩件原本也是量成一個 bbox，中間那一整條照片跟著被鎖。
+    理由與 news／live24 相同，見 `_fixed_element_boxes`。
     """
     width, height = YT_CANVAS
     margin = round(width * YT_MARGIN_RATIO)
 
-    def render_top_cluster(canvas: Image.Image) -> None:
+    def render_logo(canvas: Image.Image) -> None:
         _paste_logo(canvas, (margin, round(height * YT_HOURLY_LOGO_TOP_RATIO)), round(width * YT_HOURLY_LOGO_WIDTH_RATIO))
+
+    def render_badge(canvas: Image.Image) -> None:
         badge_w = round(width * YT_HOURLY_BADGE_WIDTH_RATIO)
         badge_x0 = width - margin - badge_w
         badge_top = round(height * YT_HOURLY_BADGE_TOP_RATIO)
@@ -3621,7 +3675,7 @@ def _yt_hourly_fixed_boxes(
             band = (badge_x0 + inset, band_y0, badge_x0 + badge_w - inset, band_y0 + band_h)
             ImageDraw.Draw(canvas).rounded_rectangle(band, radius=12, fill=YT_HOURLY_TIME_BAND_FILL + (255,))
 
-    boxes = [_render_fixed_elements_bbox(render_top_cluster)]
+    boxes = _fixed_element_boxes(render_logo, render_badge)
 
     # 日期牌只有「程式自己畫」的時候才需要保護。創意 1 級起整個日期牌是**模型畫的**
     # （0911 使用者裁決，見 YT_HOURLY_DATE_TAB_BOX 上方的階梯說明），這時把這塊列為
@@ -3648,15 +3702,22 @@ def _yt_live24_fixed_boxes(*, ai_note: bool) -> list[tuple[int, int, int, int]]:
     """24H LIVE：左上角標（含日期）＋右上兩層版 Logo，都貼在頂端；AI示意圖（只有
     is_ai 底圖才有，B55 這條路是真照片所以理論上不會開，量出來備用不吃虧）貼在
     角標正下方——跟 news/hourly 共用的右側版型不同，是 live24 自己的位置。
+
+    2026-09-21：角標與 Logo 一左一右，原本量成一個 bbox（54,49,1855,321），中間
+    那一整片照片跟著被鎖——22:24 那張被擋下的違規就落在 Logo 下方的空白
+    （Logo 底部只到 y=202，違規在 y=298~322）。改為逐件量框，見 `_fixed_element_boxes`。
     """
     width, height = YT_CANVAS
+    badge_w = round(width * LIVE24_BADGE_WIDTH_RATIO)
+    badge_top = round(height * LIVE24_BADGE_TOP_RATIO)
 
-    def render(canvas: Image.Image) -> None:
-        badge_w = round(width * LIVE24_BADGE_WIDTH_RATIO)
-        badge_h = _paste_live24_badge(
-            canvas, (round(width * LIVE24_BADGE_LEFT_RATIO), round(height * LIVE24_BADGE_TOP_RATIO)),
+    def render_badge(canvas: Image.Image) -> None:
+        _paste_live24_badge(
+            canvas, (round(width * LIVE24_BADGE_LEFT_RATIO), badge_top),
             badge_w, "00.00.00",  # 只是量測用的佔位日期字串，不影響外框大小（板子尺寸固定）
         )
+
+    def render_logo(canvas: Image.Image) -> None:
         logo_w = round(width * LIVE24_LOGO_WIDTH_RATIO)
         logo_x = round(width * LIVE24_LOGO_RIGHT_RATIO) - logo_w
         if TVBS_LOGO_NEWS_WHITE.exists():
@@ -3664,10 +3725,20 @@ def _yt_live24_fixed_boxes(*, ai_note: bool) -> list[tuple[int, int, int, int]]:
                 logo = logo_file.convert("RGBA")
                 logo = logo.resize((logo_w, round(logo.height * logo_w / logo.width)), Image.LANCZOS)
                 canvas.alpha_composite(logo, (logo_x, round(height * LIVE24_LOGO_TOP_RATIO)))
-        if ai_note:
-            _draw_live24_ai_note(canvas, round(height * LIVE24_BADGE_TOP_RATIO) + badge_h + 16)
 
-    return [_render_fixed_elements_bbox(render)]
+    boxes = _fixed_element_boxes(render_badge, render_logo)
+    if ai_note:
+        # 角標正下方那一塊。位置要接在角標實際高度之後，所以這裡重量一次角標高度。
+        measure = Image.new("RGBA", YT_CANVAS, (0, 0, 0, 0))
+        badge_h = _paste_live24_badge(
+            measure, (round(width * LIVE24_BADGE_LEFT_RATIO), badge_top), badge_w, "00.00.00",
+        )
+
+        def render_ai_note(canvas: Image.Image) -> None:
+            _draw_live24_ai_note(canvas, badge_top + badge_h + 16)
+
+        boxes.append(_render_fixed_elements_bbox(render_ai_note))
+    return boxes
 
 
 def yt_cover_protect_boxes(
