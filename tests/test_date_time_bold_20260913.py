@@ -48,6 +48,21 @@ def _ink(img: Image.Image, box, pred):
 _WHITE = lambda p: p[0] > 200 and p[1] > 200 and p[2] > 200  # noqa: E731
 
 
+def _actual_hourly_tab(img: Image.Image):
+    """整點封面上紅色日期牌**實際**被畫在哪。
+
+    F36（2026-09-21）之後，0 級的日期牌會依標題墨水上緣往下移，不再等於
+    YT_HOURLY_DATE_TAB_BOX 那個預設框。這裡量的是字重，不是位置，所以先把牌子
+    掃出來、再在牌子裡面量——位置歸 test_f36_hourly_date_gap 管。
+    """
+    b = compose.YT_HOURLY_DATE_TAB_BOX
+    x0, x2 = round(W * b[0]), round(W * b[2])
+    cx = (x0 + x2) // 2
+    px = img.convert("RGB").load()
+    rows = [y for y in range(H) if px[cx, y][0] > 150 and px[cx, y][1] < 80]
+    return (x0, min(rows), x2, max(rows) + 1)
+
+
 class BoldHelperTests(unittest.TestCase):
     def test_the_stroke_scales_with_the_type_size(self):
         """固定像素寬的描邊會把小字糊成一團，所以按字級等比例。"""
@@ -85,8 +100,7 @@ class HourlyDateAndTimeTests(unittest.TestCase):
         self.img = Image.open(io.BytesIO(png))
 
     def _tab(self):
-        b = compose.YT_HOURLY_DATE_TAB_BOX
-        return (round(W * b[0]), round(H * b[1]), round(W * b[2]), round(H * b[3]))
+        return _actual_hourly_tab(self.img)
 
     def test_the_date_is_visibly_bolder_than_a_hairline(self):
         """字幹佔紅條的比例：細體 0.184 → 0.045 版 0.350 → 定案的 0.022 版 0.267。
@@ -152,8 +166,7 @@ class TwoWeightsTests(unittest.TestCase):
         png = compose.compose_yt_hourly_cover(
             _flat(), line1="東北季風", line2="今起增強", date_text=DATE, time_text="20:00")
         img = Image.open(io.BytesIO(png))
-        b = compose.YT_HOURLY_DATE_TAB_BOX
-        tab = (round(W * b[0]), round(H * b[1]), round(W * b[2]), round(H * b[3]))
+        tab = _actual_hourly_tab(img)
         ratio = len(_ink(img, tab, _WHITE)) / ((tab[2] - tab[0]) * (tab[3] - tab[1]))
         self.assertGreater(ratio, 0.23)
         self.assertLess(ratio, 0.31)
