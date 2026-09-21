@@ -201,5 +201,70 @@ class TenCoverFullSingleAsisEndpointTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200, res.text)
 
 
+class HeaderBandSurvivesPhotoProtectionTests(unittest.TestCase):
+    """2026-09-21 使用者回報：十點不一樣「原圖放置」時頂部藍底帶不見了。
+
+    設計矛盾——純 AI 版的標頭帶一直都是**模型畫的**，但「原圖放置」會把字帶以上
+    一律還原成 base（這份檔案測的差異遮罩硬邊界，gpt 那條透明圖層路徑則是整片列為
+    保護區）。base 是使用者的原圖、本來就沒有帶，於是 Logo／節目標籤／日期／ON AIR
+    被直接貼在照片上，藍底整條消失。改成由程式補畫那條帶。
+    """
+
+    BODY = {
+        "title_left": "測試標題", "title_right": "", "layout": "full",
+        "mode": "ai", "title_creativity": 1, "provider": "gemini",
+        "date_text": "2026/09/16",
+    }
+
+    def _near(self, pixel, target, tol=26) -> bool:
+        return all(abs(pixel[i] - target[i]) <= tol for i in range(3))
+
+    def test_the_band_is_drawn_over_the_protected_photo(self):
+        def fake_raw(req):
+            img = Image.new("RGB", compose.COVER_CANVAS, RED)
+            band_top = round(compose.COVER_CANVAS[1] * compose.cover_title_band_top_ratio())
+            ImageDraw.Draw(img).rectangle([200, band_top + 100, 700, band_top + 180], fill=GREEN)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return SimpleNamespace(
+                image_data_base64=base64.b64encode(buf.getvalue()).decode(),
+                model="fake", mime_type="image/png",
+            )
+
+        body = {**self.BODY, "slot_left": [
+            {"data_url": _data_url(_png_bytes(size=(640, 640), colour=RED)), "purpose": "asis"},
+        ]}
+        with patch.object(main, "generate_image_raw", side_effect=fake_raw), \
+             patch.object(main, "resolve_cover_visuals", return_value=("景", "景")):
+            res = client.post("/api/editor/cover", json=body, headers=_headers())
+        self.assertEqual(res.status_code, 200, res.text)
+        cover = Image.open(io.BytesIO(base64.b64decode(res.json()["image_data_base64"]))).convert("RGB")
+        # 帶高範圍內、畫面中央那一豎列（避開 Logo／標籤／日期，也避開帶底亮線）
+        band_h = round(cover.size[1] * compose.COVER_AI_HEADER_RATIO)
+        x = cover.size[0] // 2
+        rows = [cover.getpixel((x, y)) for y in range(4, band_h - 8)]
+        self.assertTrue(
+            all(self._near(p, compose.COVER_HEADER_FILL) for p in rows),
+            f"標頭帶不是深藍：{rows[:6]}…（原圖是紅色，代表帶根本沒被畫上去）",
+        )
+
+    def test_the_band_matches_the_composite_version(self):
+        """程式畫的帶要跟合成版長一樣——兩版不一致比沒有帶更難察覺。"""
+        photo = _png_bytes(size=compose.COVER_CANVAS, colour=RED)
+        img = Image.open(io.BytesIO(compose.paste_cover_header_band(photo))).convert("RGB")
+        band_h = round(compose.COVER_CANVAS[1] * compose.COVER_AI_HEADER_RATIO)
+        line_h = max(2, round(compose.COVER_CANVAS[1] * compose.COVER_HEADER_LINE_RATIO))
+        x = compose.COVER_CANVAS[0] // 2
+        self.assertEqual(img.getpixel((x, band_h // 2)), compose.COVER_HEADER_FILL)
+        self.assertEqual(img.getpixel((x, band_h - line_h // 2 - 1)), compose.COVER_HEADER_LINE)
+        # 帶以下一個像素都不准動
+        self.assertEqual(img.getpixel((x, band_h + 6)), RED)
+
+    def test_a_pure_ai_cover_still_lets_the_model_draw_its_own_band(self):
+        """沒有原圖放置時照片沒被保護，模型畫的帶留得下來，程式不該再蓋一層。"""
+        source = (ROOT / "main.py").read_text(encoding="utf-8")
+        self.assertIn("draw_header_band=protect_base and base is not None", source)
+
+
 if __name__ == "__main__":
     unittest.main()

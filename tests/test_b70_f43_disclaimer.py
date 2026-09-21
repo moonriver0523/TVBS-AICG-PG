@@ -19,6 +19,7 @@ import base64
 import io
 import os
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
@@ -523,6 +524,143 @@ class WebImageGenerateEndToEndRegressionTests(unittest.TestCase):
             )
         self.assertEqual(res.status_code, 200, res.text)
         self.assertEqual(captured["disclaimer_kind"], "ai")
+
+
+class SourceTextReachesTheResolverTests(unittest.TestCase):
+    """F43 的斷線（2026-09-21）：`apply_portrait_to_image_request` 以前不把
+    `disclaimer_source_text` 交給 `resolve_image_disclaimer`，而且沒有肖像題時直接
+    early return——於是「畫面沒有人臉＋使用者填了來源名」這個 F43 最主要的情境
+    永遠拿不到 kind，標籤整個不會出現。前端補了控制項也沒用，所以一起修。
+    """
+
+    def _req(self, **kwargs) -> main.ImageGenerateRequest:
+        base = {"prompt": "一張新聞圖", "provider": "gpt"}
+        base.update(kwargs)
+        return main.ImageGenerateRequest(**base)
+
+    def test_no_portrait_plus_source_text_gets_the_source_label(self):
+        out = main.apply_portrait_to_image_request(
+            self._req(disclaimer_source_text="路透社")
+        )
+        self.assertEqual(out.disclaimer_kind, "source")
+
+    def test_no_portrait_and_no_source_text_returns_the_same_object(self):
+        """什麼都沒改時要回原物件——這是這支函式一直以來的行為。"""
+        req = self._req()
+        self.assertIs(main.apply_portrait_to_image_request(req), req)
+
+    def test_whitespace_only_source_text_still_returns_the_same_object(self):
+        req = self._req(disclaimer_source_text="   ")
+        self.assertIs(main.apply_portrait_to_image_request(req), req)
+
+    def test_a_kind_the_caller_already_set_is_never_overwritten(self):
+        """LINE 路徑自己先算好 kind 再組 request，而且不傳 portrait_subjects——
+        走的正是這條早退路。無條件改寫會把它算好的 "ai" 洗成空字串。"""
+        for kind in ("ai", "source"):
+            with self.subTest(kind=kind):
+                req = self._req(disclaimer_kind=kind, disclaimer_source_text="路透社")
+                self.assertIs(main.apply_portrait_to_image_request(req), req)
+
+    def test_ai_portrait_wins_over_a_typed_source_name(self):
+        """互斥優先序：有 AI 生成的人臉就一律「示意圖」，來源名被忽略。"""
+        with patch.object(main, "resolve_portraits", return_value=("entry_only", [])):
+            out = main.apply_portrait_to_image_request(
+                self._req(portrait_subjects=["某人"], disclaimer_source_text="路透社")
+            )
+        self.assertEqual(out.disclaimer_kind, "ai")
+
+    def test_the_discarded_source_name_is_reported_to_the_user(self):
+        """2026-09-21 使用者要求：AI 贏的時候要講一聲。使用者打了來源名卻拿到
+        「示意圖」，畫面上看不出那個欄位被丟掉，只會以為自己填錯或功能壞了。"""
+        main.reset_portrait_notices()
+        with patch.object(main, "resolve_portraits", return_value=("entry_only", [])):
+            main.apply_portrait_to_image_request(
+                self._req(portrait_subjects=["某人"], disclaimer_source_text="路透社")
+            )
+        notices = "／".join(main.collected_portrait_notices())
+        self.assertIn("路透社", notices)
+        self.assertIn("示意圖", notices)
+
+    def test_no_notice_when_the_source_name_is_actually_used(self):
+        main.reset_portrait_notices()
+        with patch.object(main, "resolve_portraits", return_value=("no_reference", [])):
+            main.apply_portrait_to_image_request(
+                self._req(portrait_subjects=["某人"], disclaimer_source_text="路透社")
+            )
+        self.assertNotIn("沒有用上", "／".join(main.collected_portrait_notices()))
+
+    def test_no_notice_when_nothing_was_typed(self):
+        main.reset_portrait_notices()
+        with patch.object(main, "resolve_portraits", return_value=("entry_only", [])):
+            main.apply_portrait_to_image_request(self._req(portrait_subjects=["某人"]))
+        self.assertNotIn("沒有用上", "／".join(main.collected_portrait_notices()))
+
+    def test_portrait_without_reference_still_allows_the_source_label(self):
+        """no_reference＝畫面上不安排這個人，沒有 AI 捏的臉，來源名就該生效。"""
+        with patch.object(main, "resolve_portraits", return_value=("no_reference", [])):
+            out = main.apply_portrait_to_image_request(
+                self._req(portrait_subjects=["某人"], disclaimer_source_text="路透社")
+            )
+        self.assertEqual(out.disclaimer_kind, "source")
+
+
+class FrontEndSendsTheDisclaimerFieldsTests(unittest.TestCase):
+    """前端沒做就等於後端白做（2026-09-21 使用者驗收 B70／F43 的原話：
+    「後端已修，但前端沒做」）。這組守在原始碼層，不需要瀏覽器。"""
+
+    ROOT = Path(__file__).resolve().parent.parent
+    CORNERS = ("upper_left", "lower_left", "upper_right", "lower_right")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app_js = (cls.ROOT / "app.js").read_text(encoding="utf-8")
+        cls.index = (cls.ROOT / "index.html").read_text(encoding="utf-8")
+
+    def test_both_generate_payloads_send_the_fields(self):
+        """一鍵生成（第一頁）與生圖（第二／三頁）是兩個獨立的 fetch，少一個就有一頁沒標籤。"""
+        self.assertEqual(
+            self.app_js.count("...disclaimerPayload()"), 2,
+            "兩個生圖送出點都要送，不多不少",
+        )
+
+    def test_the_payload_uses_the_backend_field_names(self):
+        self.assertIn("disclaimer_source_text: state.disclaimerSourceText.trim()", self.app_js)
+        self.assertIn("disclaimer_corner: state.disclaimerCorner", self.app_js)
+
+    def test_the_refine_path_does_not_send_them(self):
+        """追加修改走 ImageRefineRequest，它沒有這兩個欄位，送了也不會貼標籤。"""
+        refine = self.app_js.split("source_image_base64: state.refineSource.base64")[1][:1500]
+        self.assertNotIn("disclaimer", refine)
+
+    def test_the_buttons_use_the_backend_vocabulary(self):
+        """不做 tl/br 對照層：按鈕上的值就是進 disclaimer_corner 的值。"""
+        for corner in self.CORNERS:
+            with self.subTest(corner=corner):
+                self.assertIn(f'data-disclaimer-corner="{corner}"', self.index)
+
+    def test_every_corner_the_ui_offers_is_one_the_backend_accepts(self):
+        allowed = set(
+            main.ImageGenerateRequest.model_fields["disclaimer_corner"].annotation.__args__
+        )
+        self.assertEqual(set(self.CORNERS), allowed)
+
+    def test_both_pages_have_their_own_control_row(self):
+        """控制項在兩頁各有一份（第一頁那組、第二／三頁那組）。"""
+        self.assertEqual(self.index.count("data-disclaimer-row"), 2)
+        self.assertEqual(self.index.count("data-disclaimer-source"), 2)
+
+    def test_the_source_input_matches_the_backend_length_limit(self):
+        field = main.ImageGenerateRequest.model_fields["disclaimer_source_text"]
+        self.assertIn('maxlength="40"', self.index)
+        self.assertEqual(
+            [m.max_length for m in field.metadata if hasattr(m, "max_length")], [40],
+            "後端上限改了，前端 maxlength 與 slice(0, 40) 要一起改",
+        )
+
+    def test_cover_formats_hide_the_row(self):
+        """封面版型走 compose 自己的 _draw_ai_note，這組設定對它沒有作用。"""
+        self.assertEqual(self.app_js.count("disclaimer: true"), 6)
+        self.assertIn("(editorFormat().hides || {}).disclaimer", self.app_js)
 
 
 if __name__ == "__main__":

@@ -2440,6 +2440,11 @@ class Capability:
     digest_controls: bool
     safe_frame: bool
     stamp: bool
+    # B70／F43（2026-09-21）：有沒有那組「示意圖／畫面來源」標籤控制。
+    # 封面版型一律沒有——它們走 compose 自己的 _draw_ai_note（位置由版型幾何決定），
+    # 不吃 ImageGenerateRequest.disclaimer_*，擺出來會是按了沒反應的按鈕。
+    # 給預設值是為了不用回頭補每一個 Capability(...)；新版型要關掉得自己寫 False。
+    disclaimer: bool = True
 
 
 _CG_CAPABILITY = Capability(
@@ -2459,6 +2464,7 @@ _YT_SLOT_CAPABILITY = Capability(
     slots=True, shared_refs=False, asis_max=4, fusion=True,
     creativity_scope=CREATIVITY_SCOPE_TITLE, zero_program_text=True, text_only_recompose=YT_TEXT_ONLY_SINGLE,
     refine=True, instruction=True, engine=True, digest_controls=False, safe_frame=False, stamp=False,
+    disclaimer=False,
 )
 
 FORMAT_CAPABILITIES: dict[str, Capability] = {
@@ -2469,12 +2475,14 @@ FORMAT_CAPABILITIES: dict[str, Capability] = {
         creativity_scope=CREATIVITY_SCOPE_TITLE, zero_program_text=True,
         text_only_recompose=(COVER_LAYOUT_FULL, COVER_LAYOUT_SPLIT),   # 雙切 2026-09-14 補上
         refine=True, instruction=True, engine=True, digest_controls=False, safe_frame=False, stamp=False,
+        disclaimer=False,
     ),
     "yt_live_cover": _YT_SLOT_CAPABILITY,
     "yt_vstrip": Capability(
         slots=False, shared_refs=False, asis_max=0, fusion=False,
         creativity_scope=None, zero_program_text=False, text_only_recompose=(),
         refine=False, instruction=False, engine=False, digest_controls=False, safe_frame=False, stamp=False,
+        disclaimer=False,
     ),
     "yt_hourly_cover": Capability(**{**asdict(_YT_SLOT_CAPABILITY),
                                      "creativity_scope": CREATIVITY_SCOPE_TITLE_DATE,
@@ -2519,6 +2527,7 @@ def hides_for(key: str | None) -> dict[str, bool]:
         "instruction": not cap.instruction,
         "refUpload": not cap.shared_refs,
         "refine": not cap.refine,
+        "disclaimer": not cap.disclaimer,
     }
     return {name: True for name, hidden in hides.items() if hidden}
 

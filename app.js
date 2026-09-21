@@ -405,6 +405,15 @@ let state = {
         sourceCorner: 'tl',       // 來源句角落（2026-09-09 起四角可選，取代 sourceFollowLogo）
         live: true,               // LIVE 章可取消
     },
+    // B70／F43（2026-09-21）：程式端壓「示意圖」／「畫面來源：○○○」標籤。
+    // **一組控制、兩種標籤**——該貼哪一種由後端 resolve_image_disclaimer 判（畫面上
+    // 有 AI 生成的人臉就一律「示意圖」，沒有才看來源名有沒有填），前端不自己判，
+    // 所以角落選擇器只有一組。
+    // 值直接用後端的方位詞原文（lower_right／…），不做 tl/br 之類的對照層——多一層
+    // 對照就多一個會對錯的地方，而這組值會原樣進 ImageGenerateRequest.disclaimer_corner。
+    // 直標那組 vstrip.sourceCorner 是直標自己的狀態，兩者不共用。
+    disclaimerCorner: 'lower_right',
+    disclaimerSourceText: '',
     // ---- 變化池 seed（F0／D1，2026-09-14 使用者裁決）----
     // 三條線各存一顆：CG（第一頁一鍵生成）、十點不一樣、YT 封面。null＝還沒生過，
     // 後端會現抽一顆並在回應裡回報，前端存下來。
@@ -489,7 +498,7 @@ const EDITOR_FORMATS = {
         // 底下，跟第一／第二標題下面那兩顆附圖位功能重疊——同一張照片有兩個入口，而且上面
         // 兩顆有填時後端就完全不看下面那區（見 main.py editor_cover 的 slots 判定），
         // 使用者放了卻沒作用。十點的照片一律走上面那兩顆（含原圖放置）。
-        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
+        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true, disclaimer: true },
         hole: null,
     },
     // YT 直播封面：底圖來自附圖（原圖放置）或 AI，LIVE 章／日期／Logo／兩行標題全由程式疊。
@@ -501,7 +510,7 @@ const EDITOR_FORMATS = {
         ytLayout: 'news',
         slots: true,   // 2026-09-14 對齊整點：一標一附圖位，共用「附參考圖」區收起來
         locks: {},
-        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
+        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true, disclaimer: true },
         hole: null,
     },
     // YT 直播直標（2026-09-08 WP3）：不是封面，是疊在直播訊號上的透明底 PNG。
@@ -513,7 +522,7 @@ const EDITOR_FORMATS = {
         hint: '直播用的垂直標題條，透明底 PNG，直接疊在直播訊號上。第一標題最多 12 格、第二標題最多 14 格（連續英數字算一格）。不生圖、不打 AI。',
         inputs: 'yt_vstrip',
         locks: {},
-        hides: { digestControls: true, safeFrame: true, stamp: true, engine: true, instruction: true, refUpload: true, refine: true },
+        hides: { digestControls: true, safeFrame: true, stamp: true, engine: true, instruction: true, refUpload: true, refine: true, disclaimer: true },
         hole: null,
     },
     // YT 整點直播：同一條底圖流程，版面換成整點版（Logo 左上、LIVE 章右上＋選填整點時間、
@@ -528,7 +537,7 @@ const EDITOR_FORMATS = {
         // 2026-09-10：整點改成一標一附圖（對齊十點），共用「附參考圖」那一區整個收起來。
         // 2026-09-14：國內外新聞直播與今日熱搜也跟上——當初怕一標一圖砍掉 2 張雙切／3 張三切，
         // 但 2026-09-13 起單則附圖位的整份清單會併進共用清單，切格那條路照走，顧慮不成立。
-        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
+        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true, disclaimer: true },
         hole: null,
     },
     // YT 24H LIVE（2026-09-13）：整點的鏡像——Logo 兩層版在右上、24H LIVE 角標在左上、
@@ -541,7 +550,7 @@ const EDITOR_FORMATS = {
         slots: true,   // 一標一附圖位（與後端能力矩陣對齊）
         locks: {},
         // 同整點：一標一附圖，共用「附參考圖」那一區整個收起來，免得有兩個入口
-        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
+        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true, disclaimer: true },
         hole: null,
     },
     // YT 今日熱搜（2026-09-06 型錄 H 類）：紅色系「今日熱搜」標籤＋紅色 Logo 斜標，
@@ -553,7 +562,7 @@ const EDITOR_FORMATS = {
         ytLayout: 'hot',
         slots: true,   // 2026-09-14 對齊整點：一標一附圖位
         locks: {},
-        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true },
+        hides: { digestControls: true, safeFrame: true, stamp: true, refUpload: true, disclaimer: true },
         hole: null,
     },
 };
@@ -1116,6 +1125,8 @@ function applyEditorFormatInputs() {
     if (yt) yt.classList.toggle('hidden', !wantsYt);
     if (vstrip) vstrip.classList.toggle('hidden', !wantsVstrip);
     updateVstripButtons();
+    // B70／F43：封面版型自己有 _draw_ai_note，不吃這組設定，換版型時要跟著收／放
+    updateDisclaimerControls();
     // 附圖位只有整點有，換到別的版型要收起來——updateYtLayoutIndicator 只在整點時才跑到底，
     // 靠它收不掉（2026-09-10）
     updateYtAsisSlots();
@@ -2922,6 +2933,52 @@ function toggleVstripLive(checkbox) {
     state.vstrip.live = !!checkbox.checked;
 }
 
+// ---- B70／F43：示意圖／畫面來源標籤（2026-09-21）----
+// 值是後端方位詞原文，四個角都在安全區內（compose._disclaimer_box 釘住）。
+const DISCLAIMER_CORNER_LABELS = {
+    upper_left: '左上', lower_left: '左下', upper_right: '右上', lower_right: '右下',
+};
+
+function setDisclaimerCorner(corner) {
+    if (!DISCLAIMER_CORNER_LABELS[corner]) return;
+    state.disclaimerCorner = corner;
+    updateDisclaimerControls();
+}
+
+function onDisclaimerSourceInput(input) {
+    // 後端 disclaimer_source_text 是 max_length=40，超過會被 422 擋在生圖之前，
+    // 所以這裡先截斷而不是讓使用者打完才失敗（input 本身也有 maxlength）。
+    state.disclaimerSourceText = (input?.value || '').slice(0, 40);
+    updateDisclaimerControls();
+}
+
+function updateDisclaimerControls() {
+    document.querySelectorAll('[data-disclaimer-corner]').forEach(btn => {
+        const on = btn.dataset.disclaimerCorner === state.disclaimerCorner;
+        btn.classList.toggle('bg-amber-600', on);
+        btn.classList.toggle('text-white', on);
+        btn.classList.toggle('text-slate-400', !on);
+        btn.title = `「示意圖」／「畫面來源」標籤貼在${DISCLAIMER_CORNER_LABELS[btn.dataset.disclaimerCorner]}`;
+    });
+    // 兩頁各有一份控制項（p1- 前綴那份與第二／三頁那份），值要同步顯示
+    document.querySelectorAll('[data-disclaimer-source]').forEach(input => {
+        if (input.value !== state.disclaimerSourceText) input.value = state.disclaimerSourceText;
+    });
+    // 封面版型走 compose 自己的 _draw_ai_note，不吃這組設定，整列收起來
+    const hide = !!(editorFormat().hides || {}).disclaimer;
+    document.querySelectorAll('[data-disclaimer-row]').forEach(row => {
+        row.classList.toggle('hidden', hide);
+    });
+}
+
+// 兩個生圖送出點共用：一組控制、兩種標籤，該貼哪一種由後端判。
+function disclaimerPayload() {
+    return {
+        disclaimer_source_text: state.disclaimerSourceText.trim(),
+        disclaimer_corner: state.disclaimerCorner,
+    };
+}
+
 // 按鈕外觀：選中的填色、沒選中的只有邊框；會壓到直標的角落直接 disabled
 function _vstripPick(selector, value) {
     document.querySelectorAll(selector).forEach(btn => {
@@ -3102,6 +3159,9 @@ async function handleOneClickGenerate() {
                 // AI改圖 專用（2026-09-13）：指令欄要直接送到生圖模型手上，當成
                 // 「這張附圖要改哪裡」。沒附 AI改圖 的圖時後端會忽略這個欄位。
                 editor_instruction: currentUserInstruction(),
+                // B70／F43：示意圖／畫面來源標籤的來源名與角落。該貼哪一種（或都不貼）
+                // 由後端 resolve_image_disclaimer 判，前端只負責把這兩個值送到。
+                ...disclaimerPayload(),
             }),
         });
         const data = await imgRes.json().catch(() => ({}));
@@ -3221,7 +3281,9 @@ async function handleImageGeneration() {
                 // 經緯度實測差到 2.3 公里，冷門地名尤其不準。
                 map_points: state.mapPoints,
                 portrait_subjects: state.portraitSubjects,
-                portrait_subjects_en: state.portraitSubjectsEn
+                portrait_subjects_en: state.portraitSubjectsEn,
+                // B70／F43：同上，兩個送出點要一致，不然第二／三頁按生成就沒有標籤。
+                ...disclaimerPayload(),
             })
         });
         const data = await response.json();

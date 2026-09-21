@@ -4870,6 +4870,27 @@ def resolve_portrait(
     return mode, (photos[0] if len(photos) == 1 else None)
 
 
+def _fill_in_disclaimer_kind(req: ImageGenerateRequest) -> ImageGenerateRequest:
+    """沒有肖像題時的 `disclaimer_kind`：**只補，不覆蓋**。
+
+    這支只服務 `apply_portrait_to_image_request` 那條「沒有 portrait_subjects 就
+    早退」的路。沒有肖像＝不可能判出 "ai"，所以唯一可能補上的是 F43 的 "source"。
+
+    ⚠**不准覆蓋呼叫端已經設好的值**：LINE 路徑（`generate_news_image`）是自己先
+    算好 `disclaimer_kind` 再組 request，而且不傳 `portrait_subjects`——走的正是
+    這條早退路。無條件改寫會把它算好的 "ai" 洗成空字串，標籤整個消失（本 session
+    第一版就是這樣寫的，被 `GenerateImageWiringTests` 當場抓到）。
+
+    什麼都不用補時回原物件：這支函式對「沒改到東西」的輸入一直都是回同一個 req。
+    """
+    if req.disclaimer_kind:
+        return req
+    kind, _ = resolve_image_disclaimer("none", req.disclaimer_source_text)
+    if not kind:
+        return req
+    return req.model_copy(update={"disclaimer_kind": kind})
+
+
 def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateRequest:
     """網頁版生圖路徑：依 portrait_subjects 注入規則並附上參考照。
 
@@ -4886,7 +4907,12 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
     """
     subjects = clean_portrait_subjects(req.portrait_subjects)
     if not subjects:
-        return req
+        # F43（2026-09-21）：沒有肖像題也可能要標「畫面來源」。這裡以前直接 return，
+        # 於是「沒有人臉＋使用者填了來源名」這個 F43 最主要的情境永遠拿不到 kind，
+        # 標籤整個不會出現——跟 B70 那個洞是同一種斷線（prompt 說軟體會壓，軟體那半
+        # 沒被叫到），只是發生在更前面一步。
+        # 沒填來源名的話原封不動把 req 還回去；呼叫端已經設好的 kind 也不動。
+        return _fill_in_disclaimer_kind(req)
     english = align_english_names(
         subjects, req.portrait_subjects_en, req.portrait_subjects
     )
@@ -4903,7 +4929,18 @@ def apply_portrait_to_image_request(req: ImageGenerateRequest) -> ImageGenerateR
         # resolve_image_disclaimer，disclaimer_kind 永遠是空字串——prompt 已經告訴
         # 模型「不要自己畫、軟體會壓」，但軟體那半從沒被叫到，兩邊斷開＝標籤整個消失。
         # LINE 路徑（generate_news_image）另外呼叫這支函式，沒有這個洞。
-        disclaimer_kind, _ = resolve_image_disclaimer(mode)
+        # 2026-09-21：source_text 要一起交出去，否則「查不到肖像（mode=none/
+        # no_reference）＋使用者填了來源名」永遠判不出 kind="source"（F43）。
+        # AI 標籤仍然贏——優先序寫在 resolve_image_disclaimer 裡，這裡不重判。
+        disclaimer_kind, _ = resolve_image_disclaimer(mode, req.disclaimer_source_text)
+        # 2026-09-21 使用者要求：AI 贏的時候要講一聲。使用者打了來源名卻拿到「示意圖」，
+        # 畫面上看不出那個欄位被丟掉了，只會以為自己填錯或功能壞了。
+        if disclaimer_kind == "ai" and req.disclaimer_source_text.strip():
+            _record_portrait_notice(
+                f"你填的畫面來源「{req.disclaimer_source_text.strip()}」這次沒有用上："
+                "畫面裡有 AI 生成或推測的人物長相，一律只能標「示意圖」，"
+                "兩種標籤不能並存。要標來源請改用沒有 AI 人物的畫面。"
+            )
         prompt = req.prompt
         if block and block not in prompt:
             prompt = f"{prompt.rstrip()}\n\n{block}"
@@ -6194,11 +6231,17 @@ def _cover_ai(
     的圖。拆法與合成版同一支 `compose.cover_title_lines`（使用者自己分的行優先，超寬再
     防呆拆），比照 YT ai-title 的 line1／line2。
     """
-    def _post_paste(raw: bytes) -> bytes:
+    def _post_paste(raw: bytes, *, draw_header_band: bool = False) -> bytes:
         # 日期與 ON AIR 紅標從 2026-09-10 起也由程式貼（原本寫在 prompt 給模型畫，
         # 而補帶會把模型畫的那兩樣切成上下兩截，見 compose.paste_cover_header_right）。
         # 先放大裁滿定版 1920×1080（原生 GPT 16:9 出 1280×720），後面貼的東西才照定版比例算
         raw = compose.fit_cover_canvas(raw)
+        # B55（2026-09-21 使用者回報）：「原圖放置」＋AI 標題時照片被程式硬保護，
+        # 模型畫的標頭帶一定會被還原掉，而 base 是使用者的原圖、本來就沒有帶——
+        # 不補的話 Logo／節目標籤／日期／ON AIR 會直接貼在照片上，藍底整條不見。
+        # 要在 fit_cover_canvas **之後**畫：那支會放大裁滿，先畫會被裁掉一截。
+        if draw_header_band:
+            raw = compose.paste_cover_header_band(raw)
         cover = compose.paste_cover_logo(raw, date_text=date_text, badge=req.badge)
         # 「AI示意圖」小標改由程式壓（2026-09-07）：模板要模型自己畫時，只要使用者附了
         # 實景參考圖，apply_user_references_to_image_request 的「Do NOT render any 示意圖
@@ -6415,7 +6458,13 @@ def _cover_ai(
         raw = compose.restore_photo_outside_title_band(
             base, raw, band_top_ratio=compose.cover_title_band_top_ratio(),
         )
-    return _post_paste(raw), result.model, raw, result.mime_type
+    # 兩條「原圖放置」路徑（gpt 的透明圖層、gemini 的差異遮罩）都會把字帶以上還原成
+    # base，模型畫的標頭帶一定不會留下來，所以由程式補畫。純 AI 版（base is None）
+    # 的帶仍然是模型畫的，不補。
+    return (
+        _post_paste(raw, draw_header_band=protect_base and base is not None),
+        result.model, raw, result.mime_type,
+    )
 
 
 def _cover_full_image(
