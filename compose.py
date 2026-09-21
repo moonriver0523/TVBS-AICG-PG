@@ -2015,9 +2015,15 @@ YT_HOURLY_DATE_TAB_BOX = (
 # 純相對描述今天已經出過一次事，給個範圍讓它不會飄走。
 #
 # ⚠2026-09-21 起這個框**不再等於 0 級程式貼的位置**：F36 定案後，0 級的牌子會依標題
-# 墨水上緣往下移（最大字級時約 +64px），這個框仍停在原處當 1–4 級的 AI 護欄。兩條路
-# 的牌子高度因此會差一截。要不要讓護欄跟著走是使用者的裁決事項（他這次只指定「壓字
-# 版」），沒有指示之前不自行改動。
+# 墨水上緣往下移（最大字級時約 +64px），這個框仍停在原處。
+#
+# 注意它只是 0 級的殘留基準與 B55 保護區來源——**1–4 級的 AI 護欄不是這個框**，是
+# editor_formats.yt_hourly_date_guide_box(level)，那支本來就從該級的標題字頂往上推
+# （YT_HOURLY_DATE_TITLE_GAP_RATIO = 0.02H ≈ 21.6px），塊高一變牌就跟著走。所以兩條
+# 路的「位置邏輯」是一致的（都貼著標題），差的只有間距數字：壓字 40px／AI 21.6px。
+#
+# 2026-09-21 使用者看過 40 vs 21.6 的壓字對照樣張後裁決：**壓字版維持 40px，AI 版
+# 不動**。兩邊不統一是他知情後的選擇，不要再「順手」改成同一個數字。
 
 
 @functools.lru_cache(maxsize=1)
@@ -3562,7 +3568,7 @@ def _yt_news_or_hot_fixed_boxes(
 
 
 def _yt_hourly_fixed_boxes(
-    *, ai_note: bool, has_time: bool,
+    *, ai_note: bool, has_time: bool, include_date_tab: bool = True,
 ) -> list[tuple[int, int, int, int]]:
     """整點直播：左上小 Logo＋右上 LIVE 章（可能帶整點時間帶）算一叢；日期紅牌
     （YT_HOURLY_DATE_TAB_BOX）卡在畫面中段、跟頂端那叢中間隔了一大段照片，
@@ -3587,11 +3593,19 @@ def _yt_hourly_fixed_boxes(
 
     boxes = [_render_fixed_elements_bbox(render_top_cluster)]
 
-    date_box = YT_HOURLY_DATE_TAB_BOX
-    boxes.append((
-        round(width * date_box[0]), round(height * date_box[1]),
-        round(width * date_box[2]), round(height * date_box[3]),
-    ))
+    # 日期牌只有「程式自己畫」的時候才需要保護。創意 1 級起整個日期牌是**模型畫的**
+    # （0911 使用者裁決，見 YT_HOURLY_DATE_TAB_BOX 上方的階梯說明），這時把這塊列為
+    # 保護區等於一邊叫模型畫、一邊禁止它畫，是設計自相矛盾。
+    #
+    # 2026-09-21 實證：使用者三次 原圖放置＋AI 標題 全部擋在第 b 道閘，保護區被畫
+    # 51,016／52,224／53,081 px，而後台歸檔的圖層看得很清楚——被畫到的只有這一塊，
+    # 頁首帶與角標那兩塊完全是空的，模型畫的正是它被要求畫的日期條。
+    if include_date_tab:
+        date_box = YT_HOURLY_DATE_TAB_BOX
+        boxes.append((
+            round(width * date_box[0]), round(height * date_box[1]),
+            round(width * date_box[2]), round(height * date_box[3]),
+        ))
 
     if ai_note:
         def render_ai_note(canvas: Image.Image) -> None:
@@ -3628,6 +3642,7 @@ def _yt_live24_fixed_boxes(*, ai_note: bool) -> list[tuple[int, int, int, int]]:
 
 def yt_cover_protect_boxes(
     layout: str, *, original_audio: bool = False, ai_translation: bool = False, ai_note: bool = False,
+    protect_date_tab: bool = True,
 ) -> list[tuple[int, int, int, int]]:
     """B55 YT 擴充：該 YT 封面版型固定元素實際占用的像素框（聯集），供
     `restore_yt_cover_photo` 當硬保護區。layout 用 editor_formats.YT_COVER_LAYOUT_*
@@ -3635,7 +3650,9 @@ def yt_cover_protect_boxes(
     editor_formats（避免循環 import），所以這裡收字串、不收那個模組的常數物件。
     """
     if layout == "hourly":
-        return _yt_hourly_fixed_boxes(ai_note=ai_note, has_time=True)
+        return _yt_hourly_fixed_boxes(
+            ai_note=ai_note, has_time=True, include_date_tab=protect_date_tab,
+        )
     if layout == "hot":
         return _yt_news_or_hot_fixed_boxes(
             original_audio=False, ai_translation=False, ai_note=ai_note, hot_header=True,
@@ -3698,7 +3715,8 @@ def restore_yt_cover_photo(
 #   (b) 保護區（頁首帶／Logo／角標這些程式後貼元素要用的位置）內 alpha 必須全為 0——
 #       模型不准在那些區域畫任何東西，畫了代表要蓋掉程式後貼的內容。
 #   (c) 面積防呆：可疊區域裡非透明像素比例超過門檻，代表模型畫的不是標題，是整片
-#       半透明背景——沿用既有的 PHOTO_PROTECT_MAX_CHANGE_RATIO，不另訂數字。
+#       半透明背景——見 TITLE_LAYER_MAX_PAINT_RATIO（2026-09-21 起自己一個數字，
+#       不再借用 PHOTO_PROTECT_MAX_CHANGE_RATIO；借用是張冠李戴，見該常數的註解）。
 # ============================================================
 
 # alpha 判定的雜訊容忍：反鋸齒邊緣、JPEG-like 壓縮偽影會讓「理論上全透明」的像素
@@ -3719,6 +3737,21 @@ TITLE_LAYER_ALPHA_THRESHOLD = 16
 # 0.1% 的餘裕：十點門檻約 1,834px，最瘦的合法案例（0.19%）仍有約 1.9 倍；
 # 測試用的 60×20 殘渣約 1,281px＝0.07%，仍然擋得住。
 TITLE_LAYER_MIN_PAINT_RATIO = 0.001
+
+# 標題圖層「畫太多」的上限（第 c 道閘）。
+#
+# 2026-09-20 這條沿用 PHOTO_PROTECT_MAX_CHANGE_RATIO（0.5），理由是「不另訂數字」。
+# 2026-09-21 使用者實機測三次，三次都是可疊區 **52.0%／51.4%／56.3%**——全部卡在
+# 50% 這條線上。看模型回傳的圖層（後台已歸檔，`20260921-1713~1715` 三筆）：那是
+# 完全正常的透明底標題設計，滿版兩行大字＋裝飾，照片一個像素都沒碰。
+#
+# 借用 0.5 本來就是張冠李戴：PHOTO_PROTECT_MAX_CHANGE_RATIO 量的是「照片被改動的
+# 比例」，改超過一半代表模型把照片重畫了；這裡量的是「標題圖層蓋住多少畫面」，
+# 滿版標題設計蓋掉下半部是**預期行為**，不是事故。兩者不該共用一個數字。
+#
+# 2026-09-21 使用者裁決：放寬到 70%。實測三張 51~56% 留約 1.25 倍餘裕，而「整片
+# 半透明背景」那種真正要擋的情況會逼近 100%，仍然擋得住。
+TITLE_LAYER_MAX_PAINT_RATIO = 0.70
 
 
 # ============================================================
@@ -3844,7 +3877,7 @@ def _measure_title_layer(
 def _overlay_title_layer_core(
     base_img: Image.Image, layer_img: Image.Image, *,
     protect_boxes: list[tuple[int, int, int, int]],
-    max_paint_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+    max_paint_ratio: float = TITLE_LAYER_MAX_PAINT_RATIO,
     min_paint_ratio: float = TITLE_LAYER_MIN_PAINT_RATIO,
     alpha_threshold: int = TITLE_LAYER_ALPHA_THRESHOLD,
     diagnostics: dict | None = None,
@@ -3942,7 +3975,7 @@ def _overlay_title_layer_core(
 
 def overlay_title_layer_over_cover_band(
     base_png: bytes, layer_png: bytes, *, band_top_ratio: float,
-    max_paint_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+    max_paint_ratio: float = TITLE_LAYER_MAX_PAINT_RATIO,
     diagnostics: dict | None = None,
 ) -> bytes:
     """十點封面（滿版）版本：保護區是標頭帶（`cover_title_band_top_ratio()` 以上），
@@ -3974,11 +4007,17 @@ def overlay_title_layer_over_cover_band(
 def overlay_title_layer_over_yt_cover(
     base_png: bytes, layer_png: bytes, *, layout: str,
     original_audio: bool = False, ai_translation: bool = False, ai_note: bool = False,
-    max_paint_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+    max_paint_ratio: float = TITLE_LAYER_MAX_PAINT_RATIO,
+    protect_date_tab: bool = True,
     diagnostics: dict | None = None,
 ) -> bytes:
     """YT 四版型版本：保護區沿用 `yt_cover_protect_boxes()`，跟 `restore_yt_cover_photo`
-    保護的區域完全一樣，只是保證機制換成 alpha 三道閘。回傳一律是 base 尺寸的 PNG。"""
+    保護的區域完全一樣，只是保證機制換成 alpha 三道閘。回傳一律是 base 尺寸的 PNG。
+
+    `protect_date_tab=False`：創意 1 級起日期牌由模型自己畫，這塊不再是保護區
+    （2026-09-21 使用者裁決，見 `_yt_hourly_fixed_boxes`）。呼叫端要傳的條件跟
+    `compose_yt_hourly_cover(draw_date=...)` 是同一個，兩邊不可以各自判斷。
+    """
     base_img = Image.open(io.BytesIO(base_png)).convert("RGB")
     layer_img = Image.open(io.BytesIO(layer_png)).convert("RGBA")
     layer_raw_size = layer_img.size
@@ -3986,6 +4025,7 @@ def overlay_title_layer_over_yt_cover(
         layer_img = layer_img.resize(base_img.size, Image.LANCZOS)
     protect_boxes = yt_cover_protect_boxes(
         layout, original_audio=original_audio, ai_translation=ai_translation, ai_note=ai_note,
+        protect_date_tab=protect_date_tab,
     )
     try:
         result = _overlay_title_layer_core(

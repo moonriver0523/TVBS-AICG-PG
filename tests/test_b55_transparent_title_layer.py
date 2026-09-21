@@ -879,11 +879,26 @@ class TitleLayerDiagnosticsTests(unittest.TestCase):
         self.assertEqual(diag["gate"], "d-min")
         self.assertLess(diag["paint_ratio"], compose.TITLE_LAYER_MIN_PAINT_RATIO)
 
-    def test_thresholds_are_unchanged(self):
-        """門檻常數本輪不准動——改門檻是裁決事項，診斷只負責量。"""
+    def test_thresholds_are_what_the_user_ruled(self):
+        """門檻是裁決事項，程式不准自己調——這條釘住目前這組被裁定的數字。
+
+        2026-09-21：可疊區上限從「借用 PHOTO_PROTECT_MAX_CHANGE_RATIO（0.5）」改成
+        自己的 TITLE_LAYER_MAX_PAINT_RATIO=0.70（使用者看過三張實證圖層後裁決）；
+        另外兩個門檻沒動，差異遮罩那條路的 0.5 也沒動。
+        """
         self.assertEqual(compose.TITLE_LAYER_MIN_PAINT_RATIO, 0.001)
         self.assertEqual(compose.TITLE_LAYER_ALPHA_THRESHOLD, 16)
+        self.assertEqual(compose.TITLE_LAYER_MAX_PAINT_RATIO, 0.70)
         self.assertEqual(compose.PHOTO_PROTECT_MAX_CHANGE_RATIO, 0.5)
+
+    def test_the_two_caps_are_separate_knobs(self):
+        """合成一個常數就會「調標題圖層順手改掉照片保護」——兩者量的是不同東西。"""
+        source = Path(compose.__file__).read_text(encoding="utf-8")
+        self.assertIn("TITLE_LAYER_MAX_PAINT_RATIO = ", source)
+        self.assertIn("PHOTO_PROTECT_MAX_CHANGE_RATIO = ", source)
+        self.assertNotEqual(
+            compose.TITLE_LAYER_MAX_PAINT_RATIO, compose.PHOTO_PROTECT_MAX_CHANGE_RATIO
+        )
 
     # ---- 診斷內容本身 ----
 
@@ -998,6 +1013,93 @@ class TitleLayerArchiveWriteTests(unittest.TestCase):
                     path.resolve().is_relative_to(root), f"跑出歸檔目錄：{path}"
                 )
                 self.assertNotIn("..", path.name)
+
+
+class DateTabIsOnlyProtectedWhenTheProgramDrawsItTests(unittest.TestCase):
+    """2026-09-21 使用者實機驗收「誤判」的真因與修法。
+
+    整點封面的創意 1 級起，**整個日期牌是模型畫的**（2026-09-11 使用者裁決）。
+    0920 的四道閘卻不分等級一律把日期牌那塊列為保護區——等於一邊叫模型畫牌、
+    一邊禁止它在那裡畫。使用者三次 原圖放置＋AI 標題 全部擋在第 b 道閘，後台歸檔
+    的圖層顯示：被畫到的**只有日期牌那一塊**，頁首帶與角標完全是空的。
+    """
+
+    def _boxes(self, protect_date_tab: bool):
+        return compose.yt_cover_protect_boxes(
+            "hourly", ai_note=False, protect_date_tab=protect_date_tab,
+        )
+
+    def _date_tab_box(self):
+        width, height = compose.YT_CANVAS
+        b = compose.YT_HOURLY_DATE_TAB_BOX
+        return (
+            round(width * b[0]), round(height * b[1]),
+            round(width * b[2]), round(height * b[3]),
+        )
+
+    def test_the_default_still_protects_it(self):
+        """0 級是程式自己畫牌，行為一個像素都不准變。"""
+        self.assertIn(self._date_tab_box(), compose.yt_cover_protect_boxes("hourly"))
+
+    def test_turning_it_off_removes_exactly_that_one_box(self):
+        """只准少掉日期牌那一塊——Logo／LIVE 章那叢還是要保護。"""
+        on, off = self._boxes(True), self._boxes(False)
+        self.assertEqual(
+            [b for b in on if b != self._date_tab_box()], off,
+            "除了日期牌，其他保護區不該有任何變化",
+        )
+        self.assertNotIn(self._date_tab_box(), off)
+        self.assertTrue(off, "關掉日期牌保護不代表整個保護區清空")
+
+    def test_other_layouts_are_untouched(self):
+        """只有 hourly 有這塊牌，其他版型不該因為多了這個參數而改變。"""
+        for layout in ("news", "hot", "live24"):
+            with self.subTest(layout=layout):
+                self.assertEqual(
+                    compose.yt_cover_protect_boxes(layout, protect_date_tab=True),
+                    compose.yt_cover_protect_boxes(layout, protect_date_tab=False),
+                )
+
+    def test_a_layer_painting_only_the_date_tab_passes_when_the_model_draws_it(self):
+        """把 0921 那三張的情形縮成一題：圖層只畫在日期牌那塊。"""
+        width, height = compose.YT_CANVAS
+        tab = self._date_tab_box()
+        layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(layer)
+        draw.rectangle(tab, fill=(214, 22, 32, 255))
+        # 另外畫一塊夠大的標題，免得撞到下限那道閘
+        draw.rectangle([100, 700, 1800, 1000], fill=(255, 255, 255, 255))
+        buffer = io.BytesIO()
+        layer.save(buffer, format="PNG")
+        layer_png = buffer.getvalue()
+
+        base = io.BytesIO()
+        Image.new("RGB", (width, height), (40, 44, 52)).save(base, format="PNG")
+        base_png = base.getvalue()
+
+        with self.assertRaises(compose.ComposeError):
+            compose.overlay_title_layer_over_yt_cover(
+                base_png, layer_png, layout="hourly", protect_date_tab=True,
+            )
+        # 模型畫牌時同一張圖層要過
+        compose.overlay_title_layer_over_yt_cover(
+            base_png, layer_png, layout="hourly", protect_date_tab=False,
+        )
+
+
+class TheCallerMatchesDrawDateTests(unittest.TestCase):
+    """`protect_date_tab` 與 `compose_yt_hourly_cover(draw_date=...)` 必須是同一個條件。
+
+    兩邊各自判斷的話，就會回到「程式畫了牌、但那塊沒被保護」或者反過來的狀態，
+    而這種不一致在成品上看起來完全正常，只有實際被模型畫到才會爆。
+    """
+
+    CONDITION = "not (req.creativity >= 1 and ai_title)"
+
+    def test_both_call_sites_use_the_same_expression(self):
+        source = Path(compose.__file__).with_name("main.py").read_text(encoding="utf-8")
+        self.assertIn(f"protect_date_tab={self.CONDITION}", source)
+        self.assertIn(f"draw_date={self.CONDITION}", source)
 
 
 if __name__ == "__main__":

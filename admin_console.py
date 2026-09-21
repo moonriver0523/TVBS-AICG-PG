@@ -48,7 +48,9 @@ def _authorized(request: Request) -> bool:
 
 
 def _esc(value) -> str:
-    return html.escape(str(value or ""))
+    # 不能寫 `value or ""`：診斷欄位裡的 0 是有意義的數值（alpha 最小值 0＝圖層裡
+    # 有完全透明的像素），被 falsy 吃掉就會印成「alpha –255」那種讀不出來的東西。
+    return html.escape("" if value is None else str(value))
 
 
 def _type_of(record: dict) -> str:
@@ -77,7 +79,8 @@ def _params_line(record: dict) -> str:
     return " · ".join([
         f"角色: {_esc(record.get('role')) or '－'}",
         f"份量: {_esc(record.get('density')) or '－'}",
-        # 不能直接 _esc(seed)：_esc 走 `value or ""`，seed 0 會被當成空值印成空白。
+        # seed 0 是合法值，要印出來而不是當成缺值。2026-09-21 _esc 已改成只把 None
+        # 當空值，這裡的 str() 其實不再必要，但留著也不會錯，就不動它。
         f"seed: {_esc(str(seed)) if seed is not None else '－'}",
     ])
 
