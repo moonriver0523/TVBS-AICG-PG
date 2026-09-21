@@ -58,6 +58,7 @@ import editor_formats
 import gcs_archive
 import map_lookup
 import photo_lookup
+import name_aliases
 import request_log
 import safe_area_spec
 import safe_frame
@@ -6079,6 +6080,13 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
             "output, and the headline above is source material under the same rule): "
             + news_text
         )
+    # 簡稱對照（B82，2026-09-21）：「川習會」這類事件簡稱裡沒有逐字人名，推導模型
+    # 照 VERBATIM 規則不准認出他們，描述就退成「兩位領導人」、參考照零張、臉自己編。
+    # 這裡由程式查表把人名補成**已知事實**再交給模型——查表是確定性的，跟放寬護欄
+    # 讓模型自己聯想是兩回事。沒命中時回空字串，material 與加表之前逐字相同。
+    material += name_aliases.alias_hint_block(
+        req.title_left, req.title_right, left, right, news_text,
+    )
     # 使用者的指令欄（2026-09-08 WP1）：兩格共用，只當畫面提示。放在最後、明講它
     # 管的是「畫面長什麼樣」——不然模型會把它讀成「標題要改成這樣」。
     instruction = (getattr(req, "instruction", "") or "").strip()
@@ -7487,6 +7495,8 @@ def derive_yt_cover_plan(
             "output, and the headline above is source material under the same rule): "
             + news_text.strip()
         )
+    # 簡稱對照（B82，2026-09-21）：同 resolve_cover_visuals 的理由與位置。
+    material += name_aliases.alias_hint_block(title, news_text)
     if instruction.strip():
         material += (
             "\n\nExtra instruction from the editor about how the photograph should look "
