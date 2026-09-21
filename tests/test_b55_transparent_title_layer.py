@@ -1504,3 +1504,220 @@ class LayerHeightDiagnosticTests(unittest.TestCase):
         self.assertIn("圖層高度佔畫面 0.0%", compose.format_title_layer_diagnostics(
             {"gate": "a", "painted_bbox": [], "painted_bbox_height_ratio": 0.0},
         ))
+
+
+class LayerHeightCapTests(unittest.TestCase):
+    """B55 高度上限（2026-09-22 使用者裁定「壓縮階梯 44/46/48/50」＋縮放下限 0.6）。
+
+    這一組跟四道閘**不是同一件事**，測的東西也不一樣：閘門測「該不該擋」，
+    這裡測「放行之後有沒有縮到位，而且縮這件事在構造上不可能造成失敗」。
+
+    為什麼要有這條路：prompt 的塊高百分比已經實測證偽（dev 後台 0921 21:20~
+    0922 00:54）——十點 prompt 要 18/24/30/36% 實際畫 45/50/61/69%，YT 要 32~44%
+    實際畫 47~59%。十點要得比 YT 少卻畫得比 YT 多，絕對百分比根本沒被讀進去。
+    """
+
+    def _cover_layer(self, top, bottom, *, left=200, right=1700):
+        width, height = compose.COVER_CANVAS
+        return _rgba_layer_png((width, height), opaque_box=[left, top, right, bottom])
+
+    def _overlay(self, layer, *, level):
+        width, height = compose.COVER_CANVAS
+        diag: dict = {}
+        out = compose.overlay_title_layer_over_cover_band(
+            _rgb_png(RED, (width, height)), layer,
+            band_top_ratio=compose.cover_title_band_top_ratio(),
+            max_height_ratio=compose.title_layer_max_height_ratio(level),
+            diagnostics=diag,
+        )
+        return out, diag
+
+    # ---- 表本身 ----------------------------------------------------------
+
+    def test_the_ladder_is_the_ruled_numbers(self):
+        self.assertEqual(
+            compose.TITLE_LAYER_MAX_HEIGHT_RATIOS, {1: 0.44, 2: 0.46, 3: 0.48, 4: 0.50},
+        )
+
+    def test_the_ladder_only_goes_up(self):
+        """階梯要單調遞增——創意越高可以越張揚是這條階梯唯一的意義。"""
+        values = [compose.TITLE_LAYER_MAX_HEIGHT_RATIOS[k] for k in (1, 2, 3, 4)]
+        self.assertEqual(values, sorted(values))
+        self.assertEqual(len(set(values)), 4)
+
+    def test_the_cap_never_goes_above_the_accepted_band(self):
+        """使用者驗收過的刻度：45.0% 與 50.0%「偏高但可以接受」，61.0% 與 69.0%
+        「誇張、完全遮住原圖」。上限不可以訂進被判定為誇張的那一側。"""
+        for value in compose.TITLE_LAYER_MAX_HEIGHT_RATIOS.values():
+            self.assertLessEqual(value, 0.50)
+            self.assertGreater(value, 0.0)
+
+    def test_levels_outside_the_table_clamp_instead_of_disabling_the_cap(self):
+        """夾而不是回 0。「不確定是哪一級」不是「這張可以畫滿整個畫面」的理由。"""
+        self.assertEqual(compose.title_layer_max_height_ratio(0), 0.44)
+        self.assertEqual(compose.title_layer_max_height_ratio(-3), 0.44)
+        self.assertEqual(compose.title_layer_max_height_ratio(9), 0.50)
+        self.assertEqual(compose.title_layer_max_height_ratio(None), 0.50)
+        self.assertEqual(compose.title_layer_max_height_ratio("不是數字"), 0.50)
+
+    # ---- 縮不縮 ----------------------------------------------------------
+
+    def test_a_layer_under_the_cap_is_left_completely_alone(self):
+        """低於上限的一張要跟「完全沒有這個功能」時位元組相同——L1 L2 使用者已經
+        驗收過了，這條路不可以動到它們。"""
+        _, height = compose.COVER_CANVAS
+        layer = self._cover_layer(400, 400 + round(height * 0.30))
+        capped, diag = self._overlay(layer, level=4)
+        control = compose.overlay_title_layer_over_cover_band(
+            _rgb_png(RED, compose.COVER_CANVAS), layer,
+            band_top_ratio=compose.cover_title_band_top_ratio(),
+        )
+        self.assertEqual(capped, control)
+        self.assertEqual(diag["height_scale"], 1.0)
+
+    def test_a_layer_over_the_cap_is_shrunk_to_the_cap(self):
+        _, height = compose.COVER_CANVAS
+        layer = self._cover_layer(400, 400 + round(height * 0.60))
+        _, diag = self._overlay(layer, level=4)
+        self.assertAlmostEqual(diag["painted_bbox_height_ratio_before"], 0.60, delta=0.01)
+        self.assertAlmostEqual(diag["painted_bbox_height_ratio"], 0.50, delta=0.01)
+        self.assertAlmostEqual(diag["height_scale"], 0.50 / 0.601, delta=0.02)
+
+    def test_the_same_layer_gets_a_tighter_cap_at_a_lower_level(self):
+        """同一張圖層在 L1 要比 L4 縮得更多——階梯若不生效這條就過不了。"""
+        _, height = compose.COVER_CANVAS
+        layer = self._cover_layer(400, 400 + round(height * 0.60))
+        _, low = self._overlay(layer, level=1)
+        _, high = self._overlay(layer, level=4)
+        self.assertLess(low["height_scale"], high["height_scale"])
+        self.assertAlmostEqual(low["painted_bbox_height_ratio"], 0.44, delta=0.01)
+        self.assertAlmostEqual(high["painted_bbox_height_ratio"], 0.50, delta=0.01)
+
+    def test_the_floor_stops_the_shrink_before_the_type_gets_unreadable(self):
+        """重現實測最極端的那一張（dev 20260921-212143，圖層高度 88.4%）：
+        縮到剛好 50% 需要 0.57 倍，下限 0.6 會先擋住，結果仍然高於上限。
+        使用者裁定寧可那一張高一點，也不要把字縮到看不清楚。"""
+        width, height = compose.COVER_CANVAS
+        band_top = round(height * compose.cover_title_band_top_ratio())
+        layer = self._cover_layer(band_top + 1, height - 1, left=290, right=1634)
+        _, diag = self._overlay(layer, level=4)
+        self.assertAlmostEqual(diag["painted_bbox_height_ratio_before"], 0.884, delta=0.02)
+        self.assertEqual(diag["height_scale"], compose.TITLE_LAYER_MIN_HEIGHT_SCALE)
+        # 下限咬住了，所以縮完仍然超過上限——這是裁定的結果，不是 bug。
+        self.assertGreater(diag["painted_bbox_height_ratio"], 0.50)
+        self.assertLess(diag["painted_bbox_height_ratio"], 0.60)
+
+    def test_zero_means_off_and_that_is_the_wrappers_default(self):
+        """預設參數是 0＝不縮。沒有明確傳等級進來的呼叫端行為一個位元都不變。"""
+        _, height = compose.COVER_CANVAS
+        layer = self._cover_layer(400, 400 + round(height * 0.60))
+        diag: dict = {}
+        compose.overlay_title_layer_over_cover_band(
+            _rgb_png(RED, compose.COVER_CANVAS), layer,
+            band_top_ratio=compose.cover_title_band_top_ratio(), diagnostics=diag,
+        )
+        self.assertEqual(diag["height_scale"], 1.0)
+        self.assertAlmostEqual(diag["painted_bbox_height_ratio"], 0.60, delta=0.01)
+
+    # ---- 錨點 ------------------------------------------------------------
+
+    def test_the_shrink_is_anchored_at_the_bottom_centre_of_the_title(self):
+        """標題坐在畫面下半部，底邊等於視覺上的基線——縮完基線不可以飄。
+        錨在畫布中心的話字會往中間跑，正好跑向照片主體。"""
+        _, height = compose.COVER_CANVAS
+        top, bottom = 400, 400 + round(height * 0.60)
+        layer = self._cover_layer(top, bottom, left=200, right=1700)
+        before: dict = {}
+        compose.overlay_title_layer_over_cover_band(
+            _rgb_png(RED, compose.COVER_CANVAS), layer,
+            band_top_ratio=compose.cover_title_band_top_ratio(), diagnostics=before,
+        )
+        _, after = self._overlay(layer, level=4)
+        bx0, _, bx1, by1 = before["painted_bbox"]
+        ax0, _, ax1, ay1 = after["painted_bbox"]
+        self.assertAlmostEqual(ay1, by1, delta=4)                          # 底邊留在原位
+        self.assertAlmostEqual((ax0 + ax1) / 2, (bx0 + bx1) / 2, delta=4)  # 水平中點留在原位
+        self.assertGreater(ax0, bx0)                                       # 左右確實內縮了
+        self.assertLess(ax1, bx1)
+
+    # ---- 構造上不可能造成失敗 --------------------------------------------
+
+    def test_a_shrink_that_would_hit_a_protected_box_falls_back_to_the_unshrunk_layer(self):
+        """縮小不是構造上安全的：圖層由分開的兩塊組成時，往中心縮會讓兩塊之間的
+        空隙被蓋住，而保護區可能就在那個空隙裡（hourly 的日期牌在畫面中段）。
+        這種時候要退回那張**已經過閘**的原圖層，絕對不是退回程式壓字。"""
+        width, height = compose.COVER_CANVAS
+        base = Image.new("RGB", (width, height), RED)
+        layer = Image.open(io.BytesIO(_rgba_layer_png(
+            (width, height), opaque_box=[100, 400, 500, 1000],
+            extra_boxes=[[1400, 400, 1800, 1000]],
+        ))).convert("RGBA")
+        # 原圖層的兩塊之間空著，這個框沒被畫到；縮完左邊那塊會蓋過來。
+        protect = [(520, 500, 540, 600)]
+        diag: dict = {}
+        out = compose._overlay_title_layer_core(
+            base, layer, protect_boxes=protect, max_height_ratio=0.50, diagnostics=diag,
+        )
+        self.assertEqual(diag["verdict"], "pass")       # 沒有變成失敗
+        self.assertEqual(diag["height_scale"], 1.0)     # 沒有縮
+        self.assertIn("height_scale_rejected", diag)    # 但有記下來試過
+        control = compose._overlay_title_layer_core(base, layer, protect_boxes=protect)
+        self.assertEqual(out.tobytes(), control.tobytes())
+
+    def test_the_cap_runs_after_every_gate_so_it_can_only_ever_run_on_a_pass(self):
+        """順序寫死在原始碼裡：判決先定案，才輪到縮。反過來的話一張被擋下的圖層
+        會先被縮一次，錯誤訊息裡的數字就不是模型實際畫的東西。"""
+        source = Path(compose.__file__).read_text(encoding="utf-8")
+        core = source[source.index("def _overlay_title_layer_core"):]
+        core = core[:core.index("def overlay_title_layer_over_cover_band")]
+        self.assertLess(core.index('diag["verdict"] = "pass"'), core.index("_shrink_title_layer"))
+        for gate in ('_block("a"', '_block("b"', '_block("c"', '_block("d-empty"'):
+            self.assertLess(core.index(gate), core.index("_shrink_title_layer"))
+
+    def test_a_shrink_that_would_empty_the_layer_falls_back_too(self):
+        """著色量隨 scale 平方掉，本來就貼近下限的圖層縮完可能掉到下限以下。
+        那種時候疊出來會是一張幾乎沒字的原圖，寧可不縮。"""
+        width, height = compose.COVER_CANVAS
+        base = Image.new("RGB", (width, height), RED)
+        layer = Image.open(io.BytesIO(
+            self._cover_layer(200, 200 + round(height * 0.60), left=900, right=920)
+        )).convert("RGBA")
+        diag: dict = {}
+        compose._overlay_title_layer_core(
+            base, layer, protect_boxes=[], max_height_ratio=0.50,
+            min_paint_ratio=0.006, diagnostics=diag,
+        )
+        self.assertEqual(diag["verdict"], "pass")
+        self.assertEqual(diag["height_scale"], 1.0)
+        self.assertIn("height_scale_rejected", diag)
+
+    # ---- 診斷 ------------------------------------------------------------
+
+    def test_the_diagnostic_line_reports_both_numbers_when_it_shrinks(self):
+        """只印縮完的看不出模型本來畫多大，只印原始的又對不上成品。
+        VERSION 不跳號，這一行是下一次實測唯一能證明新版有上線的東西。"""
+        _, height = compose.COVER_CANVAS
+        layer = self._cover_layer(400, 400 + round(height * 0.60))
+        _, diag = self._overlay(layer, level=4)
+        line = compose.format_title_layer_diagnostics(diag)
+        self.assertIn("已縮 0.83", line)
+        self.assertIn("原 60.1%", line)
+        self.assertIn("上限 50%", line)
+        self.assertIn("圖層高度佔畫面 50", line)
+
+    def test_the_diagnostic_line_stays_short_when_nothing_was_shrunk(self):
+        _, height = compose.COVER_CANVAS
+        layer = self._cover_layer(400, 400 + round(height * 0.30))
+        _, diag = self._overlay(layer, level=4)
+        self.assertNotIn("已縮", compose.format_title_layer_diagnostics(diag))
+
+    # ---- 接線 ------------------------------------------------------------
+
+    def test_both_call_sites_pass_the_creativity_level_in(self):
+        """compose 不知道創意等級，等級只能由 main 傳進來。兩個呼叫端都要接上，
+        漏一個的症狀是那條路整個沒有上限——而且測不出來。"""
+        source = Path(compose.__file__).with_name("main.py").read_text(encoding="utf-8")
+        self.assertIn("max_height_ratio=compose.title_layer_max_height_ratio(level)", source)
+        self.assertEqual(
+            source.count("max_height_ratio=compose.title_layer_max_height_ratio"), 2,
+        )
