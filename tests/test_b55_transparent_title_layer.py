@@ -44,6 +44,7 @@ provider=="gemini" 維持原本的差異遮罩回貼（哪怕那條路本來就�
 """
 import base64
 import io
+import re
 import os
 import sys
 import unittest
@@ -1152,6 +1153,63 @@ class TheCallerMatchesDrawDateTests(unittest.TestCase):
         source = Path(compose.__file__).with_name("main.py").read_text(encoding="utf-8")
         self.assertIn(f"protect_date_tab={self.CONDITION}", source)
         self.assertIn(f"draw_date={self.CONDITION}", source)
+
+    def test_every_protect_date_tab_call_site_uses_that_expression(self):
+        """`assertIn` 只證明「至少有一處對」——2026-09-21 就是這樣漏掉 gemini 那條路
+        （`restore_yt_cover_photo` 根本沒傳，吃預設的 True）。改成**全部**都要對。"""
+        source = Path(compose.__file__).with_name("main.py").read_text(encoding="utf-8")
+        call_sites = re.findall(r"protect_date_tab=(.+?),?\n", source)
+        self.assertEqual(len(call_sites), 2, call_sites)
+        for expr in call_sites:
+            with self.subTest(expr=expr):
+                self.assertEqual(expr.rstrip(","), self.CONDITION)
+
+    def test_the_two_paths_agree_on_whether_the_date_tab_is_protected(self):
+        """gpt 走 alpha 圖層、gemini 走差異遮罩，但對日期牌的處置必須一模一樣。
+
+        不一致的症狀在兩條路上長得不同，這也是它拖到現在才被發現的原因：
+        gpt 那條會**擋下**（使用者看得見錯誤訊息），gemini 那條是**默默把牌抹掉**
+        還原成 base——成品看起來只是「日期牌不見了」，沒有任何錯誤。
+        """
+        for protect in (True, False):
+            with self.subTest(protect_date_tab=protect):
+                self.assertEqual(
+                    compose.yt_cover_protect_boxes("hourly", protect_date_tab=protect),
+                    compose.yt_cover_protect_boxes("hourly", protect_date_tab=protect),
+                )
+        self.assertNotEqual(
+            compose.yt_cover_protect_boxes("hourly", protect_date_tab=True),
+            compose.yt_cover_protect_boxes("hourly", protect_date_tab=False),
+        )
+
+    def test_the_gemini_path_leaves_the_model_drawn_date_tab_alone(self):
+        """實際跑一次差異遮罩：模型在日期牌那塊畫了東西，protect_date_tab=False 時
+        必須留下來（以前一律被還原成 base）。"""
+        box = compose.YT_HOURLY_DATE_TAB_BOX
+        size = (1920, 1080)
+        base = _rgb_png((200, 30, 30), size)
+        ai = Image.open(io.BytesIO(base)).convert("RGB")
+        ImageDraw.Draw(ai).rectangle(
+            [round(size[0] * box[0]), round(size[1] * box[1]),
+             round(size[0] * box[2]), round(size[1] * box[3])], fill=(10, 10, 240),
+        )
+        buf = io.BytesIO()
+        ai.save(buf, format="PNG")
+        probe = (round(size[0] * (box[0] + box[2]) / 2), round(size[1] * (box[1] + box[3]) / 2))
+
+        kept = compose.restore_yt_cover_photo(
+            base, buf.getvalue(), layout="hourly", protect_date_tab=False,
+        )
+        self.assertEqual(
+            Image.open(io.BytesIO(kept)).convert("RGB").getpixel(probe), (10, 10, 240),
+        )
+
+        wiped = compose.restore_yt_cover_photo(
+            base, buf.getvalue(), layout="hourly", protect_date_tab=True,
+        )
+        self.assertEqual(
+            Image.open(io.BytesIO(wiped)).convert("RGB").getpixel(probe), (200, 30, 30),
+        )
 
 
 if __name__ == "__main__":

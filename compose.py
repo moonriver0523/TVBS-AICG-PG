@@ -3700,11 +3700,18 @@ def restore_yt_cover_photo(
     base_png: bytes, ai_png: bytes, *, layout: str,
     original_audio: bool = False, ai_translation: bool = False, ai_note: bool = False,
     diff_threshold: int = 24, max_change_ratio: float = PHOTO_PROTECT_MAX_CHANGE_RATIO,
+    protect_date_tab: bool = True,
 ) -> bytes:
     """B55 YT 擴充（2026-09-16 使用者裁決）：YT 封面單張「原圖放置」＋AI 標題時，
     照片本身一個像素都不准動，只有標題設計可以變——與十點滿版 `restore_photo_outside_
     title_band` 同一條規則，只是保護區換成 `yt_cover_protect_boxes()` 量出來的
     固定元素 bbox 聯集，而不是十點那條簡單的水平字帶。
+
+    `protect_date_tab=False`：創意 1 級起日期牌由模型自己畫，這塊不再是保護區。
+    跟 `overlay_title_layer_over_yt_cover` 的同名參數是同一件事，呼叫端要傳的條件
+    也跟 `compose_yt_hourly_cover(draw_date=...)` 是同一個（2026-09-21 使用者裁決）。
+    這條是 provider=gemini 的差異遮罩路徑；gpt 走的是 alpha 圖層那條。兩條路對
+    日期牌的處置**必須一致**，不然換一家 provider 同一張圖就一邊過一邊被還原。
 
     回傳一律是 base 尺寸的 PNG；ai_png 尺寸不同時等比縮放對齊。
     """
@@ -3715,6 +3722,7 @@ def restore_yt_cover_photo(
 
     protect_boxes = yt_cover_protect_boxes(
         layout, original_audio=original_audio, ai_translation=ai_translation, ai_note=ai_note,
+        protect_date_tab=protect_date_tab,
     )
     result = _restore_outside_protected_boxes(
         base_img, ai_img, protect_boxes=protect_boxes,
