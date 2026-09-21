@@ -8228,6 +8228,13 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                     background = compose.restore_yt_cover_photo(
                         base, background, layout=req.layout,
                         original_audio=original_audio, ai_translation=ai_translation, ai_note=False,
+                        # 跟上面 overlay_title_layer_over_yt_cover 傳的條件逐字相同，
+                        # 也跟下面 compose_yt_hourly_cover 的 draw_date 逐字相同
+                        # （2026-09-21 使用者裁決）。這條是 provider=gemini 的差異遮罩
+                        # 路徑，原本漏了沒接：創意 ≥1 時模型奉命畫日期牌，這裡卻把那塊
+                        # 還原成 base，牌會整個消失——跟 gpt 那條被擋下是同一個矛盾的
+                        # 另一種症狀（那邊擋、這邊默默抹掉，這邊更難發現）。
+                        protect_date_tab=not (req.creativity >= 1 and ai_title),
                     )
             if base_models:
                 image_model = "、".join([*base_models, image_model])
