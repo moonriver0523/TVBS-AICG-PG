@@ -194,11 +194,22 @@ def _title_layer_block(record: dict, month: str) -> str:
             continue
         gate = d.get("gate") or ""
         verdict = f"擋下（第 {gate} 道閘）" if gate else "通過"
+        # 創意等級決定 prompt 裡的塊高規格，要跟圖層高度佔比並排才看得出是
+        # 「模型沒照做」還是「規格本身訂太大」。舊紀錄沒有這一欄就整段省略。
+        level_note = (
+            f' · 創意 {_esc(d.get("creativity"))} 級'
+            if d.get("creativity") is not None else ""
+        )
         lines.append(
             f'{_esc(d.get("path", ""))}：{verdict}'
             f' · alpha {_esc(d.get("alpha_min"))}–{_esc(d.get("alpha_max"))}'
             f'（門檻 {_esc(d.get("alpha_threshold"))}）'
             f' · 保護區被畫 {_esc(d.get("protect_painted_pixels"))} px'
+            f'{"（已丟棄）" if d.get("protect_discarded") else ""}'
+            # 2026-09-21 使用者回報「標題太大幾乎遮住整個版面」時，這一欄不存在，
+            # 只好把成品下載下來逐列量。這個數字可以直接跟 prompt 的塊高規格對照。
+            f' · 圖層高度佔畫面 {(d.get("painted_bbox_height_ratio") or 0):.1%}'
+            f'{level_note}'
             f' · 可疊區 {_esc(d.get("painted_in_editable_pixels"))}/'
             f'{_esc(d.get("editable_pixels"))} px'
             f'＝{(d.get("paint_ratio") or 0):.3%}'

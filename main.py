@@ -2173,11 +2173,22 @@ def reset_title_layer_diags() -> None:
     _title_layer_blocked.set([])
 
 
-def _record_title_layer_diag(diag: dict, blocked_png: bytes = b"") -> None:
+def _record_title_layer_diag(
+    diag: dict, blocked_png: bytes = b"", *, creativity: int | None = None,
+) -> None:
     """記一次四道閘的量測結果。`blocked_png` 只在被擋下時給（成功筆的圖層已經疊進
-    成品，不必另存一份）。"""
+    成品，不必另存一份）。
+
+    `creativity`（2026-09-21）：稽核歸檔本來**完全沒有存創意等級**。使用者回報
+    「AI生成純標題太大了」時，「模型畫多大」與「prompt 叫它畫多大」要對照才判得出
+    是模型沒照做還是規格本身訂太大，而後者的數字正是由等級決定的——少這一欄就只能
+    從成品反推（數招式件數、看有沒有傾斜）。跟圖層高度佔比放同一行，一眼對得起來。
+    """
     if diag:
-        _title_layer_diags.set(_title_layer_diags.get() + [dict(diag)])
+        entry = dict(diag)
+        if creativity is not None:
+            entry["creativity"] = creativity
+        _title_layer_diags.set(_title_layer_diags.get() + [entry])
     if blocked_png:
         _title_layer_blocked.set(_title_layer_blocked.get() + [blocked_png])
 
@@ -6357,7 +6368,10 @@ def _cover_ai(
     # background=transparent（見 compose.py 那段長註解），原路（差異遮罩回貼）不動。
     transparent_mode = protect_base and base is not None and req.provider == "gpt"
     prompt = (
-        editor_formats.with_title_layer_note(prompt)
+        editor_formats.with_title_layer_note(
+            # 塊高數字跟 DESIGN BRIEF 取自同一張表，不手打（2026-09-21）。
+            prompt, block_height=editor_formats.cover_title_block_height(level),
+        )
         if transparent_mode
         else editor_formats.with_base_image_note(prompt, base is not None)
     )
@@ -6418,7 +6432,7 @@ def _cover_ai(
                 base, raw, band_top_ratio=compose.cover_title_band_top_ratio(),
                 diagnostics=title_layer_diag,
             )
-            _record_title_layer_diag(title_layer_diag)
+            _record_title_layer_diag(title_layer_diag, creativity=level)
         except compose.ComposeError as exc:
             # 2026-09-20 使用者裁定：四道閘任一沒過不要回 400，退回程式壓字，但要明講。
             # 退的是**標題怎麼畫**，不是照片——base 本來就沒經過模型，這裡直接拿它走
@@ -6432,7 +6446,7 @@ def _cover_ai(
                 "版面與字體會跟 AI 標題不一樣；想要 AI 標題請重新生成一次。"
                 + compose.format_title_layer_diagnostics(title_layer_diag)
             )
-            _record_title_layer_diag(title_layer_diag, title_layer_raw)
+            _record_title_layer_diag(title_layer_diag, title_layer_raw, creativity=level)
             # 斷句補打（2026-09-21 獨立複查第三輪）：端點入口的 apply_title_break_hints
             # 帶的是 composite=False（B75：AI 標題模式下 compose 不壓字，斷句沒人讀），
             # 所以走到這裡時**詞組邊界是空的**。現在這條路真的要用 Pillow 壓字了，
@@ -7812,7 +7826,11 @@ def _yt_cover_full_image(
     # 的專用 note，跟 with_base_image_note 互斥（見 main._cover_ai 同款分岔的理由）。
     image_req = image_req.model_copy(
         update={"prompt": (
-            editor_formats.with_title_layer_note(image_req.prompt)
+            editor_formats.with_title_layer_note(
+                # 塊高數字跟 yt_design_brief 取自同一張表，不手打（2026-09-21）。
+                image_req.prompt,
+                block_height=editor_formats.yt_title_block_height(req.creativity),
+            )
             if protect_base and base is not None
             else editor_formats.with_base_image_note(image_req.prompt, base is not None)
         )}
@@ -8202,7 +8220,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                             protect_date_tab=not (req.creativity >= 1 and ai_title),
                             diagnostics=title_layer_diag,
                         )
-                        _record_title_layer_diag(title_layer_diag)
+                        _record_title_layer_diag(title_layer_diag, creativity=req.creativity)
                     except compose.ComposeError as exc:
                         # 2026-09-20 使用者裁定：閘門沒過退回程式壓字，但要明講。
                         # 底圖換回未經模型的 base，並把 ai_title 關掉——下面那組
@@ -8215,7 +8233,9 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                             "版面與字體會跟 AI 標題不一樣；想要 AI 標題請重新生成一次。"
                             + compose.format_title_layer_diagnostics(title_layer_diag)
                         )
-                        _record_title_layer_diag(title_layer_diag, title_layer_raw)
+                        _record_title_layer_diag(
+                            title_layer_diag, title_layer_raw, creativity=req.creativity,
+                        )
                         background, ai_title = base, False
                         image_model = f"{image_model}＋yt-cover:title-layer-fallback"
                         title_layer_fallback = True

@@ -1285,3 +1285,99 @@ class TheCallerMatchesDrawDateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TitleLayerSizeNoteTests(unittest.TestCase):
+    """2026-09-21 使用者回報「AI生成純標題 太大了 幾乎遮住整個版面」。
+
+    查證是同一則新聞、同一個使用者、同一天的兩張 dev 成品對照：
+    17:42 `5ef0a6d8a6e7` 純 AI 版標題塊約佔畫面高 38%（兩張臉完整露出、招式擺在
+    標題旁邊）；19:16 `e1bac5f58636` 原圖放置版約 65%（蓋掉兩人身體與半張臉、
+    招式疊在標題下方）。兩張的 DESIGN BRIEF 一字不差——所以病不在塊高那組數字，
+    改小它只會連本來就正常的純 AI 版一起縮掉。病在透明圖層那段 note：模型面對
+    一張空畫布，沒有人物可以襯托，字就長到把框填滿。
+    """
+
+    def _note(self, height: str = "") -> str:
+        return editor_formats.with_title_layer_note(
+            "=== TEXT TO RENDER ===\nbody", block_height=height,
+        )
+
+    def test_the_block_height_number_is_repeated_in_the_note(self):
+        """數字要重複釘在近端。2026-09-11 已證明離 CANVAS 遠的條文壓不動模型，
+        而這段 note 就在 prompt 最前面——只寫在後面的 DESIGN BRIEF 等於沒寫。"""
+        note = self._note(editor_formats.cover_title_block_height(4))
+        self.assertIn("36%", note)
+        self.assertIn("DESIGN BRIEF", note)
+
+    def test_the_number_comes_from_the_same_table_as_the_brief(self):
+        """兩邊手打就會各寫各的。這兩支取值函式必須直接讀規格表。"""
+        for level, spec in editor_formats.COVER_TITLE_BRIEF_SPECS.items():
+            with self.subTest(level=level):
+                self.assertEqual(
+                    editor_formats.cover_title_block_height(level), spec["height"],
+                )
+        for level, spec in editor_formats.YT_BRIEF_SPECS.items():
+            with self.subTest(yt_level=level):
+                self.assertEqual(
+                    editor_formats.yt_title_block_height(level), spec["height"],
+                )
+
+    def test_no_number_is_invented_when_there_is_no_brief(self):
+        """創意 0 沒有 DESIGN BRIEF，就不准引用一個沒人裁決過的塊高——但另外兩件
+        事（讓開人物、空畫布不是長大的理由）跟等級無關，照樣要講。"""
+        self.assertEqual(editor_formats.cover_title_block_height(0), "")
+        note = self._note("")
+        self.assertNotIn("DESIGN BRIEF below states", note)
+        self.assertIn("An empty canvas is NOT a reason to grow", note)
+        self.assertIn("never cover a face", note)
+
+    def test_the_note_covers_both_observed_defects(self):
+        """兩個缺陷各要有一句對得上的話：①字自己長大；②招式另起一排疊在下面，
+        把總高又撐高一截（19:16 那張多出來的那一截正是這樣來的）。"""
+        note = self._note("36%")
+        self.assertIn("reason to grow", note)                     # ①
+        self.assertIn("supporting artwork must fit inside", note) # ②
+        self.assertIn("never stacked underneath", note)           # ②
+
+    def test_the_size_note_only_rides_with_the_transparent_layer_note(self):
+        """純 AI 版那條路（with_base_image_note）本來就正常，不可以被波及。"""
+        plain = editor_formats.with_base_image_note("=== TEXT TO RENDER ===", True)
+        self.assertNotIn("SIZE THE HEADLINE", plain)
+        self.assertIn("SIZE THE HEADLINE", self._note("36%"))
+
+    def test_both_call_sites_pass_a_height_from_the_spec_tables(self):
+        """手打數字會跟規格表脫鉤。兩個呼叫端都必須走取值函式。"""
+        source = Path(compose.__file__).with_name("main.py").read_text(encoding="utf-8")
+        self.assertIn("block_height=editor_formats.cover_title_block_height(level)", source)
+        self.assertIn(
+            "block_height=editor_formats.yt_title_block_height(req.creativity)", source,
+        )
+
+
+class LayerHeightDiagnosticTests(unittest.TestCase):
+    """使用者回報「太大」時，後台只有面積比例，答不了「有多高」——當時只能把成品
+    下載下來逐列量。面積比例本來就答不了這題：滿版一行大字與散在各處的小元件
+    可以是同一個百分比。"""
+
+    def test_the_bbox_height_ratio_is_measured_and_shown(self):
+        width, height = compose.COVER_CANVAS
+        band_top = round(height * compose.cover_title_band_top_ratio())
+        # 一條剛好佔畫面高 30% 的帶
+        top = band_top + 10
+        bottom = top + round(height * 0.30)
+        layer = _rgba_layer_png((width, height), opaque_box=[100, top, width - 100, bottom])
+        diag: dict = {}
+        compose.overlay_title_layer_over_cover_band(
+            _rgb_png(RED, (width, height)), layer,
+            band_top_ratio=compose.cover_title_band_top_ratio(), diagnostics=diag,
+        )
+        self.assertAlmostEqual(diag["painted_bbox_height_ratio"], 0.30, delta=0.01)
+        self.assertIn("圖層高度佔畫面 30", compose.format_title_layer_diagnostics(diag))
+
+    def test_an_empty_bbox_does_not_crash_the_ratio(self):
+        """擋在第 (a) 道閘時 bbox 是空的，診斷字串照樣要印得出來。"""
+        self.assertEqual(compose.format_title_layer_diagnostics({}), "")
+        self.assertIn("圖層高度佔畫面 0.0%", compose.format_title_layer_diagnostics(
+            {"gate": "a", "painted_bbox": [], "painted_bbox_height_ratio": 0.0},
+        ))

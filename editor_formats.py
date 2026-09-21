@@ -673,16 +673,77 @@ Draw ONLY: the headline typography, and any design elements the instructions bel
 
 """
 
+# 2026-09-21 使用者回報：「AI生成純標題 太大了 幾乎遮住整個版面」。
+#
+# 查證方式是同一則新聞、同一個使用者、同一天的兩張成品對照（dev 後台）：
+#   17:42 `5ef0a6d8a6e7` 純 AI 版  → 標題塊約佔畫面高 38%，靠左下，兩張臉完整露出，
+#                                     招式擺在標題**旁邊**
+#   19:16 `e1bac5f58636` 原圖放置 → 標題塊約佔畫面高 65%，滿版置中，蓋掉兩人身體與
+#                                     半張臉，招式**疊在標題下方**又加高一截
+# 兩張的 DESIGN BRIEF 一字不差（同一個 COVER_TITLE_BRIEF_SPECS，推測同為 L4＝36%），
+# 結果差了快一倍——所以**病不在塊高那組數字**，改小它只會連本來就正常的純 AI 版
+# 一起縮掉。
+#
+# 病在上面那段 note 本身：它告訴模型「附圖只是參考，不要重畫照片」「你的畫布是透明的」。
+# 模型面對一張空畫布，沒有任何人物可以互相襯托，字就長到把整個框填滿。純 AI 版因為
+# 照片是它自己畫的，它會自己讓開。
+#
+# 所以補這一段，講三件上面那段講不到的事：
+#   (1) 畫布是空的，但**成品不是**——照參考圖裡人物的位置讓開，不要蓋臉；
+#   (2) 塊高就是 brief 那個數字，空畫布不是長大的理由（數字**重複釘在近端**——
+#       2026-09-11 已證明離 CANVAS 遠的條文壓不動模型，這段就在 prompt 最前面）；
+#   (3) 那個數字管的是**整份回傳的美術**，不只是字：底板、光暈、招式全部要塞進同一條
+#       帶裡。招式擺在標題**旁邊**或同一條帶的角落，不可以另起一排疊在下面把總高撐高
+#       ——19:16 那張多出來的一截正是這樣來的。
+AI_TITLE_LAYER_SIZE_NOTE = """=== SIZE THE HEADLINE AS IF THE PHOTOGRAPH WERE ALREADY THERE ===
+The canvas you draw on is empty, but the finished picture is NOT. The reference image shows the people and the scene that will sit underneath your artwork. Lay the type out around them: never cover a face, and leave the main subject clearly readable.
+{height_rule}An empty canvas is NOT a reason to grow. The block is the same size it would be if you were painting straight onto that photograph — do not let the type, its plates, its glow or its supporting artwork expand to fill the frame just because the frame looks empty.
+That height covers the WHOLE artwork you return, not only the letters: plates, glow, accent strokes and every piece of supporting artwork must fit inside the same band. Supporting artwork goes BESIDE the headline or tucks into a corner of that band — never stacked underneath it as an extra row that makes the total taller.
 
-def with_title_layer_note(prompt: str) -> str:
+"""
+
+
+def title_layer_size_note(block_height: str = "") -> str:
+    """上面那段的成品，把塊高數字填進去。
+
+    `block_height` 空字串（創意 0，沒有 DESIGN BRIEF）時整句省略——沒有數字可引用時
+    硬寫一個出來，等於在 prompt 裡偽造一條沒人裁決過的規格。其餘兩件事（讓開人物、
+    空畫布不是長大的理由）跟等級無關，照樣要講。
+    """
+    height_rule = (
+        f"The headline block stays at about {block_height} of the frame height, exactly as the"
+        " DESIGN BRIEF below states. " if block_height else ""
+    )
+    return AI_TITLE_LAYER_SIZE_NOTE.format(height_rule=height_rule)
+
+
+def cover_title_block_height(level: int) -> str:
+    """十點的塊高字串（給 note 引用）。沒有那一級就回空字串。"""
+    spec = COVER_TITLE_BRIEF_SPECS.get(level)
+    return spec["height"] if spec else ""
+
+
+def yt_title_block_height(level: int) -> str:
+    """YT 四版型的塊高字串（給 note 引用）。沒有那一級就回空字串。"""
+    spec = YT_BRIEF_SPECS.get(level)
+    return spec["height"] if spec else ""
+
+
+def with_title_layer_note(prompt: str, *, block_height: str = "") -> str:
     """B55 修法甲專用：取代 with_base_image_note，注入位置相同（第一個 TEXT TO RENDER
     段之前），但措辭完全不同——那邊叫模型「重現整張照片」，這裡叫模型「除了字跟設計
     元素，其餘全部留透明」，兩句話同時出現在同一份 prompt 裡會直接互相矛盾，
-    呼叫端只能二選一（見 main._cover_ai／main._yt_cover_full_image 的呼叫處）。"""
+    呼叫端只能二選一（見 main._cover_ai／main._yt_cover_full_image 的呼叫處）。
+
+    `block_height`（2026-09-21）：該創意等級的標題塊高，接在後面那段尺寸守則裡。
+    呼叫端用 `cover_title_block_height()`／`yt_title_block_height()` 取，不要手打
+    ——手打就會跟 DESIGN BRIEF 各寫各的。
+    """
+    note = AI_TITLE_LAYER_ONLY_NOTE + title_layer_size_note(block_height)
     marker = "=== TEXT TO RENDER"
     if marker not in prompt:
-        return AI_TITLE_LAYER_ONLY_NOTE + prompt
-    return prompt.replace(marker, AI_TITLE_LAYER_ONLY_NOTE + marker, 1)
+        return note + prompt
+    return prompt.replace(marker, note + marker, 1)
 
 
 # ---- 設計綱要：插在 CANVAS 正後方（2026-09-11 第二輪）----
