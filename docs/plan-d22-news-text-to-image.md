@@ -7,11 +7,11 @@
 
 選 **(b) 分開做，但共用 B70／F43 抽出的 seam**。
 
-D22 的接線位置確實與 B70／F43 高度重疊：都是 `ImageGenerateRequest`，也都是 `app.js` 內兩個 `/api/images/generate` request body。以目前程式計，D22 的前端最小接線只是兩個 payload 各加一個欄位，或由一個共用 helper 回傳後在兩處展開；「因為主檔一萬多行，所以不值得碰」已不是成立的主要反對理由。現行 `app.js` 是 **4,006 行**，而且 PR 5 本來就要改同兩個 payload。
+D22 的一般 CG／播出鏡面接線位置確實與 B70／F43 高度重疊：都是 `ImageGenerateRequest`，也都是 `app.js` 內兩個 `/api/images/generate` request body。**但本段原先把範圍限定成這兩個 payload，已被第 7 節裁決 4 推翻**；核准範圍還包括十點與四種 YT 封面，須另外接既有封面畫面推導 seam。`yt_vstrip` 則沒有生圖模型可注入，實際邊界見第 8 節。現行 `app.js` 是 **4,006 行**，而且 PR 5 本來就要改同兩個一般 CG payload。
 
 但 D22 不應混進 B70／F43 的 PR 2 或 PR 5。標籤案改的是 provenance、標籤 schema、幾何、拖曳與 compose；D22 改的是「哪些新聞內容可進入生圖模型」這個模型信任介面。後者會改 prompt 語意、成本、內容忠實度與 B55 的文字正確性風險，驗收方式也不是標籤測試能涵蓋。把兩者塞在同一 PR，若成品退化，無法判斷是標籤／版面改造還是原文污染 prompt。
 
-建議順序是：先完成 B70／F43 PR 2，再完成 PR 5 並穩定兩個 generate payload；D22 另開 `D22-PR1`，排在 PR 5 後、無須等待移除 legacy 欄位的 PR 6。D22 共用的是已穩定的 `ImageGenerateRequest` request seam、兩個明確的 image payload call site，以及既有 transport／prompt baseline 測試，不共用標籤政策或 renderer。
+建議順序是：先完成 B70／F43 PR 2，再完成 PR 5 並穩定兩個 generate payload；D22 另開 `D22-PR1`，排在 PR 5 後、無須等待移除 legacy 欄位的 PR 6。一般 CG／播出鏡面共用已穩定的 `ImageGenerateRequest` seam 與兩個 image payload call site；封面另沿用既有畫面推導 seam。D22 不共用標籤政策或 renderer。
 
 依題意，因結論不是「一起做」，**不修改** `docs/plan-disclaimer-unification.md`。
 
@@ -31,17 +31,17 @@ D22 的接線位置確實與 B70／F43 高度重疊：都是 `ImageGenerateReque
 
 ### 1.2 最小改動量
 
-若採前端明送，D22 的最小接線為：
+依第 7 節裁決，D22 的核准接線為：
 
-1. `main.ImageGenerateRequest` 新增一個 optional `news_text` 欄位。
-2. `handleOneClickGenerate()` 的 image payload 送出該次區域變數 `input`。
-3. `handleImageGeneration()` 的 image payload從 `#aiInput` 讀取目前原文；更穩妥的作法是消化成功時把原文與該次 digest 一起保存成明確 state，再由同一個 helper 取值，避免使用者消化後改了輸入框卻未重新消化。
-4. 後端新增一個集中式 prompt adapter，把有上限的 context 放入 provider 最終 prompt；不可在 OpenAI／Gemini／OpenRouter 三個 transport 各拼一次。
-5. 稽核路徑優先記 `req.news_text`；memo 只保留為舊 caller 的 audit fallback，不能再覆蓋明送值。
+1. 一般 CG／播出鏡面的 digest response 產出 optional `visual_context`；前端把它和該次 digest 綁定，再由兩個 `/api/images/generate` payload 明送。
+2. 十點與四種 YT 封面的標題消化 response 同樣產出 `visual_context`；`tenCoverFields()`／`ytCoverFields()` 明送給各自端點。既有 `news_text` 保留供標題消化、稽核與舊 caller fallback，但同一次畫面推導只能選一份來源，細節見第 8 節。
+3. 後端對一般 CG／播出鏡面使用集中式 prompt adapter；封面則在既有 `resolve_cover_visuals()`／`derive_yt_cover_plan()` seam 消費，不可把同一份內容再附到最終生圖 prompt。
+4. `yt_vstrip` 仍走純 compose；不得為了字面滿足「全部版型」而新增一條背景生圖流程。
+5. 稽核路徑記明送的 context mode／長度；memo 只保留為舊 caller 的 audit fallback，不能成為模型輸入。
 
-所以前端直接改動是 **2 個 payload 欄位**，後端是 **1 個 schema 欄位＋1 個集中式 prompt adapter**。與 disclaimer 是同兩個前端函式，但不是同一個政策函式：`disclaimerPayload()` 管標籤，D22 應另有 `newsContextPayload()`，或在日後真正抽出的 `imageGeneratePayload()` 中成為獨立欄位，不應塞進 `disclaimerPayload()`。
+所以「只改 2 個 payload 欄位、1 個 schema 欄位」是裁決前的低估。與 disclaimer 共用的仍只是一般 CG 的兩個前端函式；封面還要改各自 request／response schema、digest state 與畫面推導 seam。D22 仍應使用獨立的 context helper，不應塞進 `disclaimerPayload()`。
 
-「大檔風險」仍有一小部分成立：兩個 payload 容易只改到一處，且 `handleImageGeneration()` 是消化後人工確認再生圖的另一條路，取哪一版原文有狀態一致性問題。不過 B70／F43 已用「出現次數恰為 2」的 contract test 管同一風險，故風險來源已從「碰大檔」縮小成「兩路 payload 與 digest state 必須一致」。不能再用檔案總行數作為否決 D22 的充分理由。
+「大檔風險」仍有一小部分成立：兩個 payload 容易只改到一處，且 `handleImageGeneration()` 是消化後人工確認再生圖的另一條路，取哪一版 `visual_context` 有狀態一致性問題。不過 B70／F43 已用「出現次數恰為 2」的 contract test 管同一風險，故風險來源已從「碰大檔」縮小成「兩路 payload 與 digest state 必須一致」。不能再用檔案總行數作為否決 D22 的充分理由。
 
 ## 2. `_remember_digest`／`_recall_digest` 不能升級成模型輸入
 
@@ -98,8 +98,8 @@ B55 的透明標題層守門驗的是 alpha、可繪區、面積上下限與保�
 
 所以 D22 第一版必須有硬隔離：
 
-- `ImageGenerateRequest.news_text` 預設空字串。
-- 一般 CG 網頁的兩個明確 payload 才送；內部 B55 `titlelayer` request、`ImageRefineRequest`、重貼 disclaimer endpoint 都不繼承。
+- `ImageGenerateRequest.visual_context` 預設空字串，且硬上限 4,000 characters；一般生圖 request 不新增 raw `news_text` 模型輸入。
+- 一般 CG／播出鏡面的兩個 payload，以及十點與四種 YT 封面的各自 payload 都可送；內部 B55 `titlelayer` request、`ImageRefineRequest`、重貼 disclaimer endpoint 一律不繼承。
 - `apply_user_references_to_image_request()` 遇到 `purpose="titlelayer"` 時，不得把 news context 注入該 prompt。
 - 若日後要讓封面 title-layer 看原文，先新增語意守門（至少能驗可讀文字只含指定 title；單靠現有像素／面積閘不夠），另案裁決。
 
@@ -149,33 +149,34 @@ D22 不應新增自動生圖重試：每個使用者動作仍只呼叫 image pro
 ### 5.1 程式 seam（若使用者裁決啟動後才做）
 
 1. `main.ImageGenerateRequest`
-   - 新增 `news_text: str = Field(default="", max_length=20_000)`。
-   - 新增 `visual_context: str = Field(default="", max_length=4_000)`，或只收 `news_text` 再由同次 digest response 的欄位傳送；兩者不可含糊地互相覆蓋。建議 canonical 欄位為 `visual_context`，`news_text` 只供 correlation／稽核。
-   - `ImageRefineRequest` 維持完全不收這兩個欄位。
+   - 新增 canonical `visual_context: str = Field(default="", max_length=4_000)`；依裁決不新增 raw `news_text` 模型輸入欄位。
+   - `TenCoverRequest`／`YtCoverRequest` 另加同名 optional 欄位；既有 `news_text` 仍維持 20,000-character transport，僅供標題消化、稽核與第 8 節定義的 legacy fallback。
+   - `ImageRefineRequest` 維持不收 `visual_context`。
 2. `app.js`
    - `digestNewsText()`／`_digestFetch()` 保留本次輸入與 digest response 的綁定 state，不能只在生圖當下重讀可能已改過的 textarea。
    - `handleOneClickGenerate()` 與 `handleImageGeneration()` 的兩個 payload 透過同一 `newsContextPayload()` 明送；測試釘出現次數為 2。
-   - 不碰 `tenCoverFields()`、`ytCoverFields()`、`vstripFields()`，除非另行裁決封面也納入 D22。
+   - `handleCoverTitleDigest()` 需把十點／YT 封面的 `visual_context` 與各自 textarea 的該次 digest 綁定，`tenCoverFields()`／`ytCoverFields()` 明送。`vstripFields()` 不送入 compose；理由見第 8 節。
 3. `news_prompt.py`
    - 新增純函式 `append_visual_context(prompt, context)`；context 放在清楚的「background only／never render wording」區塊，並由 `ensure_final_image_baseline()` 保證最終硬規則仍在最後且只出現一次。
    - 不修改 `VARIABLE FIELDS`，不把 context 混入 `style`／`structure`，讓既有文字唯一來源仍可測。
-4. `main.generate_image_raw()`
-   - provider dispatch 前集中呼叫 context adapter，再注入 `FINAL_IMAGE_BASELINE`；OpenRouter、native GPT、Gemini 共用，避免三套漂移。
+4. 後端注入 seam
+   - 一般 CG／播出鏡面在 `main.generate_image_raw()` provider dispatch 前集中呼叫 context adapter，再注入 `FINAL_IMAGE_BASELINE`；OpenRouter、native GPT、Gemini 共用，避免三套漂移。
+   - 十點／YT 封面只在 `resolve_cover_visuals()`／`derive_yt_cover_plan()` 選用 `visual_context` 作來源材料；不得又經通用 adapter 把同一內容附到最終生圖 prompt。
    - 對 `titlelayer`、refine、disclaimer render 明確不注入。
 5. `_enrich_archive_fields()`
-   - 明送的 `req.news_text` 優先；只有舊 caller 欄位為空時才用 `_recall_digest()` 補 audit。
-   - archive 加 `news_context_mode`（`none`／`visual`／`raw_experiment`）、原文 digest/hash、注入 characters／estimated tokens、是否截斷，才能比較品質與成本。
+   - 明送的 `req.visual_context` 只供模型與 context telemetry；原文 audit 仍只有舊 caller 欄位為空時才用 `_recall_digest()` 回補，memo 永不進模型。
+   - archive 加 `news_context_mode`（`none`／`visual`）、context digest/hash、注入 characters／estimated tokens、是否截斷，才能比較品質與成本。
 
 ### 5.2 測試
 
 新增 `tests/test_d22_news_context.py`，至少包含：
 
-- `ImageGenerateRequest` 的 20,000 字 transport 上限與 `visual_context` 4,000 字上限。
-- 兩個前端 image payload 都明送，且綁的是完成消化的那一版原文；payload builder 出現次數恰為 2。
+- 一般 `ImageGenerateRequest.visual_context` 的 4,000 字上限，以及封面既有 `news_text` 20,000 字 transport 不被縮短。
+- 兩個前端 image payload 都明送，且綁的是完成消化的那一版 `visual_context`；payload builder 出現次數恰為 2。
 - 模擬 textarea 在消化後被改動，未重新消化不得把新稿配給舊 prompt。
 - `append_visual_context()` 的空值 no-op、固定截斷、delimiter、不得改 `VARIABLE FIELDS`、`FINAL_IMAGE_BASELINE` 最後且恰一次。
 - OpenRouter、native GPT、Gemini 三條 transport 都只收到一次 context；caller request object 不被 mutate。
-- `_remember_digest` 中故意放另一稿時，明送 `req.news_text` 仍勝出；未明送的舊 caller 才可用 memo 做 archive fallback，且 memo 永不進模型。
+- `_remember_digest` 中故意放另一稿時，明送 `req.visual_context` 仍是唯一模型 context；memo 只可做 archive fallback，永不進模型。
 - 同 user 兩分頁／反向完成順序的 characterization test，證明 memo 不可作模型 correlation。
 - `purpose="titlelayer"`、`ImageRefineRequest`、`POST /api/images/disclaimer/render` 零 context。
 - attempt 上限為 1；不因 context 自動多呼叫一次 image provider。
@@ -209,8 +210,8 @@ python -m unittest tests.test_d22_news_context tests.test_b70_f43_disclaimer tes
 3. **截斷策略。**  
    建議 raw experiment 使用 deterministic 前 3,000＋後 1,000；正式版用 bounded `visual_context`，不截原文來冒充完整語意。需要裁決是否接受 head＋tail 可能切斷句子的風險。
 
-4. **涵蓋路徑。**  
-   建議第一期只涵蓋一般 CG 的兩個 `/api/images/generate` payload；封面、YT、title-layer、refine、disclaimer render 全排除。封面本已有 `news_text` 用於畫面描述推導，不等於應直接餵給最終生圖模型。
+4. **涵蓋路徑（已裁決）。**
+   本項原建議「第一期只做一般 CG」已被第 7 節裁決 4 推翻。實作範圍改為一般 CG、播出鏡面、十點與四種 YT 封面；`titlelayer`、refine、disclaimer render 仍排除。封面沿用畫面推導 seam，不把 context 直接重複餵給最終生圖模型；`yt_vstrip` 的無生圖事實與建議邊界見第 8 節。
 
 5. **A/B 驗收門檻。**  
    需先定義樣本數與判準：視覺事實錯誤率、額外文字／數字／Logo 違規率、標題逐字錯誤率、成本與延遲。建議只有 treatment 的視覺準確度明顯提升，且上述違規率不高於 control，才開正式 flag。
@@ -251,7 +252,7 @@ D22 的「接線成本」已因 B70／F43 同批 seam 改造而顯著下降，�
 
 **（裁決 4）涵蓋範圍由一般CG 擴大到全部版型（標題層除外）。**
 第 6 節第 4 項與 5.1 的 seam 需相應擴大：
-- 集中式 prompt adapter 必須涵蓋封面與直標的生圖呼叫路徑，不只 `/api/images/generate` 的兩個 payload。
+- D22 seam 必須涵蓋封面既有畫面推導路徑，不只 `/api/images/generate` 的兩個 payload；直標沒有生圖呼叫可接，依第 8.7 節待裁。
 - 封面路徑目前本來就有 `news_text` 用於推導畫面描述，需釐清那條路與新的 `visual_context` 的關係，**不可重複注入兩份語意相近的內容**。這是 `D22-PR1` 開工前要先查清的第一件事。
 - 每一條新涵蓋的路徑都要確認 `visual_context` 為 optional、預設空字串，缺值時行為與現況完全相同。
 
@@ -269,3 +270,79 @@ control = 不送，treatment = 送。attempt 上限固定為 1，不加 fallback
 1. 封面路徑既有的 `news_text` 用途，與新 `visual_context` 是否重疊。
 2. 消化 schema 要新增 `visual_context` 欄位，其 prompt 約束文字（明禁任何要畫出的標題、caption、數字、機構標籤、來源名）需與 `news_prompt.py:797-802` 的既有禁令對齊，不可互相矛盾。
 3. 全部版型涵蓋後的實際 token 增量，需重新量測（本文件第 4 節只量了一般CG 路徑）。
+
+## 8. 開工前盤點（2026-09-21）
+
+### 8.1 結論：封面既有 `news_text` 與新 `visual_context` 是同一語意層，不可並排注入
+
+封面現況不是把 `news_text` 直接塞給 image provider，而是先讓文字模型把「標題＋新聞原文＋編輯指令」翻成可拍攝的 `visual_left`／`visual_right` 或 `visual`，再把該畫面描述交給生圖模型。這與 D22 定義的 `visual_context`——同次消化產出的場景、物件、關係與消歧資訊——在語意上是同一種 visual grounding，只是產生時間不同。既有推導規則也明定輸出必須是「鏡頭看得到什麼」、不得含 caption／標題／數字／圖表（`editor_formats.py:1020-1037`、`editor_formats.py:2313-2329`），和本文件第 3.4 節對 `visual_context` 的定義幾乎重合。
+
+因此明確做法如下：
+
+1. 封面 request 同時可攜帶 `news_text` 與 `visual_context`，但**同一次畫面推導只准選一份來源**：`visual_context.strip()` 非空時只用它；否則才以既有 `news_text` 作 legacy fallback。這是 `effective_visual_source = visual_context or news_text`，不是把兩段串起來。
+2. `resolve_cover_visuals()`／`derive_yt_cover_plan()` 保留，因為它們除了場景還負責左右格分派、標題斷行與 `portrait_subjects`／英文名抽取；只是來源材料改吃上述 `effective_visual_source`。既有 `news_text` 仍供封面標題消化、稽核與舊 caller 相容。
+3. 推導完成後，最終生圖 prompt **只放推導出的** `visual_left`／`visual_right`／`visual`；不得再由通用 `append_visual_context()` 附一次原始 `visual_context`。否則相同人物、地點、動作被兩種措辭重複一次，模型會把它視為加權訊號，增加重複人物／物件、硬切多景或過度強調某個事件的風險。
+4. A/B 的封面 control 維持現況（沒有 `visual_context` 時仍以 `news_text` 推導），treatment 以 `visual_context` **取代**該次推導的 raw source。不能把 control 改成完全無 grounding，否則量到的是「拿掉 B53」而非 D22 增益。
+5. 有現成底圖、全格 `asis` 或只重壓文字而根本不需要推導／生背景的分支，`visual_context` 維持 optional no-op；不得為了宣稱「有開」而多打一個模型。
+
+### 8.2 封面 `news_text` 的實際來源、傳遞與消費
+
+**共同來源與第一次消費（標題消化）：**
+
+- 前端 `handleCoverTitleDigest()` 直接讀 textarea：十點讀 `#coverNewsText`、YT 讀 `#ytCoverNewsText`（`app.js:2615-2623`），並把原文以 `{ news_text, target }` POST 到 `/api/editor/cover-titles`（`app.js:2628-2632`）。直標另走同端點，見 8.5。
+- 後端 transport 是 `CoverTitleDigestRequest.news_text`，上限 20,000 characters（`main.py:6703-6710`）；`_editor_cover_titles_impl()` 在 `digest_completion(..., news_text=req.news_text.strip())` 消費它以產生封面標題（`main.py:6873-6915`）。現行 `CoverTitleDigestResponse` 只有標題、來源與籤，沒有 `visual_context`（`main.py:6771-6786`）。
+- 標題消化只回填標題欄，原 textarea 留在畫面上；目前沒有把「這份原文／未來的 `visual_context`」與該次回應綁成 state。生封面時會再次讀 textarea，因此使用者在消化後改原文、未重新消化，標題與畫面來源就可能來自不同版本。D22 必須在消化成功時保存配對，不能到生成當下才重讀。
+
+**十點封面（滿版與 split）：**
+
+- 生成 request 的原文由 `tenCoverFields()` 的 `#coverNewsText` 取得（`app.js:2421-2432`）；真正重生的 object literal 也再次讀同一欄（`app.js:2553-2563`）。後端欄位是 `TenCoverRequest.news_text`（`main.py:5635-5639`）。
+- `resolve_cover_visuals()` 先組左右標題／既有描述，再把非空 `news_text` 附成 `News article source material`（`main.py:6055-6081`），交給 `COVER_VISUAL_DERIVE_SYSTEM`／`COVER_VISUAL_SCHEMA`（`main.py:6091-6103`；schema 欄位見 `editor_formats.py:1073-1088`）。它產出每格 `visual_*` 與具名真人，使用者已填的 `visual_*` 優先（`main.py:6111-6139`）。
+- 滿版在無 `asis`／既有底圖時呼叫這支推導（`main.py:6984-7012`）；split 在至少有一格需生底圖時呼叫（`main.py:7213-7230`）。結果最後進入無字底圖 prompt（`main.py:6171-6190`、`main.py:6553-6557`、`main.py:6593-6600`），或 AI 整張封面的 `{visual_left}`／`{visual_right}`（`main.py:6341-6364`）。所以 raw `news_text` 的實際消費點是**第二次文字模型**，不是 image provider。
+
+**四種 YT 封面（`yt_live_cover`／`yt_hourly_cover`／`yt_live24_cover`／`yt_hot_cover`）：**
+
+- 四種 UI 共用 `ytCoverFields()`；layout 由當前版型決定，原文直接讀 `#ytCoverNewsText`（`app.js:2705-2733`）。後端共用 `YtCoverRequest.news_text`（`main.py:7367-7374`）與 `/api/editor/yt-cover`（`main.py:7993-7998`）；request 的 `layout` 值是 `news`／`hourly`／`hot`／`live24`（`main.py:7338-7344`）。
+- 單則由 `resolve_yt_cover_plan()` 呼叫 `derive_yt_cover_plan(..., req.news_text)`（`main.py:7530-7556`）；雙則拆成左右 panel 後，每格仍各自把同一份 `panel_req.news_text` 交給推導（`main.py:7917-7939`）。
+- `derive_yt_cover_plan()` 把原文附成 `News article source material`，明定只供認人與場景準確度、不得照抄（`main.py:7456-7506`），回傳 `visual` 與肖像欄位（`main.py:7568-7580`）。`visual` 最後進入 composite 無字底圖 prompt（`main.py:7654-7695`）或 AI 整張封面 prompt 的 `{visual}`（`main.py:7738-7745`）。
+- 雙則現況會讓兩個 panel 各看到同一篇完整原文；換成單一 `visual_context` 後沿用同樣規則，以各自 title 作主題 selector。第一版不另發明 `visual_context_left/right`，避免偏離裁決的單一 canonical 欄位；若實拍出現跨格污染，再用證據另案拆欄位。
+
+### 8.3 重複注入會發生什麼
+
+若保留目前 `news_text → derived visual`，又把新 `visual_context` 直接附到最終 image prompt，image provider 會同時看到「二十至四十字的具體鏡頭」與「同一事件較長的場景／物件／關係描述」。這不是互補的標題與背景分工，而是同一視覺事實的兩次表述。可能結果包括：
+
+- 同一人物或物件被畫兩次，或被拆成兩個場景；
+- 多事件材料中，被重複提及的次要背景搶過標題主題；
+- `visual_context` 的較長描述稀釋封面既有的單一鏡頭、單句與 text-free 約束；
+- 兩份內容細節不一致時，模型自行折衷，反而降低可稽核性。
+
+故封面的 D22 seam 應是「替換推導來源」，不是「再疊一個 final-prompt block」。一般 CG／播出鏡面才使用通用 `append_visual_context()`，封面 request 不應把 `visual_context` 繼續複製到內部 `ImageGenerateRequest`。
+
+### 8.4 既有測試代表的契約與應新增的釘法
+
+現有 B53 測試已釘住 raw `news_text` 會進封面推導 material：
+
+- `tests/test_cover_photo_availability.py:231` `CoverNewsTextMaterialTests.test_news_text_is_appended_as_source_material`
+- `tests/test_cover_photo_availability.py:243` `CoverNewsTextMaterialTests.test_empty_news_text_leaves_material_byte_identical`
+- `tests/test_cover_photo_availability.py:259` `YtCoverNewsTextMaterialTests.test_news_text_is_appended_as_source_material`
+- `tests/test_cover_photo_availability.py:269` `YtCoverNewsTextMaterialTests.test_empty_news_text_leaves_material_byte_identical`
+- `tests/test_b68_cover_material_newline_20260920.py:47` `TenCoverMaterialNewlineTests.test_news_text_segment_uses_real_linebreaks`
+- `tests/test_b68_cover_material_newline_20260920.py:69` `TenCoverMaterialNewlineTests.test_both_extra_segments_together_still_use_real_linebreaks`
+- `tests/test_b68_cover_material_newline_20260920.py:87` `YtCoverMaterialNewlineRegressionTests.test_material_never_contains_literal_backslash_n`
+- `tests/test_stage5b_ui.py:34` `Stage5bUiTests.test_cover_fields_send_news_text_verbatim`
+
+採本節方案後，這些 legacy fallback 測試可保留；另加「`visual_context` 非空時 material 含它且不含 raw `news_text`」、「空值才退回 raw」、「最終 image prompt 不再出現原始 `visual_context` 第二次」及「titlelayer request 零 context」。若實作選擇直接刪除 legacy fallback，上述前七個 material 契約會刻意變紅；本盤點不建議那樣做。
+
+### 8.5 直標與播出鏡面的類似內容注入現況
+
+**直標 `yt_vstrip`：有原文消化，沒有生圖內容注入。** `handleVstripTitleDigest()` 讀 `#vstripNewsText` 並以 `target: 'yt_vstrip'` 送到封面標題消化端點（`app.js:2668-2682`）；後端用該原文產出兩段標題與來源名（`main.py:6873-6915`、`main.py:6944-6951`）。但真正生成時 `vstripFields()` 只送標題、來源與版面開關（`app.js:2884-2896`），`/api/editor/yt-overlay` 明確「不生圖、不打任何模型、沒有底圖」（`main.py:8407-8413`），只呼叫 `compose.compose_yt_overlay()` 畫透明 PNG（`main.py:8473-8507`）。所以它沒有可與 `visual_context` 類比的 image-prompt 注入點；原文只用來定稿可讀文字與來源。
+
+**播出鏡面：有消化後內容注入，沒有 raw article／獨立 visual context 注入。** 它和一般 CG 共用主流程：`_digestFetch()` 把 `news_text`、`editor_format`、`hole_side` 與 `user_instruction` 送到 `/api/generate`（`app.js:2309-2331`），後端在 `generate()` 以 `news_text` 做消化，產出 `style`／`structure`／`variable`（`main.py:2994-3019`、`main.py:3055-3062`、`main.py:3202-3218`）；前端再把三欄放進 `buildPrompt()`（`app.js:3118-3132`）並只送組好的 `prompt` 到 `/api/images/generate`（`app.js:3138-3165`，人工確認路徑為 `app.js:3248-3287`）。因此它已有「消化結果進生圖」但沒有「原文或另一份場景摘要進生圖」；D22 應沿一般 CG seam 增加一次 bounded `visual_context`，不要重送 raw `news_text`。
+
+### 8.6 與前文衝突及修正
+
+- 原第 1.2 節把工作量寫成「2 個 payload 欄位＋1 個 schema 欄位」、原 5.1 寫「不碰 `tenCoverFields()`／`ytCoverFields()`／`vstripFields()`」，原第 6 節第 4 項建議只做一般 CG。三處都與第 7 節裁決 4 衝突，已在本次盤點直接修正為全部有生圖語意的路徑，並把封面 seam 明定在既有畫面推導層。
+- 原第 3.3 節寫「一般 CG 網頁的兩個 payload 才送」，也已修正為一般 CG／播出鏡面與封面 payload 可帶；B55 `titlelayer`、refine、disclaimer render 仍硬隔離。
+
+### 8.7 新待裁項
+
+1. **`yt_vstrip` 的「全部版型都開」如何解讀。** 現行直標是透明 overlay，沒有 image provider、背景或 visual prompt，`visual_context` 沒有可消費之處。建議把裁決解讀為「所有會生背景圖的版型都開；`yt_vstrip` 保持純 compose，原文仍只用於既有標題／來源消化」，並在驗收矩陣標成 `N/A（無生圖模型）`。若要求 `visual_context` 必須對直標產生可見效果，就只能新增背景生圖或改變可讀文字，兩者都是新的產品功能與明顯擴案，不應混入 `D22-PR1`。

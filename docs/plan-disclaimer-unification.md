@@ -33,7 +33,7 @@
 
 ### 1.3 幾何與碰撞能力
 
-- 一般 CG 的 `_disclaimer_box()` 只做安全區、`HOLE_INSET` 與四角定位，改為安全區內 normalized coordinate 是同一段幾何的一般化。
+- 一般 CG 的 `_disclaimer_box()` 只做安全區、`HOLE_INSET` 與四角定位；`HOLE_INSET` 只是離安全區外框的 margin，**沒有**扣除 `broadcast_hole_rect()` 的洞框 bbox。改為 normalized coordinate 時必須另把洞框列為 hard exclusion，不能把現行幾何直接一般化後就宣稱已避洞（見 9.2）。
 - 直標的 `yt_vertical_layout()` 已能算出 `box`、`live`、`label`、`logo`、`source` 等實際矩形，且現行「與 Logo 同角就讓開」有測試覆蓋。
 - YT 封面的 `_render_fixed_elements_bbox()` 會在透明畫布真正繪製固定元素，再由 alpha bbox 量出像素外框；`_yt_news_or_hot_fixed_boxes()`、`_yt_hourly_fixed_boxes()`、`_yt_live24_fixed_boxes()` 已使用它。
 - `yt_cover_protect_boxes()` **不能原封不動當標籤碰撞表**：它是 B55 照片保護用途，測試還刻意要求「不要進標題區」，因此不含標題／標題帶；部分頂端元素也被合併成一個聯集 bbox。可直接重用的是 `_render_fixed_elements_bbox()` 這個量測 primitive 與各版型 render helper；標籤碰撞需另建包含固定元素、標題與標題帶的 obstacle boxes。
@@ -88,7 +88,7 @@ class DisclaimerInput(BaseModel):
 - `TenCoverRequest`：滿版只能 `left_panel`（語意為唯一 panel）；split 可各一筆 `left_panel`／`right_panel`，不得重複。
 - `ImageRefineRequest`：**不新增**此欄位。
 
-`position=None` 不是 `(0.5, 0.5)`，而是「沿用該版型 2026-09-21 的既有位置」，確保舊請求逐像素相容。新位置一律用 target-relative 的 normalized `(x, y)`：`canvas` 是整張成品，`left_panel`／`right_panel` 是各自 panel 的最終像素矩形；`(x, y)` 表示**標籤中心點**，不是左上角，也不是瀏覽器預覽圖像素。中心點最符合拖曳手勢，且來源文字長短改變時不會把使用者選的位置改解讀成另一個角落。後端先依成品實際尺寸、profile 與文字量出真實 bbox，再驗證整個 bbox 是否位於 `safe_area_spec.safe_rect` 加 `HOLE_INSET` 的可用矩形內。
+`position=None` 不是 `(0.5, 0.5)`，而是「沿用該版型 2026-09-21 的既有位置」，確保舊請求逐像素相容；唯一例外是以前根本不貼新標籤的 `broadcast_hole`，它沒有可維持的標籤像素基準，預設位置須另選不遮洞框與洞框浮水印的位置（見 9.4）。新位置一律用 target-relative 的 normalized `(x, y)`：`canvas` 是整張成品，`left_panel`／`right_panel` 是各自 panel 的最終像素矩形；`(x, y)` 表示**標籤中心點**，不是左上角，也不是瀏覽器預覽圖像素。中心點最符合拖曳手勢，且來源文字長短改變時不會把使用者選的位置改解讀成另一個角落。後端先依成品實際尺寸、profile 與文字量出真實 bbox，再驗證整個 bbox 位於 `safe_area_spec.safe_rect` 內；若有 `broadcast_hole`，還要驗證不與 `broadcast_hole_rect()` 相交。因 safe rect 扣掉洞框後不是單一矩形，API 不能只回一個 `placement_bounds` 矩形，還須回 hard-exclusion bbox。
 
 前端把 Pointer Event 在預覽圖 content box 內的位置換成 target-relative 0–1；後端回傳同一座標系的 `placement_bounds`，前端只依這個權威範圍夾住拖曳，不複製 safe-area／字級／內距算式。若惡意或過期 client 仍送到範圍外，後端回 400 `outside_safe_area`，**不**靜默夾回，避免輸出位置和使用者送出的值不一致。四角快捷鍵由後端回傳的 bounds 算中心點；legacy corner adapter 也在量出 bbox 後做同一轉換，不再假設四角固定等於 `(0,0)`／`(1,1)`。
 
@@ -143,7 +143,7 @@ paste_resolved_disclaimer(
 |---|---|---|---|
 | 一般 CG | 安全區內全自由 | 只檢查安全區與畫布，不做內容語意碰撞 | 沒有程式固定家具；使用者對底圖內容負責 |
 | broadcast 無挖空 | 同一般 CG | 依實際 broadcast safe profile | 現況已可四角，generalize 風險低 |
-| broadcast 有 `broadcast_hole` | 維持現行：不用這組標籤 | UI 整列 disabled，顯示「挖空框會自行貼浮水印；此位置設定不生效」；後端仍忽略並記 notice | 避免看似可調、實際被跳過；是否改成可取代浮水印列為待裁 |
+| broadcast 有 `broadcast_hole` | 安全區內自由，但不得落進洞框；洞框浮水印與新標籤都保留 | UI 不 disabled；後端在洞框與浮水印畫完後仍貼新標籤。洞框 bbox 是 hard exclusion；浮水印 bbox 是一般 obstacle，依裁決 2 只警示 | **裁決 1 已反轉舊方案**；兩個都貼，且不得再以 `broadcast_hole` 跳過 |
 | YT 直標 | 安全區內自由，但不得碰直標、LIVE／小標、Logo | 量出 candidate bbox 後硬擋碰撞 | 現行自動讓 Logo 是四角特例；任意點若繼續自動移位會讓實際輸出和選擇不一致 |
 | 十點／YT 封面 | 安全區內自由，但不得碰任何固定元素與程式標題區 | 量出 candidate bbox 後硬擋碰撞 | 家具多，無限制拖曳會直接壓 Logo／標題；白名單矩形會隨版型演進過時 |
 
@@ -208,7 +208,7 @@ token 綁定底圖 digest、實際 provenance／resolved kind、profile、target
 - 使用 Pointer Events＋`setPointerCapture()` 同時支援滑鼠、觸控筆與手機觸控；handle 至少 44×44 CSS px，拖曳區設 `touch-action: none`，但只攔截 handle，不阻止整頁捲動。鍵盤以方向鍵移 1%、Shift＋方向鍵移 5%，並用 `aria-valuetext` 唸出百分比與衝突原因。
 - 不支援 Pointer Events、預覽尚未產生、layer 載入失敗或使用者採鍵盤操作時，fallback 是四角快捷鍵＋X/Y 0–100 數字欄位；它們寫入同一份 normalized state，不形成第二套位置模型。
 - 十點 split 顯示「左格／右格」切換，每格各自保存來源與位置；滿版顯示「全版」。一般 CG 的兩份控制 DOM 仍共用同一 state 與更新函式；兩個 generate payload 仍各呼叫同一個 `disclaimerPayload()`。封面／直標改用相同 builder 產生 `disclaimers`，而非再手拼 `source_*`。
-- `broadcast_hole` 開啟時禁用來源輸入、拖曳 handle、快捷鍵與數字欄位，保留值但加 inline 說明；關閉後恢復，不清空使用者輸入。
+- `broadcast_hole` 開啟時來源輸入、拖曳 handle、快捷鍵與數字欄位全部維持可用；前端顯示洞框 hard exclusion 與洞框浮水印 obstacle，不能因開關而灰掉或隱藏控制項。**此處依裁決 1 修正原先的 disabled 方案。**
 
 #### 3.3.4 封面六版型
 
@@ -262,7 +262,7 @@ YT 封面的固定元素由各真實 render helper 經 `_render_fixed_elements_b
 2. 把兩份一般控制列升級成預覽圖拖曳，仍由 `querySelectorAll` 同步；四角與 X/Y 數字只作快捷／fallback。保留 `disclaimerPayload()` 且在兩個 generate fetch 各出現一次。
 3. `tenCoverFields()` 送 left／right `disclaimers`，`ytCoverFields()` 與 `vstripFields()` 送 canvas `disclaimers`。封面來源第一次真正能由 UI 填入，修復缺陷 1。
 4. 十點 split 提供左右 target 編輯；其餘版型只一組。切換版型時 state 依 format＋target 保存，避免把「路透社」從十點左格意外帶到直播直標。
-5. `broadcast_hole` 開啟時 disabled＋說明，payload 可保留使用者值但後端不使用；回應 notice 明示跳過。
+5. `broadcast_hole` 開啟時控制項照常可用、payload 照常送、後端照常繪製；response 回傳洞框 hard exclusion、浮水印 obstacle，以及實際碰撞 warnings。**此處依裁決 1 修正原先的 skip／disabled 方案。**
 6. refine payload 與 `ImageRefineRequest` 完全不碰；recompose 由 `tenCoverFields()`／`ytCoverFields()` 重送目前標籤設定。
 7. 新增 `POST /api/images/disclaimer/render`：驗證 signed context 與底圖 digest，只做一次 PIL 重貼；不得呼叫任何模型 provider。前端 pointermove 只移動後端 layer，pointerup 才呼叫端點。
 8. 用 Pointer Events 完成滑鼠／觸控／筆、pointer capture、44 px handle、鍵盤步進、ARIA 與四角／數字 fallback；封面是否啟用依本計畫待裁項與 PR 4 obstacle 完成度決定。
@@ -300,7 +300,7 @@ python -c "import unittest; names=['tests.test_b70_f43_disclaimer','tests.test_f
 6. `tests/test_followups_20260909.py::VstripSourceTests.test_api_and_ui_carry_the_new_field`：由 `source_corner` 短碼改驗 `disclaimers[].position`；另保留 backend-only legacy short-code test。
 7. `tests/test_yt_vstrip_ui.py::MarkupTests.test_three_text_fields` 與 `test_five_button_groups`：若移除直標獨立來源控制，改驗共用標籤控制與直標其餘四組；不是把來源功能刪掉。
 8. `tests/test_f43_source_label.py::ComposeTenCoverSourceLabelTests` 與 `tests/test_f43_yt_cover_source_label.py::ComposeMutualExclusionTests`：測試面由 compose 內部 `if/elif` 改到 `resolve_disclaimer()` 的公開 seam；endpoint 可觀察結果仍維持。
-9. `tests/test_b70_f43_disclaimer.py::GenerateImageWiringTests.test_broadcast_hole_set_skips_the_new_stamp_to_avoid_double_stamping`：後端 skip 行為保留；PR 5 再加 UI disabled／notice，不反轉此測試，除非使用者另裁決由新標籤取代洞框浮水印。
+9. `tests/test_b70_f43_disclaimer.py::GenerateImageWiringTests.test_broadcast_hole_set_skips_the_new_stamp_to_avoid_double_stamping`：依裁決 1 **反轉**為洞框浮水印與新標籤兩者都畫，並驗證呼叫順序是 `apply_broadcast_hole()` 後才 `paste_disclaimer_note()`。這是刻意行為變更，不是 regression；洞框浮水印沒有被取代。
 
 其餘既有測試應視為 regression，不應為了讓重構通過而放寬。尤其下列契約必須原樣保留：`disclaimerPayload()` 在兩個 generate payload 恰兩次、refine 不送且 `ImageRefineRequest` 不收、maxlength 40、舊請求未帶 position 時像素位置不變、B55 `yt_cover_protect_boxes()` 不侵入標題區。另新增硬契約：pre-disclaimer base 必須是置框／挖洞後且貼標籤前的 exact pixels，render 端點不得呼叫模型，後端永遠重驗位置。
 
@@ -382,7 +382,7 @@ python -c "import unittest; names=['tests.test_b70_f43_disclaimer','tests.test_f
 - 前端**不**灰掉控制項；來源輸入、拖曳 handle、四角快捷、數字欄位全部正常可用。
 - 後端**不**再跳過標籤繪製；`apply_image_disclaimer()` 在挖空框浮水印之後照常貼標籤。
 - 同一張成品會同時出現洞框浮水印與本系統標籤，這是刻意的。
-- 可用區需扣掉挖空框本身（沿用既有 `HOLE_INSET`），標籤不得落進洞內。
+- 可用區需扣掉挖空框本身；9.2 的實查確認 `HOLE_INSET` 單獨不足，必須使用 `broadcast_hole_rect()` 的 bbox 建 hard exclusion，標籤不得落進洞內。
 - 既有「挖空時跳過標籤」的行為若有測試釘住，屬**刻意行為變更**，須逐一點名改寫。
 
 **（裁決 2）碰撞由硬擋改為警示。**
@@ -407,3 +407,87 @@ PR 4 的 obstacle exporter 必須一次涵蓋十點滿版／十點 split ／四�
 - 盤點六個封面版型與直標各自實際寫的字，確認哪幾個需要改成「AI示意圖」。
 - 盤點「挖空時跳過標籤」的所有程式路徑與測試。
 - 重新估 PR 4 工作量（六版型 obstacle 一次到位）。
+
+## 9. 開工前盤點（2026-09-21）
+
+本節是對 8.2 前兩項的實碼查核；第 8 節裁決仍是最高優先。查核時先用 codebase knowledge graph 找定義與 caller；`get_code_snippet`／`trace_path` 因本環境 approval policy 無法讀取，才回退到具行號的本機原始碼與字串搜尋。沒有讀取 `MASTER-列管清單.md` 全文。
+
+### 9.1 各版型目前實際畫出的文案
+
+共同來源前綴只有一份：`compose.py:2877` 的 `VSTRIP_SOURCE_PREFIX = "畫面來源："`，`compose.py:2980-2989` 的 `vstrip_source_text()` 會 trim，空字串仍空；已經以「畫面來源」開頭就原樣回傳，否則補上全形冒號版本「畫面來源：」。它目前涵蓋一般 CG／播出鏡面、直標、十點滿版／split、四種 YT 封面的**來源標籤**；它不負責任何 AI 文案，也不處理洞框自己的浮水印。
+
+| 路徑 | AI 標籤現在實際畫出的字 | 「畫面來源」現在實際畫出的字 | 定義與消費點 | 裁決 10 是否要改字 |
+|---|---|---|---|---|
+| 一般 CG／播出鏡面（`compose.paste_disclaimer_note()`） | `示意圖` | 裸來源名 `美聯社` 會成為 `畫面來源：美聯社`；已帶「畫面來源」者原樣 | `PORTRAIT_DISCLAIMER_TEXT = "示意圖"` 在 `compose.py:417`；`paste_disclaimer_note()` 於 `compose.py:446-496`，其中 `compose.py:467` 在 AI 常數與 `vstrip_source_text()` 間選一個 | **要**：`PORTRAIT_DISCLAIMER_TEXT` 改為 `AI示意圖` |
+| 直標 `yt_vstrip` | **沒有 AI 標籤能力，也沒有 AI 文案常數**；現行 request 只有來源句 | `畫面來源：`＋來源名 | 前綴常數／helper 在 `compose.py:2877, 2980-2989`；layout 於 `compose.py:3112-3120` 先正規化並量寬，實際繪字在 `compose.py:3333-3340` 再正規化後畫出 | 現有字不用改；若統一介面要讓直標也能顯示 AI 標籤，這是**新增 provenance／AI 分支**，不能誤寫成單純換字 |
+| 十點封面滿版 | `AI示意圖` | `畫面來源：`＋左格來源名（滿版唯一 panel 沿用 left） | `COVER_AI_NOTE = "AI示意圖"` 在 `compose.py:559`；純 AI 滿版 `paste_cover_ai_note(split=False)` 在 `compose.py:862-882`；合成滿版走 `compose_ten_cover()` 的 `compose.py:1418-1493`；draw helper 預設值在 `compose.py:1019-1043` | 不用改 |
+| 十點封面 split | 左、右 AI 格各畫 `AI示意圖` | 非 AI 格各自畫 `畫面來源：`＋各格來源名 | 同一 `COVER_AI_NOTE`（`compose.py:559`）；純 AI split 在 `compose.py:862-882` 畫兩枚；合成 split 的左右互斥分支在 `compose.py:1479-1493` | 不用改 |
+| `yt_live_cover`（實作名 `compose_yt_cover`） | `AI示意圖` | `畫面來源：`＋來源名 | `YT_AI_NOTE = "AI示意圖"` 在 `compose.py:1607`；`_draw_ai_note()` 預設文案在 `compose.py:1667-1693`；互斥分支在 `compose.py:1952-1960` | 不用改 |
+| `yt_hourly_cover` | `AI示意圖` | `畫面來源：`＋來源名 | 同一 `YT_AI_NOTE`（`compose.py:1607`）與 `_draw_ai_note()`；互斥分支在 `compose.py:2190-2199` | 不用改 |
+| `yt_live24_cover` | `AI示意圖` | `畫面來源：`＋來源名 | 同一 `YT_AI_NOTE`（`compose.py:1607`）；靠左的 `_draw_live24_ai_note()` 預設文案在 `compose.py:2584-2605`；互斥分支在 `compose.py:2565-2573` | 不用改 |
+| `yt_hot_cover` | `AI示意圖` | `畫面來源：`＋來源名 | 同一 `YT_AI_NOTE`（`compose.py:1607`）與 `_draw_ai_note()`；互斥分支在 `compose.py:2749-2755` | 不用改 |
+
+另有一條不在上表七條 UI 路徑之內、但仍是全站可見 AI 文案：洞框浮水印 `compose.WATERMARK_TEXT` 現為 `示意圖`（`compose.py:305`），由 `apply_broadcast_hole()` 在 `compose.py:382-392` 畫出。裁決 10 的「全站」也涵蓋它，因此同樣要改成 `AI示意圖`；不能只改 `PORTRAIT_DISCLAIMER_TEXT` 後留下第二種字樣。
+
+#### 文案變更會紅的既有測試
+
+以 runtime 暫時把 `WATERMARK_TEXT`／`PORTRAIT_DISCLAIMER_TEXT` 換成 `AI示意圖`，再用 `unittest.defaultTestLoader.loadTestsFromNames()` 實跑確認（沒有改檔）：
+
+1. `tests/test_followups_20260909.py:191-203::BroadcastBottomStripTests.test_stamp_on_leaves_the_watermark_corner_clear` 會紅，因 `tests/test_followups_20260909.py:198` 明確斷言 `WATERMARK_TEXT == "示意圖"`。只改期望文案；它後半段釘住 lower-right 保留區的斷言仍要保留。這是**刻意文案變更**。
+2. `tests/test_editor_formats.py:229-239::ComposeOutputTests.test_base_canvas_compose_is_byte_identical_to_the_golden` 會紅，因它在 `tests/test_editor_formats.py:236-239` 比對整張 PNG SHA-256；浮水印多出 `AI` 必然改 hash。重錄時要附 before／after watermark bbox。這是**刻意像素變更**。
+3. `tests/test_b70_f43_disclaimer.py:108-112::ComposePasteDisclaimerNoteTests.test_ai_kind_draws_the_fixed_text` **不會紅**：方法名雖稱 fixed text，實際只驗尺寸與 mode，沒有驗字串或像素。這是覆蓋缺口，實作 PR 應補一個攔截 `_draw_text` 並明確驗 `AI示意圖` 的 assertion。
+4. 十點與四種 YT 封面的常數原本就是 `AI示意圖`，所以 `tests/test_cover_ai_note.py`、`tests/test_f43_source_label.py::ComposeTenCoverSourceLabelTests`、`tests/test_f43_yt_cover_source_label.py::ComposeMutualExclusionTests` 不應因裁決 10 變紅；若變紅就是**誤傷／regression**。直標目前沒有 AI 字可換，來源前綴也不變。
+
+### 9.2 `broadcast_hole` 開啟時跳過標籤：完整路徑
+
+#### 後端實作點
+
+實際 skip 只有一個：`main.generate_image()`（定義 `main.py:3541`）在模型生圖、safe frame 與洞框都完成後，於 `main.py:3580-3586` 用：
+
+```python
+if req.disclaimer_kind and not req.broadcast_hole:
+    result = apply_image_disclaimer(result, req, profile=frame_profile)
+```
+
+也就是 `broadcast_hole` 只要是非空字串（現行合法值為 `left`／`right`），即使 `disclaimer_kind` 是 `ai` 或 `source` 也完全不呼叫 `apply_image_disclaimer()`。`/api/images/generate` 直接走這一點；`/api/news-image` 也沒有第二個 skip，而是在 `main.py:5484-5512` 把 `broadcast_hole_for(req)` 與已 resolve 的 `disclaimer_kind` 組成 `ImageGenerateRequest` 後呼叫同一個 `generate_image()`。因此刪除 `and not req.broadcast_hole` 就能覆蓋兩條後端入口，不能在兩個 endpoint 各補一次。
+
+`apply_image_disclaimer()` 本身在 `main.py:4054-4080` 沒有洞框判斷，只呼叫 `compose.paste_disclaimer_note()`；它的 docstring 已說是「置框（與可能的播出鏡面挖空框）都貼完之後」才執行，與裁決指定順序一致。
+
+#### 前端現況
+
+前端**沒有**「洞框開啟就隱藏／停用 disclaimer」的現行邏輯：
+
+- `app.js:1717-1721` 的 `toggleHole()` 只翻 `state.hole`、更新壓框按鈕與 toast，沒有碰 disclaimer controls。
+- `app.js:2955-2971` 的 `updateDisclaimerControls()` 只同步角落按鈕、來源輸入值，並依 `editorFormat().hides.disclaimer` 隱藏不適用版型；它不讀 `state.hole`，也不設 `disabled`。
+- `index.html:741-758` 與 `index.html:1036-1055` 的兩份控制列沒有 `broadcast_hole` 條件或 `disabled` 屬性。
+
+所以「UI 不灰掉」在現況已成立；要改的是計畫前文原先打算新增的 disabled 設計，而不是移除既有前端程式。本次已明改 3.1、3.3.3 與 PR 5，避免未來照舊計畫誤做。
+
+#### 洞框與浮水印
+
+- 洞框 bbox 已可直接取得：`compose.broadcast_hole_rect(canvas, side, profile)`（`compose.py:322-352`）。1920×1080、`EDITOR_FRAME_PROFILE` 實算 safe rect 為 `(77, 43, 1843, 1037)`；左洞為 `(101, 319, 885, 760)`，右洞為 `(1035, 319, 1819, 760)`。
+- `compose.apply_broadcast_hole()`（`compose.py:355-396`）先在該 bbox 畫白底、灰框、圓角洞框，再由 `compose.py:382-392` 畫浮水印。浮水印常數為 `WATERMARK_TEXT = "示意圖"`、30 px、淺灰 `(236,236,236)`（`compose.py:305-307`），無底板、有 3 px stroke，固定以 safe rect 右下內縮 `HOLE_INSET` 的 `(x1-inset, y1-inset)` 為 `anchor="rs"`；1920×1080 的 anchor 是 `(1819, 1013)`，與洞框在左或右無關。
+- 它會和新標籤的現行預設 `lower_right` **直接打架**。`_disclaimer_box()`（`compose.py:425-443`）也用同一個右下 anchor；以新字 `AI示意圖` 實算新標籤 plate 約 `(1713, 961, 1819, 1013)`，而舊／新浮水印 ink bbox 約為 `(1771,987,1822,1017)`／`(1741,987,1822,1017)`，有實質重疊，不只是安全距離不足。
+
+#### 可用區的明確做法
+
+`HOLE_INSET` **不夠**。它只是 24 px scalar margin：`broadcast_hole_rect()` 用它把洞框離 safe rect 外框內縮（`compose.py:335-351`），`_disclaimer_box()` 又各自用它把標籤離 safe rect 外框內縮（`compose.py:433-442`）；兩者沒有互相看 bbox。裁決要求的實作應為：
+
+1. 先以成品實際尺寸呼叫 `broadcast_hole_rect()`，取得洞框 bbox。
+2. 以裁決 11 的短邊 1%（profile 可覆寫）膨脹該 bbox，列入 `hard_exclusions`；candidate label bbox 與它相交時屬幾何非法，回 `outside_available_region`，不是一般家具碰撞 warning。這樣才真正做到「不得落進洞內」。
+3. safe rect 減洞框後不是單一矩形，現計畫只回單一 `placement_bounds` 不足；response 需另回 `hard_exclusions`（bbox list），前端照比例畫禁區，後端仍逐次重驗 candidate bbox。
+4. 浮水印 bbox 目前沒有公開 helper；`broadcast_hole_rect()` 只回白色洞框。新增 `broadcast_watermark_bbox(canvas, profile, text)`（或統一的 `broadcast_hole_obstacles()`）用與 `apply_broadcast_hole()` 完全相同的 font、stroke、anchor 量測，作為具名 obstacle `broadcast_hole_watermark`。依裁決 2，它與新標籤相撞只回 warning、仍可提交；預設位置則應主動選開，避免每張預設成品都疊字。
+
+這也修正了前文 1.3、2.2 與 8.1 將 `HOLE_INSET` 說成足以形成洞框可用區的錯誤；`HOLE_INSET` 可沿用作 outer margin，但不能代替洞框 bbox 幾何。
+
+### 9.3 釘住「挖空時不畫標籤」的測試
+
+現有 suite 只有一題直接釘住 skip：`tests/test_b70_f43_disclaimer.py:220-234::GenerateImageWiringTests.test_broadcast_hole_set_skips_the_new_stamp_to_avoid_double_stamping`。它 patch `compose.paste_disclaimer_note` 後送 `broadcast_hole="left"`、`disclaimer_kind="ai"`，最後 `assert_not_called()`。裁決 1 後此題必紅，屬**刻意行為變更**；應改名為例如 `test_broadcast_hole_keeps_its_watermark_and_stamps_the_disclaimer_afterwards`，同時 spy `compose.apply_broadcast_hole` 與 `compose.paste_disclaimer_note`，驗兩者各一次且順序正確。
+
+沒有前端測試釘住 disabled／hidden，因前端本來就沒有該行為。文案統一另外造成 9.1 所列兩題刻意失敗；它們不是 skip 行為的測試。除此之外，現有洞框幾何測試都應維持綠色：例如 `tests/test_editor_formats.py:241-267::ComposeOutputTests.test_high_res_watermark_scales_with_the_canvas_height` 只驗縮放關係，`tests/test_followups_20260909.py:205-212::BroadcastBottomStripTests.test_the_watermark_really_is_at_the_bottom_right_for_both_sides` 只驗 anchor 與 inset。若它們因解除 skip 而紅，屬**誤傷／regression**，不應改鬆。
+
+### 9.4 新發現的待裁項
+
+1. **洞框開啟時，新標籤的 legacy default 放哪裡？** 以前整枚被 skip，沒有可維持的標籤像素基準；直接沿用 `lower_right` 又必定壓住洞框浮水印。建議依洞框側選「對側上角」：左洞用 `upper_right`、右洞用 `upper_left`。理由是同時避開中央洞框與固定在右下的浮水印，而且這條路沒有舊標籤位置可被破壞。使用者若拖到別處，仍依 hard exclusion＋warning 規則處理。
+
+除這一項外，文案沒有新待裁：`WATERMARK_TEXT` 是否改名已被裁決 10 的「全站」涵蓋；直標目前沒有 AI provenance，後續是否畫 AI 標籤則屬既定統一介面施工範圍，不應由 compose 猜測。
