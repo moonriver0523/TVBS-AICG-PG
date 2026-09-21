@@ -25,16 +25,25 @@ APP_JS = (ROOT / "app.js").read_text(encoding="utf-8")
 # 接線當天（2026-09-14）app.js 每個版型手寫的 hides——資料化後推導出來的必須一模一樣。
 # 同日稍後對齊第 3 項：國內外新聞直播／今日熱搜改成一標一附圖位，refUpload 跟著收起來
 #（這是刻意的行為變更，見 test_yt_shared_layouts_get_slots_20260914）。
+# 2026-09-21 B70／F43：新增 disclaimer——「示意圖／畫面來源」標籤控制只有主流程 CG 有，
+# 封面類一律收起來（它們走 compose 自己的 _draw_ai_note，不吃 disclaimer_* 欄位）。
+# 同樣是刻意的行為變更，所以這份基準跟著更新而不是把新欄位排除在外。
 HIDES_ON_2026_09_14 = {
     "default": {},
     "broadcast": {},
-    "ten_cover": {"digestControls": True, "safeFrame": True, "stamp": True, "refUpload": True},
-    "yt_live_cover": {"digestControls": True, "safeFrame": True, "stamp": True, "refUpload": True},
+    "ten_cover": {"digestControls": True, "safeFrame": True, "stamp": True, "refUpload": True,
+                  "disclaimer": True},
+    "yt_live_cover": {"digestControls": True, "safeFrame": True, "stamp": True, "refUpload": True,
+                      "disclaimer": True},
     "yt_vstrip": {"digestControls": True, "safeFrame": True, "stamp": True, "engine": True,
-                  "instruction": True, "refUpload": True, "refine": True},
-    "yt_hourly_cover": {"digestControls": True, "safeFrame": True, "stamp": True, "refUpload": True},
-    "yt_live24_cover": {"digestControls": True, "safeFrame": True, "stamp": True, "refUpload": True},
-    "yt_hot_cover": {"digestControls": True, "safeFrame": True, "stamp": True, "refUpload": True},
+                  "instruction": True, "refUpload": True, "refine": True,
+                  "disclaimer": True},
+    "yt_hourly_cover": {"digestControls": True, "safeFrame": True, "stamp": True, "refUpload": True,
+                        "disclaimer": True},
+    "yt_live24_cover": {"digestControls": True, "safeFrame": True, "stamp": True, "refUpload": True,
+                        "disclaimer": True},
+    "yt_hot_cover": {"digestControls": True, "safeFrame": True, "stamp": True, "refUpload": True,
+                     "disclaimer": True},
 }
 
 

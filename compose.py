@@ -799,6 +799,36 @@ def fit_cover_canvas(image_bytes: bytes) -> bytes:
     return buffer.getvalue()
 
 
+def paste_cover_header_band(image_bytes: bytes) -> bytes:
+    """程式自己畫十點封面的深藍標頭帶（2026-09-21 使用者回報）。
+
+    什麼時候需要：**「原圖放置」＋AI 標題**時，照片被程式硬保護，字帶以上一律還原
+    成 base（`restore_photo_outside_title_band` 的硬邊界，透明圖層那條路則是整片
+    列為保護區）。模型就算畫了標頭帶也一定會被還原掉，而 base 是使用者的原圖、
+    本來就沒有帶——於是 `paste_cover_logo` 把 Logo、節目標籤、日期、ON AIR 直接貼
+    在照片上，藍底整條不見。
+
+    這是設計矛盾不是模型的錯：純 AI 版的帶一直都是模型畫的，改成「只有標題交給
+    模型」之後就沒有人畫它了，所以要由程式補上。
+
+    帶的幾何與合成版 `_draw_cover_header` 逐項相同（同一組 COVER_HEADER_* 常數），
+    兩版長得一樣是刻意的——見 COVER_AI_HEADER_RATIO 上方那段。畫完之後
+    `ensure_ai_header_band` 量得到這條帶（底部亮藍線就是它找的那個邊），不會再去
+    搬動它。
+    """
+    with Image.open(io.BytesIO(image_bytes)) as opened:
+        canvas = opened.convert("RGB")
+    width, height = canvas.size
+    band_h = round(height * COVER_AI_HEADER_RATIO)
+    line_h = max(2, round(height * COVER_HEADER_LINE_RATIO))
+    draw = ImageDraw.Draw(canvas)
+    draw.rectangle((0, 0, width, band_h), fill=COVER_HEADER_FILL)
+    draw.rectangle((0, band_h - line_h, width, band_h), fill=COVER_HEADER_LINE)
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
 def paste_cover_logo(
     image_bytes: bytes, date_text: str = "", badge: str = COVER_DEFAULT_BADGE
 ) -> bytes:

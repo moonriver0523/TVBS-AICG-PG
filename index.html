@@ -312,7 +312,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260921-03</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260921-04</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -738,6 +738,25 @@
                         </div>
                     </div>
 
+                    <!-- B70／F43（2026-09-21）：第一頁那一份。控制項在兩頁各有一組，
+                         state 是同一份（updateDisclaimerControls 會把值同步到兩邊的欄位）。
+                         判斷該貼「示意圖」還是「畫面來源」一律由後端做，見第二頁那份的註解。 -->
+                    <div data-disclaimer-row class="flex items-center gap-1.5 flex-wrap mb-2">
+                        <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">畫面來源</span>
+                        <input data-disclaimer-source type="text" maxlength="40"
+                               oninput="onDisclaimerSourceInput(this)"
+                               placeholder="來源名（留空＝不標）"
+                               class="flex-1 min-w-[120px] bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[10px] text-slate-200 placeholder:text-slate-600" />
+                        <button type="button" data-disclaimer-corner="upper_left" onclick="setDisclaimerCorner('upper_left')"
+                                class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-amber-600 text-slate-400 hover:text-white">左上</button>
+                        <button type="button" data-disclaimer-corner="lower_left" onclick="setDisclaimerCorner('lower_left')"
+                                class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-amber-600 text-slate-400 hover:text-white">左下</button>
+                        <button type="button" data-disclaimer-corner="upper_right" onclick="setDisclaimerCorner('upper_right')"
+                                class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-amber-600 text-slate-400 hover:text-white">右上</button>
+                        <button type="button" data-disclaimer-corner="lower_right" onclick="setDisclaimerCorner('lower_right')"
+                                class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-amber-600 bg-amber-600 text-white">右下</button>
+                    </div>
+
                     <button id="aiBtn" onclick="handleOneClickGenerate()"
                             class="bg-red-600 hover:bg-red-500 w-full py-3 rounded-lg text-xs font-black flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50">
                         <span id="aiBtnText">一鍵生成（記者・標準）</span>
@@ -1012,6 +1031,27 @@
                         <button id="btnSafeFrame" onclick="toggleSafeFrame()" title="開啟後：模型畫滿版，後端再把整張圖精準置入 TVBS 安全框並補背景（輸出 1920×1080）" class="ml-2 px-3 py-1 rounded text-[9px] font-black transition-all border border-emerald-600 text-slate-400 hover:text-white">安全框 OFF</button>
                     <span id="aspectBadge" class="text-[9px] font-mono text-slate-500 bg-slate-800 px-2 py-0.5 rounded">16:9 / 1K</span>
                 </div>
+            </div>
+
+            <!-- B70／F43（2026-09-21）：示意圖／畫面來源標籤。**一組控制、兩種標籤**
+                 ——畫面上有 AI 生成的人臉就一律壓「示意圖」，沒有才看來源名有沒有填，
+                 判斷在後端（main.resolve_image_disclaimer），前端不重判也不給第二組按鈕。
+                 角落值用後端方位詞原文，四個角都在安全區內（compose._disclaimer_box）。 -->
+            <div data-disclaimer-row class="flex items-center gap-2 flex-wrap mb-3">
+                <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">畫面來源</span>
+                <input data-disclaimer-source type="text" maxlength="40"
+                       oninput="onDisclaimerSourceInput(this)"
+                       placeholder="來源名（留空＝不標；畫面有 AI 人臉時一律標「示意圖」）"
+                       class="flex-1 min-w-[180px] bg-slate-950 border border-slate-800 rounded px-2 py-1 text-[10px] text-slate-200 placeholder:text-slate-600" />
+                <span class="text-[9px] font-black text-slate-500 uppercase tracking-[0.16em]">標籤位置</span>
+                <button type="button" data-disclaimer-corner="upper_left" onclick="setDisclaimerCorner('upper_left')"
+                        class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-amber-600 text-slate-400 hover:text-white">左上</button>
+                <button type="button" data-disclaimer-corner="lower_left" onclick="setDisclaimerCorner('lower_left')"
+                        class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-amber-600 text-slate-400 hover:text-white">左下</button>
+                <button type="button" data-disclaimer-corner="upper_right" onclick="setDisclaimerCorner('upper_right')"
+                        class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-amber-600 text-slate-400 hover:text-white">右上</button>
+                <button type="button" data-disclaimer-corner="lower_right" onclick="setDisclaimerCorner('lower_right')"
+                        class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-amber-600 bg-amber-600 text-white">右下</button>
             </div>
 
             <div id="displayPrompt" onclick="copyToClipboard()"
