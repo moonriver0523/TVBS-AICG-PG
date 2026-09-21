@@ -3858,6 +3858,7 @@ def format_title_layer_diagnostics(diag: dict) -> str:
         f"（門檻 {diag.get('alpha_threshold', '?')}）"
         f"／保護區被畫 {diag.get('protect_painted_pixels', '?')} px"
         + ("（已丟棄，不計失敗）" if diag.get("protect_discarded") else "")
+        + f"／圖層高度佔畫面 {diag.get('painted_bbox_height_ratio', 0):.1%}"
         + f"／可疊區畫了 {diag.get('paint_ratio', 0):.3%}"
         f"（上限 {diag.get('max_paint_ratio', 0):.0%}、下限 {diag.get('min_paint_ratio', 0):.2%}）"
     )
@@ -3914,6 +3915,11 @@ def _measure_title_layer(
     # 畫過的像素的外接框：整片背景會是接近全畫布的框，真正的標題是一條帶狀。
     # 光看比例分不出「一大塊半透明」與「散落各處的殘渣」，這個框分得出來。
     bbox = painted_in_editable.getbbox()
+    # 框高佔畫面的比例（2026-09-21 補）：使用者回報「標題太大幾乎遮住整個版面」時，
+    # 我得把成品下載下來逐列量才知道有多大。這個數字直接回答那個問題，而且能跟
+    # prompt 裡的塊高規格（COVER_TITLE_BRIEF_SPECS／YT_BRIEF_SPECS）直接對照。
+    # 面積比例答不了這題：滿版一行大字與散在各處的小元件可以是同一個百分比。
+    bbox_height_ratio = (bbox[3] - bbox[1]) / height if bbox else 0.0
 
     return {
         "canvas": f"{width}x{height}",
@@ -3927,6 +3933,7 @@ def _measure_title_layer(
         "painted_in_editable_pixels": painted_in_editable_count,
         "paint_ratio": paint_ratio,
         "painted_bbox": list(bbox) if bbox else [],
+        "painted_bbox_height_ratio": bbox_height_ratio,
         # 下面兩個由 _overlay_title_layer_core 補上（門檻是它的參數）
         "max_paint_ratio": 0.0,
         "min_paint_ratio": 0.0,
