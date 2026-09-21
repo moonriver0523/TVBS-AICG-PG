@@ -3789,7 +3789,29 @@ TITLE_LAYER_MIN_PAINT_RATIO = 0.001
 #
 # 2026-09-21 使用者裁決：放寬到 70%。實測三張 51~56% 留約 1.25 倍餘裕，而「整片
 # 半透明背景」那種真正要擋的情況會逼近 100%，仍然擋得住。
-TITLE_LAYER_MAX_PAINT_RATIO = 0.70
+#
+# 2026-09-21 第二次裁決：**十點與 YT 拆成兩個數字**（使用者：「要拆 怕誤判」）。
+#
+# 拆的理由不是「兩邊用量不同」——當天後台八筆實測，兩邊的比例幾乎一樣
+# （十點 28.7／32.5／40.3／56.5%，YT 整點 41.5／51.4／52.0／56.3%）。
+# 真正的理由是**分母不同**：這道閘量的是「佔可疊區的比例」，而可疊區＝畫布扣掉
+# 保護區，各版型差很多——
+#     十點滿版 88.4%／hot 82.4%／live24 76.3%／hourly 74.0%／news 67.5%（佔畫面）
+# 把實測值換算回「佔整張畫面」：十點 56.5%→50.0%、YT 整點 56.3%→41.7%。
+# 也就是說**同一份設計放到 YT，因為分母小，算出來的比例天生偏高**，YT 那側會先
+# 撞到天花板。誤判風險集中在 YT，所以 YT 要更多餘裕，不是兩邊各給一樣的數字。
+#
+# 十點 75%＝實測最高的 1.33 倍；YT 85%＝實測最高的 1.51 倍。
+# 兩個數字都遠低於「模型整片畫背景」的實際表現（逼近 100%），該擋的照樣擋。
+#
+# 下次要調：後台的閘門訊息會印「可疊區內 XX% 的像素非透明」，拿被擋那一側的
+# 實際分佈來改那一側，不要兩邊一起動——拆開就是為了這件事。
+TITLE_LAYER_MAX_PAINT_RATIO_TEN = 0.75
+TITLE_LAYER_MAX_PAINT_RATIO_YT = 0.85
+
+# 舊名保留給「沒有指定是哪一側」的呼叫（`_overlay_title_layer_core` 的預設值）。
+# 兩支對外的疊圖函式都各自傳明確的值進去，實務上不會落到這個預設。
+TITLE_LAYER_MAX_PAINT_RATIO = TITLE_LAYER_MAX_PAINT_RATIO_TEN
 
 
 # ============================================================
@@ -4026,7 +4048,7 @@ def _overlay_title_layer_core(
 
 def overlay_title_layer_over_cover_band(
     base_png: bytes, layer_png: bytes, *, band_top_ratio: float,
-    max_paint_ratio: float = TITLE_LAYER_MAX_PAINT_RATIO,
+    max_paint_ratio: float = TITLE_LAYER_MAX_PAINT_RATIO_TEN,
     diagnostics: dict | None = None,
 ) -> bytes:
     """十點封面（滿版）版本：保護區是標頭帶（`cover_title_band_top_ratio()` 以上），
@@ -4069,7 +4091,7 @@ def overlay_title_layer_over_cover_band(
 def overlay_title_layer_over_yt_cover(
     base_png: bytes, layer_png: bytes, *, layout: str,
     original_audio: bool = False, ai_translation: bool = False, ai_note: bool = False,
-    max_paint_ratio: float = TITLE_LAYER_MAX_PAINT_RATIO,
+    max_paint_ratio: float = TITLE_LAYER_MAX_PAINT_RATIO_YT,
     protect_date_tab: bool = True,
     diagnostics: dict | None = None,
 ) -> bytes:
