@@ -577,6 +577,34 @@ def _generation_retries() -> int:
     return _generation_retry_count.get()
 
 
+# 上游錯誤的真話（B94，2026-09-22）：消化這條路以前把 OpenRouter 丟回來的例外
+# 整個吞掉，只 print 到 stdout，後台紀錄裡留下的永遠是同一句「AI 服務處理失敗，
+# 請確認模型權限或稍後重試」。2026-09-22 DEV 連倒五筆就是卡在這裡——看得到
+# `provider_5xx · HTTP 502`，卻看不出是額度、是模型權限、還是 provider 掛了，
+# 等於每次都要重跑一次才能猜。生圖那條早就把 OpenRouter 的 JSON 原文帶進訊息
+# （見 2026-09-17 那筆 safety system 的紀錄），消化這條補上同樣的待遇。
+UPSTREAM_DETAIL_MAX_CHARS = 200
+# 帶原文就要防金鑰外流：後台是 HTTP Basic 擋著沒錯，但錯誤訊息也會回到前端。
+_SECRET_LIKE_RE = re.compile(r"\b(?:sk|pk)-[A-Za-z0-9._\-]{8,}")
+
+
+def upstream_error_detail(exc: BaseException) -> str:
+    """上游例外 → 使用者與後台都看得懂的一句話，**帶上游的狀態碼與訊息摘要**。
+
+    連不上是另一回事（沒有狀態碼可帶），維持原本的講法。
+    """
+    if isinstance(exc, APIConnectionError):
+        return "無法連線至 AI 服務，請稍後再試"
+    base = "AI 服務處理失敗，請確認模型權限或稍後重試"
+    status = getattr(exc, "status_code", None)
+    body = re.sub(r"\s+", " ", str(getattr(exc, "message", "") or exc)).strip()
+    body = _SECRET_LIKE_RE.sub("[已遮蔽]", body)
+    if len(body) > UPSTREAM_DETAIL_MAX_CHARS:
+        body = body[:UPSTREAM_DETAIL_MAX_CHARS] + "…"
+    parts = [p for p in (f"上游 {status}" if status else "", body) if p]
+    return f"{base}（{' · '.join(parts)}）" if parts else base
+
+
 def _error_type_from_http(
     status: int | None, summary: str, *, upstream: bool = False
 ) -> str:
@@ -3096,11 +3124,7 @@ def generate(req: GenerateRequest):
                     detail="AI 服務用量已達限制，請稍後再試",
                 ) from exc
             except (APIConnectionError, APIError) as exc:
-                last_detail = (
-                    "無法連線至 AI 服務，請稍後再試"
-                    if isinstance(exc, APIConnectionError)
-                    else "AI 服務處理失敗，請確認模型權限或稍後重試"
-                )
+                last_detail = upstream_error_detail(exc)
                 print(f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} API error: {exc}", flush=True)
                 retry_context = digest_retry_note(
                     attempt + 1,
@@ -3494,11 +3518,7 @@ def hybrid_digest(req: HybridDigestRequest):
                     detail="AI 服務用量已達限制，請稍後再試",
                 ) from exc
             except (APIConnectionError, APIError) as exc:
-                last_detail = (
-                    "無法連線至 AI 服務，請稍後再試"
-                    if isinstance(exc, APIConnectionError)
-                    else "AI 服務處理失敗，請確認模型權限或稍後重試"
-                )
+                last_detail = upstream_error_detail(exc)
                 print(f"[hybrid] attempt {attempt + 1}/3 API error: {exc}", flush=True)
                 _note_generation_retry()
                 time.sleep(1.5)
