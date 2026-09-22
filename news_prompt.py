@@ -464,12 +464,38 @@ USER_REFERENCE_MODES = {
 # 更晚不了——生圖模型會照著 STRUCTURE 的具體描述憑空畫，等於蓋掉 ASIS 規則
 # （2026-08-23 記者/編輯版各出過一次「附圖被忽略、模型自己畫一張替代圖」）。
 # 這段是消化端專屬的措辭護欄，只在使用者有上傳 asis 圖時注入。
+#
+# B85 候選④（2026-09-22，使用者裁「先做候選4」）：原本只封「depiction／illustration／
+# rendering」這一類**畫風**措辭，沒封**動作**。正式站 10:47:32（`99b1373ef899`，編輯／
+# 份量 maximum／創意 4）的成品 prompt 逐字證實這個缺口：
+#
+#   a full-height dramatic hero cutout image showing the user's original supplied
+#   photograph placed unaltered, intersecting an anticlockwise diagonal
+#   brush-stroke dividing edge
+#
+# 「placed unaltered」是上面那三行逼出來的，護欄有生效；但同一句話同時下令 cutout ＋
+# 讓照片與斜切邊界相交，而生圖端的 USER_REFERENCE_ASIS_RULES 寫的是「Do not crop,
+# stretch, rotate, mirror or otherwise distort」——**兩邊正面矛盾**。矛盾的來源不是
+# 模型自由發揮，是創意階梯**命令**的：_CG_L3_EXTRA「cut the main subject out」、
+# _CG_L4_EXTRA「ONE SIDE OF THE FRAME IS GIVEN TO A SINGLE DRAMATIC IMAGE running
+# the full height」、_CG_DESIGN_DRAW_TEMPLATE「PALETTE: work in these four and no
+# others」。所以創意 ≥3 時，消化端是被逼著寫出違反原圖放置的版面語。
+#
+# ⚠ 這一刀**只消掉那條必然衝突**，不是 B85 的解。這條路仍然只有 prompt 層、沒有任何
+# 像素保護（B55 實測創意 0 級 change_ratio 就有 68.1%，那時根本沒有這條矛盾）。真正
+# 的解在 D25 的候選①／②，仍待裁——不要因為這一刀上線就把 B85 當結案。
+#
+# 注入點在 cg_creativity_rules 之後（main.py:2452），加上這裡的明文 OVERRIDE，
+# 才是本 repo「位置在後＋明文 OVERRIDE」的完整雙重表達。
 USER_REFERENCE_ASIS_DIGEST_RULES = """
 
 ATTACHED IMAGE TO BE PLACED AS-IS (STRUCTURE MUST MATCH THIS):
 The user has attached at least one image that a later stage will place into the graphic exactly as supplied, completely unaltered. Wherever "structure" describes the visual area that will hold this image, describe it ONLY as the user's original supplied photograph placed unaltered.
 NEVER use wording such as "depiction", "illustration", "portrait-style", "artistic rendering", "reinterpreted", or any phrase that asks for that area to be redrawn or reimagined — that wording gets carried into the image-generation step and causes it to fabricate a replacement image instead of using the real supplied photograph.
-Do not invent an alternative scene, outfit, setting or pose for this image area; simply reserve its position, size and framing in the layout."""
+Do not invent an alternative scene, outfit, setting or pose for this image area; simply reserve its position, size and framing in the layout.
+THIS ONE AREA IS EXEMPT FROM EVERY ARRANGEMENT AND ART INSTRUCTION ABOVE (OVERRIDE). Any earlier paragraph — including any VISUAL CREATIVITY level and the DESIGN DRAW — that calls for a cut-out subject, a full-height dramatic image, a slanted or torn dividing edge, a tilt, a shared plate shape, a hero element overlapping its own zone, or one palette worked across the whole graphic, does NOT reach this image. Those instructions still govern every other part of the layout; they stop at this image's edge.
+NEVER write, of this area, "cut out", "cutout", "cut-out", "silhouetted", "knocked out", "cropped", "tilted", "angled", "slanted", "skewed", "intersecting" a dividing edge, "bleeding off" an edge, "tinted", "colour-graded", "recoloured", "duotone", or any phrase that works it into the graphic's palette or its shape language. The image-generation step reads "structure" literally: any one of those words makes it repaint the photograph, and writing "placed unaltered" in the same sentence does not stop it.
+Describe this area instead as an upright rectangular panel holding the user's original supplied photograph, placed unaltered, with its own edges, and say only where it sits and how large it is. If a level above requires a slant, a tilt or an angled arrangement, run that angle through the panels and plates AROUND this image and leave this one square to the frame."""
 
 # 使用者有上傳參考圖時一律注入（2026-08-17 使用者裁決）：既然是照著使用者
 # 提供的實景實物生成，就不再標「示意圖」。REAL_WORLD_RENDERING_RULES 寫著
