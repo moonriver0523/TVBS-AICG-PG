@@ -67,6 +67,45 @@ class UpstreamErrorDetailTests(unittest.TestCase):
         self.assertIn("line one line two", detail)
 
 
+class CreditsExhaustedStopsRetryingTests(unittest.TestCase):
+    """B95：B94 上線後第一筆 DEV 失敗就寫出了真因——
+
+        上游 402 · This request requires more credits, or fewer max_tokens.
+        You requested up to 16000 tokens, but can only afford 15030.
+
+    DEV 那把 OpenRouter 金鑰餘額見底，跟 B91 的 prompt 無關。但它走通用的
+    APIError 分支，被當成「上游間歇脫軌」重試滿 DIGEST_ATTEMPTS——餘額不會
+    因為重試變多，那五次是純粹的等待。
+    """
+
+    REAL = (
+        "Error code: 402 - {'error': {'message': \"This request requires more credits, "
+        "or fewer max_tokens. You requested up to 16000 tokens, but can only afford 15030.\"}}"
+    )
+
+    def test_402_produces_a_stop(self):
+        stop = main.credits_exhausted_error(_FakeAPIError(self.REAL, 402))
+        self.assertIsNotNone(stop)
+        self.assertEqual(stop.status_code, 503)
+        self.assertIn("額度不足", stop.detail)
+        self.assertIn("can only afford 15030", stop.detail, "餘額數字要留著，才知道差多少")
+
+    def test_other_statuses_keep_retrying(self):
+        for status in (500, 502, 503, 403, 429):
+            self.assertIsNone(
+                main.credits_exhausted_error(_FakeAPIError("boom", status)),
+                f"{status} 不該被當成額度不足",
+            )
+
+    def test_both_digest_paths_stop_before_the_retry(self):
+        source = Path(main.__file__).read_text(encoding="utf-8")
+        self.assertEqual(source.count("stop = credits_exhausted_error(exc)"), 2)
+        # 停手要排在寫 last_detail 之前，不然還是會走完重試圈
+        for block in source.split("except (APIConnectionError, APIError) as exc:")[1:]:
+            head = block[: block.index("last_detail")]
+            self.assertIn("credits_exhausted_error", head)
+
+
 class BothDigestPathsUseItTests(unittest.TestCase):
     """generate() 與 hybrid_digest() 兩條都要改到——使用者踩到的是前者，
     但兩條的 APIError 分支本來是同一段複製貼上的死字串。"""
