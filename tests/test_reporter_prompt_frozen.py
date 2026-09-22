@@ -104,6 +104,23 @@
   快照**第三次改動、每份只差一行（`git diff --numstat tests/fixtures/` 全是
   `1 1`）；兩份 `reporter-image-prompt-*.txt` **這次沒有變**（`news_prompt.py`
   沒動）。B76 那塊逐份 grep 十份仍全部找得到。
+- 2026-09-22（B91）：使用者當面放行（我描述為「改規則 5、會影響所有記者／編輯CG
+  的推導」，使用者答「好 改」）。真因有 DEV 後台紀錄佐證：2026-09-22 17:29:22
+  `bce3a1f6206c`，簡稱對照表**有生效**（消化輸出寫出「川普與習近平」，而「習近平」
+  三個字新聞原文一次都沒出現，模型不可能逐字抄），但 `portrait_subjects` 交白卷、
+  STRUCTURE 寫了 `without rendered photographic portraits`，最終 prompt 因此沒有
+  NAMED REAL PERSON 區塊，通則接手就畫成兩個背影。
+  病灶是**system prompt 與素材打架**：對照表放在使用者素材裡說「當作已寫明」，
+  第 5 條卻絕對禁止「never infer a person from … an event」，而「川習會」正是
+  event。模型的折衷就是名字敢寫進文字、不敢列進陣列。
+  修法：第 5 條加一條**範圍寫死的例外**——只有標題為
+  `Abbreviation glossary supplied by the newsroom` 的區塊裡列出的人名視同逐字
+  寫明，並明文禁止那個折衷（不准只寫進文字不列陣列、不准在 structure 寫
+  「without portraits」「via typography only」規避）。表以外的人，VERBATIM 護欄
+  一個字都沒鬆。`editor_formats.py` 兩份封面推導同步補同一句（那兩份沒有快照）。
+  只動 `REAL_WORLD_FIDELITY_RULES` 第 5 條一句 ⇒ **八份 digest 快照**第四次改動、
+  每份仍只差一行（`git diff --numstat tests/fixtures/` 全是 `1 1`）；兩份
+  `reporter-image-prompt-*.txt` **沒有變**（`news_prompt.py` 沒動）。
 """
 
 import os
