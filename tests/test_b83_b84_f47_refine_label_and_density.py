@@ -152,20 +152,30 @@ class RestampTests(unittest.TestCase):
         self.assertEqual(result.disclaimer_source_text, "美聯社")
         self.assertEqual(result.disclaimer_corner, "upper_right")
 
-    def test_the_editor_off_path_keeps_the_generated_size(self):
-        """D24（2026-09-22 使用者裁決）：編輯安全框 OFF ＝ 不後製。
+    def test_the_editor_off_path_follows_the_density_split(self):
+        """D24（2026-09-22 使用者裁決，同日修正為「只在字多 字超多生效」）。
 
-        以前這條驗的是 1748×924（對位框本身，2026-08-19 裁決），已被推翻。
-        重貼標籤不能偷偷改變尺寸——進去多大出來就多大。
+        非字多檔仍是 1748×924（對位框本身，2026-08-19）；字多／字超多不後製，
+        進去多大出來就多大。重貼標籤必須跟生圖給出同一種尺寸，否則挪一下標籤
+        就換了一張不同尺寸的圖。
         """
-        result = main.restamp_disclaimer(
+        light = main.restamp_disclaimer(
             self._request(
                 "lower_left",
                 safe_frame=False,
                 safe_frame_profile=safe_area_spec.EDITOR_PROFILE,
             )
         )
-        self.assertEqual(_dimensions(result.image_data_base64), (1280, 720))
+        self.assertEqual(_dimensions(light.image_data_base64), (1748, 924))
+        dense = main.restamp_disclaimer(
+            self._request(
+                "lower_left",
+                density="standard",
+                safe_frame=False,
+                safe_frame_profile=safe_area_spec.EDITOR_PROFILE,
+            )
+        )
+        self.assertEqual(_dimensions(dense.image_data_base64), (1280, 720))
 
     def test_the_editor_on_path_still_lands_on_the_thin_frame_canvas(self):
         """ON 那檔沒被 D24 動到：仍是 2% 薄框、輸出完整畫布。"""

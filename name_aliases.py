@@ -34,8 +34,16 @@
   更難查的那種。只收**複合事件詞**。
 - **不從表裡推衍新組合。** 表上沒有的就是沒有，不做「X習會 → X＋習近平」這種
   模式比對——那又變成推論了。
-- **不碰一般 CG 那條路。** 那條路吃的是完整新聞稿（實例 609 字），內文通常會寫
-  全名，結構性問題遠小於純標題輸入的封面。要開另案評估。
+
+## 2026-09-22 兩項修正
+
+- **接上一般 CG（B88）。** 原本這裡寫「不碰一般 CG 那條路，要開另案評估」，
+  結果 B82 的因果鏈在記者／編輯CG 上原封不動重演一次，只是終點從「編臉」
+  變成「背影」。現在 `main.generate()` 也吃這張表。
+- **收了兩個字的「川習」。** 使用者指定。它違反上面「只收複合事件詞」的精神，
+  因為標題常寫「川習通話」「川習互動」，三個字的「川習會」比對不到。代價是
+  跨詞邊界的碰撞（「四川習俗」「四川習近平視察」），所以配一張
+  `BLOCKING_PREFIXES` 把已知的前綴擋掉——那仍然是查表，不是推論。
 
 ## 要加新條目時
 
@@ -50,23 +58,69 @@ from __future__ import annotations
 #
 # 第一批（2026-09-21 使用者指定）：川習會、拜習會、普習會。
 # 值一律用臺灣譯名，且只放人名本身——不含頭銜、不含國名、不含組織。
+#
+# 第二批（2026-09-22 使用者指定）：「川習」。標題常寫「川習通話」「川習互動」
+# 「川習登場」，三個字的「川習會」比對不到，B88 接好了照樣落空。
+# ⚠ 這一條比第一批脆弱：「川習」兩個字會出現在**跨詞邊界**上，最現實的是
+# 「四川習俗」「四川習近平視察」——前一個字是「四川」的川。所以它配一張
+# `BLOCKING_PREFIXES`（見下），那仍然是查表、不是推論。
 NAME_ALIASES: dict[str, tuple[str, ...]] = {
     "川習會": ("川普", "習近平"),
     "拜習會": ("拜登", "習近平"),
     "普習會": ("普欽", "習近平"),
+    "川習": ("川普", "習近平"),
 }
+
+# 簡稱前面出現這些字時，那一次出現不算命中——它是跨詞邊界的巧合。
+# 只收「以『川』結尾的地名／姓氏」這一類確定會碰撞的字，同樣是人工維護的封閉集合，
+# 不做任何模式推衍。key 是簡稱，value 是「前一個字」的集合。
+#
+# 為什麼不乾脆不收「川習」：使用者 2026-09-22 明確要求列入。折衷是「收，但把已知
+# 的碰撞擋掉」——漏擋的代價是把川普畫進一則四川新聞裡，比畫成背影嚴重得多。
+BLOCKING_PREFIXES: dict[str, frozenset[str]] = {
+    "川習": frozenset("四銀品香德市河旭湯"),
+}
+
+
+def _really_appears(alias: str, blob: str) -> bool:
+    """這個簡稱在素材裡有沒有**至少一次**不是跨詞巧合的出現。
+
+    沒有登記阻擋字的簡稱就是單純的 `in`（第一批三條全都是這種）。
+    有登記的，逐一檢查每次出現的前一個字：只要有一次不被擋，就算命中。
+    """
+    blocked = BLOCKING_PREFIXES.get(alias)
+    if not blocked:
+        return alias in blob
+    start = blob.find(alias)
+    while start != -1:
+        if start == 0 or blob[start - 1] not in blocked:
+            return True
+        start = blob.find(alias, start + 1)
+    return False
 
 
 def find_aliases(*texts: str) -> list[tuple[str, tuple[str, ...]]]:
     """挑出這些素材裡**真的出現過**的簡稱，依表的順序回傳，不重複。
 
-    只做字面比對（`in`），不做正規化、不做模糊比對——比對規則一旦帶推測，
-    這張表就失去「確定性」這個唯一的正當性。
+    只做字面比對（`in`）＋一張人工維護的阻擋字表（`BLOCKING_PREFIXES`），
+    不做正規化、不做模糊比對——比對規則一旦帶推測，這張表就失去
+    「確定性」這個唯一的正當性。
+
+    ⚠ 長短簡稱會同時命中（「川習會」的素材也含「川習」），兩條都指向同一組人，
+    所以只保留**先命中的那一條**，避免同一組名字在素材裡出現兩次。
+    表的順序＝長的在前，所以留下的一定是講得比較具體的那一條。
     """
     blob = "\n".join(t for t in texts if t)
     if not blob:
         return []
-    return [(alias, names) for alias, names in NAME_ALIASES.items() if alias in blob]
+    hits: list[tuple[str, tuple[str, ...]]] = []
+    seen: set[tuple[str, ...]] = set()
+    for alias, names in NAME_ALIASES.items():
+        if names in seen or not _really_appears(alias, blob):
+            continue
+        hits.append((alias, names))
+        seen.add(names)
+    return hits
 
 
 def alias_hint_block(*texts: str) -> str:

@@ -52,10 +52,30 @@ class AliasTableShapeTests(unittest.TestCase):
 
     def test_no_single_character_entries(self):
         """刻意不做單字展開：「川普」這兩個字本身也是「四川腔國語」，
-        「習」更是常用字（學習、習慣）。單字比對會製造比原本更難查的誤判。"""
+        「習」更是常用字（學習、習慣）。單字比對會製造比原本更難查的誤判。
+
+        2026-09-22：下限從 3 放寬到 2（使用者指定收「川習」）。**兩個字的條目
+        一律要有阻擋字表**，見下一條——沒有的話就等於開了跨詞邊界的誤判閘門。
+        """
         for alias in name_aliases.NAME_ALIASES:
             with self.subTest(alias=alias):
-                self.assertGreaterEqual(len(alias), 3)
+                self.assertGreaterEqual(len(alias), 2)
+
+    def test_every_two_character_entry_has_a_blocking_list(self):
+        """三個字以上的簡稱（「川習會」）幾乎不可能跨詞碰撞；兩個字的會。
+        「四川習俗」「四川習近平視察」裡都有「川習」——沒擋的話會把川普畫進
+        一則四川新聞裡，比畫成背影嚴重得多。"""
+        for alias in name_aliases.NAME_ALIASES:
+            if len(alias) <= 2:
+                with self.subTest(alias=alias):
+                    self.assertTrue(
+                        name_aliases.BLOCKING_PREFIXES.get(alias),
+                        f"兩個字的條目「{alias}」沒有登記阻擋字",
+                    )
+
+    def test_the_second_batch_is_exactly_what_the_user_asked_for(self):
+        """2026-09-22 使用者：「B88 "川習" 也要列入條目」"""
+        self.assertEqual(name_aliases.NAME_ALIASES["川習"], ("川普", "習近平"))
 
 
 class FindAliasesTests(unittest.TestCase):
@@ -79,6 +99,33 @@ class FindAliasesTests(unittest.TestCase):
         """雙切兩格各有標題，簡稱可能只出現在其中一格。"""
         hits = name_aliases.find_aliases("台北生存戰", "本周川習會")
         self.assertEqual([a for a, _ in hits], ["川習會"])
+
+    def test_the_two_character_entry_catches_the_headlines_the_long_one_misses(self):
+        """使用者要「川習」的理由：標題常寫「川習通話」「川習互動」，
+        三個字的「川習會」比對不到，B88 接好了照樣落空。"""
+        for headline in ("川習通話登場", "川習互動熱絡", "本周川習登場"):
+            with self.subTest(headline=headline):
+                hits = name_aliases.find_aliases(headline)
+                self.assertEqual(hits, [("川習", ("川普", "習近平"))])
+
+    def test_a_cross_word_coincidence_does_not_count(self):
+        """「四川習俗」「四川習近平視察」裡的「川習」是跨詞邊界的巧合。
+        誤命中的代價是把川普畫進一則四川新聞裡——比畫成背影嚴重得多。"""
+        for text in ("四川習俗大不同", "四川習近平視察災區", "銀川習俗巡禮"):
+            with self.subTest(text=text):
+                self.assertEqual(name_aliases.find_aliases(text), [])
+
+    def test_a_real_mention_still_counts_even_next_to_a_coincidence(self):
+        """同一篇裡既有巧合也有真的提到時，真的那次要贏——阻擋是逐次判定，
+        不是「整篇出現過巧合就整條放棄」。"""
+        hits = name_aliases.find_aliases("川習互動熱絡，四川習俗也入鏡")
+        self.assertEqual(hits, [("川習", ("川普", "習近平"))])
+
+    def test_the_long_and_short_forms_do_not_both_fire(self):
+        """「川習會」的素材當然也含「川習」，兩條指向同一組人。
+        兩條都回會讓同一組名字在素材裡出現兩次，模型讀起來像兩件事。"""
+        hits = name_aliases.find_aliases("全球矚目　本周川習會")
+        self.assertEqual(hits, [("川習會", ("川普", "習近平"))])
 
     def test_the_order_is_the_tables_order_and_there_are_no_duplicates(self):
         hits = name_aliases.find_aliases("川習會前瞻", "回顧拜習會", "又一次川習會")

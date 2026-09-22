@@ -516,18 +516,41 @@ class EditorTwoFrameModesTests(unittest.TestCase):
         data = safe_frame.apply_safe_frame(buffer.getvalue(), profile=profile)
         return Image.open(io.BytesIO(data)).convert("RGB")
 
-    def test_editor_off_is_not_post_processed_at_all(self):
-        """D24（2026-09-22 使用者裁決）：編輯 OFF ＝ 完全不後製。
+    def test_editor_off_is_not_post_processed_at_the_dense_tiers(self):
+        """D24（2026-09-22 使用者裁決）：編輯 OFF ＋ 字多／字超多 ＝ 完全不後製。
 
         取代 `test_editor_off_still_gets_post_processed`（2026-08-19 的
         「OFF ＝ 舊的 ON：拉伸到對位框」）。使用者原話：「記者/編輯CG 字多/字超多
-        安全框 OFF 時 生成 16:9 2K 無任何色框」——那條舊路的交付物是 1748×924 的
-        對位框本身，已被推翻。**版面仍是滿版**（交付的是模型整張畫面）。
+        安全框 OFF 時 生成 16:9 2K 無任何色框」，並在同日明確補充
+        「**只在字多 字超多生效**」。**版面仍是滿版**（交付的是模型整張畫面）。
         """
-        full_bleed, needs_frame, profile = main.resolve_frame_plan("編輯", False)
-        self.assertTrue(full_bleed, "編輯 OFF 仍要出滿版版面")
-        self.assertFalse(needs_frame, "D24：OFF 不准有任何後製")
-        self.assertEqual(profile, safe_area_spec.EDITOR_PROFILE)
+        for density in ("standard", "maximum"):
+            with self.subTest(density=density):
+                full_bleed, needs_frame, profile = main.resolve_frame_plan(
+                    "編輯", False, density
+                )
+                self.assertTrue(full_bleed, "編輯 OFF 仍要出滿版版面")
+                self.assertFalse(needs_frame, "D24：字多／字超多不准有任何後製")
+                self.assertEqual(profile, safe_area_spec.EDITOR_PROFILE)
+
+    def test_editor_off_still_stretches_to_the_alignment_frame_elsewhere(self):
+        """其餘檔位維持 2026-08-19 的行為——D24 只點名字多／字超多。
+
+        漏傳 `density` 也要落到這一條：舊呼叫端不該因為沒傳而悄悄拿到不後製的圖。
+        """
+        for density in ("", "minimal", "simplified", "verbatim", "no_text"):
+            with self.subTest(density=density):
+                full_bleed, needs_frame, profile = main.resolve_frame_plan(
+                    "編輯", False, density
+                )
+                self.assertTrue(full_bleed)
+                self.assertTrue(needs_frame, "非字多檔仍要拉伸填滿對位框")
+                self.assertEqual(profile, safe_area_spec.EDITOR_PROFILE)
+        self.assertEqual(
+            main.resolve_frame_plan("編輯", False),
+            (True, True, safe_area_spec.EDITOR_PROFILE),
+            "漏傳 density 要落到改動前的行為",
+        )
 
     def test_editor_on_uses_the_thin_frame(self):
         full_bleed, needs_frame, profile = main.resolve_frame_plan("編輯", True)

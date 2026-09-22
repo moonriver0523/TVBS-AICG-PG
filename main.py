@@ -3019,7 +3019,7 @@ def generate(req: GenerateRequest):
         type_label=type_label,
         map_scope_guard=classified_non_map,
         # 編輯版兩檔都要滿版版面，不能直接看 safe_frame（見 resolve_frame_plan）
-        full_bleed=resolve_frame_plan(req.role, req.safe_frame)[0],
+        full_bleed=resolve_frame_plan(req.role, req.safe_frame, req.density)[0],
         user_instruction=req.user_instruction,
         exclude_people=req.exclude_people,
         asis_reference_count=req.asis_reference_count,
@@ -3589,7 +3589,7 @@ def generate_image(req: ImageGenerateRequest):
         # safe_frame_profile 帶的是「角色」，實際要用哪個框在這裡才決定——
         # 全系統只有這一個解析點，pipeline 與網頁版直呼都會經過。
         _, needs_frame, frame_profile = resolve_frame_plan(
-            req.safe_frame_profile, req.safe_frame
+            req.safe_frame_profile, req.safe_frame, req.density
         )
         result = finalize_image_result(
             generate_image_raw(req),
@@ -4643,36 +4643,40 @@ SAFE_FRAME_ASPECT_RATIO = "21:9"
 DEFAULT_ASPECT_RATIO = "16:9"
 
 
-def resolve_frame_plan(role: str, safe_frame: bool) -> tuple[bool, bool, str]:
-    """把（角色, 安全框開關）翻成（要滿版版面?, 要後製置框?, 置框 profile）。
+def resolve_frame_plan(
+    role: str, safe_frame: bool, density: str = ""
+) -> tuple[bool, bool, str]:
+    """把（角色, 安全框開關, 檔位）翻成（要滿版版面?, 要後製置框?, 置框 profile）。
 
     這是編輯版兩種模式的唯一決定點，三個呼叫端（消化、生圖、整條 pipeline）
     都問這裡，才不會有人漏接就悄悄退回舊行為。
 
     編輯版：
-      OFF → **不後製**，直接交付生成圖（D24，2026-09-22 使用者裁決，見下）
-      ON  → 四周各壓 2% 薄框，輸出完整 1920×1080（2026-08-19 起不變）
-    版面仍然是滿版生成（第一個回傳值恆為 True）：交付的就是模型整張畫面，
-    沒有襯底也沒有留白，版面規則本來就該照滿版寫。
+      ON                    → 四周各壓 2% 薄框，輸出完整 1920×1080（2026-08-19 起不變）
+      OFF ＋ 字多／字超多   → **不後製**，直接交付生成圖（D24，見下）
+      OFF ＋ 其餘檔位       → 拉伸填滿對位框（2026-08-19 的行為，維持不變）
+    版面一律滿版生成（第一個回傳值恆為 True），兩檔都是。
 
-    ⚖ **D24（2026-09-22 使用者裁決）**：「記者/編輯CG 字多/字超多 安全框 OFF 時
-    生成 16:9 2K 無任何色框」。這推翻了 2026-08-19 的「編輯版兩檔都是滿版生成＋
-    後製、OFF＝拉伸填滿對位框」——那條路的交付物是 1748×924 的對位框本身
-    （`safe_frame.apply_safe_frame` 的 `_stretch_to_zone`），使用者 2026-09-22
-    回報「不是我們講好的」。現在 OFF 就是 OFF：一個像素都不動，交付尺寸＝生成
-    尺寸（字多／字超多＝2560×1440，其餘＝該 provider 的基本尺寸）。
-    ⚠ 裁決原話只點名字多／字超多，這裡**所有檔位一視同仁**——同一個開關在不同
-    檔位做兩件相反的事（字少置對位框、字多不置）沒有人解釋得清楚，而且使用者
-    2026-09-22 稍早的原話「字多或字超多 2K 其他 1K」講的也是同一個開關下的尺寸
-    差異，不是後製差異。要改回只在高檔位生效，改這一支就好。
+    ⚖ **D24（2026-09-22 使用者裁決）**：原話「記者/編輯CG 字多/字超多 安全框OFF時
+    生成 16:9 2K 無任何色框」。同日稍早先實作成「所有檔位都不後製」，使用者隨即
+    修正為「**只在字多 字超多生效**」，所以命中條件就是字面那兩檔，其餘檔位仍走
+    2026-08-19 的對位框（交付 1748×924）。
+
+    為什麼命中條件借 `HIGH_RES_EDITOR_DENSITIES` 而不是自己再寫一份：裁決原話把
+    「字多／字超多」與「2K」綁在同一句，而那個 frozenset 就是 F38 定義 2K 的地方
+    （standard＝字多、maximum＝字超多）。兩邊各寫一份遲早會分岔。
+
+    `density` 給預設值是為了舊呼叫端：漏傳就落到「非字多」那條，也就是改動前的
+    行為，不會有人因為漏傳而悄悄拿到不後製的圖。
 
     記者版不受影響：OFF 就是不出滿版版面、也不後製（本來就符合 D24）。
     """
     if role == safe_area_spec.EDITOR_PROFILE:
         if not safe_frame:
-            # profile 仍回對位框那組：這裡已經不置框，它只剩下「貼標籤時用哪組
-            # 邊界算版位」這個用途（見 apply_image_disclaimer）。
-            return True, False, safe_area_spec.EDITOR_PROFILE
+            # profile 兩條路都回對位框那組：不後製那條只拿它算貼標籤的版位
+            # （見 apply_image_disclaimer），置框那條真的拿它置框。
+            needs_frame = density not in HIGH_RES_EDITOR_DENSITIES
+            return True, needs_frame, safe_area_spec.EDITOR_PROFILE
         return True, True, safe_area_spec.EDITOR_FRAME_PROFILE
     return safe_frame, safe_frame, safe_area_spec.REPORTER_PROFILE
 
@@ -5394,7 +5398,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             # 追加修改也要走同一個解析點，否則編輯 OFF 改完圖會整個跳過後製，
             # 出來一張沒置框的原始生成圖（尺寸與版面都不對，卻不會報錯）。
             _, needs_frame, frame_profile = resolve_frame_plan(
-                req.safe_frame_profile, req.safe_frame
+                req.safe_frame_profile, req.safe_frame, req.density
             )
         result = finalize_image_result(
             generate_image_raw(image_req),
@@ -5512,7 +5516,7 @@ def restamp_disclaimer(req: ImageRestampRequest) -> ImageGenerateResponse:
         disclaimer_corner=req.disclaimer_corner,
     )
     _, needs_frame, frame_profile = resolve_frame_plan(
-        req.safe_frame_profile, req.safe_frame
+        req.safe_frame_profile, req.safe_frame, req.density
     )
     try:
         result = finalize_image_result(
