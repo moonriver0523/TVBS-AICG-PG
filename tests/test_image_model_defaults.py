@@ -90,9 +90,13 @@ class ModelDefaultsTests(unittest.TestCase):
 
 
 class HighResolutionDecisionTableTests(unittest.TestCase):
+    # 生成比例 → (非高解析度的 gpt provider size, 高解析度的**交付畫布**)。
+    # B87（2026-09-22）：兩個比例的交付畫布現在是同一個——交付畫布永遠是 1080p
+    # 那個形狀（16:9），21:9 只是生成技巧。以前這裡 21:9 釘 (3360,1440)，等於把
+    # 缺陷寫成規格：那張畫布是 2.333，記者安全框在上面會變成 2.853（規格 2.176）。
     ASPECTS = {
         "16:9": ("1280x720", (2560, 1440)),
-        "21:9": ("1680x720", (3360, 1440)),
+        "21:9": ("1680x720", (2560, 1440)),
     }
     DENSITIES = ("", "low", "minimal", "simplified", "verbatim", "standard", "maximum")
 
@@ -249,12 +253,47 @@ class HighResGptSizeTests(unittest.TestCase):
                 self.assertEqual((width % 16, height % 16), (0, 0))
                 self.assertLessEqual(max(width, height), 3840)
 
-    def test_output_canvas_matches_the_provider_size_pixel_for_pixel(self):
-        """高解析度是「不再靠升採樣」，provider 尺寸與交付畫布必須是同一組數字。"""
-        for ratio, size in main.HIGH_RES_GPT_IMAGE_SIZES.items():
-            with self.subTest(ratio=ratio):
-                width, height = (int(v) for v in size.split("x"))
-                self.assertEqual(main.HIGH_RES_OUTPUT_CANVASES[ratio], (width, height))
+    def test_the_delivered_canvas_is_always_the_broadcast_shape(self):
+        """B87：交付畫布永遠是 1080p 那個形狀，不跟著生成比例跑。
+
+        這一條取代舊的 `test_output_canvas_matches_the_provider_size_pixel_for_pixel`
+        （「provider 尺寸與交付畫布必須是同一組數字」）。那句話對 16:9 成立，對 21:9
+        不成立——21:9 從來不是交付比例，它是記者開安全框時的**生成**技巧，非高解析度
+        那條路一律把它放進 16:9 的 `BASE_CANVAS`。舊測試把 21:9 的 3360×1440 當成
+        規格釘住，等於保證了使用者回報的那個缺陷。
+        """
+        base_w, base_h = main.safe_area_spec.BASE_CANVAS
+        width, height = main.HIGH_RES_OUTPUT_CANVAS
+        self.assertAlmostEqual(width / height, base_w / base_h, places=3)
+        self.assertGreater(width, base_w, "高解析度畫布要比基準大，否則 F38 沒意義")
+
+    def test_the_safe_frame_keeps_its_shape_on_every_high_resolution_combination(self):
+        """真正要守的不變量：安全框在高解析度畫布上的形狀要跟規格一致。
+
+        使用者回報的就是這個——「安全框比例完全是錯的」。舊畫布表下記者安全框
+        在 21:9 那格是 2.853，規格是 2.176。
+        """
+        for profile in (
+            main.safe_area_spec.REPORTER_PROFILE,
+            main.safe_area_spec.EDITOR_PROFILE,
+            main.safe_area_spec.EDITOR_FRAME_PROFILE,
+        ):
+            bx0, by0, bx1, by1 = main.safe_area_spec.safe_rect(
+                *main.safe_area_spec.BASE_CANVAS, profile
+            )
+            expected = (bx1 - bx0) / (by1 - by0)
+            for aspect in main.HIGH_RES_GPT_IMAGE_SIZES:
+                with self.subTest(profile=profile, aspect=aspect):
+                    req = ImageGenerateRequest(
+                        prompt="p",
+                        provider="gpt",
+                        aspect_ratio=aspect,
+                        density="standard",
+                        safe_frame_profile=profile,
+                    )
+                    _, canvas = main.image_generation_size(req)
+                    x0, y0, x1, y1 = main.safe_area_spec.safe_rect(*canvas, profile)
+                    self.assertAlmostEqual((x1 - x0) / (y1 - y0), expected, delta=0.01)
 
     def test_requested_ratio_reaches_the_api_instead_of_a_hardcoded_size(self):
         captured = {}

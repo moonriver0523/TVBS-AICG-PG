@@ -2236,6 +2236,8 @@ const API_BASE = (location.hostname === "127.0.0.1" || location.hostname === "lo
 const AI_BACKEND_URL = `${API_BASE}/api/generate`;
 const IMAGE_BACKEND_URL = `${API_BASE}/api/images/generate`;
 const REFINE_BACKEND_URL = `${API_BASE}/api/images/refine`;
+// F47（2026-09-22）：事後把「示意圖」／「畫面來源」標籤改貼到另一個角落，不重生圖
+const RESTAMP_BACKEND_URL = `${API_BASE}/api/images/restamp-disclaimer`;
 
 // 後端有給 detail 時直接照用（那是後端刻意寫給人看的訊息）；
 // 只有 fallback（例如 524 這種被 Cloudflare 邊緣層直接攔掉、後端來不及回應的情況）
@@ -2943,6 +2945,48 @@ function setDisclaimerCorner(corner) {
     if (!DISCLAIMER_CORNER_LABELS[corner]) return;
     state.disclaimerCorner = corner;
     updateDisclaimerControls();
+    // F47（2026-09-22 使用者要求）：已經有成品的話立刻把標籤挪過去，不用重生一張。
+    // 貼標籤全程是 Pillow，一次生圖 API 都不打（見後端 /api/images/restamp-disclaimer）。
+    restampDisclaimer();
+}
+
+// F47：把標籤改貼到另一個角落。沒有成品、或那張成品根本沒貼標籤就什麼都不做
+// ——後者不是錯誤，是「這次本來就沒有標籤可以挪」。
+async function restampDisclaimer() {
+    const applied = appliedDisclaimer();
+    if (!applied.kind || !state.refineSource) return;
+    // 封面版型的標籤是 compose 自己畫的（版位綁在角標上），不吃這組設定
+    if ((editorFormat().hides || {}).disclaimer) return;
+    try {
+        const response = await fetch(RESTAMP_BACKEND_URL, {
+            method: 'POST',
+            headers: _apiHeaders(),
+            body: JSON.stringify({
+                source_image_base64: state.refineSource.base64,
+                source_mime_type: state.refineSource.mimeType,
+                model: (state.refineDisplay || {}).model || '',
+                provider: effectiveImageProvider(),
+                aspect_ratio: currentAspectRatio(),
+                image_size: state.imageSize,
+                // 少了這格會把一張 2K 成品悄悄重算成 1K（同 B84）
+                density: state.density,
+                safe_frame: state.safeFrame,
+                safe_frame_profile: state.currentRole,
+                broadcast_hole: broadcastHoleForApi(),
+                disclaimer_kind: applied.kind,
+                disclaimer_source_text: applied.sourceText,
+                disclaimer_corner: state.disclaimerCorner,
+            }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(_apiError(data, response.status));
+        // 只換顯示中的成品；refineSource 是置框前原圖，標籤不在上面，不必動
+        state.refineDisplay = data;
+        showRefinedImage(data);
+        showToast(`標籤已移到${DISCLAIMER_CORNER_LABELS[state.disclaimerCorner]}`);
+    } catch (err) {
+        showToast(`標籤移位失敗：${err.message}`);
+    }
 }
 
 function onDisclaimerSourceInput(input) {
@@ -3271,6 +3315,10 @@ async function handleImageGeneration() {
                 provider,
                 aspect_ratio: currentAspectRatio(),
                 image_size: state.imageSize,
+                // B84（2026-09-22）：這格以前漏掉，後端收到 density="" → F38 的高解析度
+                // 閘門在第二／三頁這個送出點**永遠不成立**，字多／字超多從來沒拿到 2K。
+                // 與第一頁那個送出點一致，兩邊少一邊就有一邊靜靜降級。
+                density: state.density,
                 safe_frame: state.safeFrame,
                 safe_frame_profile: state.currentRole,
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
@@ -3689,6 +3737,22 @@ function refineSourceFromResponse(data) {
     return { base64: data.image_data_base64, mimeType: data.mime_type };
 }
 
+// B83／F47（2026-09-22）：上一張成品**實際**貼的那一組標籤。
+// 後端刻意不重判——refine 不送 portrait_subjects，重判會讓一張本來標「示意圖」的
+// 具名肖像因為來源名還留在輸入框而被降級成「畫面來源」，那是對觀眾說謊。
+// 所以這裡讀的是**回應**裡的值（後端貼了什麼就回什麼），不是前端那組輸入控制項。
+// 沒有成品、或那張根本沒貼標籤時回 kind=''，後端就不貼。
+function appliedDisclaimer() {
+    const d = state.refineDisplay || {};
+    return {
+        kind: d.disclaimer_kind || '',
+        sourceText: d.disclaimer_source_text || '',
+        // 角落是使用者現在選的那個（F47 事後改位置就是改這格）；
+        // 沒選過就沿用上一張貼的位置。
+        corner: state.disclaimerCorner || d.disclaimer_corner || 'lower_right',
+    };
+}
+
 function resetRefineState(source, display) {
     state.refineSource = source || null;
     // 顯示中的成品也記在 state（退回上一版用），不從 DOM 反解
@@ -3767,6 +3831,15 @@ async function handleRefine() {
                 provider: effectiveImageProvider(),
                 aspect_ratio: isCover ? '16:9' : currentAspectRatio(),
                 image_size: state.imageSize,
+                // B84（2026-09-22）：這格以前不存在，後端 ImageRefineRequest 也沒有——
+                // 於是追加修改一律掉回 1K 畫布，字多／字超多生的 2K 圖只要一改就降級。
+                density: state.density,
+                // B83（2026-09-22）：refine 以前完全不貼標籤，「畫面來源」與「示意圖」
+                // 改完圖就整個消失。原樣帶回上一張實際貼的那一組（見 appliedDisclaimer）。
+                // 封面版型走 compose 自己的 _draw_ai_note，不吃這組。
+                disclaimer_kind: isCover ? '' : appliedDisclaimer().kind,
+                disclaimer_source_text: isCover ? '' : appliedDisclaimer().sourceText,
+                disclaimer_corner: appliedDisclaimer().corner,
                 safe_frame: isCover ? false : state.safeFrame,
                 // B51：封面不能只送 safe_frame=false 卻仍帶「編輯」——編輯身分在
                 // resolve_frame_plan 一律會被置對位框（見 main.py 的說明），safe_frame

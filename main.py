@@ -1166,7 +1166,10 @@ class ImageGenerateResponse(BaseModel):
     # source_image_base64：置框「前」的原始生成圖，**只**供追加修改（refine）再編輯用。
     # 兩者不可混用——把成品餵回去改圖會二次拉伸，失真 6.4%→13.2%→20.5% 疊上去，
     # 而且每輪只多一點、很難察覺（PLAN.md ③ 的失真疊加坑）。
-    # 未置框（safe_frame=False）時 source_image_base64 為空字串，成品本身就是原圖。
+    # 未置框（safe_frame=False）且沒貼標籤時 source_image_base64 為空字串，成品本身
+    # 就是原圖。**有貼標籤時例外**（B86）：未置框那條路的成品已經帶著一枚標籤，
+    # 直接拿去 refine／restamp 會被貼上第二枚，所以 apply_image_disclaimer 會把
+    # 「貼標籤之前」那張補進這一格。
     # source_mime_type＝原圖實際的 MIME（模型可能回 png 也可能回 jpeg），
     # 前端組 refine 請求時要用它，不能假設一律是 png。
     image_data_base64: str
@@ -1178,6 +1181,15 @@ class ImageGenerateResponse(BaseModel):
     # 依新聞語境自畫具名真人，但**不**在圖上標「長相為 AI 推測」（使用者明確裁定）——
     # 改成這裡回一則文字給前端訊息欄。空清單＝這次沒有需要通知的事。
     notices: list[str] = Field(default_factory=list)
+    # B83（2026-09-22）：這次成品上**實際**貼了哪一種標籤、什麼文字、哪個角落。
+    # 空字串＝這次沒貼。追加修改（/api/images/refine）與事後重貼
+    # （/api/images/restamp-disclaimer）一律把這三格原樣送回來，後端**不重判**——
+    # refine 不帶 portrait_subjects，重判會讓一張本來是「示意圖」的具名肖像因為
+    # 來源名還留著而被降級成「畫面來源」，那是對觀眾說謊（互斥優先序見
+    # resolve_image_disclaimer）。
+    disclaimer_kind: Literal["", "ai", "source"] = ""
+    disclaimer_source_text: str = ""
+    disclaimer_corner: str = ""
 
 
 # 第一頁「懶人機制」：type_label 傳這個值代表由 AI 自行判斷最適合的圖表類型
@@ -3007,7 +3019,7 @@ def generate(req: GenerateRequest):
         type_label=type_label,
         map_scope_guard=classified_non_map,
         # 編輯版兩檔都要滿版版面，不能直接看 safe_frame（見 resolve_frame_plan）
-        full_bleed=resolve_frame_plan(req.role, req.safe_frame)[0],
+        full_bleed=resolve_frame_plan(req.role, req.safe_frame, req.density)[0],
         user_instruction=req.user_instruction,
         exclude_people=req.exclude_people,
         asis_reference_count=req.asis_reference_count,
@@ -3056,7 +3068,16 @@ def generate(req: GenerateRequest):
                 response = digest_completion(
                     model=model,
                     system_prompt=system_prompt,
-                    news_text=req.news_text,
+                    # B88（2026-09-22 使用者回報「川習被畫成背影」）：簡稱對照表
+                    # 以前只接在兩條封面推導上（`resolve_cover_visuals`／
+                    # `derive_yt_cover_plan`），一般 CG 這條完全沒接——而 B82 的
+                    # 因果鏈在這裡一字不差地重演：簡稱推導不出人名 →
+                    # `portrait_subjects` 交白卷 → 查不到參考照 →
+                    # `news_prompt.py:334`「沒有附照片的具名真人必須畫成背影或剪影」
+                    # → 背影。沒命中時回空字串，素材與加表之前逐字相同。
+                    news_text=req.news_text + name_aliases.alias_hint_block(
+                        req.news_text, req.user_instruction
+                    ),
                     max_output_tokens=max_output_tokens,
                     schema_name="news_cg_digest",
                     schema=digest_schema(type_label),
@@ -3568,7 +3589,7 @@ def generate_image(req: ImageGenerateRequest):
         # safe_frame_profile 帶的是「角色」，實際要用哪個框在這裡才決定——
         # 全系統只有這一個解析點，pipeline 與網頁版直呼都會經過。
         _, needs_frame, frame_profile = resolve_frame_plan(
-            req.safe_frame_profile, req.safe_frame
+            req.safe_frame_profile, req.safe_frame, req.density
         )
         result = finalize_image_result(
             generate_image_raw(req),
@@ -4077,6 +4098,20 @@ def apply_image_disclaimer(
         update={
             "image_data_base64": base64.b64encode(stamped).decode("ascii"),
             "mime_type": "image/png",
+            # B86（2026-09-22）：未置框那條路（記者＋安全框 OFF）`finalize_image_result`
+            # 會提早 return，`source_image_base64` 留空，前端
+            # `refineSourceFromResponse()` 就退而取成品本身——而成品此刻**已經有一枚
+            # 標籤**。那張再送回 refine／restamp 就會被貼上第二枚（舊角落一枚、新角落
+            # 一枚）。所以這裡把「貼標籤之前」那張補進去；上游已經填過（置框那條路）
+            # 就不動它，那格的語意是「置框前原圖」，優先序不能倒過來。
+            "source_image_base64": (
+                result.source_image_base64 or result.image_data_base64
+            ),
+            "source_mime_type": result.source_mime_type or result.mime_type,
+            # B83：留下這次**實際**貼的那一組，供 refine／restamp 原樣帶回（見欄位說明）
+            "disclaimer_kind": req.disclaimer_kind,
+            "disclaimer_source_text": req.disclaimer_source_text,
+            "disclaimer_corner": req.disclaimer_corner,
         }
     )
 
@@ -4262,7 +4297,8 @@ NATIVE_GPT_IMAGE_SIZES = {
 # 旗標名稱歷史留著 EDITOR，但這次使用者原話「記者/編輯 字多/字超多的時候」明講
 # 兩個角色都要涵蓋，不能再寫死只有編輯——見下面 HIGH_RES_ROLES。
 #
-# 實際會送出的尺寸：16:9→2560x1440、21:9→3360x1440。預設模型
+# 實際會送出的**生成**尺寸：16:9→2560x1440、21:9→3360x1440（交付畫布是另一回事，
+# 一律 16:9，見下面 HIGH_RES_OUTPUT_CANVAS）。預設模型
 # NATIVE_GPT_IMAGE_MODEL="gpt-image-2.5-sunburst"（見上方 generate_gpt_image），
 # 2.5 系列長邊上限放寬到 3840（見本檔開頭的模型註記），3360 在界內；若透過
 # OPENAI_IMAGE_MODEL 環境變數換回 gpt-image-2（標準上限 2560×1440），21:9 這條
@@ -4277,10 +4313,32 @@ HIGH_RES_GPT_IMAGE_SIZES = {
     "16:9": "2560x1440",
     "21:9": "3360x1440",
 }
-HIGH_RES_OUTPUT_CANVASES = {
-    "16:9": (2560, 1440),
-    "21:9": (3360, 1440),
-}
+
+# B87（2026-09-22 使用者回報：「記者CG 字多 安全框比例完全是錯的 沒有跟著 2K 調整」）
+#
+# 這裡以前是一張 `{"16:9": (2560,1440), "21:9": (3360,1440)}` 的表，理由寫的是
+# 「高解析度是不再靠升採樣，provider 尺寸與交付畫布必須是同一組數字」。那句話對
+# 16:9 成立，對 21:9 **不成立**，而且會毀掉安全框：
+#
+#   交付畫布**永遠是 1080p 那個形狀**（16:9）。21:9 從來不是交付比例，它是**生成**
+#   技巧——記者開安全框時 `resolve_aspect_ratio()` 會挑 21:9，因為那個比例的生成圖
+#   FIT 進記者安全區幾乎零裁切（見 SAFE_FRAME_ASPECT_RATIO 那段）。非高解析度那條
+#   路無論生成比例是什麼，`output_canvas` 一律 `BASE_CANVAS`，21:9 的圖就是被放進
+#   16:9 畫布裡。F38 把交付畫布改成跟著生成比例走，等於悄悄把記者的交付檔從
+#   1920×1080 換成 3360×1440。
+#
+# 實測（`safe_area_spec.safe_rect(*canvas, "記者")`）：
+#   字少 21:9 → 畫布 1920×1080（1.778），安全框 1634×751，框比例 2.176  ✅
+#   字多 16:9 → 畫布 2560×1440（1.778），安全框 2178×1002，框比例 2.174  ✅
+#   字多 21:9 → 畫布 3360×1440（**2.333**），安全框 2859×1002，框比例 **2.853** ❌
+# 最後一列就是使用者看到的那張：畫布與安全框的形狀雙雙跑掉。
+#
+# 改成單一畫布 (2560, 1440)＝1920×1080 等比放大到模型長邊上限內的最大 16:9。
+# provider size **不動**（21:9 仍送 3360x1440）：生成比例是生成比例，交付畫布是交付
+# 畫布，本來就是兩件事，混在同一張表就是這個缺陷的成因。
+# 「不再靠升採樣」那個目的仍然達成——記者安全區在這張畫布上是 2178×1002，
+# 比 1920 畫布的 1634×751 多 77% 像素，而且來源是 3360 寬的生成圖，全程只有縮小。
+HIGH_RES_OUTPUT_CANVAS = (2560, 1440)
 
 
 def image_generation_size(
@@ -4300,12 +4358,12 @@ def image_generation_size(
         HIGH_RES_EDITOR_ENABLED
         and req.safe_frame_profile in HIGH_RES_ROLES
         and req.density in HIGH_RES_EDITOR_DENSITIES
-        and req.aspect_ratio in HIGH_RES_OUTPUT_CANVASES
+        # 閘門看的是「這個生成比例有沒有高解析度的 provider size」，不是交付畫布
+        # ——交付畫布只有一個（B87）。
+        and req.aspect_ratio in HIGH_RES_GPT_IMAGE_SIZES
     )
     output_canvas = (
-        HIGH_RES_OUTPUT_CANVASES[req.aspect_ratio]
-        if high_res
-        else safe_area_spec.BASE_CANVAS
+        HIGH_RES_OUTPUT_CANVAS if high_res else safe_area_spec.BASE_CANVAS
     )
     if req.provider == "gpt":
         size_map = HIGH_RES_GPT_IMAGE_SIZES if high_res else NATIVE_GPT_IMAGE_SIZES
@@ -4585,27 +4643,41 @@ SAFE_FRAME_ASPECT_RATIO = "21:9"
 DEFAULT_ASPECT_RATIO = "16:9"
 
 
-def resolve_frame_plan(role: str, safe_frame: bool) -> tuple[bool, bool, str]:
-    """把（角色, 安全框開關）翻成（要滿版版面?, 要後製置框?, 置框 profile）。
+def resolve_frame_plan(
+    role: str, safe_frame: bool, density: str = ""
+) -> tuple[bool, bool, str]:
+    """把（角色, 安全框開關, 檔位）翻成（要滿版版面?, 要後製置框?, 置框 profile）。
 
     這是編輯版兩種模式的唯一決定點，三個呼叫端（消化、生圖、整條 pipeline）
     都問這裡，才不會有人漏接就悄悄退回舊行為。
 
-    編輯版（2026-08-19 起）：**兩檔都是滿版生成＋後製**，開關只決定後製方式——
-      OFF → 拉伸填滿對位框（即 2026-08-17～08-19 掛在 ON 的那個行為）
-      ON  → 四周各壓 2% 薄框，輸出完整 1920×1080
-    原本 OFF 那條「靠 prompt 叫模型自己縮小置中留厚邊、完全不後製」已依使用者
-    2026-08-19 裁決廢除，編輯版不再有任何不後製的路徑。
+    編輯版：
+      ON                    → 四周各壓 2% 薄框，輸出完整 1920×1080（2026-08-19 起不變）
+      OFF ＋ 字多／字超多   → **不後製**，直接交付生成圖（D24，見下）
+      OFF ＋ 其餘檔位       → 拉伸填滿對位框（2026-08-19 的行為，維持不變）
+    版面一律滿版生成（第一個回傳值恆為 True），兩檔都是。
 
-    記者版不受影響：OFF 就是不出滿版版面、也不後製。
+    ⚖ **D24（2026-09-22 使用者裁決）**：原話「記者/編輯CG 字多/字超多 安全框OFF時
+    生成 16:9 2K 無任何色框」。同日稍早先實作成「所有檔位都不後製」，使用者隨即
+    修正為「**只在字多 字超多生效**」，所以命中條件就是字面那兩檔，其餘檔位仍走
+    2026-08-19 的對位框（交付 1748×924）。
+
+    為什麼命中條件借 `HIGH_RES_EDITOR_DENSITIES` 而不是自己再寫一份：裁決原話把
+    「字多／字超多」與「2K」綁在同一句，而那個 frozenset 就是 F38 定義 2K 的地方
+    （standard＝字多、maximum＝字超多）。兩邊各寫一份遲早會分岔。
+
+    `density` 給預設值是為了舊呼叫端：漏傳就落到「非字多」那條，也就是改動前的
+    行為，不會有人因為漏傳而悄悄拿到不後製的圖。
+
+    記者版不受影響：OFF 就是不出滿版版面、也不後製（本來就符合 D24）。
     """
     if role == safe_area_spec.EDITOR_PROFILE:
-        profile = (
-            safe_area_spec.EDITOR_FRAME_PROFILE
-            if safe_frame
-            else safe_area_spec.EDITOR_PROFILE
-        )
-        return True, True, profile
+        if not safe_frame:
+            # profile 兩條路都回對位框那組：不後製那條只拿它算貼標籤的版位
+            # （見 apply_image_disclaimer），置框那條真的拿它置框。
+            needs_frame = density not in HIGH_RES_EDITOR_DENSITIES
+            return True, needs_frame, safe_area_spec.EDITOR_PROFILE
+        return True, True, safe_area_spec.EDITOR_FRAME_PROFILE
     return safe_frame, safe_frame, safe_area_spec.REPORTER_PROFILE
 
 
@@ -5220,6 +5292,21 @@ class ImageRefineRequest(BaseModel):
     cover_kind: Literal[
         "", "ten_cover", "yt_live_cover", "yt_hourly_cover", "yt_live24_cover", "yt_hot_cover"
     ] = ""
+    # B84（2026-09-22）：消化檔位。這裡以前沒有這格，於是 image_generation_size()
+    # 永遠看到 density=""，F38 的高解析度閘門在追加修改這條路上**從來沒有成立過**
+    # ——字多／字超多生成的圖只要一改就悄悄掉回 1K 畫布。語意同
+    # ImageGenerateRequest.density，前端原樣送回這次那張圖用的檔位。
+    density: str = ""
+    # B83（2026-09-22）：上一張成品**實際**貼的標籤，原樣帶回來重貼。這條路以前
+    # 完全沒有貼標籤這件事（refine 直呼 generate_image_raw，從不經過
+    # apply_image_disclaimer），所以「畫面來源」與「示意圖」追加修改後都會整個消失。
+    # 刻意不重判：refine 不送 portrait_subjects，重判會把「示意圖」降級成
+    # 「畫面來源」（見 ImageGenerateResponse 同名欄位）。
+    disclaimer_kind: Literal["", "ai", "source"] = ""
+    disclaimer_source_text: str = Field(default="", max_length=40)
+    disclaimer_corner: Literal[
+        "lower_right", "lower_left", "upper_right", "upper_left"
+    ] = "lower_right"
 
 
 @app.post(
@@ -5282,6 +5369,8 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             provider=req.provider,
             aspect_ratio=req.aspect_ratio,
             image_size=req.image_size,
+            # B84：檔位要跟著過來，F38 的高解析度閘門才判得出來（見欄位說明）
+            density=req.density,
             safe_frame=req.safe_frame,
             safe_frame_profile=req.safe_frame_profile,
             broadcast_hole=req.broadcast_hole,
@@ -5289,6 +5378,14 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
                 f"data:{req.source_mime_type};base64,{req.source_image_base64}"
             ),
             reference_images=replacement_images if replacement_person else [],
+            # B83：原樣帶回上一張實際貼的標籤，不重判（見欄位說明）。具名換臉一定是
+            # 模型畫的臉，這裡強制「示意圖」——否則使用者只要把來源名留著，一張換過
+            # 臉的圖就會掛上「畫面來源」。
+            disclaimer_kind="ai" if replacement_person else req.disclaimer_kind,
+            disclaimer_source_text=(
+                "" if replacement_person else req.disclaimer_source_text
+            ),
+            disclaimer_corner=req.disclaimer_corner,
         )
         prompt = image_req.prompt
         if req.cover_kind:
@@ -5301,7 +5398,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             # 追加修改也要走同一個解析點，否則編輯 OFF 改完圖會整個跳過後製，
             # 出來一張沒置框的原始生成圖（尺寸與版面都不對，卻不會報錯）。
             _, needs_frame, frame_profile = resolve_frame_plan(
-                req.safe_frame_profile, req.safe_frame
+                req.safe_frame_profile, req.safe_frame, req.density
             )
         result = finalize_image_result(
             generate_image_raw(image_req),
@@ -5311,6 +5408,11 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             broadcast_hole=req.broadcast_hole,
             canvas=image_generation_size(image_req)[1],
         )
+        # B83（2026-09-22）：這一段以前整個不存在——refine 從不貼標籤，所以
+        # 「畫面來源」與「示意圖」追加修改後都會消失。條件與 generate_image()
+        # 的同一行一字不差（挖空框自己已經貼過浮水印，不重貼第二次）。
+        if image_req.disclaimer_kind and not req.broadcast_hole:
+            result = apply_image_disclaimer(result, image_req, profile=frame_profile)
     except Exception as exc:
         _record_generation_failure(
             request_id, started, exc,
@@ -5338,6 +5440,113 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
     notices = collected_portrait_notices()
     if notices:
         result = result.model_copy(update={"notices": notices})
+    return result
+
+
+# ---- F47：事後重貼「示意圖」／「畫面來源」標籤（2026-09-22 使用者要求）----
+#
+# 使用者原話：「畫面來源(與AI示意圖標籤) 的位置，是 PILLOW，理論上成圖之後要讓
+# 使用者修改位置」。確實如此——貼標籤這件事從頭到尾沒有模型參與
+# （compose.paste_disclaimer_note 是純 Pillow），但角落以前只能在**生圖前**選，
+# 想換一個角落就得整張重生一次，等於為了挪一行字付一次生圖費。
+#
+# 這支端點拿回應裡那張**置框前原圖**（source_image_base64），照原本的參數重跑
+# 置框→挖空框→貼標籤，得到的成品與當初那張逐像素相同、只差標籤位置。
+# 一次生圖 API 都不打。
+#
+# ⚠️ 不接受「把成品送回來再貼一次」：成品上已經有一枚標籤，再貼會變兩枚，而且
+# 對位框那條路會二次拉伸（失真疊加，見 ImageGenerateResponse 欄位說明）。所以
+# 收的一律是置框前原圖；未置框且未貼標籤（source_image_base64 為空）才送成品本身，
+# 規矩與 /api/images/refine 完全一致。
+class ImageRestampRequest(BaseModel):
+    # 置框「前」的原始生成圖（base64，不是 data URL），同 ImageRefineRequest。
+    source_image_base64: str = Field(min_length=1, max_length=28_000_000)
+    source_mime_type: str = "image/png"
+    model: str = ""
+    # 下面這組必須與當初那次生圖**完全一致**，否則重算出來的不是同一張圖：
+    # 畫布尺寸由 image_generation_size() 依 provider／density／檔位／角色推導，
+    # 少帶一個（尤其 density）就會把一張 2K 成品悄悄重算成 1K。
+    provider: Literal["gemini", "gpt"] = "gemini"
+    aspect_ratio: str = "16:9"
+    image_size: str = "1K"
+    density: str = ""
+    safe_frame: bool = False
+    safe_frame_profile: str = "記者"
+    broadcast_hole: str = ""
+    # 要貼的標籤：kind 與文字原樣沿用上一張（不重判，理由同 refine），
+    # 只有 corner 是這次真正要改的東西。
+    disclaimer_kind: Literal["ai", "source"]
+    disclaimer_source_text: str = Field(default="", max_length=40)
+    disclaimer_corner: Literal[
+        "lower_right", "lower_left", "upper_right", "upper_left"
+    ]
+
+
+@app.post(
+    "/api/images/restamp-disclaimer",
+    response_model=ImageGenerateResponse,
+    dependencies=[Depends(verify_internal_api_key)],
+)
+def restamp_disclaimer(req: ImageRestampRequest) -> ImageGenerateResponse:
+    """把標籤改貼到另一個角落，不重新生圖（F47）。"""
+    request_id = request_log.new_request_id()
+    started = _generation_clock()
+    if req.broadcast_hole:
+        # 播出鏡面的「示意圖」浮水印是 compose.apply_broadcast_hole 自己畫的，
+        # 版位綁在挖空框上，不吃 disclaimer_corner——讓它假裝成功比擋下來更糟。
+        raise HTTPException(
+            status_code=400,
+            detail="播出鏡面的「示意圖」浮水印位置綁在挖空框上，不能單獨挪動",
+        )
+    base = ImageGenerateResponse(
+        image_data_base64=req.source_image_base64,
+        mime_type=req.source_mime_type,
+        model=req.model,
+    )
+    sizing = ImageGenerateRequest(
+        prompt="restamp",  # 只為了算畫布，不會送給任何模型
+        provider=req.provider,
+        aspect_ratio=req.aspect_ratio,
+        image_size=req.image_size,
+        density=req.density,
+        safe_frame=req.safe_frame,
+        safe_frame_profile=req.safe_frame_profile,
+        disclaimer_kind=req.disclaimer_kind,
+        disclaimer_source_text=req.disclaimer_source_text,
+        disclaimer_corner=req.disclaimer_corner,
+    )
+    _, needs_frame, frame_profile = resolve_frame_plan(
+        req.safe_frame_profile, req.safe_frame, req.density
+    )
+    try:
+        result = finalize_image_result(
+            base,
+            aspect_ratio=req.aspect_ratio,
+            safe_frame=needs_frame,
+            profile=frame_profile,
+            canvas=image_generation_size(sizing)[1],
+        )
+        result = apply_image_disclaimer(result, sizing, profile=frame_profile)
+    except Exception as exc:
+        # 失敗也要留紀錄：這條路沒有生圖模型可以怪，出事一定是置框或貼字，
+        # 後台查得到才知道是哪一種（沿用 web-refine 的同一套失敗歸檔）。
+        _record_generation_failure(
+            request_id, started, exc,
+            source="web-restamp", news_text="", prompt="", provider=req.provider,
+        )
+        raise
+    # 交出去的成品換了一張（標籤挪了角落），後台就得記一筆——不記的話稽核裡
+    # 停在舊角落那版，跟使用者手上那張對不起來。分類是「合成」（純 Pillow，
+    # 沒有生圖模型，耗時量級與其他端點不同），見 audit_archive.record_action。
+    meta = _outcome_meta(started, provider=req.provider, image_model=result.model)
+    _archive_generation(
+        request_id=request_id,
+        image_base64=result.image_data_base64,
+        mime_type=result.mime_type,
+        source="web-restamp",
+        prompt="",
+        **meta,
+    )
     return result
 
 

@@ -89,7 +89,9 @@ class FrontendSwitchTests(unittest.TestCase):
 
     def test_every_payload_goes_through_the_switch(self):
         payloads = re.findall(r"broadcast_hole:\s*([^,\n]+)", self.js)
-        self.assertEqual(len(payloads), 3, payloads)
+        # 2026-09-22 F47：第 4 個是 restampDisclaimer()（事後改標籤角落）。它一樣要
+        # 走同一支開關——挖空框的成品若被算成沒有挖空，重貼出來的就不是同一張圖。
+        self.assertEqual(len(payloads), 4, payloads)
         for expr in payloads:
             self.assertIn("broadcastHoleForApi()", expr, expr)
         self.assertNotIn("broadcast_hole: editorFormat().hole", self.js)

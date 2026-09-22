@@ -105,8 +105,9 @@ class RefineEndpointTests(unittest.TestCase):
         證明沒有二次拉伸：每輪都拿 source_image_base64（置框前）繼續改，
         成品永遠等於 apply_safe_frame(原圖) 一次的結果。
 
-        2026-08-19：編輯版兩檔都會後製（見 main.resolve_frame_plan），所以兩檔
-        都要驗——OFF 是拉伸到對位框、ON 是 2% 薄框，任一檔疊加失真都是缺陷。
+        這裡兩檔都用非字多檔位（`refine_request` 不帶 density），所以 OFF 仍是
+        拉伸到對位框、ON 是 2% 薄框——D24 只在字多／字超多改行為，見
+        `test_safe_frame.EditorTwoFrameModesTests`。
         """
         import safe_area_spec
         import safe_frame
@@ -149,7 +150,7 @@ class RefineEndpointTests(unittest.TestCase):
                         expected,
                         "成品必須與原圖直接置框逐位元相符（無二次處理）",
                     )
-                    source = result.source_image_base64
+                    source = result.source_image_base64 or result.image_data_base64
 
     def test_source_mime_type_reports_raw_mime(self):
         """置框前原圖的實際 MIME 要回給前端；模型回 jpeg 時不能被硬當成 png。"""
@@ -194,8 +195,9 @@ class RefineEndpointTests(unittest.TestCase):
         self.assertEqual(result.source_image_base64, "")
         self.assertEqual(result.image_data_base64, EDITOR_RAW)
 
-    def test_editor_off_is_still_framed_on_refine(self):
-        """編輯 OFF 追加修改仍要置框——漏接會回一張沒置框的生成圖且不報錯。"""
+    def test_editor_off_is_still_framed_on_refine_at_the_light_tiers(self):
+        """編輯 OFF ＋ 非字多檔，追加修改仍要置框——漏接會回一張沒置框的生成圖
+        且不報錯。D24 只在字多／字超多改行為，見下一條。"""
         with patch.object(
             main, "generate_image_raw", return_value=fake_raw_response(EDITOR_RAW)
         ):
@@ -205,6 +207,26 @@ class RefineEndpointTests(unittest.TestCase):
             io.BytesIO(base64.b64decode(result.image_data_base64))
         ) as image:
             self.assertEqual(image.size, EDITOR_FRAMED_SIZE)
+
+    def test_editor_off_is_not_framed_on_refine_at_the_dense_tiers(self):
+        """D24（2026-09-22 使用者裁決，同日修正為「只在字多 字超多生效」）：
+        那兩檔的交付物就是生成圖本身。
+
+        B84 已經把 `density` 接進 `ImageRefineRequest`；這條同時證明那一格真的
+        被 `resolve_frame_plan` 讀到——沒接的話追加修改會跟生圖給出不同尺寸。
+        """
+        for density in ("standard", "maximum"):
+            with self.subTest(density=density):
+                with patch.object(
+                    main, "generate_image_raw",
+                    return_value=fake_raw_response(EDITOR_RAW),
+                ):
+                    result = main.refine_image(
+                        self.refine_request(safe_frame=False, density=density)
+                    )
+                # 沒置框就沒有「置框前原圖」可留，成品本身就是原圖（見欄位定義）
+                self.assertEqual(result.source_image_base64, "")
+                self.assertEqual(result.image_data_base64, EDITOR_RAW)
 
 
 class CoverRefineFrameBypassTests(unittest.TestCase):
@@ -258,7 +280,9 @@ class CoverRefineFrameBypassTests(unittest.TestCase):
         self.assertEqual(result.source_image_base64, "")
 
     def test_empty_cover_kind_falls_back_to_existing_editor_behavior(self):
-        """cover_kind 沒填＝一般編輯圖片改圖，既有「編輯 OFF 仍置框」規則不變。"""
+        """cover_kind 沒填＝一般編輯圖片改圖，既有「編輯 OFF 仍置框」規則不變
+        （非字多檔；D24 只改字多／字超多）。重點：封面的 bypass 不可以外溢到
+        一般路徑。"""
         with patch.object(
             main, "generate_image_raw", return_value=fake_raw_response(EDITOR_RAW)
         ):

@@ -412,10 +412,16 @@ class EndpointWiringTests(unittest.TestCase):
         with Image.open(io.BytesIO(base64.b64decode(result.source_image_base64))) as img:
             self.assertEqual(img.size, (1280, 720))
 
-    def test_high_res_editor_off_keeps_the_stretch_to_zone_semantics(self):
+    def test_high_res_editor_off_delivers_the_generated_image_untouched(self):
+        """D24（2026-09-22 使用者裁決）：字超多＋安全框 OFF ＝ 生成圖原樣交付。
+
+        取代 `test_high_res_editor_off_keeps_the_stretch_to_zone_semantics`
+        （那條釘的是「拉伸到 2560×1440 畫布上的對位框」＝2331×1232）。使用者原話
+        「安全框 OFF 時 生成 16:9 2K 無任何色框」——交付尺寸就是模型生成的尺寸。
+        """
         import base64
 
-        raw = self.raw_response((1280, 720))
+        raw = self.raw_response((2560, 1440))
         req = ImageGenerateRequest(
             prompt="p",
             provider="gpt",
@@ -423,15 +429,13 @@ class EndpointWiringTests(unittest.TestCase):
             safe_frame=False,
             safe_frame_profile=safe_area_spec.EDITOR_PROFILE,
         )
-        expected = safe_area_spec.safe_rect(
-            2560, 1440, safe_area_spec.EDITOR_PROFILE
-        )
         with patch.object(main, "HIGH_RES_EDITOR_ENABLED", True), patch.object(
             main, "generate_image_raw", return_value=raw
         ):
             result = generate_image(req)
         with Image.open(io.BytesIO(base64.b64decode(result.image_data_base64))) as img:
-            self.assertEqual(img.size, (expected[2] - expected[0], expected[3] - expected[1]))
+            self.assertEqual(img.size, (2560, 1440))
+        self.assertEqual(result.image_data_base64, raw.image_data_base64)
 
     def test_high_res_safe_rect_scales_each_normalized_edge(self):
         self.assertEqual(safe_frame.DEFAULT_CANVAS, safe_area_spec.BASE_CANVAS)
@@ -512,12 +516,41 @@ class EditorTwoFrameModesTests(unittest.TestCase):
         data = safe_frame.apply_safe_frame(buffer.getvalue(), profile=profile)
         return Image.open(io.BytesIO(data)).convert("RGB")
 
-    def test_editor_off_still_gets_post_processed(self):
-        """OFF ＝ 舊的 ON：滿版生成＋拉伸到對位框，不是「不後製」。"""
-        full_bleed, needs_frame, profile = main.resolve_frame_plan("編輯", False)
-        self.assertTrue(full_bleed, "編輯 OFF 仍要出滿版版面")
-        self.assertTrue(needs_frame, "編輯 OFF 仍要後製，漏了會退回已廢除的舊行為")
-        self.assertEqual(profile, safe_area_spec.EDITOR_PROFILE)
+    def test_editor_off_is_not_post_processed_at_the_dense_tiers(self):
+        """D24（2026-09-22 使用者裁決）：編輯 OFF ＋ 字多／字超多 ＝ 完全不後製。
+
+        取代 `test_editor_off_still_gets_post_processed`（2026-08-19 的
+        「OFF ＝ 舊的 ON：拉伸到對位框」）。使用者原話：「記者/編輯CG 字多/字超多
+        安全框 OFF 時 生成 16:9 2K 無任何色框」，並在同日明確補充
+        「**只在字多 字超多生效**」。**版面仍是滿版**（交付的是模型整張畫面）。
+        """
+        for density in ("standard", "maximum"):
+            with self.subTest(density=density):
+                full_bleed, needs_frame, profile = main.resolve_frame_plan(
+                    "編輯", False, density
+                )
+                self.assertTrue(full_bleed, "編輯 OFF 仍要出滿版版面")
+                self.assertFalse(needs_frame, "D24：字多／字超多不准有任何後製")
+                self.assertEqual(profile, safe_area_spec.EDITOR_PROFILE)
+
+    def test_editor_off_still_stretches_to_the_alignment_frame_elsewhere(self):
+        """其餘檔位維持 2026-08-19 的行為——D24 只點名字多／字超多。
+
+        漏傳 `density` 也要落到這一條：舊呼叫端不該因為沒傳而悄悄拿到不後製的圖。
+        """
+        for density in ("", "minimal", "simplified", "verbatim", "no_text"):
+            with self.subTest(density=density):
+                full_bleed, needs_frame, profile = main.resolve_frame_plan(
+                    "編輯", False, density
+                )
+                self.assertTrue(full_bleed)
+                self.assertTrue(needs_frame, "非字多檔仍要拉伸填滿對位框")
+                self.assertEqual(profile, safe_area_spec.EDITOR_PROFILE)
+        self.assertEqual(
+            main.resolve_frame_plan("編輯", False),
+            (True, True, safe_area_spec.EDITOR_PROFILE),
+            "漏傳 density 要落到改動前的行為",
+        )
 
     def test_editor_on_uses_the_thin_frame(self):
         full_bleed, needs_frame, profile = main.resolve_frame_plan("編輯", True)

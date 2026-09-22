@@ -119,11 +119,13 @@ def record_action(record: dict) -> str:
         return "追加修改"
     if source in _DIGEST_SOURCES:
         return "消化"
-    if source.startswith("editor-yt-overlay"):
+    if source.startswith("editor-yt-overlay") or source == "web-restamp":
         # 直標是純 Pillow 壓字（80ms 級），不呼叫生圖模型，耗時／逾時的判斷
         # 天生就跟其他要打生圖 API 的路徑（十秒到分鐘級）不是同一個量級，
         # 獨立分類讓後台看得出這兩種母體不能套同一套故障率／逾時門檻
         # （2026-09-20 正式站實查提醒）。
+        # 2026-09-22 F47：標籤事後改角落（/api/images/restamp-disclaimer）同一種——
+        # 置框＋貼字全程 Pillow，一次生圖 API 都不打。
         return "合成"
     return "新生成"
 
