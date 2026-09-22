@@ -4837,8 +4837,8 @@ def resolve_image_disclaimer(portrait_mode: str, source_text: str = "") -> tuple
 
     回傳 (kind, text)：kind 直接對應 ImageGenerateRequest.disclaimer_kind／
     compose.paste_disclaimer_note 的 kind 參數；text 只在 kind="source" 時有值
-    （已去除前後空白，尚未套用 compose.vstrip_source_text 的「畫面來源：」前綴——
-    那個正規化留給 compose 那層做，這裡只管「有沒有東西可以標」）。
+    （只去除前後空白。B90 起 compose 那層**逐字照貼**、不再自動補「畫面來源：」，
+    所以這裡拿到什麼字，成品上就是什麼字。）
     """
     if portrait_mode in PORTRAIT_MODES_NEEDING_DISCLAIMER:
         return "ai", ""

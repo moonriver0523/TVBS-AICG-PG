@@ -455,18 +455,26 @@ def paste_disclaimer_note(
     """程式端壓「示意圖」或「畫面來源：○○○」標籤（B70 甲案／F43）。
 
     kind="ai"     → 固定文字 PORTRAIT_DISCLAIMER_TEXT（「示意圖」）。
-    kind="source" → vstrip_source_text(source_text)（「畫面來源：」由該函式自動補）。
+    kind="source" → **逐字**貼 source_text，不補任何前綴。
     兩者互斥，呼叫端負責只傳其中一種——見 main.resolve_image_disclaimer，這裡不
     重新判斷「該不該標」，只管「怎麼貼」。
+
+    B90（2026-09-22 使用者裁決）：這條路以前套 `vstrip_source_text`，自動補上
+    「畫面來源：」。使用者原話——「預設不要任何文字，讓使用者根據需要填寫，因為
+    也可能是資料來源，也可能是兩者都要寫」。自動補前綴會讓「資料來源：中央社」
+    變成「畫面來源：資料來源：中央社」，兩者都要寫更是直接做不到，所以這裡改成
+    逐字照貼。⚠ 只改這一條：直標／十點／YT 那些呼叫端仍套
+    `vstrip_source_text`，因為那邊是 AI 判出**光禿禿的來源名**（「美聯社」），
+    前綴本來就該由程式補。
 
     視覺沿用 `_draw_cover_ai_note` 那一套：半透明黑底＋白字，高度以傳入的畫布為準
     （這裡的呼叫端可能是任意 provider 尺寸，不是固定的 COVER_CANVAS）。
     """
     if kind not in ("ai", "source"):
         raise ComposeError(f"未知的標籤種類：{kind!r}（可用：'ai'／'source'）")
-    text = PORTRAIT_DISCLAIMER_TEXT if kind == "ai" else vstrip_source_text(source_text)
+    text = PORTRAIT_DISCLAIMER_TEXT if kind == "ai" else (source_text or "").strip()
     if not text:
-        raise ComposeError("畫面來源標籤沒有文字可貼（source_text 是空的）")
+        raise ComposeError("來源標籤沒有文字可貼（source_text 是空的）")
 
     with Image.open(io.BytesIO(image_bytes)) as opened:
         canvas_image = opened.convert("RGBA")
