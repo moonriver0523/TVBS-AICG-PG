@@ -1074,12 +1074,20 @@ _SPLIT_BEFORE_PARTICLES = set("被把將對於為讓使與和及因但而且或�
 
 # 一段「數字」不是只有連續數字：9/12、5.5、20:00 中間的符號也在數字裡面，從那裡斷行
 # 會把日期切成兩截（2026-09-09 使用者回報 9/12）。回傳所有**不准當斷點**的索引。
-_NUMBER_TOKEN_RE = re.compile(r"\d+(?:[/.:]\d+)+|\d+")
+#
+# B92（2026-09-22 正式站 18:15:07 王結玲）：拉丁字母串同理。「白宮封殺CNN遭提告」
+# 10 字、中點落在 index 5，正好是第二個 N，成品印出「白宮封殺C／NN遭提告」。
+# 中文方塊字可以逐字斷，拉丁字母串不行——CNN、AI、GDP、F-16、COVID-19 都是
+# **一個不可分的記號**，跟數字是同一類結構，不是 `_SPLIT_KEEP_TOGETHER` 那種
+# 會愈長愈胖的詞典（2026-09-14 裁決「不再加條目」針對的是那一份）。所以這裡
+# 直接把原本的「數字記號」放寬成「英數記號」，一條規則同時管住三條路：
+# 模型給的 hint（`_hint_cuts` 的結果會被 inner 濾）、括號邊緣、與保底中點切。
+_ATOMIC_TOKEN_RE = re.compile(r"[0-9A-Za-z]+(?:[/.:\-][0-9A-Za-z]+)*")
 
 
-def _number_inner_indices(text: str) -> set[int]:
+def _atomic_token_inner_indices(text: str) -> set[int]:
     inner: set[int] = set()
-    for match in _NUMBER_TOKEN_RE.finditer(text):
+    for match in _ATOMIC_TOKEN_RE.finditer(text):
         inner.update(range(match.start() + 1, match.end()))
     return inner
 
@@ -1111,8 +1119,8 @@ _SPLIT_KEEP_TOGETHER = (
 
 
 def _protected_inner_indices(text: str) -> set[int]:
-    """所有**不准當斷點**的索引：數字中間、括號內、專有名詞中間。"""
-    inner = _number_inner_indices(text)
+    """所有**不准當斷點**的索引：英數記號中間、括號內、專有名詞中間。"""
+    inner = _atomic_token_inner_indices(text)
     stack: list[str] = []
     for i, ch in enumerate(text):
         if ch in _BRACKET_PAIRS:

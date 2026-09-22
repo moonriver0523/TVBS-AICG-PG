@@ -52,6 +52,23 @@ class WrapTests(unittest.TestCase):
         head, tail = compose._split_line_near_middle("投資產業184億元計畫")
         self.assertFalse(head[-1:].isdigit() and tail[:1].isdigit())
 
+    def test_split_never_cuts_inside_a_latin_token(self):
+        """B92：正式站 2026-09-22 18:15:07 印出「白宮封殺C／NN遭提告」。
+
+        10 字的段中點正好落在第二個 N。拉丁字母串跟數字同類——CNN／AI／F-16
+        都是一個不可分的記號，切進去就成了另一個字。
+        """
+        self.assertEqual(
+            compose._fill_cover_title_lines(["白宮封殺CNN遭提告"]),
+            ["白宮封殺", "CNN遭提告"],
+        )
+        for text in ("爭奪AI霸權主導權", "美股F-16軍售案過關", "疫後COVID-19補助加碼"):
+            head, tail = compose._split_line_near_middle(text)
+            self.assertFalse(
+                head[-1:].isalnum() and tail[:1].isalnum() and head[-1:].isascii() and tail[:1].isascii(),
+                f"{text} 被切成 {head}／{tail}",
+            )
+
 
 class FitTests(unittest.TestCase):
     def test_start_size_is_larger_than_before(self):
