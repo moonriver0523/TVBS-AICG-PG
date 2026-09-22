@@ -112,15 +112,42 @@ class ComposePasteDisclaimerNoteTests(unittest.TestCase):
             self.assertEqual(img.size, self.canvas)
             self.assertEqual(img.mode, "RGB")
 
-    def test_source_kind_normalises_the_prefix(self):
-        """沿用 vstrip_source_text：使用者只填來源名，「畫面來源：」自動補。"""
-        with patch.object(
-            compose, "vstrip_source_text", wraps=compose.vstrip_source_text
-        ) as spy:
+    def test_source_kind_pastes_the_text_verbatim(self):
+        """B90（2026-09-22 使用者裁決）：逐字照貼，不再自動補「畫面來源：」。
+
+        使用者原話——「預設不要任何文字，讓使用者根據需要填寫，因為也可能是
+        資料來源，也可能是兩者都要寫」。自動補前綴的話，「資料來源：中央社」會
+        變成「畫面來源：資料來源：中央社」，兩者都要寫更是直接打不出來。
+
+        判準用**成品位元**而不是 spy：自動補前綴時「美聯社」與「畫面來源：美聯社」
+        會貼出一模一樣的圖（前者被補成後者），逐字照貼則必然不同。這一刀就是
+        vstrip_source_text 有沒有偷偷介入的唯一可靠證據。
+        """
+        bare = compose.paste_disclaimer_note(
+            self.image_bytes, kind="source", source_text="美聯社"
+        )
+        full = compose.paste_disclaimer_note(
+            self.image_bytes, kind="source", source_text="畫面來源：美聯社"
+        )
+        self.assertNotEqual(bare, full)
+
+    def test_source_kind_never_touches_vstrip_normalisation(self):
+        """直標／十點／YT 仍套 vstrip_source_text，這條路 B90 起完全不碰它。"""
+        with patch.object(compose, "vstrip_source_text") as spy:
             compose.paste_disclaimer_note(
-                self.image_bytes, kind="source", source_text="美聯社"
+                self.image_bytes, kind="source", source_text="資料來源：中央社"
             )
-        spy.assert_called_once_with("美聯社")
+        spy.assert_not_called()
+
+    def test_source_kind_keeps_a_self_written_label_intact(self):
+        """使用者自己打「資料來源：」不能被補成「畫面來源：資料來源：」。"""
+        own = compose.paste_disclaimer_note(
+            self.image_bytes, kind="source", source_text="資料來源：中央社"
+        )
+        doubled = compose.paste_disclaimer_note(
+            self.image_bytes, kind="source", source_text="畫面來源：資料來源：中央社"
+        )
+        self.assertNotEqual(own, doubled)
 
     def test_source_kind_with_empty_text_raises(self):
         with self.assertRaises(compose.ComposeError):

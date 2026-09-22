@@ -285,5 +285,53 @@ class CoverDeriveWiringTests(unittest.TestCase):
         self.assertLess(material.index("川普"), material.index("畫面要明亮一點"))
 
 
+class SystemPromptsAcknowledgeTheGlossaryTests(unittest.TestCase):
+    """B91（2026-09-22）：三份推導 system prompt 都必須承認這張對照表的存在。
+
+    真因紀錄（DEV 後台 2026-09-22 17:29:22，`bce3a1f6206c`，操作者 許岱軒）：
+    對照表**有生效**——消化輸出的內文小標寫「川普與習近平會談成未知數」，而
+    「習近平」三個字新聞原文一次都沒出現（原文只有「納入川習之間」），模型不
+    可能逐字抄。但同一次的 `portrait_subjects` 交白卷，STRUCTURE 還寫了
+    `The named figures appear strictly via typography and data callouts without
+    rendered photographic portraits.`——最終 prompt 裡因此沒有 NAMED REAL PERSON
+    區塊，通則接手「沒有那個區塊就畫背影或剪影」，成品就是川普與習近平的背影。
+
+    模型會這樣折衷，是因為對照表放在**使用者素材**裡說「當作已寫明」，而
+    system prompt 的規則 5 寫著絕對禁令「never infer a person from … an event」
+    ——「川習會」正是 event。於是名字敢寫進文字，不敢列進 portrait_subjects。
+
+    這裡釘的不是措辭，是**兩邊對得上**：對照表區塊的標題字串一旦在
+    `name_aliases` 改掉而 prompt 沒跟著改，例外條款就會靜默失效，而症狀又會長
+    得像生圖模型的問題（背影），查起來一樣貴。
+    """
+
+    HEADING = "Abbreviation glossary supplied by the newsroom"
+
+    def test_the_heading_in_the_block_is_the_one_the_prompts_quote(self):
+        block = name_aliases.alias_hint_block("本周川習會登場")
+        self.assertIn(self.HEADING, block)
+
+    def test_the_news_cg_rule_five_carries_the_exception(self):
+        rules = main.REAL_WORLD_FIDELITY_RULES
+        self.assertIn(self.HEADING, rules)
+        # 例外只能放行對照表上的名字，不能變成整條 VERBATIM 護欄的後門
+        self.assertIn("ONE EXCEPTION", rules)
+        self.assertIn("the verbatim rule stands unchanged", rules)
+
+    def test_both_cover_derive_prompts_carry_the_exception(self):
+        import editor_formats
+
+        with open(editor_formats.__file__, encoding="utf-8") as handle:
+            text = handle.read()
+        # 十點雙切與 YT 封面各一份，兩份都要有——只改一份的話另一份會重演本案
+        self.assertEqual(text.count(self.HEADING), 2)
+
+    def test_the_exception_forbids_the_hedge_that_caused_this(self):
+        """釘住這一案的具體病灶：名字寫進文字、人卻不進 portrait_subjects。"""
+        rules = main.REAL_WORLD_FIDELITY_RULES
+        self.assertIn("Do not hedge", rules)
+        self.assertIn("via typography only", rules)
+
+
 if __name__ == "__main__":
     unittest.main()
