@@ -16,6 +16,7 @@ F43 追加「畫面來源」欄位，與「示意圖」互斥：圖是 AI 生成
 """
 
 import base64
+import inspect
 import io
 import os
 import unittest
@@ -627,10 +628,48 @@ class FrontEndSendsTheDisclaimerFieldsTests(unittest.TestCase):
         self.assertIn("disclaimer_source_text: state.disclaimerSourceText.trim()", self.app_js)
         self.assertIn("disclaimer_corner: state.disclaimerCorner", self.app_js)
 
-    def test_the_refine_path_does_not_send_them(self):
-        """追加修改走 ImageRefineRequest，它沒有這兩個欄位，送了也不會貼標籤。"""
-        refine = self.app_js.split("source_image_base64: state.refineSource.base64")[1][:1500]
-        self.assertNotIn("disclaimer", refine)
+    def test_the_refine_path_carries_the_applied_label_forward(self):
+        """B83（2026-09-22 使用者回報）：這條路以前**刻意**不送，於是「畫面來源」與
+        「示意圖」追加修改後整個消失——這個測試原本還把那個缺陷寫成了規格。
+
+        現在要送，而且送的必須是 `appliedDisclaimer()`（上一張成品**實際**貼的那組），
+        不是 `disclaimerPayload()`（前端輸入框的現值）：refine 不帶 portrait_subjects，
+        讓後端重判會把「示意圖」降級成「畫面來源」，那是對觀眾說謊。
+        """
+        # 錨在 REFINE_BACKEND_URL：`source_image_base64: state.refineSource.base64`
+        # 這一行 F47 的 restampDisclaimer() 也有，而且在檔案裡排在前面。
+        refine = self.app_js.split("fetch(REFINE_BACKEND_URL")[1][:2500]
+        self.assertIn("disclaimer_kind:", refine)
+        self.assertIn("appliedDisclaimer()", refine)
+        self.assertNotIn("...disclaimerPayload()", refine)
+
+    def test_the_applied_label_comes_from_the_response_not_the_input_box(self):
+        """`appliedDisclaimer()` 讀的是回應（後端貼了什麼就回什麼），不是輸入控制項。"""
+        helper = self.app_js.split("function appliedDisclaimer()")[1][:600]
+        self.assertIn("d.disclaimer_kind", helper)
+        self.assertIn("d.disclaimer_source_text", helper)
+        self.assertNotIn("state.disclaimerSourceText", helper)
+
+    def test_the_backend_records_what_it_actually_stamped(self):
+        """回應要帶回實際貼上的那一組，refine／restamp 才有東西可以原樣送回。"""
+        for field in ("disclaimer_kind", "disclaimer_source_text", "disclaimer_corner"):
+            with self.subTest(field=field):
+                self.assertIn(field, main.ImageGenerateResponse.model_fields)
+
+    def test_refine_actually_stamps(self):
+        """光有欄位不夠——refine_image() 要真的呼叫 apply_image_disclaimer。
+
+        B70 的原始事故就是「prompt 說軟體會壓，軟體那半從沒被叫到」，
+        欄位齊全但沒人貼是同一種斷線。
+        """
+        source = inspect.getsource(main.refine_image)
+        self.assertIn("apply_image_disclaimer", source)
+        self.assertIn("not req.broadcast_hole", source)
+
+    def test_refine_forces_the_ai_label_on_a_named_face_swap(self):
+        """具名換臉畫出來的臉是模型的——來源名留在輸入框也不能掛「畫面來源」。"""
+        source = inspect.getsource(main.refine_image)
+        self.assertIn('disclaimer_kind="ai" if replacement_person else', source)
 
     def test_the_buttons_use_the_backend_vocabulary(self):
         """不做 tl/br 對照層：按鈕上的值就是進 disclaimer_corner 的值。"""

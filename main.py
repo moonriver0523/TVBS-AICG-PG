@@ -1178,6 +1178,15 @@ class ImageGenerateResponse(BaseModel):
     # 依新聞語境自畫具名真人，但**不**在圖上標「長相為 AI 推測」（使用者明確裁定）——
     # 改成這裡回一則文字給前端訊息欄。空清單＝這次沒有需要通知的事。
     notices: list[str] = Field(default_factory=list)
+    # B83（2026-09-22）：這次成品上**實際**貼了哪一種標籤、什麼文字、哪個角落。
+    # 空字串＝這次沒貼。追加修改（/api/images/refine）與事後重貼
+    # （/api/images/restamp-disclaimer）一律把這三格原樣送回來，後端**不重判**——
+    # refine 不帶 portrait_subjects，重判會讓一張本來是「示意圖」的具名肖像因為
+    # 來源名還留著而被降級成「畫面來源」，那是對觀眾說謊（互斥優先序見
+    # resolve_image_disclaimer）。
+    disclaimer_kind: Literal["", "ai", "source"] = ""
+    disclaimer_source_text: str = ""
+    disclaimer_corner: str = ""
 
 
 # 第一頁「懶人機制」：type_label 傳這個值代表由 AI 自行判斷最適合的圖表類型
@@ -4077,6 +4086,10 @@ def apply_image_disclaimer(
         update={
             "image_data_base64": base64.b64encode(stamped).decode("ascii"),
             "mime_type": "image/png",
+            # B83：留下這次**實際**貼的那一組，供 refine／restamp 原樣帶回（見欄位說明）
+            "disclaimer_kind": req.disclaimer_kind,
+            "disclaimer_source_text": req.disclaimer_source_text,
+            "disclaimer_corner": req.disclaimer_corner,
         }
     )
 
@@ -5220,6 +5233,21 @@ class ImageRefineRequest(BaseModel):
     cover_kind: Literal[
         "", "ten_cover", "yt_live_cover", "yt_hourly_cover", "yt_live24_cover", "yt_hot_cover"
     ] = ""
+    # B84（2026-09-22）：消化檔位。這裡以前沒有這格，於是 image_generation_size()
+    # 永遠看到 density=""，F38 的高解析度閘門在追加修改這條路上**從來沒有成立過**
+    # ——字多／字超多生成的圖只要一改就悄悄掉回 1K 畫布。語意同
+    # ImageGenerateRequest.density，前端原樣送回這次那張圖用的檔位。
+    density: str = ""
+    # B83（2026-09-22）：上一張成品**實際**貼的標籤，原樣帶回來重貼。這條路以前
+    # 完全沒有貼標籤這件事（refine 直呼 generate_image_raw，從不經過
+    # apply_image_disclaimer），所以「畫面來源」與「示意圖」追加修改後都會整個消失。
+    # 刻意不重判：refine 不送 portrait_subjects，重判會把「示意圖」降級成
+    # 「畫面來源」（見 ImageGenerateResponse 同名欄位）。
+    disclaimer_kind: Literal["", "ai", "source"] = ""
+    disclaimer_source_text: str = Field(default="", max_length=40)
+    disclaimer_corner: Literal[
+        "lower_right", "lower_left", "upper_right", "upper_left"
+    ] = "lower_right"
 
 
 @app.post(
@@ -5282,6 +5310,8 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             provider=req.provider,
             aspect_ratio=req.aspect_ratio,
             image_size=req.image_size,
+            # B84：檔位要跟著過來，F38 的高解析度閘門才判得出來（見欄位說明）
+            density=req.density,
             safe_frame=req.safe_frame,
             safe_frame_profile=req.safe_frame_profile,
             broadcast_hole=req.broadcast_hole,
@@ -5289,6 +5319,14 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
                 f"data:{req.source_mime_type};base64,{req.source_image_base64}"
             ),
             reference_images=replacement_images if replacement_person else [],
+            # B83：原樣帶回上一張實際貼的標籤，不重判（見欄位說明）。具名換臉一定是
+            # 模型畫的臉，這裡強制「示意圖」——否則使用者只要把來源名留著，一張換過
+            # 臉的圖就會掛上「畫面來源」。
+            disclaimer_kind="ai" if replacement_person else req.disclaimer_kind,
+            disclaimer_source_text=(
+                "" if replacement_person else req.disclaimer_source_text
+            ),
+            disclaimer_corner=req.disclaimer_corner,
         )
         prompt = image_req.prompt
         if req.cover_kind:
@@ -5311,6 +5349,11 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             broadcast_hole=req.broadcast_hole,
             canvas=image_generation_size(image_req)[1],
         )
+        # B83（2026-09-22）：這一段以前整個不存在——refine 從不貼標籤，所以
+        # 「畫面來源」與「示意圖」追加修改後都會消失。條件與 generate_image()
+        # 的同一行一字不差（挖空框自己已經貼過浮水印，不重貼第二次）。
+        if image_req.disclaimer_kind and not req.broadcast_hole:
+            result = apply_image_disclaimer(result, image_req, profile=frame_profile)
     except Exception as exc:
         _record_generation_failure(
             request_id, started, exc,
@@ -5338,6 +5381,113 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
     notices = collected_portrait_notices()
     if notices:
         result = result.model_copy(update={"notices": notices})
+    return result
+
+
+# ---- F47：事後重貼「示意圖」／「畫面來源」標籤（2026-09-22 使用者要求）----
+#
+# 使用者原話：「畫面來源(與AI示意圖標籤) 的位置，是 PILLOW，理論上成圖之後要讓
+# 使用者修改位置」。確實如此——貼標籤這件事從頭到尾沒有模型參與
+# （compose.paste_disclaimer_note 是純 Pillow），但角落以前只能在**生圖前**選，
+# 想換一個角落就得整張重生一次，等於為了挪一行字付一次生圖費。
+#
+# 這支端點拿回應裡那張**置框前原圖**（source_image_base64），照原本的參數重跑
+# 置框→挖空框→貼標籤，得到的成品與當初那張逐像素相同、只差標籤位置。
+# 一次生圖 API 都不打。
+#
+# ⚠️ 不接受「把成品送回來再貼一次」：成品上已經有一枚標籤，再貼會變兩枚，而且
+# 對位框那條路會二次拉伸（失真疊加，見 ImageGenerateResponse 欄位說明）。所以
+# 收的一律是置框前原圖；未置框流程（source_image_base64 為空）才送成品本身，
+# 規矩與 /api/images/refine 完全一致。
+class ImageRestampRequest(BaseModel):
+    # 置框「前」的原始生成圖（base64，不是 data URL），同 ImageRefineRequest。
+    source_image_base64: str = Field(min_length=1, max_length=28_000_000)
+    source_mime_type: str = "image/png"
+    model: str = ""
+    # 下面這組必須與當初那次生圖**完全一致**，否則重算出來的不是同一張圖：
+    # 畫布尺寸由 image_generation_size() 依 provider／density／檔位／角色推導，
+    # 少帶一個（尤其 density）就會把一張 2K 成品悄悄重算成 1K。
+    provider: Literal["gemini", "gpt"] = "gemini"
+    aspect_ratio: str = "16:9"
+    image_size: str = "1K"
+    density: str = ""
+    safe_frame: bool = False
+    safe_frame_profile: str = "記者"
+    broadcast_hole: str = ""
+    # 要貼的標籤：kind 與文字原樣沿用上一張（不重判，理由同 refine），
+    # 只有 corner 是這次真正要改的東西。
+    disclaimer_kind: Literal["ai", "source"]
+    disclaimer_source_text: str = Field(default="", max_length=40)
+    disclaimer_corner: Literal[
+        "lower_right", "lower_left", "upper_right", "upper_left"
+    ]
+
+
+@app.post(
+    "/api/images/restamp-disclaimer",
+    response_model=ImageGenerateResponse,
+    dependencies=[Depends(verify_internal_api_key)],
+)
+def restamp_disclaimer(req: ImageRestampRequest) -> ImageGenerateResponse:
+    """把標籤改貼到另一個角落，不重新生圖（F47）。"""
+    request_id = request_log.new_request_id()
+    started = _generation_clock()
+    if req.broadcast_hole:
+        # 播出鏡面的「示意圖」浮水印是 compose.apply_broadcast_hole 自己畫的，
+        # 版位綁在挖空框上，不吃 disclaimer_corner——讓它假裝成功比擋下來更糟。
+        raise HTTPException(
+            status_code=400,
+            detail="播出鏡面的「示意圖」浮水印位置綁在挖空框上，不能單獨挪動",
+        )
+    base = ImageGenerateResponse(
+        image_data_base64=req.source_image_base64,
+        mime_type=req.source_mime_type,
+        model=req.model,
+    )
+    sizing = ImageGenerateRequest(
+        prompt="restamp",  # 只為了算畫布，不會送給任何模型
+        provider=req.provider,
+        aspect_ratio=req.aspect_ratio,
+        image_size=req.image_size,
+        density=req.density,
+        safe_frame=req.safe_frame,
+        safe_frame_profile=req.safe_frame_profile,
+        disclaimer_kind=req.disclaimer_kind,
+        disclaimer_source_text=req.disclaimer_source_text,
+        disclaimer_corner=req.disclaimer_corner,
+    )
+    _, needs_frame, frame_profile = resolve_frame_plan(
+        req.safe_frame_profile, req.safe_frame
+    )
+    try:
+        result = finalize_image_result(
+            base,
+            aspect_ratio=req.aspect_ratio,
+            safe_frame=needs_frame,
+            profile=frame_profile,
+            canvas=image_generation_size(sizing)[1],
+        )
+        result = apply_image_disclaimer(result, sizing, profile=frame_profile)
+    except Exception as exc:
+        # 失敗也要留紀錄：這條路沒有生圖模型可以怪，出事一定是置框或貼字，
+        # 後台查得到才知道是哪一種（沿用 web-refine 的同一套失敗歸檔）。
+        _record_generation_failure(
+            request_id, started, exc,
+            source="web-restamp", news_text="", prompt="", provider=req.provider,
+        )
+        raise
+    # 交出去的成品換了一張（標籤挪了角落），後台就得記一筆——不記的話稽核裡
+    # 停在舊角落那版，跟使用者手上那張對不起來。分類是「合成」（純 Pillow，
+    # 沒有生圖模型，耗時量級與其他端點不同），見 audit_archive.record_action。
+    meta = _outcome_meta(started, provider=req.provider, image_model=result.model)
+    _archive_generation(
+        request_id=request_id,
+        image_base64=result.image_data_base64,
+        mime_type=result.mime_type,
+        source="web-restamp",
+        prompt="",
+        **meta,
+    )
     return result
 
 

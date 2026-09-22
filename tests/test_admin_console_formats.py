@@ -38,6 +38,9 @@ MAIN_TREE = ast.parse(MAIN_SRC)
 IMAGE_ENDPOINTS = {
     "/api/images/generate": "",          # 走 type_label，第一頁本來就有值
     "/api/images/refine": "",
+    # F47（2026-09-22）：一次生圖 API 都不打，但**交出去的成品換了一張**（標籤挪了
+    # 角落），後台不記就會停在舊角落那版，跟使用者手上那張對不起來。
+    "/api/images/restamp-disclaimer": "",
     "/api/news-image/generate": "",
     "/api/editor/cover": "十點不一樣",
     "/api/editor/yt-cover": "YT",
