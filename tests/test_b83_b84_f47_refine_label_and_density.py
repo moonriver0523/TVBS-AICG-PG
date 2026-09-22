@@ -200,6 +200,83 @@ class RestampTests(unittest.TestCase):
         self.assertIn("if (!applied.kind || !state.refineSource) return;", body)
 
 
+class ExactlyOneLabelTests(unittest.TestCase):
+    """B86：未置框那條路（記者＋安全框 OFF）不能被貼上第二枚標籤。
+
+    `finalize_image_result` 在 `safe_frame=False` 時提早 return，`source_image_base64`
+    留空，前端 `refineSourceFromResponse()` 因此退而取**成品本身**——而成品此刻
+    已經有一枚標籤。那張再送進 refine／restamp 就會多出第二枚（舊角落一枚、
+    新角落一枚）。`ImageRestampRequest` 的 docstring 早就寫了「再貼會變兩枚」，
+    但沒有任何東西擋住它。
+    """
+
+    def _stamped_unframed(self, corner: str = "lower_right") -> main.ImageGenerateResponse:
+        raw = main.ImageGenerateResponse(
+            image_data_base64=_png(), mime_type="image/png", model="test"
+        )
+        req = main.ImageGenerateRequest(
+            prompt="x",
+            aspect_ratio="16:9",
+            safe_frame=False,
+            safe_frame_profile=safe_area_spec.REPORTER_PROFILE,
+            disclaimer_kind="source",
+            disclaimer_source_text="美聯社",
+            disclaimer_corner=corner,
+        )
+        result = main.finalize_image_result(
+            raw, aspect_ratio="16:9", safe_frame=False,
+            profile=safe_area_spec.REPORTER_PROFILE,
+        )
+        return main.apply_image_disclaimer(
+            result, req, profile=safe_area_spec.REPORTER_PROFILE
+        )
+
+    def test_an_unframed_stamped_result_still_hands_back_a_clean_source(self):
+        stamped = self._stamped_unframed()
+        self.assertTrue(stamped.source_image_base64, "貼過標籤就必須留下貼之前那張")
+        self.assertNotEqual(stamped.source_image_base64, stamped.image_data_base64)
+        self.assertEqual(stamped.source_image_base64, _png())
+
+    def test_restamping_at_the_same_corner_reproduces_the_same_picture(self):
+        """同角落重貼要跟原本那張**逐像素相同**——不同就代表貼了兩枚。"""
+        stamped = self._stamped_unframed("lower_right")
+        again = main.restamp_disclaimer(
+            main.ImageRestampRequest(
+                source_image_base64=stamped.source_image_base64,
+                source_mime_type=stamped.source_mime_type,
+                aspect_ratio="16:9",
+                safe_frame=False,
+                safe_frame_profile=safe_area_spec.REPORTER_PROFILE,
+                disclaimer_kind="source",
+                disclaimer_source_text="美聯社",
+                disclaimer_corner="lower_right",
+            )
+        )
+        self.assertEqual(again.image_data_base64, stamped.image_data_base64)
+
+    def test_the_framed_path_keeps_its_own_pre_frame_original(self):
+        """置框那條路的 source 是**置框前**原圖，補寫不能把它蓋掉。"""
+        raw = main.ImageGenerateResponse(
+            image_data_base64=_png(), mime_type="image/png", model="test"
+        )
+        req = main.ImageGenerateRequest(
+            prompt="x",
+            aspect_ratio="16:9",
+            safe_frame=True,
+            safe_frame_profile=safe_area_spec.REPORTER_PROFILE,
+            disclaimer_kind="ai",
+            disclaimer_corner="upper_left",
+        )
+        framed = main.finalize_image_result(
+            raw, aspect_ratio="16:9", safe_frame=True,
+            profile=safe_area_spec.REPORTER_PROFILE,
+        )
+        stamped = main.apply_image_disclaimer(
+            framed, req, profile=safe_area_spec.REPORTER_PROFILE
+        )
+        self.assertEqual(stamped.source_image_base64, _png(), "置框前原圖不可被覆寫")
+
+
 class TheOldGapIsDocumentedTests(unittest.TestCase):
     """把「以前為什麼會漏」釘住，避免有人依樣畫葫蘆再加一條沒接上的路徑。"""
 

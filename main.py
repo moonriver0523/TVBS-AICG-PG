@@ -1166,7 +1166,10 @@ class ImageGenerateResponse(BaseModel):
     # source_image_base64：置框「前」的原始生成圖，**只**供追加修改（refine）再編輯用。
     # 兩者不可混用——把成品餵回去改圖會二次拉伸，失真 6.4%→13.2%→20.5% 疊上去，
     # 而且每輪只多一點、很難察覺（PLAN.md ③ 的失真疊加坑）。
-    # 未置框（safe_frame=False）時 source_image_base64 為空字串，成品本身就是原圖。
+    # 未置框（safe_frame=False）且沒貼標籤時 source_image_base64 為空字串，成品本身
+    # 就是原圖。**有貼標籤時例外**（B86）：未置框那條路的成品已經帶著一枚標籤，
+    # 直接拿去 refine／restamp 會被貼上第二枚，所以 apply_image_disclaimer 會把
+    # 「貼標籤之前」那張補進這一格。
     # source_mime_type＝原圖實際的 MIME（模型可能回 png 也可能回 jpeg），
     # 前端組 refine 請求時要用它，不能假設一律是 png。
     image_data_base64: str
@@ -4086,6 +4089,16 @@ def apply_image_disclaimer(
         update={
             "image_data_base64": base64.b64encode(stamped).decode("ascii"),
             "mime_type": "image/png",
+            # B86（2026-09-22）：未置框那條路（記者＋安全框 OFF）`finalize_image_result`
+            # 會提早 return，`source_image_base64` 留空，前端
+            # `refineSourceFromResponse()` 就退而取成品本身——而成品此刻**已經有一枚
+            # 標籤**。那張再送回 refine／restamp 就會被貼上第二枚（舊角落一枚、新角落
+            # 一枚）。所以這裡把「貼標籤之前」那張補進去；上游已經填過（置框那條路）
+            # 就不動它，那格的語意是「置框前原圖」，優先序不能倒過來。
+            "source_image_base64": (
+                result.source_image_base64 or result.image_data_base64
+            ),
+            "source_mime_type": result.source_mime_type or result.mime_type,
             # B83：留下這次**實際**貼的那一組，供 refine／restamp 原樣帶回（見欄位說明）
             "disclaimer_kind": req.disclaimer_kind,
             "disclaimer_source_text": req.disclaimer_source_text,
@@ -5397,7 +5410,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
 #
 # ⚠️ 不接受「把成品送回來再貼一次」：成品上已經有一枚標籤，再貼會變兩枚，而且
 # 對位框那條路會二次拉伸（失真疊加，見 ImageGenerateResponse 欄位說明）。所以
-# 收的一律是置框前原圖；未置框流程（source_image_base64 為空）才送成品本身，
+# 收的一律是置框前原圖；未置框且未貼標籤（source_image_base64 為空）才送成品本身，
 # 規矩與 /api/images/refine 完全一致。
 class ImageRestampRequest(BaseModel):
     # 置框「前」的原始生成圖（base64，不是 data URL），同 ImageRefineRequest。

@@ -1,8 +1,8 @@
 # AICG 進度存檔（2026-09-22）
 
 ## 分支狀態
-- `exp/redesign-20260903`，VERSION `260922-02`
-- 全量 **2300 題綠**（0 失敗 0 錯誤，1 expected failure）
+- `exp/redesign-20260903`，VERSION `260922-04`
+- 全量 **2303 題綠**（0 失敗 0 錯誤，1 expected failure）
 - 公司 `aicg-champion/main`：**這一波還沒開 PR**
 
 ## 這一波（0922 使用者回報四件事）
@@ -13,8 +13,18 @@
 | **B84** F38 的 2K 兩條路失效 | 🟢 已修。第二／三頁生圖與 refine 都補送 `density` |
 | **F47** 標籤事後改角落 | 🟢 已上線。新端點 `POST /api/images/restamp-disclaimer`，零生圖呼叫 |
 | **B85** 編輯CG 原圖放置被重畫 | ⬜ 已診斷，**不動工**——是 D25 待裁 |
+| **B86** 未置框那條路會被貼第二枚標籤 | 🟢 已修。顧問複查抓到，測試全綠時沒人看得見 |
 
-**四件事都還沒實機驗證**，等使用者實拍。
+**全部都還沒實機驗證**，等使用者實拍。
+
+## B86（自己做出來的新缺陷，沒上線就攔下了）
+記者＋安全框 OFF 時 `finalize_image_result` 提早 return，`source_image_base64` 留空，
+前端 `refineSourceFromResponse()` 就退而取**成品本身**——而成品已經有一枚標籤。
+那張再送進 refine／restamp 會被貼上第二枚（舊角落一枚、新角落一枚）。
+`ImageRestampRequest` 的 docstring 自己就寫了「再貼會變兩枚」，卻沒有東西擋住它；
+我原本的測試餵的是乾淨圖，看不到。修法：`apply_image_disclaimer` 在
+`source_image_base64` 為空時把「貼標籤之前」那張補進去（置框那條路已有值就不動）。
+編輯身分一律置框，所以使用者那條路碰不到——**會中彈的是記者**。
 
 ## B83 的兩個要點（改到這塊的人一定要讀）
 1. **「示意圖」也一起中彈**，不只使用者看到的「畫面來源」。refine 直呼
