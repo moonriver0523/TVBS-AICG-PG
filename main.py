@@ -3068,7 +3068,16 @@ def generate(req: GenerateRequest):
                 response = digest_completion(
                     model=model,
                     system_prompt=system_prompt,
-                    news_text=req.news_text,
+                    # B88（2026-09-22 使用者回報「川習被畫成背影」）：簡稱對照表
+                    # 以前只接在兩條封面推導上（`resolve_cover_visuals`／
+                    # `derive_yt_cover_plan`），一般 CG 這條完全沒接——而 B82 的
+                    # 因果鏈在這裡一字不差地重演：簡稱推導不出人名 →
+                    # `portrait_subjects` 交白卷 → 查不到參考照 →
+                    # `news_prompt.py:334`「沒有附照片的具名真人必須畫成背影或剪影」
+                    # → 背影。沒命中時回空字串，素材與加表之前逐字相同。
+                    news_text=req.news_text + name_aliases.alias_hint_block(
+                        req.news_text, req.user_instruction
+                    ),
                     max_output_tokens=max_output_tokens,
                     schema_name="news_cg_digest",
                     schema=digest_schema(type_label),
@@ -4288,7 +4297,8 @@ NATIVE_GPT_IMAGE_SIZES = {
 # 旗標名稱歷史留著 EDITOR，但這次使用者原話「記者/編輯 字多/字超多的時候」明講
 # 兩個角色都要涵蓋，不能再寫死只有編輯——見下面 HIGH_RES_ROLES。
 #
-# 實際會送出的尺寸：16:9→2560x1440、21:9→3360x1440。預設模型
+# 實際會送出的**生成**尺寸：16:9→2560x1440、21:9→3360x1440（交付畫布是另一回事，
+# 一律 16:9，見下面 HIGH_RES_OUTPUT_CANVAS）。預設模型
 # NATIVE_GPT_IMAGE_MODEL="gpt-image-2.5-sunburst"（見上方 generate_gpt_image），
 # 2.5 系列長邊上限放寬到 3840（見本檔開頭的模型註記），3360 在界內；若透過
 # OPENAI_IMAGE_MODEL 環境變數換回 gpt-image-2（標準上限 2560×1440），21:9 這條
@@ -4303,10 +4313,32 @@ HIGH_RES_GPT_IMAGE_SIZES = {
     "16:9": "2560x1440",
     "21:9": "3360x1440",
 }
-HIGH_RES_OUTPUT_CANVASES = {
-    "16:9": (2560, 1440),
-    "21:9": (3360, 1440),
-}
+
+# B87（2026-09-22 使用者回報：「記者CG 字多 安全框比例完全是錯的 沒有跟著 2K 調整」）
+#
+# 這裡以前是一張 `{"16:9": (2560,1440), "21:9": (3360,1440)}` 的表，理由寫的是
+# 「高解析度是不再靠升採樣，provider 尺寸與交付畫布必須是同一組數字」。那句話對
+# 16:9 成立，對 21:9 **不成立**，而且會毀掉安全框：
+#
+#   交付畫布**永遠是 1080p 那個形狀**（16:9）。21:9 從來不是交付比例，它是**生成**
+#   技巧——記者開安全框時 `resolve_aspect_ratio()` 會挑 21:9，因為那個比例的生成圖
+#   FIT 進記者安全區幾乎零裁切（見 SAFE_FRAME_ASPECT_RATIO 那段）。非高解析度那條
+#   路無論生成比例是什麼，`output_canvas` 一律 `BASE_CANVAS`，21:9 的圖就是被放進
+#   16:9 畫布裡。F38 把交付畫布改成跟著生成比例走，等於悄悄把記者的交付檔從
+#   1920×1080 換成 3360×1440。
+#
+# 實測（`safe_area_spec.safe_rect(*canvas, "記者")`）：
+#   字少 21:9 → 畫布 1920×1080（1.778），安全框 1634×751，框比例 2.176  ✅
+#   字多 16:9 → 畫布 2560×1440（1.778），安全框 2178×1002，框比例 2.174  ✅
+#   字多 21:9 → 畫布 3360×1440（**2.333**），安全框 2859×1002，框比例 **2.853** ❌
+# 最後一列就是使用者看到的那張：畫布與安全框的形狀雙雙跑掉。
+#
+# 改成單一畫布 (2560, 1440)＝1920×1080 等比放大到模型長邊上限內的最大 16:9。
+# provider size **不動**（21:9 仍送 3360x1440）：生成比例是生成比例，交付畫布是交付
+# 畫布，本來就是兩件事，混在同一張表就是這個缺陷的成因。
+# 「不再靠升採樣」那個目的仍然達成——記者安全區在這張畫布上是 2178×1002，
+# 比 1920 畫布的 1634×751 多 77% 像素，而且來源是 3360 寬的生成圖，全程只有縮小。
+HIGH_RES_OUTPUT_CANVAS = (2560, 1440)
 
 
 def image_generation_size(
@@ -4326,12 +4358,12 @@ def image_generation_size(
         HIGH_RES_EDITOR_ENABLED
         and req.safe_frame_profile in HIGH_RES_ROLES
         and req.density in HIGH_RES_EDITOR_DENSITIES
-        and req.aspect_ratio in HIGH_RES_OUTPUT_CANVASES
+        # 閘門看的是「這個生成比例有沒有高解析度的 provider size」，不是交付畫布
+        # ——交付畫布只有一個（B87）。
+        and req.aspect_ratio in HIGH_RES_GPT_IMAGE_SIZES
     )
     output_canvas = (
-        HIGH_RES_OUTPUT_CANVASES[req.aspect_ratio]
-        if high_res
-        else safe_area_spec.BASE_CANVAS
+        HIGH_RES_OUTPUT_CANVAS if high_res else safe_area_spec.BASE_CANVAS
     )
     if req.provider == "gpt":
         size_map = HIGH_RES_GPT_IMAGE_SIZES if high_res else NATIVE_GPT_IMAGE_SIZES
@@ -4617,21 +4649,31 @@ def resolve_frame_plan(role: str, safe_frame: bool) -> tuple[bool, bool, str]:
     這是編輯版兩種模式的唯一決定點，三個呼叫端（消化、生圖、整條 pipeline）
     都問這裡，才不會有人漏接就悄悄退回舊行為。
 
-    編輯版（2026-08-19 起）：**兩檔都是滿版生成＋後製**，開關只決定後製方式——
-      OFF → 拉伸填滿對位框（即 2026-08-17～08-19 掛在 ON 的那個行為）
-      ON  → 四周各壓 2% 薄框，輸出完整 1920×1080
-    原本 OFF 那條「靠 prompt 叫模型自己縮小置中留厚邊、完全不後製」已依使用者
-    2026-08-19 裁決廢除，編輯版不再有任何不後製的路徑。
+    編輯版：
+      OFF → **不後製**，直接交付生成圖（D24，2026-09-22 使用者裁決，見下）
+      ON  → 四周各壓 2% 薄框，輸出完整 1920×1080（2026-08-19 起不變）
+    版面仍然是滿版生成（第一個回傳值恆為 True）：交付的就是模型整張畫面，
+    沒有襯底也沒有留白，版面規則本來就該照滿版寫。
 
-    記者版不受影響：OFF 就是不出滿版版面、也不後製。
+    ⚖ **D24（2026-09-22 使用者裁決）**：「記者/編輯CG 字多/字超多 安全框 OFF 時
+    生成 16:9 2K 無任何色框」。這推翻了 2026-08-19 的「編輯版兩檔都是滿版生成＋
+    後製、OFF＝拉伸填滿對位框」——那條路的交付物是 1748×924 的對位框本身
+    （`safe_frame.apply_safe_frame` 的 `_stretch_to_zone`），使用者 2026-09-22
+    回報「不是我們講好的」。現在 OFF 就是 OFF：一個像素都不動，交付尺寸＝生成
+    尺寸（字多／字超多＝2560×1440，其餘＝該 provider 的基本尺寸）。
+    ⚠ 裁決原話只點名字多／字超多，這裡**所有檔位一視同仁**——同一個開關在不同
+    檔位做兩件相反的事（字少置對位框、字多不置）沒有人解釋得清楚，而且使用者
+    2026-09-22 稍早的原話「字多或字超多 2K 其他 1K」講的也是同一個開關下的尺寸
+    差異，不是後製差異。要改回只在高檔位生效，改這一支就好。
+
+    記者版不受影響：OFF 就是不出滿版版面、也不後製（本來就符合 D24）。
     """
     if role == safe_area_spec.EDITOR_PROFILE:
-        profile = (
-            safe_area_spec.EDITOR_FRAME_PROFILE
-            if safe_frame
-            else safe_area_spec.EDITOR_PROFILE
-        )
-        return True, True, profile
+        if not safe_frame:
+            # profile 仍回對位框那組：這裡已經不置框，它只剩下「貼標籤時用哪組
+            # 邊界算版位」這個用途（見 apply_image_disclaimer）。
+            return True, False, safe_area_spec.EDITOR_PROFILE
+        return True, True, safe_area_spec.EDITOR_FRAME_PROFILE
     return safe_frame, safe_frame, safe_area_spec.REPORTER_PROFILE
 
 

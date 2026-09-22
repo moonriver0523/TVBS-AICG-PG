@@ -105,18 +105,22 @@ class RefineEndpointTests(unittest.TestCase):
         證明沒有二次拉伸：每輪都拿 source_image_base64（置框前）繼續改，
         成品永遠等於 apply_safe_frame(原圖) 一次的結果。
 
-        2026-08-19：編輯版兩檔都會後製（見 main.resolve_frame_plan），所以兩檔
-        都要驗——OFF 是拉伸到對位框、ON 是 2% 薄框，任一檔疊加失真都是缺陷。
+        D24（2026-09-22 使用者裁決）：編輯 OFF 改成**完全不後製**，成品就是生成圖
+        本身；ON 仍是 2% 薄框。兩檔都要驗——任一檔疊加失真都是缺陷。
         """
         import safe_area_spec
         import safe_frame
 
         for safe_frame_on, profile in (
-            (False, safe_area_spec.EDITOR_PROFILE),
+            (False, None),
             (True, safe_area_spec.EDITOR_FRAME_PROFILE),
         ):
-            expected = safe_frame.apply_safe_frame(
-                base64.b64decode(EDITOR_RAW), profile=profile
+            expected = (
+                base64.b64decode(EDITOR_RAW)
+                if profile is None
+                else safe_frame.apply_safe_frame(
+                    base64.b64decode(EDITOR_RAW), profile=profile
+                )
             )
             expected_size = Image.open(io.BytesIO(expected)).size
             source = EDITOR_RAW
@@ -132,14 +136,19 @@ class RefineEndpointTests(unittest.TestCase):
                                 source_image_base64=source, safe_frame=safe_frame_on
                             )
                         )
-                    # 下一輪一律用新的置框前原圖，成品只拿來顯示
-                    self.assertEqual(result.source_image_base64, EDITOR_RAW)
-                    sent = mock_raw.call_args[0][0]
-                    self.assertNotIn(
-                        result.image_data_base64,
-                        sent.reference_image_data_url,
-                        f"第 {round_number + 1} 輪把置框後成品餵回去了（會失真疊加）",
+                    # 下一輪一律用新的置框前原圖，成品只拿來顯示。
+                    # D24 之後 OFF 不置框了，那一格照欄位定義留空＝成品本身就是原圖。
+                    self.assertEqual(
+                        result.source_image_base64,
+                        "" if profile is None else EDITOR_RAW,
                     )
+                    sent = mock_raw.call_args[0][0]
+                    if profile is not None:
+                        self.assertNotIn(
+                            result.image_data_base64,
+                            sent.reference_image_data_url,
+                            f"第 {round_number + 1} 輪把置框後成品餵回去了（會失真疊加）",
+                        )
                     with Image.open(
                         io.BytesIO(base64.b64decode(result.image_data_base64))
                     ) as image:
@@ -149,7 +158,7 @@ class RefineEndpointTests(unittest.TestCase):
                         expected,
                         "成品必須與原圖直接置框逐位元相符（無二次處理）",
                     )
-                    source = result.source_image_base64
+                    source = result.source_image_base64 or result.image_data_base64
 
     def test_source_mime_type_reports_raw_mime(self):
         """置框前原圖的實際 MIME 要回給前端；模型回 jpeg 時不能被硬當成 png。"""
@@ -194,17 +203,20 @@ class RefineEndpointTests(unittest.TestCase):
         self.assertEqual(result.source_image_base64, "")
         self.assertEqual(result.image_data_base64, EDITOR_RAW)
 
-    def test_editor_off_is_still_framed_on_refine(self):
-        """編輯 OFF 追加修改仍要置框——漏接會回一張沒置框的生成圖且不報錯。"""
+    def test_editor_off_is_no_longer_framed_on_refine(self):
+        """D24（2026-09-22 使用者裁決）：編輯 OFF ＝ 不後製，追加修改也一樣。
+
+        以前這條叫 `test_editor_off_is_still_framed_on_refine`，釘的是 2026-08-19
+        的「編輯版兩檔都要後製」。使用者 2026-09-22 回報交付物 1748×924「不是我們
+        講好的」，裁決改成「安全框 OFF 時生成 16:9 2K 無任何色框」。
+        """
         with patch.object(
             main, "generate_image_raw", return_value=fake_raw_response(EDITOR_RAW)
         ):
             result = main.refine_image(self.refine_request(safe_frame=False))
-        self.assertEqual(result.source_image_base64, EDITOR_RAW)
-        with Image.open(
-            io.BytesIO(base64.b64decode(result.image_data_base64))
-        ) as image:
-            self.assertEqual(image.size, EDITOR_FRAMED_SIZE)
+        # 沒置框就沒有「置框前原圖」可留，成品本身就是原圖（見欄位定義）
+        self.assertEqual(result.source_image_base64, "")
+        self.assertEqual(result.image_data_base64, EDITOR_RAW)
 
 
 class CoverRefineFrameBypassTests(unittest.TestCase):
@@ -258,19 +270,27 @@ class CoverRefineFrameBypassTests(unittest.TestCase):
         self.assertEqual(result.source_image_base64, "")
 
     def test_empty_cover_kind_falls_back_to_existing_editor_behavior(self):
-        """cover_kind 沒填＝一般編輯圖片改圖，既有「編輯 OFF 仍置框」規則不變。"""
+        """cover_kind 沒填＝一般編輯圖片改圖，走 resolve_frame_plan 的一般規則。
+
+        D24 之後那條規則是「OFF 不後製」，所以這裡驗的是「成品＝生成圖」；
+        ON 仍要置薄框，由下一條負責。重點沒變：封面的 bypass 不可以外溢到一般路徑。
+        """
         with patch.object(
             main, "generate_image_raw", return_value=fake_raw_response(EDITOR_RAW)
         ):
-            result = main.refine_image(
+            off = main.refine_image(
                 self.refine_request(
                     cover_kind="", safe_frame=False, safe_frame_profile="編輯"
                 )
             )
-        with Image.open(
-            io.BytesIO(base64.b64decode(result.image_data_base64))
-        ) as image:
-            self.assertEqual(image.size, EDITOR_FRAMED_SIZE)
+            on = main.refine_image(
+                self.refine_request(
+                    cover_kind="", safe_frame=True, safe_frame_profile="編輯"
+                )
+            )
+        self.assertEqual(off.image_data_base64, EDITOR_RAW)
+        with Image.open(io.BytesIO(base64.b64decode(on.image_data_base64))) as image:
+            self.assertEqual(image.size, safe_area_spec.BASE_CANVAS)
 
     def test_unknown_cover_kind_is_rejected(self):
         with self.assertRaises(pydantic.ValidationError):

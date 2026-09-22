@@ -171,6 +171,50 @@ class CoverDeriveWiringTests(unittest.TestCase):
         yt = self._yt_material("台北生存戰 4.5萬不夠活")
         self.assertNotIn("glossary", yt)
 
+    def _general_material(self, news_text: str, **kw) -> str:
+        """一般 CG（`/api/generate`）這條路送進消化端的素材。"""
+        captured = {}
+
+        def fake_digest(**kwargs):
+            captured["material"] = kwargs["news_text"]
+            raise RuntimeError("stop here")
+
+        kw.setdefault("type_label", "資料圖表")
+        req = main.GenerateRequest(news_text=news_text, **kw)
+        original = main.digest_completion
+        main.digest_completion = fake_digest
+        try:
+            main.generate(req)
+        except Exception:
+            pass
+        finally:
+            main.digest_completion = original
+        return captured.get("material", "")
+
+    def test_the_general_cg_material_carries_the_glossary(self):
+        """B88（2026-09-22 使用者回報「川習被畫成背影」）：一般 CG 以前完全沒接
+        這張表，B82 的因果鏈在記者／編輯CG 上原封不動重演一次。
+
+        這條路的終點是 `portrait_subjects`：交白卷就查不到參考照，
+        `news_prompt.py:334`「沒有附照片的具名真人必須畫成背影或剪影」就生效。
+        """
+        material = self._general_material("全球矚目，本周川習會登場，兩國領導人將會晤。")
+        self.assertIn("川普", material)
+        self.assertIn("習近平", material)
+        self.assertIn("human-maintained lookup table", material)
+
+    def test_the_general_cg_material_is_untouched_without_an_abbreviation(self):
+        material = self._general_material("今天北部有雨，氣溫下探十五度。")
+        self.assertNotIn("glossary", material)
+        self.assertNotIn("川普", material)
+
+    def test_the_glossary_wording_is_path_neutral(self):
+        """措辭原本照十點雙切寫（「the side whose headline」）。一般 CG 沒有 side
+        也沒有 headline，照搬過去模型讀不出這段在講哪一塊。"""
+        block = name_aliases.alias_hint_block("本周川習會")
+        self.assertNotIn("the side whose headline", block)
+        self.assertIn("in the material above", block)
+
     def test_the_glossary_sits_before_the_editor_instruction(self):
         """使用者指令欄講的是「畫面長什麼樣」，必須留在最後一段——
         中間插東西會讓模型把指令讀成對照表的一部分。"""

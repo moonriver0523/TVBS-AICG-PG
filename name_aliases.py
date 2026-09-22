@@ -88,10 +88,13 @@ def alias_hint_block(*texts: str) -> str:
         "human-maintained lookup table, not a guess and not something you inferred — "
         "the expansions below are given to you as established fact:\n"
         f"{lines}\n"
+        # B88（2026-09-22）：措辭從「the side whose headline」改成中性講法。
+        # 原本是照十點雙切寫的，一般 CG 沒有「side」也沒有「headline」，照搬過去
+        # 模型會讀不出這段在講哪一塊。
         "Treat every personal name listed here exactly as if it were written out in full "
-        "in the headline above: you MAY name these people in the description and you MUST "
-        "list them as named real people for the side whose headline contains the "
-        "abbreviation. This applies ONLY to the names in this glossary — for everyone else "
+        "in the material above, at the place where the abbreviation appears: you MAY name "
+        "these people in the description and you MUST list them as named real people for "
+        "that part of the graphic. This applies ONLY to the names in this glossary — for everyone else "
         "the verbatim rule stands unchanged, so never expand an abbreviation, a title or an "
         "organisation that is not listed here."
     )

@@ -152,11 +152,11 @@ class RestampTests(unittest.TestCase):
         self.assertEqual(result.disclaimer_source_text, "美聯社")
         self.assertEqual(result.disclaimer_corner, "upper_right")
 
-    def test_the_editor_alignment_frame_still_comes_out_at_the_frame_size(self):
-        """編輯對位框（安全框 OFF）的成品就是拉伸後的對位框本身。
+    def test_the_editor_off_path_keeps_the_generated_size(self):
+        """D24（2026-09-22 使用者裁決）：編輯安全框 OFF ＝ 不後製。
 
-        2026-08-19 裁決，`safe_frame.apply_safe_frame` 的 docstring 寫明。重貼標籤
-        不能偷偷改變這件事——出來要跟當初那張同尺寸。
+        以前這條驗的是 1748×924（對位框本身，2026-08-19 裁決），已被推翻。
+        重貼標籤不能偷偷改變尺寸——進去多大出來就多大。
         """
         result = main.restamp_disclaimer(
             self._request(
@@ -165,21 +165,36 @@ class RestampTests(unittest.TestCase):
                 safe_frame_profile=safe_area_spec.EDITOR_PROFILE,
             )
         )
-        self.assertEqual(_dimensions(result.image_data_base64), (1748, 924))
+        self.assertEqual(_dimensions(result.image_data_base64), (1280, 720))
 
-    def test_a_dense_editor_job_restamps_at_the_high_res_size(self):
-        """B84 的另一半：少帶 density 會把一張 2K 成品悄悄重算成 1K。"""
+    def test_the_editor_on_path_still_lands_on_the_thin_frame_canvas(self):
+        """ON 那檔沒被 D24 動到：仍是 2% 薄框、輸出完整畫布。"""
+        result = main.restamp_disclaimer(
+            self._request(
+                "lower_left",
+                safe_frame=True,
+                safe_frame_profile=safe_area_spec.EDITOR_PROFILE,
+            )
+        )
+        self.assertEqual(
+            _dimensions(result.image_data_base64), safe_area_spec.BASE_CANVAS
+        )
+
+    def test_a_dense_editor_job_restamps_at_the_high_res_canvas(self):
+        """B84 的另一半：少帶 density 會把一張 2K 成品悄悄重算成 1K。
+
+        用 ON 那檔驗——OFF 之後不置框，畫布參數根本不會被用到（D24）。
+        """
         result = main.restamp_disclaimer(
             self._request(
                 "lower_left",
                 density="maximum",
-                safe_frame=False,
+                safe_frame=True,
                 safe_frame_profile=safe_area_spec.EDITOR_PROFILE,
                 source_image_base64=_png((2560, 1440)),
             )
         )
-        width, height = _dimensions(result.image_data_base64)
-        self.assertGreater(width, 1748, "字超多要落在高解析度畫布上")
+        self.assertEqual(_dimensions(result.image_data_base64), (2560, 1440))
 
     def test_it_refuses_a_broadcast_hole_job(self):
         """播出鏡面的浮水印版位綁在挖空框上，不吃 disclaimer_corner——寧可 400。"""
