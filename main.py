@@ -588,14 +588,15 @@ UPSTREAM_DETAIL_MAX_CHARS = 200
 _SECRET_LIKE_RE = re.compile(r"\b(?:sk|pk)-[A-Za-z0-9._\-]{8,}")
 
 
-def upstream_error_detail(exc: BaseException) -> str:
+def upstream_error_detail(
+    exc: BaseException, base: str = "AI 服務處理失敗，請確認模型權限或稍後重試"
+) -> str:
     """上游例外 → 使用者與後台都看得懂的一句話，**帶上游的狀態碼與訊息摘要**。
 
     連不上是另一回事（沒有狀態碼可帶），維持原本的講法。
     """
     if isinstance(exc, APIConnectionError):
         return "無法連線至 AI 服務，請稍後再試"
-    base = "AI 服務處理失敗，請確認模型權限或稍後重試"
     status = getattr(exc, "status_code", None)
     body = re.sub(r"\s+", " ", str(getattr(exc, "message", "") or exc)).strip()
     body = _SECRET_LIKE_RE.sub("[已遮蔽]", body)
@@ -603,6 +604,31 @@ def upstream_error_detail(exc: BaseException) -> str:
         body = body[:UPSTREAM_DETAIL_MAX_CHARS] + "…"
     parts = [p for p in (f"上游 {status}" if status else "", body) if p]
     return f"{base}（{' · '.join(parts)}）" if parts else base
+
+
+def credits_exhausted_error(exc: BaseException) -> HTTPException | None:
+    """餘額不足（OpenRouter 402）→ 立刻停手的那個例外；其他狀況回 None。
+
+    B95（2026-09-22）：B94 上線後第一筆 DEV 失敗就寫出了真因——
+    `上游 402 · This request requires more credits, or fewer max_tokens.
+    You requested up to 16000 tokens, but can only afford 15030.`
+    DEV 那把 OpenRouter 金鑰餘額見底，跟 B91 的 prompt 一點關係也沒有。
+
+    但它走的是通用的 `APIError` 分支，被當成「上游間歇脫軌」重試滿
+    `DIGEST_ATTEMPTS`（5 次）。**餘額不會因為重試變多**，那五次是純粹的等待，
+    使用者每按一次就空等 9 秒才看到錯誤。金鑰無效（`AuthenticationError`）與
+    用量超限（`RateLimitError`）早就是「不重試」了，402 漏掉只是因為 SDK 把它
+    丟成一般的 `APIStatusError`，不是因為它該重試。
+
+    ⚠ 只認 402 這一個碼：其他 4xx（模型權限、參數錯）由既有分類處理，
+    不在這裡一併吃掉。
+    """
+    if getattr(exc, "status_code", None) != 402:
+        return None
+    return HTTPException(
+        status_code=503,
+        detail=upstream_error_detail(exc, base="AI 服務額度不足，請儲值後再試"),
+    )
 
 
 def _error_type_from_http(
@@ -3124,6 +3150,9 @@ def generate(req: GenerateRequest):
                     detail="AI 服務用量已達限制，請稍後再試",
                 ) from exc
             except (APIConnectionError, APIError) as exc:
+                stop = credits_exhausted_error(exc)
+                if stop is not None:
+                    raise stop from exc
                 last_detail = upstream_error_detail(exc)
                 print(f"[generate] attempt {attempt + 1}/{DIGEST_ATTEMPTS} API error: {exc}", flush=True)
                 retry_context = digest_retry_note(
@@ -3518,6 +3547,9 @@ def hybrid_digest(req: HybridDigestRequest):
                     detail="AI 服務用量已達限制，請稍後再試",
                 ) from exc
             except (APIConnectionError, APIError) as exc:
+                stop = credits_exhausted_error(exc)
+                if stop is not None:
+                    raise stop from exc
                 last_detail = upstream_error_detail(exc)
                 print(f"[hybrid] attempt {attempt + 1}/3 API error: {exc}", flush=True)
                 _note_generation_retry()
