@@ -69,8 +69,12 @@ def _element_inner_html(html: str, element_id: str) -> str:
 
 class ExcludedPeopleTests(unittest.TestCase):
     def test_keep_subjects_returns_dropped_names(self):
-        with patch.object(main, "lookup_portrait_outcomes", side_effect=_outcomes_only_merz):
-            kept, en, photos, dropped = main.keep_subjects_with_photos(["梅爾茨", "蕭茲"], ["Friedrich Merz", "Olaf Scholz"], tag="t")
+        # 關閉 B73 退路時，舊的排除防線仍須完整可用。
+        with patch.object(main, "PORTRAIT_NO_ENTRY_FALLBACK", False), \
+             patch.object(main, "lookup_portrait_outcomes", side_effect=_outcomes_only_merz):
+            kept, en, photos, dropped = main.keep_subjects_with_photos(
+                ["梅爾茨", "蕭茲"], ["Friedrich Merz", "Olaf Scholz"], tag="t"
+            )
         self.assertEqual((kept, en, dropped), (["梅爾茨"], ["Friedrich Merz"], ["蕭茲"]))
         self.assertIn("梅爾茨", photos)
 
@@ -79,7 +83,8 @@ class ExcludedPeopleTests(unittest.TestCase):
                   "portrait_subjects_left": ["梅爾茨", "蕭茲"], "portrait_subjects_left_en": ["Friedrich Merz", "Olaf Scholz"],
                   "portrait_subjects_right": [], "portrait_subjects_right_en": []}
         seen = []
-        with patch.object(main, "digest_completion", return_value=_completion(derive)), \
+        with patch.object(main, "PORTRAIT_NO_ENTRY_FALLBACK", False), \
+             patch.object(main, "digest_completion", return_value=_completion(derive)), \
              patch.object(main, "lookup_portrait_photos", side_effect=_lookup_only_merz), \
              patch.object(main, "lookup_portrait_outcomes", side_effect=_outcomes_only_merz), \
              patch.object(main, "supports_reference_image", return_value=True), \

@@ -606,8 +606,8 @@ def upstream_error_detail(
     return f"{base}（{' · '.join(parts)}）" if parts else base
 
 
-def credits_exhausted_error(exc: BaseException) -> HTTPException | None:
-    """餘額不足（OpenRouter 402）→ 立刻停手的那個例外；其他狀況回 None。
+def non_retryable_upstream_error(exc: BaseException) -> HTTPException | None:
+    """確定性 4xx → 立刻停手；408、429 與 5xx 等暫時性錯誤回 None。
 
     B95（2026-09-22）：B94 上線後第一筆 DEV 失敗就寫出了真因——
     `上游 402 · This request requires more credits, or fewer max_tokens.
@@ -620,14 +620,16 @@ def credits_exhausted_error(exc: BaseException) -> HTTPException | None:
     用量超限（`RateLimitError`）早就是「不重試」了，402 漏掉只是因為 SDK 把它
     丟成一般的 `APIStatusError`，不是因為它該重試。
 
-    ⚠ 只認 402 這一個碼：其他 4xx（模型權限、參數錯）由既有分類處理，
-    不在這裡一併吃掉。
+    B101（2026-09-23）：401／403／404（模型不存在）等錯誤重試也不會成功，
+    與 402 一樣立即回報；訊息保留上游原文。408、429 與 5xx 仍交給重試圈。
     """
-    if getattr(exc, "status_code", None) != 402:
+    status = getattr(exc, "status_code", None)
+    if not isinstance(status, int) or not (400 <= status < 500) or status in (408, 429):
         return None
+    base = "AI 服務額度不足，請儲值後再試" if status == 402 else "AI 服務拒絕這次請求，重試不會成功"
     return HTTPException(
         status_code=503,
-        detail=upstream_error_detail(exc, base="AI 服務額度不足，請儲值後再試"),
+        detail=upstream_error_detail(exc, base=base),
     )
 
 
@@ -1026,6 +1028,8 @@ class GenerateResponse(BaseModel):
     # 維基的條目名——「卡利巴夫」「阿拉奇」「巴薩尼」「瓦希迪」實測全部查無條目，
     # 但英文名查得到。不確定就留空字串，絕不亂猜拼寫。
     portrait_subjects_en: list[str] = Field(default_factory=list)
+    # 消化端依人物身分推測的英文拼寫；只供英文維基查照，絕不進畫面文字或忠實內容。
+    portrait_subjects_en_guess: list[str] = Field(default_factory=list)
     # 地圖類專用：消化端列出的地點裡，**實查得到真實座標**的那些。
     # 查不到的不會出現在這裡——標錯地點在新聞畫面上就是播出事故，寧可少標。
     # 前端把它原樣帶進生圖請求，後端據此產生真實底圖（見 build_map_reference）。
@@ -1266,6 +1270,7 @@ DIGEST_OUTPUT_SCHEMA = {
         # 與 portrait_subjects 同順序同長度的英文（或原文拉丁拼寫）姓名，
         # 後端查參考照時當備援：臺灣譯名常常不是中文維基的條目名（見第 7 條）
         "portrait_subjects_en": {"type": "array", "items": {"type": "string"}},
+        "portrait_subjects_en_guess": {"type": "array", "items": {"type": "string"}},
     },
     "required": [
         "style",
@@ -1274,6 +1279,7 @@ DIGEST_OUTPUT_SCHEMA = {
         "chart_type",
         "portrait_subjects",
         "portrait_subjects_en",
+        "portrait_subjects_en_guess",
     ],
     "additionalProperties": False,
 }
@@ -1997,6 +2003,7 @@ REAL-WORLD ACCURACY (governs "style" and "structure" — the pictures you commis
 5. NAMED REAL PEOPLE: you do NOT decide how the face is drawn. List in "portrait_subjects" EVERY specific named real person whose face the graphic would show — one entry per person. Names MUST be copied VERBATIM from the news text or from the user's explicit input; never infer a person from a job title (總統, 執行長), an event, a country, an organisation, or common knowledge. A title, office or role without a personal name is not a name — leave the array empty. ONE EXCEPTION, and only one: when the material carries a block headed "Abbreviation glossary supplied by the newsroom", the personal names listed there are established fact handed to you by the newsroom, not something you inferred — treat each of them as if it were written out in full in the material at the place the abbreviation appears. Such a person is named material exactly like any other: you may design their face into the layout and you MUST then list them in "portrait_subjects". Do not hedge — do not keep a glossary-named person out of "portrait_subjects" while naming them in the text, and never write into "structure" that the people appear "without portraits" or "via typography only" as a way of side-stepping this rule. This exception reaches ONLY the names printed in that glossary block; for everyone else the verbatim rule stands unchanged. Copy the name exactly as written, no title, no company. If the layout shows two people, list both; listing only the first is a defect. In "structure" describe only WHERE each figure sits and what it wears, never the rendering treatment (do not write "photorealistic", "faithful likeness", "back view", "silhouette", "illustration" or similar). You may describe a role or title in "structure", but that does not license filling "portrait_subjects". The backend looks up reference photographs and appends the binding portrait rules itself. Leave "portrait_subjects" as an empty array for every other graphic, including crowds and unnamed or generic figures. Never write 示意圖 into "variable" for a person you listed in "portrait_subjects" — the backend stamps that label itself once it knows how the face will be rendered. That exemption covers ONLY the people in that array: a named real person shown WITHOUT their face (a back view, a silhouette, a faceless stand-in) does not belong in "portrait_subjects", so nothing is stamped for them and rule 3 above applies in full — plan the 示意圖 label yourself. Never place a person in a scene, action or context the source material does not describe.
 6. AT MOST THREE FACES: the layout you design may show identifiable faces for AT MOST THREE named real people. When the source material names more, choose the three most central to the story and design "structure" so that ONLY those three appear as identifiable individual figures. The other named people are NOT removed from the story — their names and what they said may still appear as TEXT (a quote panel, a caption, a list item, a label on a chart), and that text should carry their points. What they must not have is a face: do not draw them as an identifiable figure, and never place their name beside any depicted figure, because a name sitting next to a drawn face reads as that person. "portrait_subjects" must be a truthful mirror of the faces you designed: never design a layout with four faces and list only three — the unlisted face is the exact defect this rule exists to prevent.
 7. NAMES IN ENGLISH TOO: fill "portrait_subjects_en" with the same people in the same order and the same length as "portrait_subjects" — each entry being that person's name in English or its original Latin spelling, copied VERBATIM from the news text or the user's explicit input when that spelling is present there. If the English or Latin name does not appear in the source material or the user's input, that entry MUST be an empty string. Never translate a Chinese name, never guess a spelling, and never fill the English name from common knowledge, a title, an event, a country or an organisation. Example: source writes 「川普」 only → portrait_subjects=["川普"], portrait_subjects_en=[""]; source writes 「川普 Donald Trump」 → ["川普"] / ["Donald Trump"]. This is how the backend finds the reference photograph: Taiwanese transliterations are frequently not the title of any Chinese encyclopedia article, so without an English name that actually appears in the material the person cannot be looked up and no face can be drawn.
+8. PHOTO-LOOKUP GUESS, NEVER CONTENT: fill "portrait_subjects_en_guess" with the same length and order. When an English/Latin spelling is absent from the source but you can identify the named person from the source's explicit name, title, nationality and role, put your best English-name guess here; otherwise use an empty string. This field is metadata used only to try an English Wikipedia photo lookup. It is NEVER a permitted source for "variable", captions, names, claims, "style" or "structure", and it does not relax any VERBATIM rule above. The backend accepts a guessed match only when the encyclopedia description independently agrees with the source context.
 """
 
 
@@ -2968,7 +2975,10 @@ def apply_photo_availability(
     subjects = result.portrait_subjects
     if not subjects:
         return result
-    outcomes = lookup_portrait_outcomes(subjects, result.portrait_subjects_en)
+    outcomes = lookup_portrait_outcomes(
+        subjects, result.portrait_subjects_en, result.portrait_subjects_en_guess,
+        req.news_text,
+    )
     photos = {
         name: outcome.photo
         for name, outcome in outcomes.items()
@@ -2978,7 +2988,11 @@ def apply_photo_availability(
     if req.portrait_photo_count:
         missing = missing[req.portrait_photo_count :]
     entry_only = [name for name in missing if outcomes[name].entry_found]
-    no_entry = [name for name in missing if not outcomes[name].entry_found]
+    lookup_failed = [name for name in missing if outcomes[name].lookup_failed]
+    no_entry = [
+        name for name in missing
+        if not outcomes[name].entry_found and not outcomes[name].lookup_failed
+    ]
     # B73 第二半（2026-09-16 使用者裁決）：查不到條目的人不再被排出版面。
     # 這裡是第二個必須跟著改的地方——只改 resolve_portraits 不改這裡的話，
     # 網頁版會**先在消化階段把人踢掉**，根本走不到那個分流（exclude_people 一下去，
@@ -2987,6 +3001,11 @@ def apply_photo_availability(
         told = entry_only + no_entry
         if told:
             _record_portrait_notice(portrait_entry_only_notice(told))
+        if lookup_failed:
+            print(
+                f"[portrait] 肖像查詢失敗（{'、'.join(lookup_failed)}），保留安全退路",
+                flush=True,
+            )
         return result
     if not no_entry:
         if entry_only:
@@ -3006,7 +3025,8 @@ def apply_photo_availability(
             req.model_copy(update={"exclude_people": no_entry})
         )
         retried_outcomes = lookup_portrait_outcomes(
-            retried.portrait_subjects, retried.portrait_subjects_en
+            retried.portrait_subjects, retried.portrait_subjects_en,
+            retried.portrait_subjects_en_guess, req.news_text,
         )
         retried_missing = [
             name for name in retried.portrait_subjects if name not in retried_outcomes
@@ -3140,17 +3160,12 @@ def generate(req: GenerateRequest):
                     reasoning_effort=reasoning_effort,
                 )
             except AuthenticationError as exc:
-                raise HTTPException(
+                raise non_retryable_upstream_error(exc) or HTTPException(
                     status_code=503,
-                    detail="AI 服務金鑰無效或尚未啟用計費",
-                ) from exc
-            except RateLimitError as exc:
-                raise HTTPException(
-                    status_code=429,
-                    detail="AI 服務用量已達限制，請稍後再試",
+                    detail=upstream_error_detail(exc, "AI 服務金鑰無效或尚未啟用計費"),
                 ) from exc
             except (APIConnectionError, APIError) as exc:
-                stop = credits_exhausted_error(exc)
+                stop = non_retryable_upstream_error(exc)
                 if stop is not None:
                     raise stop from exc
                 last_detail = upstream_error_detail(exc)
@@ -3287,6 +3302,11 @@ def generate(req: GenerateRequest):
                 portrait_subjects_en=align_english_names(
                     clean_portrait_subjects(data.get("portrait_subjects")),
                     data.get("portrait_subjects_en"),
+                    data.get("portrait_subjects"),
+                ),
+                portrait_subjects_en_guess=align_english_names(
+                    clean_portrait_subjects(data.get("portrait_subjects")),
+                    data.get("portrait_subjects_en_guess"),
                     data.get("portrait_subjects"),
                 ),
                 seed=seed,
@@ -3537,17 +3557,12 @@ def hybrid_digest(req: HybridDigestRequest):
                     site="hybrid",
                 )
             except AuthenticationError as exc:
-                raise HTTPException(
+                raise non_retryable_upstream_error(exc) or HTTPException(
                     status_code=503,
-                    detail="AI 服務金鑰無效或尚未啟用計費",
-                ) from exc
-            except RateLimitError as exc:
-                raise HTTPException(
-                    status_code=429,
-                    detail="AI 服務用量已達限制，請稍後再試",
+                    detail=upstream_error_detail(exc, "AI 服務金鑰無效或尚未啟用計費"),
                 ) from exc
             except (APIConnectionError, APIError) as exc:
-                stop = credits_exhausted_error(exc)
+                stop = non_retryable_upstream_error(exc)
                 if stop is not None:
                     raise stop from exc
                 last_detail = upstream_error_detail(exc)
@@ -4826,22 +4841,30 @@ def lookup_portrait_photos(
 def lookup_portrait_outcomes(
     subjects: list[str],
     english_names: list[str] | None = None,
+    guessed_english_names: list[str] | None = None,
+    source_context: str = "",
 ) -> dict[str, photo_lookup.PortraitLookupOutcome]:
     """逐位查完整 outcome（含 entry_found），F40 四層分流判斷用。
 
     與 `lookup_portrait_photos` 平行存在，不是取代它：查圖失敗一樣不讓整條請求
-    失敗，失敗就當「查無此人」（entry_found=False）。
+    失敗時標成 `lookup_failed`，不可誤當成「確認查無條目」而開放模型猜臉。
     """
     outcomes: dict[str, photo_lookup.PortraitLookupOutcome] = {}
     english_names = english_names or []
+    guessed_english_names = guessed_english_names or []
     for index, subject in enumerate(subjects):
         alt = english_names[index : index + 1] if index < len(english_names) else []
+        guessed = guessed_english_names[index : index + 1] if index < len(guessed_english_names) else []
         try:
-            outcome = photo_lookup.find_portrait_outcome(subject, alt_names=alt)
+            outcome = photo_lookup.find_portrait_outcome(
+                subject, alt_names=alt, guessed_alt_names=guessed,
+                source_context=source_context,
+            )
         except Exception as exc:  # noqa: BLE001 — 查圖是加分項，不該拖垮生圖
             print(f"[portrait] 查參考照片失敗（{subject}）：{exc}", flush=True)
             outcome = photo_lookup.PortraitLookupOutcome(
-                photo=None, entry_found=False, matched_name=None, language=None
+                photo=None, entry_found=False, matched_name=None, language=None,
+                lookup_failed=True,
             )
         outcomes[subject] = outcome
     return outcomes
@@ -4850,21 +4873,10 @@ def lookup_portrait_outcomes(
 # B73（2026-09-16 使用者裁決）：連維基條目都查不到時，是否仍交給生圖模型依語境
 # 自畫具名真人的臉。使用者在知悉 B45 風險後仍裁定要開。
 #
-# ⚠**預設暫時是關的，而使用者裁定的是開**——這個落差是刻意的，要說清楚：
-# 打開之後**有 20 道既有測試轉紅**，而且不是雜項，包含
-#   tests/test_plan_three_features.py::test_scene_upload_does_not_lift_iron_rule（「鐵律」）
-#   tests/test_portrait_rules.py::test_one_missing_photo_blocks_every_face（「全有或全無」）
-# 這一類**安全不變式的守門測試**——它們釘的正是 2026-08-18 那次實驗的結論：
-# 「有照片的畫、沒照片的畫剪影」生圖模型辦不到，沒照片的那位會被憑空捏臉還掛真名。
-# 換句話說，這 20 題不是過期的測試，是**這條裁定真正要推翻的東西**。
-# 逐題檢視、判斷哪些該改哪些是真的防線，是一件要清醒著做的事，
-# 不能在收工前趕著改掉 20 道安全測試。**列為下一個工作階段的第一件事。**
-#
-# 現況：程式路徑已經寫好且測試涵蓋（tests/test_b73_name_alias_20260916.py 兩條路都釘），
-# 要啟用只需 `PORTRAIT_NO_ENTRY_FALLBACK=true`，不必改程式碼。
-# B73 的另一半（譯名對照表，13 人從第 4 層救回第 2 層）**已經生效**，不受這個開關影響。
+# 預設開啟；仍保留環境開關供事故時立即退回無人場景。全有或全無、最多三張臉、
+# 使用者上傳肖像與查詢失敗不猜臉等安全不變式，不受這個開關影響。
 PORTRAIT_NO_ENTRY_FALLBACK = (
-    os.getenv("PORTRAIT_NO_ENTRY_FALLBACK", "false").strip().lower()
+    os.getenv("PORTRAIT_NO_ENTRY_FALLBACK", "true").strip().lower()
     not in ("", "0", "false", "off")
 )
 
@@ -4959,6 +4971,12 @@ def resolve_portraits(
         return mode, ordered
     if outcomes is None:
         outcomes = lookup_portrait_outcomes(portrait_subjects, english_names)
+    if any(
+        outcomes.get(name) is not None and outcomes[name].lookup_failed
+        for name in portrait_subjects
+    ):
+        print("[portrait] 肖像查詢失敗，整張退回「無人場景」", flush=True)
+        return "no_reference", []
     all_have_entries = all(
         (outcomes.get(name) is not None and outcomes[name].entry_found)
         for name in portrait_subjects
@@ -5623,7 +5641,10 @@ def resolve_digest_portraits(
     if not subjects or not supports_reference_image(provider):
         return digest, {}
 
-    outcomes = lookup_portrait_outcomes(subjects, digest.portrait_subjects_en)
+    outcomes = lookup_portrait_outcomes(
+        subjects, digest.portrait_subjects_en, digest.portrait_subjects_en_guess,
+        req.news_text,
+    )
     photos = {
         name: outcome.photo
         for name, outcome in outcomes.items()
@@ -5631,7 +5652,21 @@ def resolve_digest_portraits(
     }
     missing = [name for name in subjects if name not in photos]
     entry_only = [name for name in missing if outcomes[name].entry_found]
-    no_entry = [name for name in missing if not outcomes[name].entry_found]
+    lookup_failed = [name for name in missing if outcomes[name].lookup_failed]
+    no_entry = [
+        name for name in missing
+        if not outcomes[name].entry_found and not outcomes[name].lookup_failed
+    ]
+    if PORTRAIT_NO_ENTRY_FALLBACK:
+        told = entry_only + no_entry
+        if told:
+            _record_portrait_notice(portrait_entry_only_notice(told))
+        if lookup_failed:
+            print(
+                f"[portrait] 肖像查詢失敗（{'、'.join(lookup_failed)}），保留安全退路",
+                flush=True,
+            )
+        return digest, photos
     if not no_entry:
         if entry_only:
             _record_portrait_notice(portrait_entry_only_notice(entry_only))
@@ -5659,7 +5694,8 @@ def resolve_digest_portraits(
     if not retried.portrait_subjects:
         return retried, {}
     retried_outcomes = lookup_portrait_outcomes(
-        retried.portrait_subjects, retried.portrait_subjects_en
+        retried.portrait_subjects, retried.portrait_subjects_en,
+        retried.portrait_subjects_en_guess, req.news_text,
     )
     photos = {
         name: outcome.photo
@@ -6136,6 +6172,8 @@ def keep_subjects_with_photos(
     subjects: list[str],
     english: list[str],
     *,
+    guessed_english: list[str] | None = None,
+    source_context: str = "",
     uploaded_portraits: int = 0,
     tag: str,
 ) -> tuple[list[str], list[str], dict, list[str]]:
@@ -6169,14 +6207,27 @@ def keep_subjects_with_photos(
     """
     if not subjects:
         return [], [], {}, []
-    outcomes = lookup_portrait_outcomes(subjects, english)
+    if guessed_english and any(name.strip() for name in guessed_english):
+        outcomes = lookup_portrait_outcomes(
+            subjects, english, guessed_english, source_context,
+        )
+    else:
+        # 沒有猜測值時維持舊介面，既有呼叫與測試替身不用承擔無效參數。
+        outcomes = lookup_portrait_outcomes(subjects, english)
     photos = {name: o.photo for name, o in outcomes.items() if o.photo is not None}
     missing = [name for name in subjects if name not in photos]
     if uploaded_portraits:
         missing = missing[uploaded_portraits:]
     if not missing:
         return list(subjects), list(english), photos, []
-    no_entry = [name for name in missing if not outcomes[name].entry_found]
+    # 沒有使用者肖像時，封面也跟一般 CG 的 B73 開關走；下游會整組改走
+    # entry_only，不會把「有照片的畫、沒照片的猜臉」混在同一張。
+    if PORTRAIT_NO_ENTRY_FALLBACK and not uploaded_portraits:
+        return list(subjects), list(english), photos, []
+    no_entry = [
+        name for name in missing
+        if not outcomes[name].entry_found and not outcomes[name].lookup_failed
+    ]
     kept = [(name, en) for name, en in zip(subjects, english) if name not in no_entry]
     if not kept:
         # 全部都查無條目時**不清空名單**（刻意與 apply_photo_availability 不同）：
@@ -6389,10 +6440,16 @@ def resolve_cover_visuals(req: "TenCoverRequest") -> tuple[str, str]:
             [str(x) for x in (data.get(f"portrait_subjects_{side}_en") or [])],
             [str(x) for x in (data.get(f"portrait_subjects_{side}") or [])],
         )
+        guessed = align_english_names(
+            names,
+            [str(x) for x in (data.get(f"portrait_subjects_{side}_en_guess") or [])],
+            [str(x) for x in (data.get(f"portrait_subjects_{side}") or [])],
+        )
         # 查不到參考照的人先移除，不然 resolve_portraits 的「全有或全無」會讓
         # 查得到的那位也一起變背影（見 keep_subjects_with_photos）
         kept, kept_en, found, dropped = keep_subjects_with_photos(
-            names, aligned, uploaded_portraits=uploaded, tag=f"cover:{side}"
+            names, aligned, guessed_english=guessed, source_context=material,
+            uploaded_portraits=uploaded, tag=f"cover:{side}"
         )
         subjects.append(kept)
         english.append(kept_en)
@@ -7851,10 +7908,17 @@ def resolve_yt_cover_plan(
         [str(x) for x in (data.get("portrait_subjects_en") or [])],
         [str(x) for x in (data.get("portrait_subjects") or [])],
     )
+    guessed = align_english_names(
+        subjects,
+        [str(x) for x in (data.get("portrait_subjects_en_guess") or [])],
+        [str(x) for x in (data.get("portrait_subjects") or [])],
+    )
     # 查不到參考照的人先移除，剩下的人照樣畫臉（見 keep_subjects_with_photos）
     uploaded = sum(1 for ref in req.reference_images if ref.purpose == "portrait")
     subjects, english, photos, dropped = keep_subjects_with_photos(
-        subjects, english, uploaded_portraits=uploaded, tag="yt-cover"
+        subjects, english, guessed_english=guessed,
+        source_context="\n".join((title, req.news_text, req.instruction)),
+        uploaded_portraits=uploaded, tag="yt-cover"
     )
     return YtCoverPlan(lines, visual, subjects, english, photos, dropped)
 
@@ -8215,9 +8279,16 @@ def yt_dual_panel_plan(panel_req: "YtCoverRequest") -> "YtCoverPlan":
         [str(x) for x in (data.get("portrait_subjects_en") or [])],
         [str(x) for x in (data.get("portrait_subjects") or [])],
     )
+    guessed = align_english_names(
+        subjects,
+        [str(x) for x in (data.get("portrait_subjects_en_guess") or [])],
+        [str(x) for x in (data.get("portrait_subjects") or [])],
+    )
     uploaded = sum(1 for ref in panel_req.reference_images if ref.purpose == "portrait")
     subjects, english, photos, dropped = keep_subjects_with_photos(
-        subjects, english, uploaded_portraits=uploaded, tag="yt-cover:dual"
+        subjects, english, guessed_english=guessed,
+        source_context="\n".join((title, panel_req.news_text, panel_req.instruction)),
+        uploaded_portraits=uploaded, tag="yt-cover:dual"
     )
     return YtCoverPlan(("", ""), visual, subjects, english, photos, dropped)
 

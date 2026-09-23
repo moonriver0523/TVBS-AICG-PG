@@ -589,8 +589,8 @@ class UserPortraitUploadTests(unittest.TestCase):
         # REAL_WORLD_RENDERING_RULES 的預設條款認「NAMED REAL PERSON」區塊標題
         self.assertIn("NAMED REAL PERSON", result.prompt)
 
-    def test_missing_photo_still_forbids_every_face_without_upload(self):
-        """沒上傳、又有人查不到照片、也查無條目（F40 第 4 層）：全員不畫臉（全有或全無）。"""
+    def test_missing_photo_uses_group_wide_entry_only_without_upload(self):
+        """沒上傳且有人查無條目時，整組走 entry_only，不混用部分參考照。"""
         req = self.request(portrait_subjects=["鄭明典", "吳軒彤"])
 
         def lookup(name, **kwargs):
@@ -607,10 +607,13 @@ class UserPortraitUploadTests(unittest.TestCase):
         with patch.object(main.photo_lookup, "find_reference_photo", side_effect=lookup):
             with patch.object(main.photo_lookup, "find_portrait_outcome", side_effect=outcome):
                 result = main.apply_portrait_to_image_request(req)
-        self.assertIn("NO PERSON IN THIS SCENE", result.prompt)
+        self.assertIn("NO VERIFIED PHOTOGRAPH, DRAW FROM CONTEXT", result.prompt)
+        self.assertEqual(result.reference_image_data_url, "")
+        self.assertEqual(result.portrait_reference_data_urls, [])
+        self.assertEqual(result.disclaimer_kind, "ai")
 
-    def test_scene_upload_does_not_lift_iron_rule(self):
-        """非肖像用途的上傳不解除鐵律。"""
+    def test_scene_upload_is_not_mistaken_for_a_portrait_reference(self):
+        """非肖像用途的上傳不能被當成真人參考照；整組仍走 entry_only。"""
         req = self.request(
             portrait_subjects=["鄭明典", "吳軒彤"],
             reference_images=[
@@ -625,7 +628,10 @@ class UserPortraitUploadTests(unittest.TestCase):
         with patch.object(main.photo_lookup, "find_reference_photo", return_value=None):
             with patch.object(main.photo_lookup, "find_portrait_outcome", return_value=no_entry):
                 result = main.apply_portrait_to_image_request(req)
-        self.assertIn("NO PERSON IN THIS SCENE", result.prompt)
+        self.assertIn("NO VERIFIED PHOTOGRAPH, DRAW FROM CONTEXT", result.prompt)
+        self.assertEqual(result.reference_image_data_url, "")
+        self.assertEqual(result.portrait_reference_data_urls, [])
+        self.assertEqual(result.disclaimer_kind, "ai")
 
     def test_wording_keeps_faceless_rule_for_uncovered_persons(self):
         """措辭仍要求：只有附了照片的人可以畫臉，沒附的維持背影／剪影。"""

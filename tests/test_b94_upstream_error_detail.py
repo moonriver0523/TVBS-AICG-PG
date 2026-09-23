@@ -84,26 +84,32 @@ class CreditsExhaustedStopsRetryingTests(unittest.TestCase):
     )
 
     def test_402_produces_a_stop(self):
-        stop = main.credits_exhausted_error(_FakeAPIError(self.REAL, 402))
+        stop = main.non_retryable_upstream_error(_FakeAPIError(self.REAL, 402))
         self.assertIsNotNone(stop)
         self.assertEqual(stop.status_code, 503)
         self.assertIn("額度不足", stop.detail)
         self.assertIn("can only afford 15030", stop.detail, "餘額數字要留著，才知道差多少")
 
-    def test_other_statuses_keep_retrying(self):
-        for status in (500, 502, 503, 403, 429):
+    def test_transient_statuses_keep_retrying(self):
+        for status in (408, 429, 500, 502, 503):
             self.assertIsNone(
-                main.credits_exhausted_error(_FakeAPIError("boom", status)),
+                main.non_retryable_upstream_error(_FakeAPIError("boom", status)),
                 f"{status} 不該被當成額度不足",
             )
 
+    def test_other_deterministic_4xx_stop_with_upstream_detail(self):
+        for status in (400, 401, 403, 404):
+            stop = main.non_retryable_upstream_error(_FakeAPIError("model not allowed", status))
+            self.assertIsNotNone(stop)
+            self.assertIn("model not allowed", stop.detail)
+
     def test_both_digest_paths_stop_before_the_retry(self):
         source = Path(main.__file__).read_text(encoding="utf-8")
-        self.assertEqual(source.count("stop = credits_exhausted_error(exc)"), 2)
+        self.assertEqual(source.count("stop = non_retryable_upstream_error(exc)"), 2)
         # 停手要排在寫 last_detail 之前，不然還是會走完重試圈
         for block in source.split("except (APIConnectionError, APIError) as exc:")[1:]:
             head = block[: block.index("last_detail")]
-            self.assertIn("credits_exhausted_error", head)
+            self.assertIn("non_retryable_upstream_error", head)
 
 
 class BothDigestPathsUseItTests(unittest.TestCase):

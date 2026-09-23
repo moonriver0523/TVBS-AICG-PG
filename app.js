@@ -368,6 +368,9 @@ let state = {
     // refineStack 供「退回上一版」
     refineSource: null,
     refineDisplay: null,
+    // 與 refineSource 同一版成品實際使用的置框／模型參數；事後重貼標籤不可讀當下 UI。
+    refineParameters: null,
+    restampRequestId: 0,
     // YT 直播封面：上一次的無文字底圖是不是 AI 生的（重疊文字時決定要不要標 AI示意圖）。
     // 底圖本身走 refineSource（語意相同：給改圖用的原圖）。
     ytCoverBackgroundIsAi: false,
@@ -1202,6 +1205,8 @@ function setEditorFormat(key) {
     // 一張國內外版的底圖亮起來（審查建議 2026-09-08）。
     state.refineSource = null;
     state.refineDisplay = null;
+    state.refineParameters = null;
+    state.restampRequestId += 1;
     const coverRecompose = document.getElementById('coverRecomposeBtn');
     if (coverRecompose) coverRecompose.disabled = true;
     renderEditorFormats();
@@ -2957,6 +2962,9 @@ async function restampDisclaimer() {
     if (!applied.kind || !state.refineSource) return;
     // 封面版型的標籤是 compose 自己畫的（版位綁在角標上），不吃這組設定
     if ((editorFormat().hides || {}).disclaimer) return;
+    const requestId = ++state.restampRequestId;
+    const corner = state.disclaimerCorner;
+    const params = state.refineParameters || refineParametersFromState(state.refineDisplay);
     try {
         const response = await fetch(RESTAMP_BACKEND_URL, {
             method: 'POST',
@@ -2964,27 +2972,29 @@ async function restampDisclaimer() {
             body: JSON.stringify({
                 source_image_base64: state.refineSource.base64,
                 source_mime_type: state.refineSource.mimeType,
-                model: (state.refineDisplay || {}).model || '',
-                provider: effectiveImageProvider(),
-                aspect_ratio: currentAspectRatio(),
-                image_size: state.imageSize,
+                model: params.model,
+                provider: params.provider,
+                aspect_ratio: params.aspect_ratio,
+                image_size: params.image_size,
                 // 少了這格會把一張 2K 成品悄悄重算成 1K（同 B84）
-                density: state.density,
-                safe_frame: state.safeFrame,
-                safe_frame_profile: state.currentRole,
+                density: params.density,
+                safe_frame: params.safe_frame,
+                safe_frame_profile: params.safe_frame_profile,
                 broadcast_hole: broadcastHoleForApi(),
                 disclaimer_kind: applied.kind,
                 disclaimer_source_text: applied.sourceText,
-                disclaimer_corner: state.disclaimerCorner,
+                disclaimer_corner: corner,
             }),
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(_apiError(data, response.status));
+        if (requestId !== state.restampRequestId) return;
         // 只換顯示中的成品；refineSource 是置框前原圖，標籤不在上面，不必動
         state.refineDisplay = data;
         showRefinedImage(data);
-        showToast(`標籤已移到${DISCLAIMER_CORNER_LABELS[state.disclaimerCorner]}`);
+        showToast(`標籤已移到${DISCLAIMER_CORNER_LABELS[corner]}`);
     } catch (err) {
+        if (requestId !== state.restampRequestId) return;
         showToast(`標籤移位失敗：${err.message}`);
     }
 }
@@ -3753,10 +3763,25 @@ function appliedDisclaimer() {
     };
 }
 
+function refineParametersFromState(display = null) {
+    return {
+        density: state.density,
+        safe_frame: state.safeFrame,
+        safe_frame_profile: state.currentRole,
+        aspect_ratio: currentAspectRatio(),
+        image_size: state.imageSize,
+        provider: effectiveImageProvider(),
+        model: (display || {}).model || '',
+    };
+}
+
 function resetRefineState(source, display) {
+    // 新成品會讓先前尚未回來的 restamp 全部失效。
+    state.restampRequestId += 1;
     state.refineSource = source || null;
     // 顯示中的成品也記在 state（退回上一版用），不從 DOM 反解
     state.refineDisplay = display || null;
+    state.refineParameters = source ? refineParametersFromState(display) : null;
     state.refineStack = [];
     const input = document.getElementById('refineInput');
     if (input) input.value = '';
@@ -3820,6 +3845,12 @@ async function handleRefine() {
     // 走一般 refine 規則（字要保留），不置框、不挖洞、固定 16:9。
     const isTenCover = editorFormat().inputs === 'cover' && state.tenCoverMode === 'ai';
     const isCover = isYtCover || isTenCover;
+    const refineParameters = {
+        ...refineParametersFromState(state.refineDisplay),
+        aspect_ratio: isCover ? '16:9' : currentAspectRatio(),
+        safe_frame: isCover ? false : state.safeFrame,
+        safe_frame_profile: isCover ? '' : state.currentRole,
+    };
     try {
         const response = await fetch(REFINE_BACKEND_URL, {
             method: 'POST',
@@ -3828,24 +3859,24 @@ async function handleRefine() {
                 source_image_base64: state.refineSource.base64,
                 source_mime_type: state.refineSource.mimeType,
                 instruction,
-                provider: effectiveImageProvider(),
-                aspect_ratio: isCover ? '16:9' : currentAspectRatio(),
-                image_size: state.imageSize,
+                provider: refineParameters.provider,
+                aspect_ratio: refineParameters.aspect_ratio,
+                image_size: refineParameters.image_size,
                 // B84（2026-09-22）：這格以前不存在，後端 ImageRefineRequest 也沒有——
                 // 於是追加修改一律掉回 1K 畫布，字多／字超多生的 2K 圖只要一改就降級。
-                density: state.density,
+                density: refineParameters.density,
                 // B83（2026-09-22）：refine 以前完全不貼標籤，「畫面來源」與「示意圖」
                 // 改完圖就整個消失。原樣帶回上一張實際貼的那一組（見 appliedDisclaimer）。
                 // 封面版型走 compose 自己的 _draw_ai_note，不吃這組。
                 disclaimer_kind: isCover ? '' : appliedDisclaimer().kind,
                 disclaimer_source_text: isCover ? '' : appliedDisclaimer().sourceText,
                 disclaimer_corner: appliedDisclaimer().corner,
-                safe_frame: isCover ? false : state.safeFrame,
+                safe_frame: refineParameters.safe_frame,
                 // B51：封面不能只送 safe_frame=false 卻仍帶「編輯」——編輯身分在
                 // resolve_frame_plan 一律會被置對位框（見 main.py 的說明），safe_frame
                 // 的值因此完全無效。封面一律送空字串，並改用下面的 cover_kind 讓後端
                 // 走結構化 bypass，不依角色字串猜。
-                safe_frame_profile: isCover ? '' : state.currentRole,
+                safe_frame_profile: refineParameters.safe_frame_profile,
                 // 白名單值＝ EDITOR_FORMATS 的版型 key，正好對齊後端
                 // editor_formats.COVER_REFINE_KINDS；非封面一律不送。
                 cover_kind: isCover ? state.editorFormat : '',
@@ -3872,10 +3903,12 @@ async function handleRefine() {
         state.refineStack.push({
             source: state.refineSource,
             display: state.refineDisplay,
+            parameters: state.refineParameters,
         });
         // 下一輪修改要用**新的**置框前原圖，不是成品
         state.refineSource = refineSourceFromResponse(shown);
         state.refineDisplay = shown;
+        state.refineParameters = {...refineParameters, model: shown.model || refineParameters.model};
         showRefinedImage(shown);
         showGenerateNoticeBanner(
             Array.isArray(shown.notices) && shown.notices.length ? shown.notices : data.notices
@@ -3899,6 +3932,7 @@ function undoRefine() {
     if (!previous) return;
     state.refineSource = previous.source;
     state.refineDisplay = previous.display;
+    state.refineParameters = previous.parameters;
     showRefinedImage(previous.display);
     updateRefineControls();
     showToast('已退回上一版');
