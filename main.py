@@ -584,8 +584,6 @@ def _generation_retries() -> int:
 # 等於每次都要重跑一次才能猜。生圖那條早就把 OpenRouter 的 JSON 原文帶進訊息
 # （見 2026-09-17 那筆 safety system 的紀錄），消化這條補上同樣的待遇。
 UPSTREAM_DETAIL_MAX_CHARS = 200
-# 帶原文就要防金鑰外流：後台是 HTTP Basic 擋著沒錯，但錯誤訊息也會回到前端。
-_SECRET_LIKE_RE = re.compile(r"\b(?:sk|pk)-[A-Za-z0-9._\-]{8,}")
 
 
 def upstream_error_detail(
@@ -598,10 +596,10 @@ def upstream_error_detail(
     if isinstance(exc, APIConnectionError):
         return "無法連線至 AI 服務，請稍後再試"
     status = getattr(exc, "status_code", None)
-    body = re.sub(r"\s+", " ", str(getattr(exc, "message", "") or exc)).strip()
-    body = _SECRET_LIKE_RE.sub("[已遮蔽]", body)
-    if len(body) > UPSTREAM_DETAIL_MAX_CHARS:
-        body = body[:UPSTREAM_DETAIL_MAX_CHARS] + "…"
+    body = audit_archive.sanitize_error_summary(
+        str(getattr(exc, "message", "") or exc),
+        max_chars=UPSTREAM_DETAIL_MAX_CHARS,
+    ).replace("[redacted]", "[已遮蔽]")
     parts = [p for p in (f"上游 {status}" if status else "", body) if p]
     return f"{base}（{' · '.join(parts)}）" if parts else base
 
@@ -5561,34 +5559,35 @@ def restamp_disclaimer(req: ImageRestampRequest) -> ImageGenerateResponse:
     """把標籤改貼到另一個角落，不重新生圖（F47）。"""
     request_id = request_log.new_request_id()
     started = _generation_clock()
-    if req.broadcast_hole:
-        # 播出鏡面的「示意圖」浮水印是 compose.apply_broadcast_hole 自己畫的，
-        # 版位綁在挖空框上，不吃 disclaimer_corner——讓它假裝成功比擋下來更糟。
-        raise HTTPException(
-            status_code=400,
-            detail="播出鏡面的「示意圖」浮水印位置綁在挖空框上，不能單獨挪動",
-        )
-    base = ImageGenerateResponse(
-        image_data_base64=req.source_image_base64,
-        mime_type=req.source_mime_type,
-        model=req.model,
-    )
-    sizing = ImageGenerateRequest(
-        prompt="restamp",  # 只為了算畫布，不會送給任何模型
-        provider=req.provider,
-        aspect_ratio=req.aspect_ratio,
-        image_size=req.image_size,
-        density=req.density,
-        safe_frame=req.safe_frame,
-        safe_frame_profile=req.safe_frame_profile,
-        disclaimer_kind=req.disclaimer_kind,
-        disclaimer_source_text=req.disclaimer_source_text,
-        disclaimer_corner=req.disclaimer_corner,
-    )
-    _, needs_frame, frame_profile = resolve_frame_plan(
-        req.safe_frame_profile, req.safe_frame, req.density
-    )
     try:
+        if req.disclaimer_kind == "source" and not req.disclaimer_source_text.strip():
+            raise HTTPException(status_code=400, detail="畫面來源文字不可空白")
+        if req.broadcast_hole:
+            # 播出鏡面的標籤版位綁在挖空框上，不能單獨挪動。
+            raise HTTPException(
+                status_code=400,
+                detail="播出鏡面的「示意圖」浮水印位置綁在挖空框上，不能單獨挪動",
+            )
+        base = ImageGenerateResponse(
+            image_data_base64=req.source_image_base64,
+            mime_type=req.source_mime_type,
+            model=req.model,
+        )
+        sizing = ImageGenerateRequest(
+            prompt="restamp",  # 只為了算畫布，不會送給任何模型
+            provider=req.provider,
+            aspect_ratio=req.aspect_ratio,
+            image_size=req.image_size,
+            density=req.density,
+            safe_frame=req.safe_frame,
+            safe_frame_profile=req.safe_frame_profile,
+            disclaimer_kind=req.disclaimer_kind,
+            disclaimer_source_text=req.disclaimer_source_text,
+            disclaimer_corner=req.disclaimer_corner,
+        )
+        _, needs_frame, frame_profile = resolve_frame_plan(
+            req.safe_frame_profile, req.safe_frame, req.density
+        )
         result = finalize_image_result(
             base,
             aspect_ratio=req.aspect_ratio,

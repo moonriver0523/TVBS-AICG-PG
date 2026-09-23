@@ -42,8 +42,8 @@ _REDACT_RE = re.compile(
     r"(?i)"
     r"(?:authorization\s*[:=]\s*(?:bearer\s+)?)\S+"
     r"|(?:bearer\s+)[A-Za-z0-9._\-]+"
-    r"|(?:(?:api[_-]?key|secret|password|token)\s*[:=]\s*)\S+"
-    r"|sk-[A-Za-z0-9_-]{10,}"
+    r"|(?:(?:api[_-]?key|key|secret|password|token)\s*[:=]\s*)[^\s&]+"
+    r"|(?:sk|pk)-[A-Za-z0-9._-]{8,}"
     r"|AIza[A-Za-z0-9_-]{10,}"
 )
 _TRACE_LINE_RE = re.compile(

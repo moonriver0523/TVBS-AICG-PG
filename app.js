@@ -2524,6 +2524,7 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
     btn.disabled = true;
     loading.classList.remove('hidden');
     let completed = false;
+    let generationParameters = null;
     try {
         let data;
         if (recomposeOnly) {
@@ -2557,6 +2558,8 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
             // 兩段生圖（附圖＋AI 標題）＝一輪平行的格底圖＋一張整張，預算約 180 秒（2026-09-13）
             const twoStage = !composite && (asisCount > 0 || anySlotImage);
             beginGenerationProgress('image', twoStage ? 2.4 : asisCount >= 2 ? 0.3 : slotCount === 1 ? 1.0 : asisCount === 1 ? 0.3 : (composite ? 1.6 : 1.3));
+            // 請求送出前固定成品參數，避免等待期間的 UI 變更污染追加修改。
+            generationParameters = refineParametersFromState();
             const res = await fetch(COVER_BACKEND_URL, {
                 method: 'POST',
                 headers: _apiHeaders(),
@@ -2596,7 +2599,7 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
         // 生圖模型的原圖——把拼好的成品餵回去，模型會把 Logo 與標題一起重畫。
         state.tenCoverMode = data.mode || 'ai';
         const tenCoverSource = data.mode === 'ai' ? refineSourceFromResponse(data) : null;
-        resetRefineState(tenCoverSource, tenCoverSource ? data : null);
+        resetRefineState(tenCoverSource, tenCoverSource ? data : null, generationParameters);
         // 滿版合成版：把壓字前底圖記下來，「只改文字」才有東西可以帶回去（零 API 重壓）
         setTenCoverBackground(data);
         document.getElementById('oneClickLabel').innerText = editorFormat().label;
@@ -2763,7 +2766,7 @@ async function recomposeYtCover(refined) {
     return data;
 }
 
-function showYtCoverResult(data, fields) {
+function showYtCoverResult(data, fields, generationParameters) {
     const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
     document.getElementById('oneClickImage').src = imageUrl;
     const download = document.getElementById('oneClickDownload');
@@ -2774,7 +2777,7 @@ function showYtCoverResult(data, fields) {
     state.ytCoverTitleMode = data.title_mode || 'ai';
     // 追加修改：以無文字底圖為源，改完由 handleRefine 再疊一次文字。
     // 雙則的底圖是左右兩張羽化拼好的那一張，這裡沒有分別。
-    resetRefineState(refineSourceFromResponse(data), data);
+    resetRefineState(refineSourceFromResponse(data), data, generationParameters);
     const recompose = document.getElementById('ytCoverRecomposeBtn');
     if (recompose) recompose.disabled = false;
     document.getElementById('oneClickLabel').innerText = editorFormat().label;
@@ -2810,6 +2813,8 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
     btn.disabled = true;
     loading.classList.remove('hidden');
     let completed = false;
+    // 只改文字沿用原底圖參數；真正重生會在 fetch 前覆蓋成當次快照。
+    let generationParameters = state.refineParameters ? {...state.refineParameters} : null;
     try {
         let data;
         if (recomposeOnly) {
@@ -2827,6 +2832,7 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
                 : aiTitle ? 'AI 整張生成（含標題），約 30–120 秒…'
                 : asis ? '用附圖當底圖，合成中…' : 'AI 生底圖後合成，約 30–120 秒…');
             beginGenerationProgress('image', twoStage ? 2.4 : (asis && !aiTitle) ? 0.3 : 1.3);
+            generationParameters = refineParametersFromState();
             const res = await fetch(YT_COVER_BACKEND_URL, {
                 method: 'POST',
                 headers: _apiHeaders(),
@@ -2844,7 +2850,7 @@ async function handleYtCoverGenerate(recomposeOnly = false) {
             if (!res.ok) throw new Error(_apiError(data, res.status));
         }
         rememberSeed('ytSeed', data);
-        showYtCoverResult(data, fields);
+        showYtCoverResult(data, fields, generationParameters);
         showGenerateNoticeBanner(data.notices);
         completed = true;
     } catch (err) {
@@ -3189,6 +3195,8 @@ async function handleOneClickGenerate() {
         const slowCombo = (state.imageSize === "2K" ? 1.5 : 1)
             * (effectiveImageProvider() === "gpt" ? 1.3 : 1);
         beginGenerationProgress("image", slowCombo);
+        // 消化完成後才是生圖送出點；此刻固定實際送出的成品參數。
+        const generationParameters = refineParametersFromState();
         const imgRes = await fetch(IMAGE_BACKEND_URL, {
             method: "POST",
             headers: _apiHeaders(),
@@ -3231,7 +3239,7 @@ async function handleOneClickGenerate() {
         download.download = downloadFileName(state.editorFormat, undefined, isPng ? "png" : "jpg");
         download.innerText = `下載 ${isPng ? "PNG" : "JPEG"}`;
         // ③ 記住「置框前」原圖供追加修改；未置框時成品本身就是原圖
-        resetRefineState(refineSourceFromResponse(data), data);
+        resetRefineState(refineSourceFromResponse(data), data, generationParameters);
         document.getElementById("oneClickLabel").innerText = data.model || "AI Generated";
         const titleMatch = variable.match(/\[標題\]\s*([^\n]+)/);
         document.getElementById("oneClickMeta").innerText = titleMatch ? titleMatch[1].trim() : "";
@@ -3775,13 +3783,17 @@ function refineParametersFromState(display = null) {
     };
 }
 
-function resetRefineState(source, display) {
+function resetRefineState(source, display, parameters = null) {
     // 新成品會讓先前尚未回來的 restamp 全部失效。
     state.restampRequestId += 1;
     state.refineSource = source || null;
     // 顯示中的成品也記在 state（退回上一版用），不從 DOM 反解
     state.refineDisplay = display || null;
-    state.refineParameters = source ? refineParametersFromState(display) : null;
+    state.refineParameters = source ? {
+        ...(parameters || refineParametersFromState(display)),
+        // 模型名稱以後端實際回應為準，其他欄位則必須沿用送出快照。
+        model: (display || {}).model || (parameters || {}).model || '',
+    } : null;
     state.refineStack = [];
     const input = document.getElementById('refineInput');
     if (input) input.value = '';
@@ -3845,11 +3857,13 @@ async function handleRefine() {
     // 走一般 refine 規則（字要保留），不置框、不挖洞、固定 16:9。
     const isTenCover = editorFormat().inputs === 'cover' && state.tenCoverMode === 'ai';
     const isCover = isYtCover || isTenCover;
+    const savedRefineParameters = state.refineParameters
+        || refineParametersFromState(state.refineDisplay);
     const refineParameters = {
-        ...refineParametersFromState(state.refineDisplay),
-        aspect_ratio: isCover ? '16:9' : currentAspectRatio(),
-        safe_frame: isCover ? false : state.safeFrame,
-        safe_frame_profile: isCover ? '' : state.currentRole,
+        ...savedRefineParameters,
+        aspect_ratio: isCover ? '16:9' : savedRefineParameters.aspect_ratio,
+        safe_frame: isCover ? false : savedRefineParameters.safe_frame,
+        safe_frame_profile: isCover ? '' : savedRefineParameters.safe_frame_profile,
     };
     try {
         const response = await fetch(REFINE_BACKEND_URL, {
