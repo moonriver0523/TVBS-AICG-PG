@@ -100,6 +100,8 @@ class PortraitLookupOutcome:
     entry_found: bool
     matched_name: str | None
     language: str | None
+    # 網路／解析例外不是「確認查無條目」，不可拿來開放模型猜臉。
+    lookup_failed: bool = False
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -146,6 +148,76 @@ def _is_human(qid: str, timeout: int) -> bool:
     return False
 
 
+def _entity_descriptions(qid: str, timeout: int) -> list[str]:
+    """取中英文簡短描述；英文條目也優先用中文描述和中文新聞交叉比對。"""
+    params = urlencode({
+        "action": "wbgetentities", "ids": qid, "props": "descriptions",
+        "languages": "zh|en", "languagefallback": 1, "format": "json",
+    })
+    entity = ((_get_json(f"https://www.wikidata.org/w/api.php?{params}", timeout) or {}).get("entities") or {}).get(qid) or {}
+    descriptions = entity.get("descriptions") or {}
+    return [str(item.get("value") or "").strip() for item in descriptions.values() if item.get("value")]
+
+
+# 英文簡述對中文新聞的保守對照；至少國籍與職務各命中一項才採用。
+_IDENTITY_NATIONALITIES = (
+    (("伊朗",), ("iran", "iranian")),
+    (("美國", "美籍"), ("united states", "american")),
+    (("英國", "英籍"), ("united kingdom", "british")),
+    (("法國", "法籍"), ("france", "french")),
+    (("德國", "德籍"), ("germany", "german")),
+    (("日本", "日籍"), ("japan", "japanese")),
+    (("韓國", "南韓", "韓籍"), ("south korea", "korean")),
+    (("中國", "中國大陸", "中共"), ("china", "chinese")),
+    (("俄羅斯", "俄國", "俄籍"), ("russia", "russian")),
+    (("烏克蘭", "烏國"), ("ukraine", "ukrainian")),
+    (("以色列",), ("israel", "israeli")),
+    (("土耳其",), ("turkey", "turkish")),
+    (("印度", "印籍"), ("india", "indian")),
+    (("印尼", "印度尼西亞"), ("indonesia", "indonesian")),
+    (("馬來西亞", "大馬"), ("malaysia", "malaysian")),
+)
+_IDENTITY_ROLES = (
+    (("總統",), ("president",)),
+    (("總理", "首相"), ("prime minister", "premier")),
+    (("部長",), ("minister",)),
+    (("外交官", "外交部", "大使"), ("diplomat", "foreign ministry", "ambassador")),
+    (("發言人",), ("spokesperson", "spokesman", "spokeswoman")),
+    (("議員",), ("legislator", "member of parliament", "senator", "congressman")),
+    (("主席", "董事長"), ("chair", "chairman", "chairwoman")),
+    (("執行長", "執行長官"), ("chief executive", " ceo")),
+    (("教授", "學者"), ("professor", "academic", "scholar")),
+    (("教練",), ("coach", "manager")),
+    (("球員", "選手", "運動員"), ("player", "athlete")),
+    (("演員",), ("actor", "actress")),
+    (("歌手",), ("singer",)),
+)
+
+
+def _identity_description_matches(descriptions: list[str], context: str) -> bool:
+    """中／英文簡述都必須同時吻合原文的國籍與職務，才接受猜測。"""
+    joined = " ".join(descriptions)
+    context_lower = context.lower()
+    joined_lower = joined.lower()
+
+    def matches(groups: tuple) -> bool:
+        return any(
+            (
+                any(term in context for term in chinese)
+                or any(term in context_lower for term in english)
+            )
+            and (
+                any(term in joined for term in chinese)
+                or any(term in joined_lower for term in english)
+            )
+            for chinese, english in groups
+        )
+
+    nationality_match = matches(_IDENTITY_NATIONALITIES)
+    role_match = matches(_IDENTITY_ROLES)
+    return nationality_match and role_match
+
+
 def _p18_url(qid: str, timeout: int) -> str | None:
     """Wikidata 指定圖片（P18）的縮圖網址；沒有就 None。
 
@@ -169,7 +241,9 @@ def _download(image_url: str, timeout: int) -> tuple[str, str] | None:
     return base64.b64encode(image_bytes).decode("ascii"), _guess_mime(image_url)
 
 
-def _lookup_lang(name: str, lang: str, timeout: int) -> tuple[bool, ReferencePhoto | None]:
+def _lookup_lang(
+    name: str, lang: str, timeout: int, *, identity_context: str = ""
+) -> tuple[bool, ReferencePhoto | None]:
     """查單一語系：回傳 (entry_found, photo)。
 
     `entry_found` 只要求「確認是這個人的維基條目」（Wikidata P31=Q5 驗過），
@@ -202,6 +276,10 @@ def _lookup_lang(name: str, lang: str, timeout: int) -> tuple[bool, ReferencePho
         # 沒有對應實體就不用——身分無從驗證時寧可不畫臉。實測 21 個人名，
         # 只要條目真的存在就一定有 wikibase_item，這條不會誤傷正常人物。
         if not qid or not _is_human(qid, timeout):
+            continue
+        if identity_context and not _identity_description_matches(
+            _entity_descriptions(qid, timeout), identity_context
+        ):
             continue
 
         # 走到這裡＝條目存在且確認是人：entry_found 成立，不論下面找不找得到照片。
@@ -249,10 +327,13 @@ def _cache_key(
     name: str,
     alt_names: tuple[str, ...] | list[str],
     langs: tuple[str, ...],
+    guessed_alt_names: tuple[str, ...] | list[str] = (),
+    source_context: str = "",
 ) -> tuple:
     primary = (name or "").strip()
     alts = tuple((alt or "").strip() for alt in alt_names if (alt or "").strip())
-    return (primary, alts, tuple(langs))
+    guesses = tuple((alt or "").strip() for alt in guessed_alt_names if (alt or "").strip())
+    return (primary, alts, tuple(langs), guesses, (source_context or "").strip())
 
 
 def _cache_get(key: tuple):
@@ -326,6 +407,7 @@ TW_PORTRAIT_NAME_ALIASES: dict[str, str] = {
     # 中東／歐洲（photo_lookup 舊註解列為「整類卡住」的那幾位）
     "卡利巴夫": "Mohammad Bagher Ghalibaf",
     "阿拉奇": "Abbas Araghchi",
+    "貝卡伊": "Esmail Baghaei",
     "瓦希迪": "Ahmad Vahidi",
     "蘇納克": "Rishi Sunak",
 }
@@ -340,6 +422,8 @@ def find_portrait_outcome(
     name: str,
     *,
     alt_names: tuple[str, ...] | list[str] = (),
+    guessed_alt_names: tuple[str, ...] | list[str] = (),
+    source_context: str = "",
     langs: tuple[str, ...] = DEFAULT_LANGS,
     timeout: int = _TIMEOUT,
 ) -> PortraitLookupOutcome:
@@ -352,13 +436,14 @@ def find_portrait_outcome(
 
     刻意不用「中文全文搜尋」補救：實測 4 個譯名裡 2 個搜到完全不相干的條目
     （阿拉奇→阿布拉莫維奇、巴薩尼→威尼斯商人），抓錯人比查不到嚴重得多。
-    英文原名是結構化的事實，由消化端從新聞原文或既有知識給出，不用猜。
+    原文英文名是結構化事實；另收一個推測英文名，但只查英文維基，且必須由
+    Wikidata 中／英文人物簡述與新聞脈絡交叉確認，絕不拿推測值當畫面內容。
 
     找照片優先於找條目：只要任何候選／語系查到照片就立刻回傳；找不到照片時
     才退而求其次，看有沒有任何候選／語系至少確認到條目（entry_found），
     供 F40 第 3 層使用。兩者都沒有才是第 4 層（查無此人）。
     """
-    key = _cache_key(name, alt_names, langs)
+    key = _cache_key(name, alt_names, langs, guessed_alt_names, source_context)
     cached = _cache_get(key)
     if cached is not _CACHE_MISS:
         return cached
@@ -393,6 +478,24 @@ def find_portrait_outcome(
                 return outcome
             if entry_found and entry_match is None:
                 entry_match = (candidate, lang)
+    # 推測拼寫只查英文維基，而且一定要拿 Wikidata 簡述與新聞原文交叉比對。
+    for candidate in ((guess or "").strip() for guess in guessed_alt_names):
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        entry_found, photo = _lookup_lang(
+            candidate, "en", timeout, identity_context=source_context
+        )
+        if photo is not None:
+            outcome = PortraitLookupOutcome(
+                photo=photo, entry_found=True, matched_name=candidate, language="en"
+            )
+            _cache_put(key, outcome)
+            # 消化後緊接的生圖查詢不再帶猜測欄位，替同一原名暖一份短鍵快取。
+            _cache_put(_cache_key(name, alt_names, langs), outcome)
+            return outcome
+        if entry_found and entry_match is None:
+            entry_match = (candidate, "en")
     if entry_match is not None:
         outcome = PortraitLookupOutcome(
             photo=None, entry_found=True, matched_name=entry_match[0], language=entry_match[1]

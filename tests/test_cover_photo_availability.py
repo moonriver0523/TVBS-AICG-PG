@@ -65,9 +65,8 @@ def _only_merz(subjects, english=None):
 def _outcomes_from_lookup(lookup_fn, *, missing_entry_found=False):
     """把 (found, missing) 形狀的假查詢轉成 F40 outcome 形狀。
 
-    `missing_entry_found` 預設 False：維持這批既有測試改動前的假設——沒照片
-    的人也查無條目，一律退回「無人場景」，不是新的 entry_only（那個由本檔另外
-    新增的測試覆蓋）。
+    `missing_entry_found` 預設 False：模擬連條目都查不到；B73 預設會把整組導向
+    entry_only，測試用它確認不會混用部分參考照。
     """
     def outcomes(subjects, english=None):
         found, missing = lookup_fn(subjects, english)
@@ -112,16 +111,16 @@ class CoverPhotoAvailabilityTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200, res.text)
         return res.json(), seen
 
-    def test_one_of_two_missing_keeps_the_one_that_was_found(self):
+    def test_one_of_two_missing_keeps_both_but_uses_no_partial_reference(self):
         _, seen = self._run({"title_left": "梅爾茨 蕭茲 同框", "layout": "full", "mode": "composite"})
         req = seen[0]
-        self.assertEqual(req.portrait_subjects, ["梅爾茨"])
-        self.assertEqual(req.portrait_subjects_en, ["Friedrich Merz"])
-        # 一個人＝單張參考照通道
-        self.assertEqual(req.reference_image_data_url, MERZ_PHOTO.data_url())
-        self.assertIn(main.PORTRAIT_MODES["reference"].strip()[:60], req.prompt)
+        self.assertEqual(req.portrait_subjects, ["梅爾茨", "蕭茲"])
+        self.assertEqual(req.portrait_subjects_en, ["Friedrich Merz", "Olaf Scholz"])
+        self.assertEqual(req.reference_image_data_url, "")
+        self.assertEqual(req.portrait_reference_data_urls, [])
+        self.assertIn("NO VERIFIED PHOTOGRAPH, DRAW FROM CONTEXT", req.prompt)
 
-    def test_everyone_missing_keeps_the_list_and_the_no_face_rules(self):
+    def test_everyone_missing_keeps_the_list_and_uses_entry_only(self):
         _, seen = self._run(
             {"title_left": "梅爾茨 蕭茲 同框", "layout": "full", "mode": "composite"},
             lookup=lambda subjects, english=None: ({}, list(subjects)),
@@ -129,7 +128,8 @@ class CoverPhotoAvailabilityTests(unittest.TestCase):
         req = seen[0]
         self.assertEqual(req.portrait_subjects, ["梅爾茨", "蕭茲"])
         self.assertEqual(req.reference_image_data_url, "")
-        self.assertIn(main.PORTRAIT_MODES["no_reference"].strip()[:60], req.prompt)
+        self.assertIn("NO VERIFIED PHOTOGRAPH, DRAW FROM CONTEXT", req.prompt)
+        self.assertEqual(req.disclaimer_kind, "ai")
 
     def test_uploaded_portrait_keeps_the_person_wikipedia_cannot_find(self):
         # 會自己上傳照片，通常正是因為那個人維基查不到（假設同 apply_photo_availability）
@@ -143,7 +143,7 @@ class CoverPhotoAvailabilityTests(unittest.TestCase):
 
 
 class YtCoverPhotoAvailabilityTests(unittest.TestCase):
-    def test_yt_plan_drops_the_person_without_a_photo(self):
+    def test_yt_plan_keeps_people_for_group_wide_entry_only(self):
         derived = {
             "line1": "梅爾茨蕭茲", "line2": "同框會談", "visual": "兩人正面半身",
             "portrait_subjects": ["梅爾茨", "蕭茲"], "portrait_subjects_en": ["Friedrich Merz", "Olaf Scholz"],
@@ -153,8 +153,8 @@ class YtCoverPhotoAvailabilityTests(unittest.TestCase):
              patch.object(main, "lookup_portrait_photos", side_effect=_only_merz), \
              patch.object(main, "lookup_portrait_outcomes", side_effect=_outcomes_from_lookup(_only_merz)):
             _, _, subjects, english = main.resolve_yt_cover_plan(req)
-        self.assertEqual(subjects, ["梅爾茨"])
-        self.assertEqual(english, ["Friedrich Merz"])
+        self.assertEqual(subjects, ["梅爾茨", "蕭茲"])
+        self.assertEqual(english, ["Friedrich Merz", "Olaf Scholz"])
 
 
 ENTRY_ONLY_OUTCOME = photo_lookup.PortraitLookupOutcome(
@@ -213,16 +213,19 @@ class CoverF40FourTierTests(unittest.TestCase):
         self.assertEqual(len(data["notices"]), 1)
         self.assertIn("並非本人的精確肖像", data["notices"][0])
 
-    def test_no_entry_person_is_dropped_and_no_notice(self):
-        """兩人都連條目都查不到：從版面移除、走無人場景、不回 notice。"""
+    def test_no_entry_people_use_entry_only_with_notice(self):
+        """兩人都連條目都查不到：保留版面、整組 entry_only、回 notice。"""
         data, seen = self._run(
             {"title_left": "梅爾茨 蕭茲 同框", "layout": "full", "mode": "composite"},
             outcomes={"梅爾茨": NO_ENTRY_OUTCOME, "蕭茲": NO_ENTRY_OUTCOME},
         )
         req = seen[0]
         self.assertEqual(req.portrait_subjects, ["梅爾茨", "蕭茲"])
-        self.assertIn("NAMED REAL PEOPLE — NO PERSON IN THIS SCENE", req.prompt)
-        self.assertEqual(data.get("notices", []), [])
+        self.assertIn("NO VERIFIED PHOTOGRAPH, DRAW FROM CONTEXT", req.prompt)
+        self.assertEqual(req.reference_image_data_url, "")
+        self.assertEqual(req.portrait_reference_data_urls, [])
+        self.assertEqual(req.disclaimer_kind, "ai")
+        self.assertEqual(len(data.get("notices", [])), 1)
 
 
 class CoverNewsTextMaterialTests(unittest.TestCase):
@@ -286,7 +289,7 @@ class CoverSecondDeriveSanitizerTests(unittest.TestCase):
     區塊。用一次呼叫就驗證「不會無限重入」。
     """
 
-    def test_excluded_name_never_leaks_as_a_drawn_face_and_derive_runs_once(self):
+    def test_no_entry_fallback_keeps_group_wide_mode_and_derive_runs_once(self):
         seen = []
 
         def fake_raw(image_req):
@@ -309,11 +312,12 @@ class CoverSecondDeriveSanitizerTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200, res.text)
         # 全部都查無條目時只打一次文字模型——沒有第二次 derive 可以無限重入
         self.assertEqual(digest.call_count, 1)
-        # 兩人都連條目都查不到：整組退回無人場景，肖像規則區塊不會出現
-        # 「查到照片才有的」reference／reference_multi／entry_only 措辭
-        self.assertIn("NAMED REAL PEOPLE — NO PERSON IN THIS SCENE", seen[0].prompt)
+        # 兩人都連條目都查不到：整組改走 entry_only，不逐人混入參考照。
+        self.assertIn("NO VERIFIED PHOTOGRAPH, DRAW FROM CONTEXT", seen[0].prompt)
         self.assertNotIn("MULTIPLE PORTRAITS", seen[0].prompt)
-        self.assertNotIn("DRAW FROM CONTEXT", seen[0].prompt)
+        self.assertEqual(seen[0].reference_image_data_url, "")
+        self.assertEqual(seen[0].portrait_reference_data_urls, [])
+        self.assertEqual(seen[0].disclaimer_kind, "ai")
 
 
 if __name__ == "__main__":

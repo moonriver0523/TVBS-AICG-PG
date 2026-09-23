@@ -121,6 +121,10 @@
   只動 `REAL_WORLD_FIDELITY_RULES` 第 5 條一句 ⇒ **八份 digest 快照**第四次改動、
   每份仍只差一行（`git diff --numstat tests/fixtures/` 全是 `1 1`）；兩份
   `reporter-image-prompt-*.txt` **沒有變**（`news_prompt.py` 沒動）。
+- 2026-09-23（B96 丙）：消化輸出新增 `portrait_subjects_en_guess`，只供英文維基
+  查圖；明文禁止拿它當畫面文字或 VERBATIM 來源，後端另以人物描述與新聞職稱／
+  國籍脈絡交叉比對。`REAL_WORLD_FIDELITY_RULES` 因此新增第 8 條，本機以純函式重建
+  八份 digest 快照；未呼叫模型、未改兩份 image prompt 或 RNG fixture。
 """
 
 import os

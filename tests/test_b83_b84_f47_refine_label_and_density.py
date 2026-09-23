@@ -83,9 +83,10 @@ class DensityReachesEveryPathTests(unittest.TestCase):
 
         漏掉任何一個，那條路就靜靜掉回 1K——畫面上看不出來，要量成品尺寸才知道。
         """
+        self.assertEqual(APP_JS.count("density: state.density"), 3)
         self.assertEqual(
-            APP_JS.count("density: state.density"), 4,
-            "四個送出點都要送 density，不多不少",
+            APP_JS.count("density: refineParameters.density"), 1,
+            "標籤重貼必須沿用原成品密度，不可讀當下 state",
         )
 
     def test_the_high_res_gate_actually_fires_for_a_dense_editor_job(self):

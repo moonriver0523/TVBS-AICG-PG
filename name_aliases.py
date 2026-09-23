@@ -81,6 +81,12 @@ BLOCKING_PREFIXES: dict[str, frozenset[str]] = {
     "川習": frozenset("四銀品香德市河旭湯"),
 }
 
+# 兩字簡稱的末字若同時是常見詞首，還要看後一字，避免跨詞邊界誤命中。
+# key 是簡稱末字，value 是緊接在簡稱後、會把末字組成一般詞的字。
+TWO_CHAR_BLOCKING_SUFFIXES: dict[str, frozenset[str]] = {
+    "習": frozenset("俗性慣氣題作字藝得"),
+}
+
 
 def _really_appears(alias: str, blob: str) -> bool:
     """這個簡稱在素材裡有沒有**至少一次**不是跨詞巧合的出現。
@@ -88,12 +94,16 @@ def _really_appears(alias: str, blob: str) -> bool:
     沒有登記阻擋字的簡稱就是單純的 `in`（第一批三條全都是這種）。
     有登記的，逐一檢查每次出現的前一個字：只要有一次不被擋，就算命中。
     """
-    blocked = BLOCKING_PREFIXES.get(alias)
-    if not blocked:
+    blocked_before = BLOCKING_PREFIXES.get(alias, frozenset())
+    blocked_after = TWO_CHAR_BLOCKING_SUFFIXES.get(alias[-1], frozenset()) if len(alias) == 2 else frozenset()
+    if not blocked_before and not blocked_after:
         return alias in blob
     start = blob.find(alias)
     while start != -1:
-        if start == 0 or blob[start - 1] not in blocked:
+        before_ok = start == 0 or blob[start - 1] not in blocked_before
+        end = start + len(alias)
+        after_ok = end == len(blob) or blob[end] not in blocked_after
+        if before_ok and after_ok:
             return True
         start = blob.find(alias, start + 1)
     return False

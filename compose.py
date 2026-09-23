@@ -1082,7 +1082,7 @@ _SPLIT_BEFORE_PARTICLES = set("被把將對於為讓使與和及因但而且或�
 # 會愈長愈胖的詞典（2026-09-14 裁決「不再加條目」針對的是那一份）。所以這裡
 # 直接把原本的「數字記號」放寬成「英數記號」，一條規則同時管住三條路：
 # 模型給的 hint（`_hint_cuts` 的結果會被 inner 濾）、括號邊緣、與保底中點切。
-_ATOMIC_TOKEN_RE = re.compile(r"[0-9A-Za-z]+(?:[/.:\-][0-9A-Za-z]+)*")
+_ATOMIC_TOKEN_RE = re.compile(r"[0-9A-Za-z]+(?:[/.:&+#\-]+[0-9A-Za-z]*)*")
 
 
 def _atomic_token_inner_indices(text: str) -> set[int]:
@@ -1239,7 +1239,8 @@ def _split_line_near_middle(text: str) -> tuple[str, str]:
         for i in (mid + offset, mid - offset):
             if 1 <= i < n and i not in inner:
                 return text[:i], text[i:]
-    return text[:mid], text[mid:]
+    # 整行都是不可拆的記號時不硬切，交給既有 fit 邏輯縮字；最小字級仍過寬會明確失敗。
+    return text, ""
 
 
 def _wrap_pairs(pairs: list[tuple[str, int]], max_w: int, size: int, max_lines: int) -> list[tuple[str, int]]:
@@ -1276,6 +1277,8 @@ def _wrap_pairs(pairs: list[tuple[str, int]], max_w: int, size: int, max_lines: 
         if len(text) <= COVER_TITLE_FILL_MIN_CHARS:
             break
         head, tail = _split_line_near_middle(text)
+        if not head.strip() or not tail.strip():
+            break
         pairs[idx : idx + 1] = [(head, seg), (tail, seg)]
     return pairs
 
