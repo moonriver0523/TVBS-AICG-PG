@@ -1744,6 +1744,12 @@ function broadcastHoleForApi() {
     return state.holeSide;
 }
 
+// B110：版面挖空不等於白色壓框；播出鏡面永遠把方向送到生圖端。
+function broadcastLayoutHoleForApi() {
+    if (!editorFormat().hole) return '';
+    return state.holeSide;
+}
+
 /* 挖空方向（2026-09-08 WP1）：左切／右切從兩個版型變成同一個版型裡的一組按鈕。
    消化與生圖兩端都吃這個值——消化要把內容趕到影片那半邊的對面，方向講錯等於重點被蓋掉。 */
 function updateHoleSideButtons() {
@@ -1960,6 +1966,7 @@ function syncOutput() {
         aspectRatio: currentAspectRatio(),
         noText: state.digestDensity === 'no_text',
         modelExtension: modelExtensionActive(),
+        holeSide: broadcastLayoutHoleForApi(),
     });
     updatePromptCounter();
 }
@@ -1992,7 +1999,25 @@ EXTENDED BACKGROUND SAFE LAYOUT (OVERRIDES EVERY EARLIER RULE ABOUT MARGINS, CAN
 - Any closing banner or bottom line is the lowest element of the foreground group and stays well above the deeper background-only area at the bottom.
 - Do NOT render any frame, rectangle, outline, border line, guide line, crop mark or dimmed band to mark where the central region ends.`;
 
-function buildPrompt({ role, engine, typeLabel, style, structure, variable, safeFrame = false, aspectRatio = '16:9', noText = false, modelExtension = false }) {
+const BROADCAST_HOLE_LAYOUT_RULES_TEMPLATE = `==================================================
+BROADCAST VIDEO HOLE — {hole_side_upper} VIDEO ZONE IS BACKGROUND-ONLY (CRITICAL OVERRIDE)
+==================================================
+- The video zone is a 16:9 area on the {hole_side} side of the frame, filling roughly the {hole_side} half of the space between the headline at the top and the bottom band. Post-production will place live video there.
+- Inside the video zone: background ONLY. The same full-frame scene continues naturally through it; do not leave it blank and do not draw a white box, frame, guide or placeholder there.
+- No attached image, generated subject, text, number, card, chart, logo, badge or callout may enter or overlap the video zone.
+- The headline at the top and the bottom band may still span the full width as the layout requires; they stay above and below the video zone, never inside it.
+- Every other content element goes in the {content_side} half between the headline and the bottom band. Every attached PLACE AS-IS image MUST appear there, clearly visible and unaltered — as the main picture of that half or inside a card. Never omit it and never move it into the video zone.
+- This applies whether the software white alignment frame is ON or OFF. It OVERRIDES any earlier instruction to make an attached image full-frame, extend or crop it across the canvas, or place content on the {hole_side} side.`;
+
+function broadcastHoleLayoutRules(side) {
+    if (side !== 'left' && side !== 'right') return '';
+    return BROADCAST_HOLE_LAYOUT_RULES_TEMPLATE
+        .replaceAll('{hole_side_upper}', side.toUpperCase())
+        .replaceAll('{hole_side}', side)
+        .replaceAll('{content_side}', side === 'left' ? 'right' : 'left');
+}
+
+function buildPrompt({ role, engine, typeLabel, style, structure, variable, safeFrame = false, aspectRatio = '16:9', noText = false, modelExtension = false, holeSide = '' }) {
     // 共用的正文區塊（style / structure / variable）
     const textRules = role === '編輯' ? EDITOR_TEXT_RULES : REPORTER_TEXT_RULES;
     // D26 延伸背景：模型的圖就是交付物，版面走「中央內容」那條（跟安全框 OFF 同組），
@@ -2065,6 +2090,8 @@ FINAL OUTPUT RULE
     // 插一個 ${...} 會讓抓到的字面多出那段程式碼、比對就永遠對不起來。
     let fullBody = noText ? `${body}\n${NO_TEXT_IMAGE_OVERRIDE}` : body;
     if (modelExtension) fullBody = `${fullBody}\n${MODEL_EXTENSION_IMAGE_OVERRIDE}`;
+    const holeRules = broadcastHoleLayoutRules(holeSide);
+    if (holeRules) fullBody = `${fullBody}\n\n${holeRules}`;
 
     // 依引擎切換開頭語法
     if (engine === 'gpt') {
@@ -3261,6 +3288,7 @@ async function handleOneClickGenerate() {
             aspectRatio: currentAspectRatio(),
             noText: state.digestDensity === 'no_text',
             modelExtension: modelExtensionActive(),
+            holeSide: broadcastLayoutHoleForApi(),
         });
         showToast("生圖中，約 30–120 秒…");
         // 2K 與 GPT 都明顯較慢，預估時間拉長免得進度早早貼上限乾等
@@ -3281,9 +3309,9 @@ async function handleOneClickGenerate() {
                 safe_frame: state.safeFrame,
                 frame_strategy: frameStrategyForApi(),
                 safe_frame_profile: state.currentRole,
-                // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
-                // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
+                // 白框與 AI 版面挖空分開送：前者只在壓框 ON 時有值，後者不受壓框開關影響。
                 broadcast_hole: broadcastHoleForApi(),
+                hole_side: broadcastLayoutHoleForApi(),
                 // 地圖類的真實座標（消化端列地名、後端實查 Nominatim）。後端據此
                 // 拼一張真實底圖、把標點畫在正確位置再當參考圖附上——模型記憶裡的
                 // 經緯度實測差到 2.3 公里，冷門地名尤其不準。
@@ -3413,9 +3441,9 @@ async function handleImageGeneration() {
                 safe_frame: state.safeFrame,
                 frame_strategy: frameStrategyForApi(),
                 safe_frame_profile: state.currentRole,
-                // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
-                // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
+                // 白框與 AI 版面挖空分開送：前者只在壓框 ON 時有值，後者不受壓框開關影響。
                 broadcast_hole: broadcastHoleForApi(),
+                hole_side: broadcastLayoutHoleForApi(),
                 // 地圖類的真實座標（消化端列地名、後端實查 Nominatim）。後端據此
                 // 拼一張真實底圖、把標點畫在正確位置再當參考圖附上——模型記憶裡的
                 // 經緯度實測差到 2.3 公里，冷門地名尤其不準。
@@ -3970,9 +3998,9 @@ async function handleRefine() {
                 // 白名單值＝ EDITOR_FORMATS 的版型 key，正好對齊後端
                 // editor_formats.COVER_REFINE_KINDS；非封面一律不送。
                 cover_kind: isCover ? state.editorFormat : '',
-                // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
-                // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
+                // 追加修改沿用同一個版面挖空側；白框仍由壓框開關獨立決定。
                 broadcast_hole: isCover ? '' : broadcastHoleForApi(),
+                hole_side: isCover || !editorFormat().hole ? '' : state.holeSide,
                 text_free: ytTextFree,
                 replacement_person: replacementPerson,
                 reference_images: replacementPerson

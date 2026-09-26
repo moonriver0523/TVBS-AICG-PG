@@ -66,6 +66,7 @@ import safe_content_gate
 import safe_frame
 from input_filter import check_input, note_accepted
 from news_prompt import (
+    broadcast_hole_layout_rules,
     localise_disclaimer_position,
     MAP_TYPE_LABEL,
     PORTRAIT_MODES,
@@ -1175,9 +1176,12 @@ class ImageGenerateRequest(BaseModel):
     #   編輯 OFF  → 對位框，拉伸填滿
     #   編輯 ON   → 2% 薄框，等比例置中
     safe_frame_profile: str = "記者"
-    # 播出鏡面的挖空側（'left'／'right'）。空字串＝不挖。挖空框在**置框之後**才貼，
-    # 因為置框會縮放平移內容，在原圖座標算好的框置框後會跑掉（見 compose.py）。
+    # 播出鏡面的程式白色壓框側（'left'／'right'）。空字串＝不壓白框。白框在可能的
+    # 安全框後製之後才貼，因為安全框會縮放平移內容（見 compose.py）。
     broadcast_hole: str = ""
+    # B110：AI 版面的挖空側，與上面的程式白框開關分離。空字串＝非播出鏡面；
+    # left/right 即使 broadcast_hole 為空也要把該半邊限制成只有連續背景。
+    hole_side: Literal["", "left", "right"] = ""
     # 真人肖像的參考照片（data URL）。空字串＝這次不附參考圖。
     reference_image_data_url: str = ""
     # 使用者上傳的參考圖（地圖底稿／實景參考）。與肖像參考照分開兩個欄位：
@@ -3773,6 +3777,8 @@ def generate_image(req: ImageGenerateRequest):
     # ATTACHED MAP REFERENCE 那段用途規則（「標點已在真實位置，不要移動」）。
     req = apply_map_reference_to_image_request(req)
     req = apply_user_references_to_image_request(req)
+    # B110：一定壓在 asis／aiedit 用途規則之後，才能覆蓋「主視覺／延伸裁切」等語意。
+    req = apply_broadcast_hole_layout_to_image_request(req)
     # F48：留空提示跟著使用者選的標籤位置走（右下＝預設時 prompt 逐字不變）
     localised = localise_disclaimer_position(
         req.prompt, req.disclaimer_corner,
@@ -4254,6 +4260,11 @@ def broadcast_hole_for(req: "NewsImageGenerateRequest") -> str:
     return editor_formats.hole_side(req.editor_format, req.role, side=req.hole_side) or ""
 
 
+def broadcast_layout_hole_for(req: "NewsImageGenerateRequest") -> str:
+    """播出鏡面的 AI 版面挖空側；不受白色壓框開關影響。"""
+    return editor_formats.hole_side(req.editor_format, req.role, side=req.hole_side) or ""
+
+
 def apply_broadcast_hole_response(
     result: ImageGenerateResponse,
     side: str,
@@ -4350,13 +4361,11 @@ def finalize_image_result(
     （見 ImageGenerateResponse 的欄位說明）。
     """
     verify_output_aspect_ratio(result, aspect_ratio)
-    if not safe_frame:
-        # 沒有置框就沒有可靠的成品座標系，挖空框無處可貼。播出鏡面一律開安全框，
-        # 走到這裡代表呼叫端組錯了，出聲比默默少一個框好。
-        if broadcast_hole:
-            print("[compose] safe_frame=False，跳過播出鏡面挖空框", flush=True)
+    if not safe_frame and not broadcast_hole:
         return result
-    framed = frame_image_response(result, profile, canvas=canvas)
+    # D24/B110：白色壓框是獨立的後製步驟，不能被「不置安全框」的早退一起略過。
+    # safe_frame=False 時原圖已是成品座標；apply_broadcast_hole 會再依實際圖片尺寸重算。
+    framed = frame_image_response(result, profile, canvas=canvas) if safe_frame else result
     if broadcast_hole:
         framed = apply_broadcast_hole_response(
             framed, broadcast_hole, profile, canvas=canvas
@@ -5552,6 +5561,16 @@ def apply_user_references_to_image_request(
     return req.model_copy(update={"prompt": prompt})
 
 
+def apply_broadcast_hole_layout_to_image_request(
+    req: ImageGenerateRequest,
+) -> ImageGenerateRequest:
+    """把播出鏡面背景-only 半邊規則冪等地壓在所有附圖用途規則之後。"""
+    block = broadcast_hole_layout_rules(req.hole_side)
+    if not block or block in req.prompt:
+        return req
+    return req.model_copy(update={"prompt": f"{req.prompt.rstrip()}\n\n{block}"})
+
+
 class ImageRefineRequest(BaseModel):
     # 置框「前」的原始生成圖（base64，不是 data URL）。一律送
     # ImageGenerateResponse.source_image_base64；把已置框成品送進來會二次拉伸
@@ -5569,6 +5588,8 @@ class ImageRefineRequest(BaseModel):
     safe_frame_profile: str = "記者"
     # 追加修改要沿用同一個挖空側，否則改完圖那塊空位就不見了
     broadcast_hole: str = ""
+    # B110：追加修改也要保住同一個背景-only 半邊；與白色壓框開關分離。
+    hole_side: Literal["", "left", "right"] = ""
     # YT 直播封面：附圖是無文字底圖，改完仍須無文字（文字由程式疊）。
     # 見 news_prompt.TEXT_FREE_REFINE_RULES。
     text_free: bool = False
@@ -5670,6 +5691,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             frame_strategy=req.frame_strategy,
             safe_frame_profile=req.safe_frame_profile,
             broadcast_hole=req.broadcast_hole,
+            hole_side=req.hole_side,
             reference_image_data_url=(
                 f"data:{req.source_mime_type};base64,{req.source_image_base64}"
             ),
@@ -5683,6 +5705,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             ),
             disclaimer_corner=req.disclaimer_corner,
         )
+        image_req = apply_broadcast_hole_layout_to_image_request(image_req)
         prompt = image_req.prompt
         if req.cover_kind:
             # B51：封面追加修改一律不置框——resolve_frame_plan 對編輯身分永遠回
@@ -6030,12 +6053,14 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             # 無字檔（D14／F20）：消化端已經產出空的 variable，生圖端還要一段
             # 明文覆蓋才壓得住前面那些「把 VARIABLE FIELDS 畫上去」的條款。
             no_text=(req.density == "no_text"),
+            hole_side=broadcast_layout_hole_for(req),
         )
         image = generate_image(
             ImageGenerateRequest(
                 prompt=prompt,
                 provider=provider,
                 broadcast_hole=broadcast_hole_for(req),
+                hole_side=broadcast_layout_hole_for(req),
                 aspect_ratio=aspect_ratio,
                 image_size=req.image_size,
                 density=req.density,
