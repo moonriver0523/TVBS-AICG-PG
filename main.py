@@ -13,6 +13,7 @@ import secrets
 import ssl
 import threading
 import time
+import unicodedata
 from typing import Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -6516,6 +6517,45 @@ def _normalise_break_phrases(phrases: list[str]) -> list[str]:
     if out:
         out[0] = _strip_list_number(out[0])
     return [p for p in out if p]
+
+
+def _break_match_text(text: str) -> str:
+    """只供 hint 對位：忽略空白與全／半形差異，不把台／臺等實字當同字。"""
+    return "".join(
+        unicodedata.normalize("NFKC", ch)
+        for ch in text
+        if not ch.isspace()
+    )
+
+
+def _realign_break_phrases(original: str, phrases: list[str]) -> list[str] | None:
+    """把模型的安全等價邊界套回原文，成品永遠使用原始字元。
+
+    模型偶爾把全形標點改半形或吃掉空白；舊版因嚴格字串不等直接丟 hint。只有 NFKC
+    與空白差異才對位，任何實字變更仍拒收。邊界若落在單一原字的正規化展開中也拒收。
+    """
+    if not phrases or _break_match_text("".join(phrases)) != _break_match_text(original):
+        return None
+    targets: list[int] = []
+    length = 0
+    for phrase in phrases[:-1]:
+        length += len(_break_match_text(phrase))
+        targets.append(length)
+    cuts: list[int] = []
+    seen = 0
+    target_index = 0
+    for index, char in enumerate(original, start=1):
+        if not char.isspace():
+            seen += len(unicodedata.normalize("NFKC", char))
+        while target_index < len(targets) and seen == targets[target_index]:
+            cuts.append(index)
+            target_index += 1
+        if target_index < len(targets) and seen > targets[target_index]:
+            return None
+    if target_index != len(targets):
+        return None
+    points = [0, *cuts, len(original)]
+    return [original[points[i]:points[i + 1]] for i in range(len(points) - 1)]
 # 一段 ≤ 7 字（COVER_TITLE_FILL_MIN_CHARS）永遠不會被拆，這種標題不必打模型。
 TITLE_BREAK_MIN_CHARS = compose.COVER_TITLE_FILL_MIN_CHARS + 1
 
@@ -6567,7 +6607,16 @@ def segment_titles_for_breaks(segments: list[str]) -> dict[str, list[str]]:
         phrases = [str(x) for x in (row.get("phrases") or []) if str(x)]
         if "".join(phrases) != text:
             phrases = _normalise_break_phrases(phrases)
-        if text in segments and len(phrases) >= 2 and "".join(phrases) == text:
+        if text not in segments:
+            matches = [segment for segment in segments if _break_match_text(segment) == _break_match_text(text)]
+            if len(matches) == 1:
+                text = matches[0]
+        if text in segments and "".join(phrases) != text:
+            phrases = _realign_break_phrases(text, phrases) or phrases
+        # B108：單一長機構名／人名本身就可能是完整不可拆詞。舊版要求至少兩個
+        # phrase，模型正確回 ["中華民國中央銀行"] 也會被當成「沒切」丟掉，compose
+        # 隨後回退到逐字硬切。這裡只驗忠實度；一個 phrase 是有效的「零個可切邊界」。
+        if text in segments and len(phrases) >= 1 and "".join(phrases) == text:
             out[text] = phrases
         elif text:
             print(f"[title-break] 不採用（改了字或沒切）：{text!r} → {phrases!r}", flush=True)
@@ -8145,7 +8194,15 @@ def resolve_yt_cover_plan(
         line1 = str(data.get("line1") or "").strip()
         line2 = str(data.get("line2") or "").strip()
         if editor_formats.title_split_is_faithful(title, line1, line2):
-            lines = editor_formats.realign_split_to_title(title, line1)
+            candidate = editor_formats.realign_split_to_title(title, line1)
+            if compose.title_split_respects_hints(title, candidate[0]):
+                lines = candidate
+            else:
+                print(
+                    f"[yt-cover] AI 分段踩進不可拆詞，不採用：{candidate[0]!r} / {candidate[1]!r}",
+                    flush=True,
+                )
+                lines = editor_formats.fallback_split_title(title)
         else:
             if data:
                 print(f"[yt-cover] AI 分段改了字，不採用：{line1!r} / {line2!r}", flush=True)

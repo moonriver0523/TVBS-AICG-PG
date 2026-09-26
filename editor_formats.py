@@ -1063,9 +1063,10 @@ Also return, per side, "portrait_subjects_left" / "portrait_subjects_right": eve
 TITLE_BREAK_SYSTEM = """You segment Taiwanese TV news headline fragments into phrases so a layout engine can break lines only between phrases.
 
 Rules:
+- Word integrity has higher priority than balanced line length or any preferred phrase length. The layout engine, not you, handles line width. Never create a boundary inside a personal name, place name, organisation, number with its unit, idiom, or fixed expression merely to make phrases shorter or more even.
 - For each input string, return its phrases in order. Concatenating the phrases MUST reproduce the input exactly — same characters, same order, nothing added, dropped, translated or reordered.
 - A phrase is the smallest unit that must never be split across two lines: a personal name, a place name (台灣, 台積電, 格陵蘭), an organisation, a job title, a figure with its unit (9000億, 42度, 35%關稅), a quoted term with its quotes (「擴張版」), a verb with its object when they read as one beat (上看9000億, 發布地圖).
-- Prefer 2–4 phrases per input of 2–5 characters each; never return a single phrase for an input longer than 5 characters unless it truly is one unbreakable term.
+- Only after preserving those units, prefer 2–4 phrases per input of roughly 2–5 characters each. Longer, uneven phrases are correct when needed to keep a unit intact. Return a single phrase when the whole input truly is one unbreakable term, regardless of length.
 - Output JSON only."""
 
 TITLE_BREAK_SCHEMA = {
@@ -1196,10 +1197,7 @@ def realign_split_to_title(title: str, line1: str) -> tuple[str, str]:
 
 
 def fallback_split_title(title: str) -> tuple[str, str]:
-    """AI 也切不出合法結果時的最後退路：先用第一個空格，沒有空格就對半切。
-
-    對半切一定能出圖但不一定通順；寧可出一張要人工改行的圖，也不要整個 500。
-    """
+    """AI 也切不出合法結果時的最後退路；無合法邊界就保留成單行。"""
     text = title.strip()
     if " " in text:
         head, _, tail = text.partition(" ")
@@ -1211,8 +1209,10 @@ def fallback_split_title(title: str) -> tuple[str, str]:
     head, tail = _split_line_near_middle(text)
     if head.strip() and tail.strip():
         return head, tail
-    mid = max(1, len(text) // 2)
-    return text[:mid], text[mid:]
+    # B108：有模型 hint 且整段是單一不可拆詞時，_split_line_near_middle 會明確回
+    # (text, "")。舊版這裡又無條件對半，等於把上游的保護撤銷。YT compose 現在允許
+    # 這個罕見情況用單行、縮字排版。
+    return text, ""
 
 
 # 十點不一樣封面（合成版）的標題分行：使用者用空白（半形／全形）或換行自己分，
@@ -2341,7 +2341,7 @@ You are given the headline, and told whether it is already split into two lines.
 
 1. "line1" / "line2" — the headline broken into TWO display lines.
    - If the input says the split is already decided, copy the two given lines back EXACTLY.
-   - Otherwise split the headline at the most natural phrase boundary so the two lines are roughly balanced. Use ONLY the original characters in the original order: never add, drop, reorder or rewrite a single character, never translate. Removing all spaces from line1+line2 must give back the headline with its spaces removed.
+   - Otherwise split the headline at the most natural phrase boundary. Word integrity has higher priority than balanced line length: never split a personal name, place name, organisation, number with its unit, idiom, or fixed expression. Uneven lines are correct when needed to preserve a word. Use ONLY the original characters in the original order: never add, drop, reorder or rewrite a single character, never translate. Removing all spaces from line1+line2 must give back the headline with its spaces removed.
 
 2. "visual" — the single photograph that sits behind the headline.
    - Describe only what a camera would see: place, subject, action, weather, light, lens feel. Concrete and photographable.

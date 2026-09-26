@@ -1099,10 +1099,29 @@ _SPLIT_BEFORE_PARTICLES = set("被把將對於為讓使與和及因但而且或�
 # 模型給的 hint（`_hint_cuts` 的結果會被 inner 濾）、括號邊緣、與保底中點切。
 _ATOMIC_TOKEN_RE = re.compile(r"[0-9A-Za-z]+(?:[/.:&+#\-]+[0-9A-Za-z]*)*")
 
+# B108 fallback：模型失敗或 hint 對不上時，至少可靠辨識「數字＋單位」為一個原子。
+# 英數串由上面的 _ATOMIC_TOKEN_RE 管；中文任意人名／機構名無法靠規則可靠判斷，仍交給
+# 模型。較長單位放前面，避免 1234萬美元只吃到「1234萬」又在「萬／美元」間斷行。
+_NUMBER_WITH_UNIT_RE = re.compile(
+    r"(?:[0-9０-９]+(?:[.,．點/／:\-][0-9０-９]+)*|[一二三四五六七八九十百千萬億兩幾數多半]+)"
+    r"(?:兆|億|萬|千|百)?"
+    r"(?:平方公里|平方公尺|萬美元|億美元|萬美金|億美金|"
+    r"美元|美金|新台幣|台幣|人民幣|日圓|歐元|英鎊|"
+    r"公里|公尺|公分|毫米|公斤|公克|分鐘|小時|度C|°C|"
+    r"億元|萬元|元|噸|坪|度|%|％|年|月|日|秒|人|次|件|位|家|戶|歲|倍|條|棟|艘|架|台|場|波|班|組|隊|起|成)"
+)
+
 
 def _atomic_token_inner_indices(text: str) -> set[int]:
     inner: set[int] = set()
     for match in _ATOMIC_TOKEN_RE.finditer(text):
+        inner.update(range(match.start() + 1, match.end()))
+    return inner
+
+
+def _number_unit_inner_indices(text: str) -> set[int]:
+    inner: set[int] = set()
+    for match in _NUMBER_WITH_UNIT_RE.finditer(text):
         inner.update(range(match.start() + 1, match.end()))
     return inner
 
@@ -1135,7 +1154,7 @@ _SPLIT_KEEP_TOGETHER = (
 
 def _protected_inner_indices(text: str) -> set[int]:
     """所有**不准當斷點**的索引：英數記號中間、括號內、專有名詞中間。"""
-    inner = _atomic_token_inner_indices(text)
+    inner = _atomic_token_inner_indices(text) | _number_unit_inner_indices(text)
     stack: list[str] = []
     for i, ch in enumerate(text):
         if ch in _BRACKET_PAIRS:
@@ -1184,7 +1203,9 @@ def set_break_hints(phrases_by_text: dict[str, list[str]]) -> None:
     hints: dict[str, tuple[int, ...]] = {}
     for text, phrases in (phrases_by_text or {}).items():
         parts = [str(p) for p in (phrases or []) if str(p)]
-        if len(parts) < 2 or "".join(parts) != text:
+        # 一個 phrase 不是無效結果，而是「整段是一個不可拆長詞」；tuple() 明確保存
+        # 零個合法邊界，讓下游能和「根本沒有 hint」區分。
+        if len(parts) < 1 or "".join(parts) != text:
             continue
         cuts, pos = [], 0
         for part in parts[:-1]:
@@ -1198,15 +1219,55 @@ def clear_break_hints() -> None:
     _BREAK_HINTS.set({})
 
 
-def _hint_cuts(text: str) -> list[int]:
-    """這一行可用的模型邊界。行可能是登記段的子字串（拆過一次再拆），位移對回去。"""
+def _hint_break_info(text: str) -> tuple[list[int], bool]:
+    """回傳（這一行可用的模型邊界, 是否落在已登記的模型詞組範圍內）。
+
+    第二個值很重要：有 hint 但沒有內部邊界，表示這一行已經是一個不可拆詞；舊版只回
+    空 list，跟「模型失敗、完全沒有 hint」無法區分，因而又落回逐字硬切。
+    """
     out: list[int] = []
+    found = False
     for seg, cuts in _BREAK_HINTS.get().items():
         start = seg.find(text)
         while start != -1:
+            found = True
             out.extend(c - start for c in cuts if 0 < c - start < len(text))
             start = seg.find(text, start + 1)
-    return sorted(set(out))
+    return sorted(set(out)), found
+
+
+def _hint_cuts(text: str) -> list[int]:
+    """這一行可用的模型邊界（相容既有呼叫與測試）。"""
+    return _hint_break_info(text)[0]
+
+
+def _is_unbreakable_hint_span(text: str) -> bool:
+    cuts, found = _hint_break_info(text)
+    return found and not cuts
+
+
+def title_split_respects_hints(title: str, line1: str) -> bool:
+    """YT 規劃模型的兩行切點是否符合已登記的 B108 詞組邊界。"""
+    text = title.strip()
+    first = line1.strip()
+    if not first or not text.startswith(first):
+        return False
+    cuts, found = _hint_break_info(text)
+    # hints 缺席時（斷詞模型失敗）仍採用另一個 AI 的忠實切法；hints 存在時只准詞界。
+    return not found or len(first) in cuts
+
+
+def _fit_title_font(
+    text: str, max_width: int, start_size: int, normal_min_size: int
+) -> ImageFont.FreeTypeFont:
+    """標題塞寬：一般行維持版型最小字級；模型判定的單一長詞可繼續縮而不拆詞。
+
+    B108 的優先序是詞語完整 > 字數／慣用字級。若一個不可拆詞在正常最小字級仍超寬，
+    唯一不改字、不加行又不裁字的做法就是再縮；下限 1px 是安全保底，實際會在第一個
+    塞得進的偶數遞減字級停下。
+    """
+    min_size = 1 if _is_unbreakable_hint_span(text) else normal_min_size
+    return _fit_font(text, max_width, start_size, min_size)
 
 
 def _split_line_near_middle(text: str) -> tuple[str, str]:
@@ -1221,10 +1282,15 @@ def _split_line_near_middle(text: str) -> tuple[str, str]:
     n = len(text)
     mid = n // 2
     inner = _protected_inner_indices(text)
-    hinted = [i for i in _hint_cuts(text) if 1 <= i <= n - 1 and i not in inner]
+    hint_cuts, hinted_span = _hint_break_info(text)
+    hinted = [i for i in hint_cuts if 1 <= i <= n - 1 and i not in inner]
     if hinted:
         i = min(hinted, key=lambda e: (abs(e - mid), e))
         return text[:i], text[i:]
+    if hinted_span:
+        # 模型已判定這整段（或前一次拆出的這個子段）內沒有合法詞組邊界。
+        # 字數與目前寬度都不能凌駕詞語完整性；保留整詞，交給繪製端縮字。
+        return text, ""
     # 括號邊緣最優先（2026-09-13）：「川普發布「擴張版」美國地圖」→「川普發布／「擴張版」美國地圖」
     at_edge = _bracket_edge_split(text, inner)
     if at_edge is not None:
@@ -1391,7 +1457,7 @@ def cover_panel_title_size(pairs: list[tuple[str, int]], panel_w: int) -> int | 
     if not pairs:
         return None
     max_w, size, min_size = _cover_title_metrics(panel_w, False)
-    fitted = min(_fit_font(text, max_w, size, min_size).size for text, _ in pairs)
+    fitted = min(_fit_title_font(text, max_w, size, min_size).size for text, _ in pairs)
     return min(fitted, _cover_title_vertical_cap(len(pairs), size))
 
 
@@ -1414,7 +1480,7 @@ def _draw_cover_title(
     if size_override is not None:
         fonts = [_font(size_override)] * len(pairs)
     else:
-        fonts = [_fit_font(text, max_w, size, min_size) for text, _ in pairs]
+        fonts = [_fit_title_font(text, max_w, size, min_size) for text, _ in pairs]
     for (text, _), font in zip(pairs, fonts):
         if font.getbbox(text)[2] > max_w:
             hint = "請縮短這一段" if len(pairs) >= cover_max_title_lines(full_width) else "請用半形空格分段或縮短"
@@ -1833,8 +1899,24 @@ def _yt_shared_title_font(lines: list[str], max_w: int, start: int, smallest: in
 
     每行各自算出塞得進寬度的字級，取全域最小；兩行都短時就是起始字級。
     """
-    sizes = [_fit_font(text, max_w, start, smallest).size for text in lines if text]
+    sizes = [_fit_title_font(text, max_w, start, smallest).size for text in lines if text]
     return _font(min(sizes)) if sizes else _font(start)
+
+
+def _yt_title_rows(
+    line1: str,
+    line2: str,
+    baseline1: float,
+    baseline2: float,
+) -> list[tuple[str, tuple[int, int, int], float]]:
+    """一般兩行照舊；B108 單一不可拆長詞改用下方基線畫一行，不為湊兩行拆詞。"""
+    if line1 and line2:
+        return [
+            (line1, YT_LINE1_FILL, baseline1),
+            (line2, YT_LINE2_FILL, baseline2),
+        ]
+    text = line1 or line2
+    return [(text, YT_LINE1_FILL, baseline2)] if text else []
 
 
 def _yt_hourly_title_ink_top_ratio(font: ImageFont.FreeTypeFont, baseline_ratio: float) -> float:
@@ -1926,8 +2008,8 @@ def compose_yt_cover(
     參數被忽略（AI 標籤贏）。
     """
     line1, line2 = (line1 or "").strip(), (line2 or "").strip()
-    if not line1 or not line2:
-        raise ComposeError("YT 直播封面需要兩行標題，缺一不可")
+    if not line1 and not line2:
+        raise ComposeError("YT 直播封面需要標題")
     if not date_text.strip():
         raise ComposeError("YT 直播封面需要日期")
 
@@ -1999,9 +2081,8 @@ def compose_yt_cover(
     start = round(height * YT_TITLE_SIZE_RATIO)
     smallest = round(height * YT_TITLE_MIN_SIZE_RATIO)
     font = _yt_shared_title_font([line1, line2], max_w, start, smallest)
-    for text, fill, baseline_ratio in (
-        (line1, YT_LINE1_FILL, YT_LINE1_BASELINE_RATIO),
-        (line2, YT_LINE2_FILL, YT_LINE2_BASELINE_RATIO),
+    for text, fill, baseline_ratio in _yt_title_rows(
+        line1, line2, YT_LINE1_BASELINE_RATIO, YT_LINE2_BASELINE_RATIO
     ) if draw_titles else ():
         if font.getbbox(text)[2] > max_w:
             raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{text}」（請縮短這一行）")
@@ -2172,8 +2253,8 @@ def compose_yt_hourly_cover(
     參數被忽略（AI 標籤贏）。
     """
     line1, line2 = (line1 or "").strip(), (line2 or "").strip()
-    if not line1 or not line2:
-        raise ComposeError("YT 整點直播封面需要兩行標題，缺一不可")
+    if not line1 and not line2:
+        raise ComposeError("YT 整點直播封面需要標題")
     if not date_text.strip():
         raise ComposeError("YT 整點直播封面需要日期")
     time_text = (time_text or "").strip()
@@ -2254,7 +2335,11 @@ def compose_yt_hourly_cover(
             #
             # 標題越長→字級越小→墨水上緣越低→日期牌跟著越往下，靠的是 ink_top
             # 本身，不必再有第二套判斷。
-            ink_top = round(height * _yt_hourly_title_ink_top_ratio(font, YT_HOURLY_LINE1_BASELINE_RATIO))
+            title_baseline = (
+                YT_HOURLY_LINE1_BASELINE_RATIO if line1 and line2
+                else YT_HOURLY_LINE2_BASELINE_RATIO
+            )
+            ink_top = round(height * _yt_hourly_title_ink_top_ratio(font, title_baseline))
             gap = round(height * YT_HOURLY_DATE_TAB_GAP_RATIO)
             # clamp 只是保險：ink_top 最高就是最大字級那一檔（730px），減掉 40 仍在
             # 牌的下緣（626px）之下，實務上永遠是正的，不會把牌往上拉。
@@ -2278,9 +2363,8 @@ def compose_yt_hourly_cover(
     start = round(height * YT_HOURLY_TITLE_SIZE_RATIO)
     smallest = round(height * YT_TITLE_MIN_SIZE_RATIO)
     font = _yt_shared_title_font([line1, line2], max_w, start, smallest)
-    for text, fill, baseline_ratio in (
-        (line1, YT_LINE1_FILL, YT_HOURLY_LINE1_BASELINE_RATIO),
-        (line2, YT_LINE2_FILL, YT_HOURLY_LINE2_BASELINE_RATIO),
+    for text, fill, baseline_ratio in _yt_title_rows(
+        line1, line2, YT_HOURLY_LINE1_BASELINE_RATIO, YT_HOURLY_LINE2_BASELINE_RATIO
     ) if draw_titles else ():
         if line_max_chars and title_display_width(text) > line_max_chars:
             raise ComposeError(f"標題超過 {line_max_chars} 字：「{text}」（請縮短這一行）")
@@ -2771,8 +2855,8 @@ def compose_yt_hot_cover(
     改標「畫面來源：○○○」，與「AI示意圖」互斥、同一個版位。
     """
     line1, line2 = (line1 or "").strip(), (line2 or "").strip()
-    if not line1 or not line2:
-        raise ComposeError("今日熱搜封面需要兩行標題，缺一不可")
+    if not line1 and not line2:
+        raise ComposeError("今日熱搜封面需要標題")
     canvas = _cover_panel(background, YT_CANVAS).convert("RGBA")
     width, height = YT_CANVAS
     margin = round(width * YT_MARGIN_RATIO)
@@ -2792,9 +2876,8 @@ def compose_yt_hot_cover(
     start = round(height * YT_TITLE_SIZE_RATIO)
     smallest = round(height * YT_TITLE_MIN_SIZE_RATIO)
     font = _yt_shared_title_font([line1, line2], max_w, start, smallest)
-    for text, fill, baseline_ratio in (
-        (line1, YT_LINE1_FILL, YT_LINE1_BASELINE_RATIO),
-        (line2, YT_LINE2_FILL, YT_LINE2_BASELINE_RATIO),
+    for text, fill, baseline_ratio in _yt_title_rows(
+        line1, line2, YT_LINE1_BASELINE_RATIO, YT_LINE2_BASELINE_RATIO
     ) if draw_titles else ():
         if font.getbbox(text)[2] > max_w:
             raise ComposeError(f"標題太長，縮到最小字級仍超出版面：「{text}」（請縮短這一行）")
