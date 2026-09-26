@@ -177,6 +177,12 @@ class ConstantParityTests(unittest.TestCase):
             news_prompt.USER_REFERENCE_AIEDIT_FUSION_RULES_TEMPLATE,
         )
 
+    def test_broadcast_hole_layout_rules(self):
+        self.assert_same(
+            "BROADCAST_HOLE_LAYOUT_RULES_TEMPLATE",
+            news_prompt.BROADCAST_HOLE_LAYOUT_RULES_TEMPLATE,
+        )
+
 
 class BuiltPromptShapeTests(unittest.TestCase):
     """組裝結果的關鍵骨架——區塊順序或標頭被改動時要能發現。"""

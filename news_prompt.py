@@ -345,6 +345,32 @@ ATTACHED IMAGE — PLACE AS-IS, DO NOT REDRAW (CRITICAL)
 - Any brand marks, logos, readable text or real human faces already present in this attached image may remain exactly as supplied — the BRANDS rule and the face-rendering rules above govern what you generate elsewhere in the graphic, not this attached image's own untouched content.
 - If an attached image already contains on-air chrome (a date stamp, LIVE or 24H LIVE badge, channel logo, or a 示意圖 / AI示意圖 label), do not draw another copy of those marks."""
 
+
+# B110（2026-09-26）：播出鏡面的「挖空版面」與程式端「白色壓框」是兩件事。
+# 這塊必須壓在 asis／aiedit 等附圖規則之後：那些規則會要求把附圖當成主視覺，若沒有
+# 最後一道左右半邊限制，模型會把原圖鋪進影片預留區。模板與 app.js 逐字同步。
+BROADCAST_HOLE_LAYOUT_RULES_TEMPLATE = """==================================================
+BROADCAST VIDEO HOLE — {hole_side_upper} VIDEO ZONE IS BACKGROUND-ONLY (CRITICAL OVERRIDE)
+==================================================
+- The video zone is a 16:9 area on the {hole_side} side of the frame, filling roughly the {hole_side} half of the space between the headline at the top and the bottom band. Post-production will place live video there.
+- Inside the video zone: background ONLY. The same full-frame scene continues naturally through it; do not leave it blank and do not draw a white box, frame, guide or placeholder there.
+- No attached image, generated subject, text, number, card, chart, logo, badge or callout may enter or overlap the video zone.
+- The headline at the top and the bottom band may still span the full width as the layout requires; they stay above and below the video zone, never inside it.
+- Every other content element goes in the {content_side} half between the headline and the bottom band. Every attached PLACE AS-IS image MUST appear there, clearly visible and unaltered — as the main picture of that half or inside a card. Never omit it and never move it into the video zone.
+- This applies whether the software white alignment frame is ON or OFF. It OVERRIDES any earlier instruction to make an attached image full-frame, extend or crop it across the canvas, or place content on the {hole_side} side."""
+
+
+def broadcast_hole_layout_rules(side: str) -> str:
+    """Return the model-side background-only rule for a broadcast hole side."""
+    if side not in ("left", "right"):
+        return ""
+    content_side = "right" if side == "left" else "left"
+    return BROADCAST_HOLE_LAYOUT_RULES_TEMPLATE.format(
+        hole_side=side,
+        hole_side_upper=side.upper(),
+        content_side=content_side,
+    )
+
 # AI改圖（2026-09-13 使用者裁決）：介於 asis 與 scene 之間的第三種用途。
 # * asis  ＝原圖原封不動貼進去，完全不經過生圖模型
 # * scene ＝只拿來參考外觀，成品畫的是 STRUCTURE 描述的另一個畫面
@@ -795,6 +821,7 @@ def build_prompt(
     aspect_ratio: str = "16:9",
     portrait_mode: str = "none",
     no_text: bool = False,
+    hole_side: str = "",
 ) -> str:
     """對應 app.js 的 buildPrompt()。role: 記者／編輯，engine: gemini／gpt。
 
@@ -878,6 +905,10 @@ FINAL OUTPUT RULE
 
     if no_text:
         body += "\n" + NO_TEXT_IMAGE_OVERRIDE
+
+    hole_rules = broadcast_hole_layout_rules(hole_side)
+    if hole_rules:
+        body += "\n\n" + hole_rules
 
     if engine == "gpt":
         return (
