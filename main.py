@@ -65,6 +65,7 @@ import safe_content_gate
 import safe_frame
 from input_filter import check_input, note_accepted
 from news_prompt import (
+    localise_disclaimer_position,
     MAP_TYPE_LABEL,
     PORTRAIT_MODES,
     PROMPT_VERSION,
@@ -1219,7 +1220,7 @@ class ImageGenerateRequest(BaseModel):
     # 告訴模型「這裡留空」，只能用方位詞。四個角落都落在安全區內（見
     # compose._disclaimer_box），不會被裁切。
     disclaimer_corner: Literal[
-        "lower_right", "lower_left", "upper_right", "upper_left"
+        "lower_right", "lower_left", "upper_right", "upper_left", "lower_center"
     ] = "lower_right"
 
 
@@ -3710,6 +3711,13 @@ def generate_image(req: ImageGenerateRequest):
     # ATTACHED MAP REFERENCE 那段用途規則（「標點已在真實位置，不要移動」）。
     req = apply_map_reference_to_image_request(req)
     req = apply_user_references_to_image_request(req)
+    # F48：留空提示跟著使用者選的標籤位置走（右下＝預設時 prompt 逐字不變）
+    localised = localise_disclaimer_position(
+        req.prompt, req.disclaimer_corner,
+        stamping=bool(req.disclaimer_kind) and not req.broadcast_hole,
+    )
+    if localised != req.prompt:
+        req = req.model_copy(update={"prompt": localised})
     _, output_canvas = image_generation_size(req)
     request_id = request_log.new_request_id()
     own_clock = not _inside_pipeline.get()
@@ -5530,7 +5538,7 @@ class ImageRefineRequest(BaseModel):
     disclaimer_kind: Literal["", "ai", "source"] = ""
     disclaimer_source_text: str = Field(default="", max_length=40)
     disclaimer_corner: Literal[
-        "lower_right", "lower_left", "upper_right", "upper_left"
+        "lower_right", "lower_left", "upper_right", "upper_left", "lower_center"
     ] = "lower_right"
 
 
@@ -5717,7 +5725,7 @@ class ImageRestampRequest(BaseModel):
     disclaimer_kind: Literal["ai", "source"]
     disclaimer_source_text: str = Field(default="", max_length=40)
     disclaimer_corner: Literal[
-        "lower_right", "lower_left", "upper_right", "upper_left"
+        "lower_right", "lower_left", "upper_right", "upper_left", "lower_center"
     ]
 
 

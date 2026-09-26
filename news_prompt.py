@@ -724,6 +724,37 @@ EXTENDED BACKGROUND SAFE LAYOUT (OVERRIDES EVERY EARLIER RULE ABOUT MARGINS, CAN
 - Any closing banner or bottom line is the lowest element of the foreground group and stays well above the deeper background-only area at the bottom.
 - Do NOT render any frame, rectangle, outline, border line, guide line, crop mark or dimmed band to mark where the central region ends."""
 
+
+# F48（2026-09-26）：標籤貼的位置要跟 prompt 裡叫模型留空的位置一致。上面四段肖像規則
+# 都寫死「lower-right corner」——使用者選別的角落（F43 起就能選）時，模型會把右下留白、
+# 實際標籤卻貼在另一處壓到內容。這裡只在「選的不是右下」時改寫那句，右下（預設）
+# 的 prompt 逐字不變，凍結快照不受影響。
+_DISCLAIMER_DEFAULT_PHRASE = "at the lower-right corner of the frame"
+DISCLAIMER_POSITION_PHRASES = {
+    "lower_left": "at the lower-left corner of the frame",
+    "upper_right": "at the upper-right corner of the frame",
+    "upper_left": "at the upper-left corner of the frame",
+    "lower_center": "centred along the bottom of the frame, just inside the broadcast safe area",
+}
+# 正下方最容易壓到底部那排卡片或結論條，沒有肖像規則時也要交代一句（只在選正下方時注入）。
+LOWER_CENTER_DISCLAIMER_HINT = """==================================================
+BOTTOM-CENTRE LABEL AREA
+==================================================
+- Software stamps a small caption label afterwards, centred along the bottom of the frame just inside the broadcast safe area. Do NOT draw that label yourself.
+- Keep a short strip at the bottom centre clear of essential wording, numbers and card text so the stamped label does not land on top of anything you drew."""
+
+
+def localise_disclaimer_position(prompt: str, corner: str, *, stamping: bool) -> str:
+    """依使用者選的標籤位置改寫留空提示。右下（預設）或沒有要貼標籤時原樣回傳。"""
+    if not stamping or corner not in DISCLAIMER_POSITION_PHRASES:
+        return prompt
+    text = prompt.replace(_DISCLAIMER_DEFAULT_PHRASE, DISCLAIMER_POSITION_PHRASES[corner])
+    if corner == "lower_center":
+        text = text.replace("Keep that corner clear", "Keep that bottom-centre area clear")
+        text = f"{text.rstrip()}\n\n{LOWER_CENTER_DISCLAIMER_HINT}"
+    return text
+
+
 # 全路徑最終生圖鐵律（B61／B62，2026-09-16）。ownership 只在後端：
 # generate_image_raw() 在 provider dispatch 正前方冪等注入一次。
 # 不要同步到 app.js／hybrid.js——新版型漏帶這段必須是紅燈，不是再複製一份。

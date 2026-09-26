@@ -446,7 +446,7 @@ docstring「快照更新記錄」補一段說明，沿用既有格式。
 | F8 | 追蹤修訂（原圖不整張重生，只改細部） | 同名章節 | ⬜ | 未重新確認 |
 | F13 | LINE 訊息內帶指令＋「已消化完稿」直出 | 同名章節 | ⏸ **使用者 2026-09-24 裁示：LINE 相關短期內都不做** | 未重新確認 |
 | F14 | LINE／行動版「重新生成」 | 同名章節 | ⏸ **使用者 2026-09-24 裁示：LINE 相關短期內都不做** | 未重新確認 |
-| F48 | 來源標籤位置新增「正下方」（下方置中） | 使用者 2026-09-24 | 🔶 **基準已裁（2026-09-26）：安全框下緣置中** | `center_x=(x0+x1)//2`，`bottom=y1-scaled(HOLE_INSET)`，記者／編輯／2K／D24 共用 `safe_area_spec.safe_rect()`。同步點：`compose._disclaimer_box()` 加 center 分支、`main.py` 三處 Literal、`app.js`／`index.html` 兩組按鈕、F47 restamp、refine；`news_prompt.py` 四處寫死「lower-right corner」留白要改成依位置動態注入（只在有標籤時注入，CP1 fixture 可不動）。SOL 建議播出鏡面與封面不納入、長來源標籤單行或縮字——**這兩點使用者尚未裁** |
+| F48 | 來源標籤位置新增「正下方」（下方置中） | 使用者 2026-09-24 | 🔶 **已實作待上線（exp，260926-05，2026-09-26）**：`compose._disclaimer_box` 加 `lower_center`（安全框下緣置中、內縮 HOLE_INSET）；三個 API Literal、兩組前端按鈕「正下方」；`news_prompt.localise_disclaimer_position()` 讓留空提示跟著所選位置走（順手修正：F43 起選左下／左上／右上時 prompt 仍叫模型留右下），選正下方另注入 BOTTOM-CENTRE LABEL AREA；右下預設 prompt 逐字不變。播出鏡面／封面不納入、長來源名維持單行（使用者照建議預設）。守門 `tests/test_f48_lower_center_label.py`；樣張 `G:\Claude共用\AICG60926_F48正下方標籤樣張.png` | 基準已裁（2026-09-26）：安全框下緣置中 | `center_x=(x0+x1)//2`，`bottom=y1-scaled(HOLE_INSET)`，記者／編輯／2K／D24 共用 `safe_area_spec.safe_rect()`。同步點：`compose._disclaimer_box()` 加 center 分支、`main.py` 三處 Literal、`app.js`／`index.html` 兩組按鈕、F47 restamp、refine；`news_prompt.py` 四處寫死「lower-right corner」留白要改成依位置動態注入（只在有標籤時注入，CP1 fixture 可不動）。SOL 建議播出鏡面與封面不納入、長來源標籤單行或縮字——**這兩點使用者尚未裁** |
 
 | F25 | 生成速度：先做端到端分段計時 | 使用者 2026-09-14 問「生圖速度還有辦法變快嗎」 | ⬜ **列 TODO，之後處理** | **現況沒有分段計時，不知道消化佔幾秒、生圖佔幾秒，任何加速決策都是猜的。** 第一步是純量測、不動行為、不花錢。量完才決定動哪裡 |
 | F27 | 生成速度：多張同輪次改並行 | 同 F25 | ⬜ | 若現況是一張一張序列跑，改並行是純賺（不犧牲畫質）。**要先確認現況是不是序列**，依賴 F25 的量測 |

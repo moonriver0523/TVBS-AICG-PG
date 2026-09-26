@@ -637,7 +637,8 @@ class FrontEndSendsTheDisclaimerFieldsTests(unittest.TestCase):
     「後端已修，但前端沒做」）。這組守在原始碼層，不需要瀏覽器。"""
 
     ROOT = Path(__file__).resolve().parent.parent
-    CORNERS = ("upper_left", "lower_left", "upper_right", "lower_right")
+    # F48（2026-09-26）加「正下方」lower_center
+    CORNERS = ("upper_left", "lower_left", "upper_right", "lower_right", "lower_center")
 
     @classmethod
     def setUpClass(cls):
