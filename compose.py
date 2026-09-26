@@ -3212,18 +3212,18 @@ def yt_vertical_layout(
     # 先在「原生（左緣）」座標算好主／副標哪一半，兩側共用同一個規則：色框自己的
     # 右半永遠是主標（比較靠畫面中央那一半）——鏡射成右緣版之後這個關係還是成立
     # （鏡射會把左右反過來，原生右半鏡射後變成新畫面的左半，一樣是比較靠中央那半）。
-    half_w = (box[2] - box[0]) // 2
-    sub = (box[0], text_top, box[0] + half_w, box[3])
-    main = (box[0] + half_w, text_top, box[2], box[3])
-    if not sub_cells:
-        sub = (sub[0], sub[1], sub[0], sub[1])
-
+    # B111（2026-09-26 使用者裁決）：輸入的第一行（main）一律在色框的**左欄**、第二行
+    # 在右欄——貼左緣時第一行是外側，貼右緣（鏡射）時是內側。所以欄位要在鏡射**之後**
+    # 依最終畫面座標切，不能先切再鏡射（那樣右緣版會左右對調）。
     if title_side == "right":
         box = _vstrip_mirror(box, width)
         badge = _vstrip_mirror(badge, width)
         label = _vstrip_mirror(label, width) if labelled else (0, 0, 0, 0)
-        main = _vstrip_mirror(main, width)
-        sub = _vstrip_mirror(sub, width)
+    half_w = (box[2] - box[0]) // 2
+    main = (box[0], text_top, box[0] + half_w, box[3])
+    sub = (box[0] + half_w, text_top, box[2], box[3])
+    if not sub_cells:
+        sub = (sub[0], sub[1], sub[0], sub[1])
     live = badge
 
     source = (0, 0, 0, 0)
