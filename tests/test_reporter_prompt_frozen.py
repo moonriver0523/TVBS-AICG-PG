@@ -125,6 +125,10 @@
   查圖；明文禁止拿它當畫面文字或 VERBATIM 來源，後端另以人物描述與新聞職稱／
   國籍脈絡交叉比對。`REAL_WORLD_FIDELITY_RULES` 因此新增第 8 條，本機以純函式重建
   八份 digest 快照；未呼叫模型、未改兩份 image prompt 或 RNG fixture。
+- 2026-09-26（B105＋B34）：使用者批准把 simplified 提高為 target 4／素材足夠時
+  最少 3 點，並把 minimal 放寬為 1～3 點但加 hard max 3。只有四份 simplified
+  digest 快照因 `SIMPLIFIED_DENSITY_RULES` 改寫而重建；standard、image prompt、
+  RNG fixture 均未改。`EDITOR_SYSTEM_PROMPT_TEMPLATE` 保持逐位元不變。
 """
 
 import os
