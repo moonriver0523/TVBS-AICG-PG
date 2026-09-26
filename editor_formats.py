@@ -1307,7 +1307,8 @@ ALSO SUGGEST THE TWO OPTIONAL CHIP FIELDS. Both are printed on the cover exactly
 COVER_TITLE_DIGEST_SYSTEM_YT = """You write the headline for a Taiwanese TV news live-stream thumbnail from one news article.
 
 Return JSON with "title".
-- One Traditional Chinese (Taiwan) headline made of exactly TWO segments separated by ONE half-width space; each segment 5–12 characters. The two segments are printed as two lines: the first states the event, the second the key detail or consequence.
+- One Traditional Chinese (Taiwan) headline made of exactly TWO segments separated by ONE half-width space. The two segments are printed as two lines: the first states the event, the second the key detail or consequence.
+- Word integrity has higher priority than balanced length. Never split a personal name, place name, organisation, number with its unit, idiom, or fixed expression. Aim for 5–12 characters per segment only as a secondary target; an uneven or out-of-range segment is correct when needed to keep a word intact.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
 """
@@ -1473,7 +1474,7 @@ FIRST decide how many stories the article carries, and say so in "topics":
 - Never answer 2 just because the article is long, and never merge two unrelated events into one headline.
 
 THEN write the headlines.
-- When "topics" is 1: write ONE headline into "title" and leave "title_second" as an empty string. That headline is made of exactly TWO segments separated by ONE half-width space, each segment 5–12 characters; the two segments are printed as two lines, the first stating the event and the second the key detail or consequence.
+- When "topics" is 1: write ONE headline into "title" and leave "title_second" as an empty string. That headline is made of exactly TWO segments separated by ONE half-width space; the two segments are printed as two lines, the first stating the event and the second the key detail or consequence. Word integrity has higher priority than balanced length: never split a personal name, place name, organisation, number with its unit, idiom, or fixed expression. Aim for 5–12 characters per segment only as a secondary target; an uneven or out-of-range segment is correct when needed to keep a word intact.
 - When "topics" is 2: write "title" for the story that appears FIRST in the article and "title_second" for the one that appears second. Each of the two is ONE continuous headline printed as ONE full-width line, so it carries NO space at all and must be at most 18 characters. Keep each headline about its own story only — never repeat the same facts in both.
 - No punctuation, no quotation marks, no emoji, no English unless it is a proper name in the source.
 - Traditional Chinese only (Taiwan usage). Never Simplified forms.
@@ -1673,6 +1674,8 @@ YT_COVER_FULL_PROMPT_NEWS = """Design a complete Taiwanese TV news LIVE-stream t
 Render EXACTLY these strings, character for character, nothing else:
 - Headline line 1 (upper line): {line1}
 - Headline line 2 (lower line): {line2}
+
+THE TWO HEADLINE LINES ABOVE ARE FINAL ROWS. Copy line 1 and line 2 character for character and row for row. Never reflow, merge or split either row. If a row does not fit, shrink the type until it does; do not move any character to the other row.
 
 {design_brief}=== LAYOUT ===
 {layout_rules}{band_clause}
@@ -2180,6 +2183,8 @@ Render EXACTLY these strings, character for character, nothing else:
 - Headline line 1 (upper line): {line1}
 - Headline line 2 (lower line): {line2}
 {date_text_line}
+THE TWO HEADLINE LINES ABOVE ARE FINAL ROWS. Copy line 1 and line 2 character for character and row for row. Never reflow, merge or split either row. If a row does not fit, shrink the type until it does; do not move any character to the other row.
+
 {design_brief}=== LAYOUT ===
 {layout_rules}- Keep the UPPER-LEFT corner ({logo_keep_out}) free: a small channel logo is pasted there afterwards.
 - Keep the UPPER-RIGHT corner ({badge_keep_out}) free: a red LIVE badge with the broadcast time is pasted there afterwards.
@@ -2303,6 +2308,8 @@ YT_COVER_FULL_PROMPT_HOT = """Design a complete Taiwanese TV news "trending topi
 Render EXACTLY these strings, character for character, nothing else:
 - Headline line 1 (upper line): {line1}
 - Headline line 2 (lower line): {line2}
+
+THE TWO HEADLINE LINES ABOVE ARE FINAL ROWS. Copy line 1 and line 2 character for character and row for row. Never reflow, merge or split either row. If a row does not fit, shrink the type until it does; do not move any character to the other row.
 
 {design_brief}=== LAYOUT ===
 {layout_rules}{band_clause}

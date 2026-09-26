@@ -192,23 +192,19 @@ class SegmentationCallTests(unittest.TestCase):
         }):
             self.assertEqual(main.resolve_title_break_model(), "gpt-5.4-mini")
 
-    def test_ai_title_mode_never_calls_the_model(self):
-        """B75（2026-09-16）：AI 標題模式下 compose 不壓字，斷句結果沒人讀。
+    def test_ai_title_mode_calls_the_model_for_pre_split_prompt_lines(self):
+        """B109（2026-09-26）：撤回 B75；AI prompt 會讀預切列，故也要詞組邊界。"""
+        payload = '{"segments": [{"text": "Q3營收上看9000億", "phrases": ["Q3營收", "上看9000億"]}]}'
+        with patch.object(main, "digest_completion", return_value=_response(payload)) as call:
+            main.apply_title_break_hints("台積電法說會 Q3營收上看9000億", "")
+        call.assert_called_once()
+        self.assertEqual(main.compose._BREAK_HINTS.get(), {"Q3營收上看9000億": (4,)})
 
-        實測過的病灶：兩個封面端點原本無條件呼叫，`mode=ai` 也照打一次，
-        而創意 1 級起 ai 就是預設——等於大多數封面每張白花一次呼叫與約 2 秒。
-        """
-        with patch.object(main, "digest_completion") as call:
-            main.apply_title_break_hints("台積電法說會 Q3營收上看9000億", "", composite=False)
-        call.assert_not_called()
-        # 而且不可以留下上一個請求的殘值
-        self.assertEqual(main.compose._BREAK_HINTS.get(), {})
-
-    def test_composite_mode_still_calls_the_model(self):
-        """守衛不能把該打的那條也擋掉——composite 正是用 Pillow 壓字的路。"""
+    def test_composite_callers_still_get_registered_boundaries(self):
+        """B109 不能回歸原有 composite 路徑：Pillow 仍要讀同一份詞組邊界。"""
         payload = '{"segments": [{"text": "Q3營收上看9000億", "phrases": ["Q3營收", "上看", "9000億"]}]}'
         with patch.object(main, "digest_completion", return_value=_response(payload)) as call:
-            main.apply_title_break_hints("台積電法說會 Q3營收上看9000億", "", composite=True)
+            main.apply_title_break_hints("台積電法說會 Q3營收上看9000億", "")
         call.assert_called_once()
         self.assertEqual(main.compose._BREAK_HINTS.get(), {"Q3營收上看9000億": (4, 6)})
 
