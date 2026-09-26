@@ -584,7 +584,9 @@ class AiTitleLadderTests(unittest.TestCase):
         """0 級＝規矩：位置／字級／斜度／顏色都是量到的，像素級精準且零錯字。"""
         body, prompt, stamp = self._run(creativity=0)
         self.assertEqual(body["title_mode"], "composite")
-        self.assertEqual(stamp.call_count, 1)
+        # 2026-09-27：同一版再合成一張「固定元素完成、尚未貼來源標籤」的乾淨底圖，
+        # 供成圖後自由拖曳重貼；兩次都是 Pillow，沒有多打一個生圖或文字模型。
+        self.assertEqual(stamp.call_count, 2)
 
     def test_level_one_and_above_hand_the_title_to_the_model(self):
         for level in (1, 2, 3, 4):

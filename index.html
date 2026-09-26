@@ -312,7 +312,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260927-01</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260927-02</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -402,6 +402,9 @@
                             <input id="coverTitleLeft" type="text" maxlength="40"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                    placeholder="勞保撥補 上看1300億（半形空格分行，最多 3 段、每段 ≤ 8 字）" />
+                            <input id="coverSourceLeft" type="text" maxlength="40"
+                                   class="mt-1 w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-1.5 text-[10px] text-slate-100 input-focus-ring"
+                                   placeholder="左側／滿版畫面來源（選填，原圖版才顯示）" />
                             <!-- 2026-09-13：附圖位改走共用上傳模組（可多張＋用途下拉），
                                  清單由 renderRefList 灌進 coverAsisLeftList -->
                             <div class="mt-1">
@@ -421,6 +424,9 @@
                                    oninput="updateCoverLayoutIndicator()"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                    placeholder="留空＝滿版；填了＝雙切（例：病理醫師 月薪65萬仍缺工）" />
+                            <input id="coverSourceRight" type="text" maxlength="40"
+                                   class="cover-split-only mt-1 w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-1.5 text-[10px] text-slate-100 input-focus-ring"
+                                   placeholder="右側畫面來源（選填，原圖版才顯示）" />
                             <div class="mt-1 cover-split-only">
                                 <div class="flex items-center gap-2">
                                     <button type="button" onclick="document.getElementById('coverAsisRightInput').click()"
@@ -499,6 +505,9 @@
                             <input id="ytCoverTitle" type="text" maxlength="60"
                                    class="w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-2 text-[12px] text-slate-100 input-focus-ring"
                                    placeholder="挪威國王哈拉德辭世 開放公眾瞻仰遺容" />
+                            <input id="ytCoverSource" type="text" maxlength="40"
+                                   class="mt-1 w-full bg-slate-950/80 border border-slate-800 rounded-lg px-3 py-1.5 text-[10px] text-slate-100 input-focus-ring"
+                                   placeholder="畫面來源（選填，原圖底圖才顯示）" />
                             <!-- live24 的底圖模式（2026-09-13 使用者裁決「前台加一題底圖模式」）：
                                  漸層與疊圖都要兩格都有圖，共用一個觸發訊號分不開，所以獨立一欄。
                                  只有 24H LIVE 會顯示（updateYtAsisSlots 控制）。 -->
@@ -796,7 +805,11 @@
                             </div>
                         </div>
                         <p id="oneClickStaleNotice" class="hidden mb-2 text-[10px] text-slate-500">⚠ 這是上一次的結果，本次生成失敗</p>
-                        <img id="oneClickImage" alt="一鍵生成的新聞 CG" class="w-full rounded-lg border border-slate-800" />
+                        <div data-label-stage="oneClickImage" class="relative select-none">
+                            <img id="oneClickImage" alt="一鍵生成的新聞 CG" class="w-full rounded-lg border border-slate-800" draggable="false" />
+                            <div data-label-overlay class="absolute inset-0 pointer-events-none"></div>
+                        </div>
+                        <div data-label-controls="oneClickImage" class="hidden mt-3 rounded-lg border border-amber-800/70 bg-amber-950/20 p-3"></div>
 
                         <!-- ③ 追加指令修改：以置框前原圖為基礎就地改圖，不重跑消化 -->
                         <div id="refineBox" class="mt-3 border-t border-slate-800 pt-3">
@@ -1105,7 +1118,11 @@
                         <a id="downloadGeneratedImage" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg.jpg">下載圖片</a>
                     </div>
                 </div>
-                <img id="generatedImage" alt="AI 生成的新聞 CG 預覽" class="w-full rounded-lg border border-slate-800" />
+                <div data-label-stage="generatedImage" class="relative select-none">
+                    <img id="generatedImage" alt="AI 生成的新聞 CG 預覽" class="w-full rounded-lg border border-slate-800" draggable="false" />
+                    <div data-label-overlay class="absolute inset-0 pointer-events-none"></div>
+                </div>
+                <div data-label-controls="generatedImage" class="hidden mt-3 rounded-lg border border-amber-800/70 bg-amber-950/20 p-3"></div>
             </div>
         </div>
 

@@ -245,12 +245,11 @@ class GenerateImageWiringTests(unittest.TestCase):
                 )
         self.assertEqual(ctx.exception.status_code, 500)
 
-    def test_broadcast_hole_set_skips_the_new_stamp_to_avoid_double_stamping(self):
-        """apply_broadcast_hole 已經在同一個安全區角落自己貼過一次「示意圖」浮水印
-        （compose.WATERMARK_TEXT）；disclaimer_kind 同時有值時不重貼第二次。"""
+    def test_broadcast_hole_uses_the_shared_disclaimer_renderer(self):
+        """2026-09-27 刻意行為變更：洞框不再自畫另一套浮水印，標籤走共用 renderer。"""
         raw = fake_raw_response(png_base64(1280, 720))
         with patch.object(main, "generate_image_raw", return_value=raw), patch.object(
-            compose, "paste_disclaimer_note"
+            compose, "paste_free_label", wraps=compose.paste_free_label,
         ) as spy:
             main.generate_image(
                 main.ImageGenerateRequest(
@@ -259,12 +258,12 @@ class GenerateImageWiringTests(unittest.TestCase):
                     disclaimer_kind="ai",
                 )
             )
-        spy.assert_not_called()
+        spy.assert_called_once()
 
     def test_stamping_failure_raises_instead_of_downgrading(self):
         raw = fake_raw_response(png_base64(1920, 1080))
         with patch.object(main, "generate_image_raw", return_value=raw), patch.object(
-            compose, "paste_disclaimer_note", side_effect=compose.ComposeError("boom")
+            compose, "paste_free_label", side_effect=compose.ComposeError("boom")
         ):
             with self.assertRaises(main.HTTPException) as ctx:
                 main.generate_image(
@@ -666,14 +665,18 @@ class FrontEndSendsTheDisclaimerFieldsTests(unittest.TestCase):
         """
         # 錨在 REFINE_BACKEND_URL：`source_image_base64: state.refineSource.base64`
         # 這一行 F47 的 restampDisclaimer() 也有，而且在檔案裡排在前面。
-        refine = self.app_js.split("fetch(REFINE_BACKEND_URL")[1][:2500]
+        handle = self.app_js.split("async function handleRefine()")[1].split("function undoRefine")[0]
+        self.assertLess(handle.index("const applied = appliedDisclaimer()"), handle.index("fetch(REFINE_BACKEND_URL"))
+        refine = handle[handle.index("fetch(REFINE_BACKEND_URL"):]
         self.assertIn("disclaimer_kind:", refine)
-        self.assertIn("appliedDisclaimer()", refine)
+        self.assertIn("disclaimer_position:", refine)
+        self.assertIn("disclaimer_items:", refine)
         self.assertNotIn("...disclaimerPayload()", refine)
 
     def test_the_applied_label_comes_from_the_response_not_the_input_box(self):
         """`appliedDisclaimer()` 讀的是回應（後端貼了什麼就回什麼），不是輸入控制項。"""
-        helper = self.app_js.split("function appliedDisclaimer()")[1][:600]
+        helper = self.app_js.split("function appliedDisclaimer()")[1][:2400]
+        self.assertIn("state.labelEditor", helper)
         self.assertIn("d.disclaimer_kind", helper)
         self.assertIn("d.disclaimer_source_text", helper)
         self.assertNotIn("state.disclaimerSourceText", helper)
@@ -691,7 +694,7 @@ class FrontEndSendsTheDisclaimerFieldsTests(unittest.TestCase):
         欄位齊全但沒人貼是同一種斷線。
         """
         source = inspect.getsource(main.refine_image)
-        self.assertIn("apply_image_disclaimer", source)
+        self.assertIn("_apply_refine_label_snapshot", source)
         self.assertIn("not req.broadcast_hole", source)
 
     def test_refine_forces_the_ai_label_on_a_named_face_swap(self):
