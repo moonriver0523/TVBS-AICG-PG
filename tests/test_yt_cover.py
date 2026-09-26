@@ -139,9 +139,13 @@ class ComposeTests(unittest.TestCase):
         ))) as image:
             self.assertEqual(image.getpixel((960, 1000)), (90, 90, 90))
 
-    def test_rejects_missing_line_or_date(self):
+    def test_allows_unbreakable_single_line_but_rejects_missing_title_or_date(self):
+        out = compose.compose_yt_cover(
+            _png_bytes(), line1="只有一行", line2="", date_text="2026/09/05"
+        )
+        self.assertTrue(out.startswith(b"\x89PNG"))
         with self.assertRaises(compose.ComposeError):
-            compose.compose_yt_cover(_png_bytes(), line1="只有一行", line2="", date_text="2026/09/05")
+            compose.compose_yt_cover(_png_bytes(), line1="", line2="", date_text="2026/09/05")
         with self.assertRaises(compose.ComposeError):
             compose.compose_yt_cover(_png_bytes(), line1="一", line2="二", date_text="")
 
@@ -196,9 +200,13 @@ class HourlyComposeTests(unittest.TestCase):
 
         self.assertNotEqual(region("20:00"), region(""))
 
-    def test_rejects_missing_line_or_date(self):
+    def test_allows_unbreakable_single_line_but_rejects_missing_title_or_date(self):
+        out = compose.compose_yt_hourly_cover(
+            _png_bytes(), line1="只有一行", line2="", date_text="2026/09/01"
+        )
+        self.assertTrue(out.startswith(b"\x89PNG"))
         with self.assertRaises(compose.ComposeError):
-            compose.compose_yt_hourly_cover(_png_bytes(), line1="只有一行", line2="", date_text="2026/09/01")
+            compose.compose_yt_hourly_cover(_png_bytes(), line1="", line2="", date_text="2026/09/01")
         with self.assertRaises(compose.ComposeError):
             compose.compose_yt_hourly_cover(_png_bytes(), line1="一", line2="二", date_text="")
 
@@ -745,9 +753,11 @@ class HotCoverTests(unittest.TestCase):
         r, g, b = img.getpixel((w // 2, round(h * 0.995)))
         self.assertGreater(r, b, "底帶應偏紅")
 
-    def test_requires_two_lines(self):
+    def test_allows_unbreakable_single_line_but_rejects_missing_title(self):
+        out = compose.compose_yt_hot_cover(_png_bytes(), line1="只有一行", line2="")
+        self.assertTrue(out.startswith(b"\x89PNG"))
         with self.assertRaises(compose.ComposeError):
-            compose.compose_yt_hot_cover(_png_bytes(), line1="只有一行", line2="")
+            compose.compose_yt_hot_cover(_png_bytes(), line1="", line2="")
 
     def test_endpoint_hot_layout_with_asis_needs_no_date_and_no_api(self):
         payload = {
