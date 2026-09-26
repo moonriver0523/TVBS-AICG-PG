@@ -373,6 +373,10 @@ let state = {
     // 與 refineSource 同一版成品實際使用的置框／模型參數；事後重貼標籤不可讀當下 UI。
     refineParameters: null,
     restampRequestId: 0,
+    // 成圖後標籤編輯器。base64 永遠是「固定元素完成、尚未貼標籤」的乾淨底圖；
+    // 十點 split 的 items 同時帶左右兩枚，放手只送一次批次重貼。
+    labelEditor: null,
+    labelRestampRequestId: 0,
     // YT 直播封面：上一次的無文字底圖是不是 AI 生的（重疊文字時決定要不要標 AI示意圖）。
     // 底圖本身走 refineSource（語意相同：給改圖用的原圖）。
     ytCoverBackgroundIsAi: false,
@@ -2536,6 +2540,8 @@ function tenCoverFields() {
         // 側邊標籤（2026-09-10）：使用者自己打的短詞，後端原樣畫成一排小籤
         side_labels: val('coverSideLabels'),
         info_chips: val('coverInfoChips'),
+        source_left: val('coverSourceLeft'),
+        source_right: fullLayout ? '' : val('coverSourceRight'),
         provider: effectiveImageProvider(),
         // 重貼固定元素／只改文字：原樣送回目前這顆，長相不准變（遞增只在重生那條路徑）
         seed: state.coverSeed,
@@ -2675,6 +2681,8 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
                     reference_images: (editorFormat().hides || {}).refUpload ? [] : userRefImagesPayload(),
                     slot_left: slotPayload(state.coverAsis.left),
                     slot_right: fullLayout ? [] : slotPayload(state.coverAsis.right),
+                    source_left: val('coverSourceLeft'),
+                    source_right: fullLayout ? '' : val('coverSourceRight'),
                 }),
             });
             data = await res.json().catch(() => ({}));
@@ -2684,6 +2692,7 @@ async function handleTenCoverGenerate(recomposeOnly = false) {
         rememberSeed('coverSeed', data);
         const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
         document.getElementById('oneClickImage').src = imageUrl;
+        setupFreeLabelEditor(data, 'oneClickImage');
         const download = document.getElementById('oneClickDownload');
         download.href = imageUrl;
         download.download = downloadFileName(state.editorFormat);
@@ -2835,6 +2844,7 @@ function ytCoverFields() {
         news_text: document.getElementById('ytCoverNewsText')?.value || '',
         // 只改文字／重貼固定元素也走這支，所以這裡一律送目前這顆；遞增只在重生那條路徑
         seed: state.ytSeed,
+        source_text: val('ytCoverSource'),
     };
 }
 
@@ -2865,6 +2875,7 @@ async function recomposeYtCover(refined, backgroundIsAi = state.ytCoverBackgroun
 function showYtCoverResult(data, fields, generationParameters) {
     const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
     document.getElementById('oneClickImage').src = imageUrl;
+    setupFreeLabelEditor(data, 'oneClickImage');
     const download = document.getElementById('oneClickDownload');
     download.href = imageUrl;
     download.download = downloadFileName(state.editorFormat, fields.title);
@@ -3103,6 +3114,312 @@ async function restampDisclaimer() {
     }
 }
 
+/* 成圖後自由放置（桌機滑鼠）：拖曳期間只動虛線框，pointerup 才送一筆 Pillow 重貼。
+   種類／來源文字在手機仍可用；pointerType=touch 不啟動拖曳。 */
+function currentFreeLabelTarget() {
+    const inputs = editorFormat().inputs;
+    if (inputs === 'cover') return 'ten_cover';
+    if (inputs === 'yt_cover') return `yt_${editorFormat().ytLayout || 'news'}`;
+    if (inputs === 'yt_vstrip') return 'yt_vstrip';
+    return editorFormat().hole ? 'broadcast' : 'cg';
+}
+
+function currentFreeLabelContext() {
+    const target = currentFreeLabelTarget();
+    if (target === 'yt_vstrip') return vstripFields();
+    if (target.startsWith('yt_')) {
+        const fields = ytCoverFields();
+        return {
+            original_audio: fields.original_audio,
+            ai_translation: fields.ai_translation,
+            draw_date: !(fields.layout === 'hourly' && fields.creativity >= 1 && fields.title_mode === 'ai'),
+        };
+    }
+    if (target === 'broadcast') return {hole_side: broadcastLayoutHoleForApi()};
+    return {};
+}
+
+function _defaultFreeLabelItem(data) {
+    const kind = data.disclaimer_kind || '';
+    return {
+        id: 'global', side: 'global', kind,
+        source_text: data.disclaimer_source_text || '',
+        provenance_kind: data.disclaimer_provenance_kind || kind,
+        manual_override: !!data.disclaimer_manual_override,
+        position: data.disclaimer_position || {x: 0.82, y: 0.82},
+        bbox: data.disclaimer_bbox || [],
+    };
+}
+
+function setupFreeLabelEditor(data, imageId) {
+    if (!data?.disclaimer_base_image_base64) {
+        if (state.labelEditor?.imageId === imageId) state.labelEditor = null;
+        renderFreeLabelEditor();
+        return;
+    }
+    const items = Array.isArray(data.disclaimer_items) && data.disclaimer_items.length
+        ? data.disclaimer_items.map(item => ({...item, position: item.position || {x: 0.82, y: 0.18}}))
+        : [_defaultFreeLabelItem(data)];
+    state.labelEditor = {
+        imageId,
+        target: currentFreeLabelTarget(),
+        context: currentFreeLabelContext(),
+        base64: data.disclaimer_base_image_base64,
+        model: data.model || '',
+        items,
+        safeRect: data.disclaimer_safe_rect || [],
+        obstacles: data.disclaimer_obstacles || [],
+        canvasWidth: 1920,
+        canvasHeight: 1080,
+    };
+    const image = document.getElementById(imageId);
+    const syncSize = () => {
+        if (image.naturalWidth && image.naturalHeight && state.labelEditor?.imageId === imageId) {
+            state.labelEditor.canvasWidth = image.naturalWidth;
+            state.labelEditor.canvasHeight = image.naturalHeight;
+            renderFreeLabelEditor();
+        }
+    };
+    image.addEventListener('load', syncSize, {once: true});
+    syncSize();
+    renderFreeLabelEditor();
+}
+
+function _freeLabelBoxRatio(item, editor) {
+    const bbox = item.bbox || [];
+    if (bbox.length === 4 && editor.canvasWidth && editor.canvasHeight) {
+        return {w: (bbox[2] - bbox[0]) / editor.canvasWidth,
+                h: (bbox[3] - bbox[1]) / editor.canvasHeight};
+    }
+    const text = item.kind === 'source' ? (item.source_text || '畫面來源') : 'AI示意圖';
+    // bbox 尚未由後端回來（剛切種類／改字）時採保守估寬，讓前端先夾位與擋碰撞；
+    // 後端仍會用實際字型量一次，作最後一道 400 守門。
+    const maxWidth = editor.target === 'ten_cover' ? 0.45
+        : (editor.target.startsWith('yt_') ? 0.56 : 0.90);
+    // Pillow 的 3% 是相對「畫布高度」，不是寬度；舊公式直接拿 0.03 當寬度比例，
+    // 16:9 上會放大約 1.78 倍，正是拖曳框明顯比成品寬的原因。
+    const heightToWidth = editor.canvasHeight / editor.canvasWidth;
+    const sizeRatio = editor.target.startsWith('yt_') && editor.target !== 'yt_vstrip' ? 0.032 : 0.03;
+    const padRatio = editor.target === 'yt_vstrip' ? 0
+        : (editor.target.startsWith('yt_') ? 24 / editor.canvasWidth : 0.024 * heightToWidth);
+    const width = Array.from(text).length * sizeRatio * heightToWidth + padRatio;
+    const height = editor.target === 'yt_vstrip' ? 0.039 : 0.048;
+    return {w: Math.min(maxWidth, Math.max(0.04, width)), h: height};
+}
+
+function _freeLabelBounds(item, editor) {
+    const safe = editor.safeRect.length === 4
+        ? editor.safeRect : [0, 0, editor.canvasWidth, editor.canvasHeight];
+    let [x0, y0, x1, y1] = safe.map((v, i) => v / (i % 2 === 0 ? editor.canvasWidth : editor.canvasHeight));
+    if (editor.target === 'ten_cover' && item.side === 'left') x1 = Math.min(x1, 0.5);
+    if (editor.target === 'ten_cover' && item.side === 'right') x0 = Math.max(x0, 0.5);
+    return {x0, y0, x1, y1};
+}
+
+function _clampFreeLabelPosition(item, editor, position) {
+    const size = _freeLabelBoxRatio(item, editor);
+    const bounds = _freeLabelBounds(item, editor);
+    return {
+        x: Math.max(bounds.x0 + size.w / 2, Math.min(bounds.x1 - size.w / 2, position.x)),
+        y: Math.max(bounds.y0 + size.h / 2, Math.min(bounds.y1 - size.h / 2, position.y)),
+    };
+}
+
+function _freeLabelCollision(item, editor, position) {
+    const size = _freeLabelBoxRatio(item, editor);
+    const candidate = [
+        (position.x - size.w / 2) * editor.canvasWidth,
+        (position.y - size.h / 2) * editor.canvasHeight,
+        (position.x + size.w / 2) * editor.canvasWidth,
+        (position.y + size.h / 2) * editor.canvasHeight,
+    ];
+    return (editor.obstacles || []).find(({bbox}) =>
+        candidate[0] < bbox[2] && candidate[2] > bbox[0]
+        && candidate[1] < bbox[3] && candidate[3] > bbox[1]
+    );
+}
+
+function _labelKindOptions(editor) {
+    return editor.target === 'yt_vstrip'
+        ? [['source', '畫面來源'], ['', '無']]
+        : [['ai', editor.target === 'cg' || editor.target === 'broadcast' ? '示意圖' : 'AI示意圖'],
+           ['source', '畫面來源'], ['', '無']];
+}
+
+function renderFreeLabelEditor() {
+    document.querySelectorAll('[data-label-controls]').forEach(el => el.classList.add('hidden'));
+    document.querySelectorAll('[data-label-overlay]').forEach(el => { el.innerHTML = ''; });
+    const editor = state.labelEditor;
+    if (!editor) return;
+    const controls = document.querySelector(`[data-label-controls="${editor.imageId}"]`);
+    const stage = document.querySelector(`[data-label-stage="${editor.imageId}"]`);
+    const overlay = stage?.querySelector('[data-label-overlay]');
+    if (!controls || !overlay) return;
+    controls.classList.remove('hidden');
+    controls.innerHTML = editor.items.map((item, index) => {
+        const side = editor.items.length > 1 ? (item.side === 'left' ? '左側' : '右側') : '標籤';
+        const options = _labelKindOptions(editor).map(([value, label]) =>
+            `<option value="${value}" ${item.kind === value ? 'selected' : ''}>${label}</option>`).join('');
+        const warning = item.kind !== item.provenance_kind
+            ? (item.provenance_kind === 'ai' && item.kind === 'source'
+                ? '此圖含 AI 生成內容，改成「畫面來源」請自行確認'
+                : '已手動覆寫系統判定，請自行確認') : '';
+        return `<div class="${index ? 'mt-2 pt-2 border-t border-amber-900/60' : ''}">
+            <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-[9px] font-black text-amber-300">${side}</span>
+                <select data-free-label-kind="${index}" class="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-[10px]">${options}</select>
+                <input data-free-label-source="${index}" maxlength="40" value="${(item.source_text || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"
+                    placeholder="來源文字" class="${item.kind === 'source' ? '' : 'hidden'} flex-1 min-w-[150px] bg-slate-950 border border-slate-700 rounded px-2 py-1 text-[10px]" />
+                <span class="text-[9px] text-slate-500">桌機可直接拖曳圖片上的虛線框</span>
+            </div>
+            <p data-free-label-warning="${index}" class="${warning ? '' : 'hidden'} mt-1 text-[10px] text-amber-300">${warning}</p>
+        </div>`;
+    }).join('');
+    controls.querySelectorAll('[data-free-label-kind]').forEach(select => {
+        select.addEventListener('change', () => changeFreeLabelKind(Number(select.dataset.freeLabelKind), select.value));
+    });
+    controls.querySelectorAll('[data-free-label-source]').forEach(input => {
+        input.addEventListener('change', () => changeFreeLabelSource(Number(input.dataset.freeLabelSource), input.value));
+    });
+    editor.items.forEach((item, index) => {
+        if (!item.position) return;
+        const size = _freeLabelBoxRatio(item, editor);
+        const handle = document.createElement('div');
+        handle.dataset.freeLabelHandle = String(index);
+        handle.className = 'absolute border-2 border-dashed border-amber-400 bg-amber-400/10 cursor-move pointer-events-auto';
+        handle.style.left = `${(item.position.x - size.w / 2) * 100}%`;
+        handle.style.top = `${(item.position.y - size.h / 2) * 100}%`;
+        handle.style.width = `${size.w * 100}%`;
+        handle.style.height = `${size.h * 100}%`;
+        handle.title = '拖曳標籤；放開後才重貼';
+        handle.addEventListener('pointerdown', event => beginFreeLabelDrag(event, index, handle, stage));
+        overlay.appendChild(handle);
+    });
+}
+
+function beginFreeLabelDrag(event, index, handle, stage) {
+    if (event.pointerType === 'touch' || window.matchMedia('(max-width: 767px)').matches) return;
+    event.preventDefault();
+    const editor = state.labelEditor;
+    const item = editor?.items[index];
+    if (!item) return;
+    const original = {...item.position};
+    handle.setPointerCapture(event.pointerId);
+    const move = ev => {
+        const rect = stage.getBoundingClientRect();
+        const next = _clampFreeLabelPosition(item, editor, {
+            x: (ev.clientX - rect.left) / rect.width,
+            y: (ev.clientY - rect.top) / rect.height,
+        });
+        const hit = _freeLabelCollision(item, editor, next);
+        const size = _freeLabelBoxRatio(item, editor);
+        handle.style.left = `${(next.x - size.w / 2) * 100}%`;
+        handle.style.top = `${(next.y - size.h / 2) * 100}%`;
+        handle.classList.toggle('border-red-500', !!hit);
+        handle.classList.toggle('bg-red-500/20', !!hit);
+        handle._candidate = next;
+        handle._hit = hit;
+    };
+    const up = () => {
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', up);
+        handle.removeEventListener('pointercancel', cancel);
+        if (handle._hit) {
+            item.position = original;
+            showToast(`標籤碰到固定元素：${handle._hit.name}`);
+            renderFreeLabelEditor();
+            return;
+        }
+        item.position = handle._candidate || original;
+        restampFreeLabels();
+    };
+    const cancel = () => { item.position = original; renderFreeLabelEditor(); };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', cancel);
+}
+
+function changeFreeLabelKind(index, kind) {
+    const editor = state.labelEditor;
+    if (!editor?.items[index]) return;
+    const item = editor.items[index];
+    item.kind = kind;
+    item.bbox = [];
+    item.position = _clampFreeLabelPosition(item, editor, item.position);
+    if (kind === 'source' && !item.source_text) {
+        renderFreeLabelEditor();
+        return showToast('請先填畫面來源文字');
+    }
+    renderFreeLabelEditor();
+    const hit = _freeLabelCollision(item, editor, item.position);
+    if (hit) return showToast(`標籤碰到固定元素：${hit.name}，請先拖到其他位置`);
+    restampFreeLabels();
+}
+
+function changeFreeLabelSource(index, text) {
+    const editor = state.labelEditor;
+    if (!editor?.items[index]) return;
+    const item = editor.items[index];
+    item.source_text = String(text || '').trim().slice(0, 40);
+    item.bbox = [];
+    item.position = _clampFreeLabelPosition(item, editor, item.position);
+    renderFreeLabelEditor();
+    if (item.kind === 'source' && !item.source_text) {
+        return showToast('畫面來源文字不可空白');
+    }
+    const hit = _freeLabelCollision(item, editor, item.position);
+    if (hit) return showToast(`標籤碰到固定元素：${hit.name}，請先拖到其他位置`);
+    restampFreeLabels();
+}
+
+async function restampFreeLabels() {
+    const editor = state.labelEditor;
+    if (!editor) return;
+    const requestId = ++state.labelRestampRequestId;
+    try {
+        const response = await fetch(`${API_BASE}/api/images/restamp-disclaimer`, {
+            method: 'POST', headers: _apiHeaders(),
+            body: JSON.stringify(buildFreeLabelPayload(editor, state.currentRole)),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(_apiError(data, response.status));
+        if (requestId !== state.labelRestampRequestId || state.labelEditor !== editor) return;
+        const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
+        document.getElementById(editor.imageId).src = imageUrl;
+        const download = document.getElementById(editor.imageId === 'generatedImage' ? 'downloadGeneratedImage' : 'oneClickDownload');
+        if (download) download.href = imageUrl;
+        editor.items = data.disclaimer_items?.length ? data.disclaimer_items : editor.items;
+        editor.safeRect = data.disclaimer_safe_rect || editor.safeRect;
+        editor.obstacles = data.disclaimer_obstacles || editor.obstacles;
+        if (editor.imageId === 'oneClickImage') state.refineDisplay = {...(state.refineDisplay || {}), ...data};
+        hideToast();
+        hideGenerateErrorBanner(true);
+        showGenerateNoticeBanner(data.notices);
+        renderFreeLabelEditor();
+    } catch (err) {
+        if (requestId !== state.labelRestampRequestId) return;
+        showToast(`標籤重貼失敗：${err.message}`);
+        renderFreeLabelEditor();
+    }
+}
+
+function buildFreeLabelPayload(editor, role) {
+    return {
+        disclaimer_base_image_base64: editor.base64,
+        target: editor.target,
+        context: editor.context,
+        safe_frame_profile: editor.target === 'cg' || editor.target === 'broadcast' ? role : '編輯安全框',
+        hole_side: editor.context.hole_side || '',
+        model: editor.model,
+        items: editor.items.map(item => ({
+            id: item.id, target_side: item.side || 'global', kind: item.kind,
+            source_text: item.source_text || '', position: item.position,
+            provenance_kind: item.provenance_kind || '',
+            manual_override: !!item.manual_override || item.kind !== (item.provenance_kind || ''),
+        })),
+    };
+}
+
 function onDisclaimerSourceInput(input) {
     // 後端 disclaimer_source_text 是 max_length=40，超過會被 422 擋在生圖之前，
     // 所以這裡先截斷而不是讓使用者打完才失敗（input 本身也有 maxlength）。
@@ -3196,6 +3513,7 @@ function onVstripInput() {
 function showVstripResult(data, fields) {
     const imageUrl = `data:${data.mime_type};base64,${data.image_base64}`;
     document.getElementById('oneClickImage').src = imageUrl;
+    setupFreeLabelEditor(data, 'oneClickImage');
     const download = document.getElementById('oneClickDownload');
     download.href = imageUrl;
     download.download = downloadFileName(state.editorFormat, fields.title, 'png');
@@ -3335,6 +3653,7 @@ async function handleOneClickGenerate() {
         const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
         const isPng = data.mime_type === "image/png";
         document.getElementById("oneClickImage").src = imageUrl;
+        setupFreeLabelEditor(data, 'oneClickImage');
         const download = document.getElementById("oneClickDownload");
         download.href = imageUrl;
         download.download = downloadFileName(state.editorFormat, undefined, isPng ? "png" : "jpg");
@@ -3424,6 +3743,7 @@ async function handleImageGeneration() {
     button.disabled = true;
     buttonText.classList.add('hidden');
     loading.classList.remove('hidden');
+    const generationParameters = refineParametersFromState();
 
     try {
         const response = await fetch(IMAGE_BACKEND_URL, {
@@ -3464,12 +3784,15 @@ async function handleImageGeneration() {
         const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
         const isPng = data.mime_type === 'image/png';
         image.src = imageUrl;
+        setupFreeLabelEditor(data, 'generatedImage');
         download.href = imageUrl;
         download.download = downloadFileName(state.editorFormat, undefined, isPng ? 'png' : 'jpg');
         download.innerText = `下載 ${isPng ? 'PNG' : 'JPEG'}`;
         resultLabel.innerText = `${providerName} Generated Preview`;
         image.alt = `${providerName} 生成的新聞 CG 預覽`;
         result.classList.remove('hidden');
+        // 第二／三頁也保存同一組置框前原圖與送出快照，成圖後拖曳／切種類才有乾淨底圖可重貼。
+        resetRefineState(refineSourceFromResponse(data), data, generationParameters);
         showToast(`${providerName} 已完成圖片生成`);
     } catch (err) {
         console.error(err);
@@ -3864,12 +4187,96 @@ function refineSourceFromResponse(data) {
 // 沒有成品、或那張根本沒貼標籤時回 kind=''，後端就不貼。
 function appliedDisclaimer() {
     const d = state.refineDisplay || {};
+    const editor = state.labelEditor;
+    if (editor?.items?.length) {
+        const items = editor.items.map(item => ({
+            id: item.id || 'global',
+            target_side: item.side || item.target_side || 'global',
+            kind: item.kind || '',
+            source_text: item.source_text || '',
+            position: item.position || null,
+            provenance_kind: item.provenance_kind || '',
+            manual_override: !!item.manual_override || item.kind !== (item.provenance_kind || ''),
+        }));
+        const first = items.length === 1 ? items[0] : null;
+        return {
+            kind: first?.kind || '',
+            sourceText: first?.source_text || '',
+            corner: state.disclaimerCorner || d.disclaimer_corner || 'lower_right',
+            position: first?.position || null,
+            provenanceKind: first?.provenance_kind || '',
+            manualOverride: items.some(item => item.manual_override),
+            target: editor.target || 'cg',
+            context: editor.context || {},
+            items,
+        };
+    }
     return {
         kind: d.disclaimer_kind || '',
         sourceText: d.disclaimer_source_text || '',
         // 角落是使用者現在選的那個（F47 事後改位置就是改這格）；
         // 沒選過就沿用上一張貼的位置。
         corner: state.disclaimerCorner || d.disclaimer_corner || 'lower_right',
+        position: d.disclaimer_position || null,
+        provenanceKind: d.disclaimer_provenance_kind || d.disclaimer_kind || '',
+        manualOverride: !!d.disclaimer_manual_override,
+        target: currentFreeLabelTarget(),
+        context: currentFreeLabelContext(),
+        items: Array.isArray(d.disclaimer_items) ? d.disclaimer_items.map(item => ({
+            id: item.id || 'global',
+            target_side: item.side || item.target_side || 'global',
+            kind: item.kind || '',
+            source_text: item.source_text || '',
+            position: item.position || null,
+            provenance_kind: item.provenance_kind || '',
+            manual_override: !!item.manual_override || item.kind !== (item.provenance_kind || ''),
+        })) : [],
+    };
+}
+
+function refineDisclaimerPayload(applied) {
+    return {
+        disclaimer_kind: applied.kind,
+        disclaimer_source_text: applied.sourceText,
+        disclaimer_corner: applied.corner,
+        disclaimer_position: applied.position,
+        disclaimer_provenance_kind: applied.provenanceKind,
+        disclaimer_manual_override: applied.manualOverride,
+        disclaimer_target: applied.target,
+        disclaimer_context: applied.context,
+        disclaimer_items: applied.items,
+    };
+}
+
+async function restampRefinedCoverLabels(display, applied) {
+    if (!display?.disclaimer_base_image_base64) return display;
+    const response = await fetch(`${API_BASE}/api/images/restamp-disclaimer`, {
+        method: 'POST', headers: _apiHeaders(),
+        body: JSON.stringify({
+            disclaimer_base_image_base64: display.disclaimer_base_image_base64,
+            source_image_base64: display.source_image_base64 || '',
+            source_mime_type: display.source_mime_type || display.mime_type || 'image/png',
+            model: display.model || '',
+            target: applied.target,
+            context: applied.context,
+            safe_frame_profile: '編輯安全框',
+            disclaimer_kind: applied.kind,
+            disclaimer_source_text: applied.sourceText,
+            position: applied.position,
+            provenance_kind: applied.provenanceKind,
+            manual_override: applied.manualOverride,
+            items: applied.items,
+            clamp_to_legal: true,
+        }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(_apiError(data, response.status));
+    return {
+        ...data,
+        notices: Array.from(new Set([
+            ...(Array.isArray(display.notices) ? display.notices : []),
+            ...(Array.isArray(data.notices) ? data.notices : []),
+        ])),
     };
 }
 
@@ -3916,6 +4323,7 @@ function showRefinedImage(data) {
     const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
     const isPng = data.mime_type === 'image/png';
     document.getElementById('oneClickImage').src = imageUrl;
+    setupFreeLabelEditor(data, 'oneClickImage');
     const download = document.getElementById('oneClickDownload');
     download.href = imageUrl;
     download.download = downloadFileName(state.editorFormat, undefined, isPng ? 'png' : 'jpg');
@@ -3968,6 +4376,8 @@ async function handleRefine() {
         safe_frame: isCover ? false : savedRefineParameters.safe_frame,
         safe_frame_profile: isCover ? '' : savedRefineParameters.safe_frame_profile,
     };
+    // 送出前凍結「畫面上現在這一版」；await 期間即使 UI 狀態改變，也不能換成別張。
+    const applied = appliedDisclaimer();
     try {
         const response = await fetch(REFINE_BACKEND_URL, {
             method: 'POST',
@@ -3985,9 +4395,15 @@ async function handleRefine() {
                 // B83（2026-09-22）：refine 以前完全不貼標籤，「畫面來源」與「示意圖」
                 // 改完圖就整個消失。原樣帶回上一張實際貼的那一組（見 appliedDisclaimer）。
                 // 封面版型走 compose 自己的 _draw_ai_note，不吃這組。
-                disclaimer_kind: isCover ? '' : appliedDisclaimer().kind,
-                disclaimer_source_text: isCover ? '' : appliedDisclaimer().sourceText,
-                disclaimer_corner: appliedDisclaimer().corner,
+                disclaimer_kind: applied.kind,
+                disclaimer_source_text: applied.sourceText,
+                disclaimer_corner: applied.corner,
+                disclaimer_position: applied.position || null,
+                disclaimer_provenance_kind: applied.provenanceKind || '',
+                disclaimer_manual_override: !!applied.manualOverride,
+                disclaimer_target: applied.target || 'cg',
+                disclaimer_context: applied.context || {},
+                disclaimer_items: applied.items || [],
                 safe_frame: refineParameters.safe_frame,
                 frame_strategy: isCover ? '' : (refineParameters.frame_strategy || ''),
                 // B51：封面不能只送 safe_frame=false 卻仍帶「編輯」——編輯身分在
@@ -4013,9 +4429,10 @@ async function handleRefine() {
 
         // 封面兩條線：refine 只改了模型那張圖，要再走一次程式後貼才是成品。
         // 回來的 data 帶著 source_image_base64＝新的模型圖，refineSource 因此自動接上。
-        const shown = isYtCover ? await recomposeYtCover(data, true)
+        const recomposed = isYtCover ? await recomposeYtCover(data, true)
             : isTenCover ? await recomposeTenCover(data)
             : data;
+        const shown = isCover ? await restampRefinedCoverLabels(recomposed, applied) : recomposed;
 
         // 退回上一版用：存目前這一版的置框前原圖與顯示中成品（都在 state，不碰 DOM）
         state.refineStack.push({
@@ -4073,12 +4490,23 @@ function copyToClipboard() {
 // 「逾時」「錯誤」「無法」（例如 3132 行 err.message 直接塞「TimeoutError」之類的英文
 // 例外訊息時也未必含「失敗」），所以擴成關鍵字陣列，任一命中就標 error。
 const TOAST_ERROR_KEYWORDS = ['失敗', '逾時', '錯誤', '無法', 'timeout', 'error', 'failed'];
+let _toastTimer = null;
+
+function hideToast() {
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = null;
+    const toast = document.getElementById('toast');
+    if (!toast) return;
+    toast.style.opacity = '0';
+    toast.classList.remove('toast-animate');
+}
 
 function showToast(msg) {
     const toast = document.getElementById('toast');
+    if (_toastTimer) clearTimeout(_toastTimer);
     toast.innerText = msg;
     toast.style.opacity = '1'; toast.classList.add('toast-animate');
-    setTimeout(() => { toast.style.opacity = '0'; toast.classList.remove('toast-animate'); }, 3000);
+    _toastTimer = setTimeout(hideToast, 3000);
     // toast 3 秒就消失，看不到的人事後想查「剛才系統說了什麼」——一律再記一份到訊息歷史。
     const lower = String(msg || '').toLowerCase();
     const isError = TOAST_ERROR_KEYWORDS.some(k => lower.includes(k.toLowerCase()));

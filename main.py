@@ -1258,6 +1258,16 @@ class ImageGenerateResponse(BaseModel):
     disclaimer_kind: Literal["", "ai", "source"] = ""
     disclaimer_source_text: str = ""
     disclaimer_corner: str = ""
+    # 成品已完成所有版型固定元素、但尚未貼來源／AI 標籤的 PNG。事後拖曳、改字或
+    # 切換種類一律從這張重貼，避免舊標籤殘留；只由 Pillow 消費，不送進任何模型。
+    disclaimer_base_image_base64: str = ""
+    disclaimer_position: dict | None = None
+    disclaimer_bbox: list[int] = Field(default_factory=list)
+    disclaimer_safe_rect: list[int] = Field(default_factory=list)
+    disclaimer_obstacles: list[dict] = Field(default_factory=list)
+    disclaimer_items: list[dict] = Field(default_factory=list)
+    disclaimer_manual_override: bool = False
+    disclaimer_provenance_kind: str = ""
 
 
 # 第一頁「懶人機制」：type_label 傳這個值代表由 AI 自行判斷最適合的圖表類型
@@ -3779,10 +3789,14 @@ def generate_image(req: ImageGenerateRequest):
     req = apply_user_references_to_image_request(req)
     # B110：一定壓在 asis／aiedit 用途規則之後，才能覆蓋「主視覺／延伸裁切」等語意。
     req = apply_broadcast_hole_layout_to_image_request(req)
+    # 播出鏡面的白框原本自己畫固定右下「示意圖」，並跳過一般標籤。現在改由同一個
+    # renderer 負責；只有 caller 尚未帶 provenance 標籤時才補成 ai。
+    if req.broadcast_hole and not req.disclaimer_kind:
+        req = req.model_copy(update={"disclaimer_kind": "ai", "disclaimer_source_text": ""})
     # F48：留空提示跟著使用者選的標籤位置走（右下＝預設時 prompt 逐字不變）
     localised = localise_disclaimer_position(
         req.prompt, req.disclaimer_corner,
-        stamping=bool(req.disclaimer_kind) and not req.broadcast_hole,
+        stamping=bool(req.disclaimer_kind),
     )
     if localised != req.prompt:
         req = req.model_copy(update={"prompt": localised})
@@ -3814,14 +3828,16 @@ def generate_image(req: ImageGenerateRequest):
                 safe_frame=needs_frame,
                 profile=frame_profile,
                 broadcast_hole=req.broadcast_hole,
+                broadcast_watermark=not bool(req.disclaimer_kind),
                 canvas=output_canvas,
             )
-        # B70／F43：置框、挖空框都處理完後最後貼「示意圖」／「畫面來源」標籤。
-        # 播出鏡面挖空框已經在同一套安全區角落自己貼過一次「示意圖」浮水印
-        # （compose.apply_broadcast_hole／compose.WATERMARK_TEXT），這裡不重貼第二次
-        # ——兩者文案（「示意圖」vs 這裡固定的 PORTRAIT_DISCLAIMER_TEXT，剛好同一個字）
-        # 目前相同所以不會互相矛盾，但角落與樣式是兩套獨立實作，之後要合併是後續工作。
-        if req.disclaimer_kind and not req.broadcast_hole:
+        # B70／F43：置框、挖空框都處理完後，最後由同一套 renderer 貼
+        # 「示意圖」／「畫面來源」；播出鏡面不再由白框函式另畫固定浮水印。
+        if not result.disclaimer_base_image_base64:
+            result = result.model_copy(update={
+                "disclaimer_base_image_base64": result.image_data_base64,
+            })
+        if req.disclaimer_kind:
             result = apply_image_disclaimer(result, req, profile=frame_profile)
     except Exception as exc:
         if own_clock:
@@ -4271,6 +4287,7 @@ def apply_broadcast_hole_response(
     profile: str,
     *,
     canvas: tuple[int, int] = safe_area_spec.BASE_CANVAS,
+    watermark: bool = True,
 ) -> ImageGenerateResponse:
     """在置框後的成品上貼出播出鏡面的挖空框。
 
@@ -4283,6 +4300,7 @@ def apply_broadcast_hole_response(
             side,
             canvas=canvas,
             profile=profile,
+            watermark=watermark,
         )
     except Exception as exc:  # noqa: BLE001 — 影像處理失敗必須讓呼叫端知道
         print(f"[compose] 挖空框失敗：{type(exc).__name__}: {exc}", flush=True)
@@ -4304,14 +4322,32 @@ def apply_image_disclaimer(
     與挖空框同一個原則：失敗就整支失敗，不要悄悄回傳一張沒標籤的具名肖像圖出去——
     那正是 B70 的原始事故（合規缺陷不是美觀問題）。
     """
+    disclaimer_base = result.image_data_base64
+    canvas = _image_dimensions(result.image_data_base64)
+    target = "broadcast" if req.hole_side or req.broadcast_hole else "cg"
+    context = {"corner": req.disclaimer_corner, "hole_side": req.hole_side or req.broadcast_hole}
     try:
-        stamped = compose.paste_disclaimer_note(
+        bbox = compose.free_label_box(
+            target, req.disclaimer_kind, req.disclaimer_source_text, canvas,
+            profile=profile, context=context,
+        )
+        safe_rect = compose.free_label_safe_rect(target, canvas, profile=profile)
+        obstacles = compose.free_label_obstacles(target, canvas, context=context, profile=profile)
+    except Exception as exc:  # noqa: BLE001 — 與實際貼字相同，失敗不可靜默降級
+        print(f"[compose] 標籤幾何失敗：{type(exc).__name__}: {exc}", flush=True)
+        raise HTTPException(status_code=500, detail=f"標籤貼字失敗：{exc}") from exc
+    position = None if bbox is None else {
+        "x": ((bbox[0] + bbox[2]) / 2) / canvas[0],
+        "y": ((bbox[1] + bbox[3]) / 2) / canvas[1],
+    }
+    try:
+        stamped, _ = compose.paste_free_label(
             base64.b64decode(result.image_data_base64),
+            target=target,
             kind=req.disclaimer_kind,
             source_text=req.disclaimer_source_text,
-            corner=req.disclaimer_corner,
-            canvas=_image_dimensions(result.image_data_base64),
             profile=profile,
+            context=context,
         )
     except Exception as exc:  # noqa: BLE001 — 影像處理失敗必須讓呼叫端知道
         print(f"[compose] 標籤貼字失敗：{type(exc).__name__}: {exc}", flush=True)
@@ -4334,6 +4370,18 @@ def apply_image_disclaimer(
             "disclaimer_kind": req.disclaimer_kind,
             "disclaimer_source_text": req.disclaimer_source_text,
             "disclaimer_corner": req.disclaimer_corner,
+            "disclaimer_base_image_base64": disclaimer_base,
+            "disclaimer_provenance_kind": req.disclaimer_kind,
+            "disclaimer_position": position,
+            "disclaimer_bbox": list(bbox) if bbox else [],
+            "disclaimer_safe_rect": list(safe_rect),
+            "disclaimer_obstacles": obstacles,
+            "disclaimer_items": [{
+                "id": "global", "side": "global", "kind": req.disclaimer_kind,
+                "source_text": req.disclaimer_source_text,
+                "provenance_kind": req.disclaimer_kind,
+                "position": position, "bbox": list(bbox) if bbox else [],
+            }],
         }
     )
 
@@ -4352,6 +4400,7 @@ def finalize_image_result(
     safe_frame: bool,
     profile: str,
     broadcast_hole: str = "",
+    broadcast_watermark: bool = True,
     canvas: tuple[int, int] = safe_area_spec.BASE_CANVAS,
 ) -> ImageGenerateResponse:
     """生成後的共同收尾：驗比例，需要時置框並保留置框前原圖。
@@ -4368,7 +4417,7 @@ def finalize_image_result(
     framed = frame_image_response(result, profile, canvas=canvas) if safe_frame else result
     if broadcast_hole:
         framed = apply_broadcast_hole_response(
-            framed, broadcast_hole, profile, canvas=canvas
+            framed, broadcast_hole, profile, canvas=canvas, watermark=broadcast_watermark
         )
     return framed.model_copy(
         update={
@@ -5571,6 +5620,21 @@ def apply_broadcast_hole_layout_to_image_request(
     return req.model_copy(update={"prompt": f"{req.prompt.rstrip()}\n\n{block}"})
 
 
+class NormalizedDisclaimerPosition(BaseModel):
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+
+
+class DisclaimerRestampItem(BaseModel):
+    id: str = Field(default="global", max_length=20)
+    target_side: Literal["global", "left", "right"] = "global"
+    kind: Literal["", "ai", "source"] = ""
+    source_text: str = Field(default="", max_length=40)
+    position: NormalizedDisclaimerPosition | None = None
+    provenance_kind: Literal["", "ai", "source"] = ""
+    manual_override: bool = False
+
+
 class ImageRefineRequest(BaseModel):
     # 置框「前」的原始生成圖（base64，不是 data URL）。一律送
     # ImageGenerateResponse.source_image_base64；把已置框成品送進來會二次拉伸
@@ -5623,6 +5687,17 @@ class ImageRefineRequest(BaseModel):
     disclaimer_corner: Literal[
         "lower_right", "lower_left", "upper_right", "upper_left", "lower_center"
     ] = "lower_right"
+    # 成品標籤編輯器的完整快照。refine 不可再從輸入欄重判；拖曳位置、人工覆寫與
+    # 十點左右兩枚都必須跟著上一張成品進來。
+    disclaimer_target: Literal[
+        "cg", "broadcast", "ten_cover", "yt_news", "yt_hourly",
+        "yt_live24", "yt_hot", "yt_vstrip",
+    ] = "cg"
+    disclaimer_position: NormalizedDisclaimerPosition | None = None
+    disclaimer_context: dict = Field(default_factory=dict)
+    disclaimer_provenance_kind: Literal["", "ai", "source"] = ""
+    disclaimer_manual_override: bool = False
+    disclaimer_items: list[DisclaimerRestampItem] = Field(default_factory=list, max_length=2)
 
 
 @app.post(
@@ -5736,13 +5811,14 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
                 safe_frame=needs_frame,
                 profile=frame_profile,
                 broadcast_hole=req.broadcast_hole,
+                broadcast_watermark=not bool(image_req.disclaimer_kind),
                 canvas=image_generation_size(image_req)[1],
             )
-        # B83（2026-09-22）：這一段以前整個不存在——refine 從不貼標籤，所以
-        # 「畫面來源」與「示意圖」追加修改後都會消失。條件與 generate_image()
-        # 的同一行一字不差（挖空框自己已經貼過浮水印，不重貼第二次）。
-        if image_req.disclaimer_kind and not req.broadcast_hole:
-            result = apply_image_disclaimer(result, image_req, profile=frame_profile)
+        # B83 後續修正：舊版只帶 kind/source/corner，拖曳位置、人工覆寫與十點左右
+        # items 全掉了。refine 現在一律套用完整成品快照；新圖障礙改變時夾到最近合法點。
+        result = _apply_refine_label_snapshot(
+            result, req, profile=frame_profile, force_ai=bool(replacement_person),
+        )
     except Exception as exc:
         _record_generation_failure(
             request_id, started, exc,
@@ -5765,10 +5841,17 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
         mime_type=result.mime_type,
         source="web-refine",
         prompt=image_req.prompt,
+        label_target=req.disclaimer_target,
+        label_kind=result.disclaimer_kind,
+        label_source_text=result.disclaimer_source_text,
+        label_position=result.disclaimer_position,
+        label_provenance_kind=result.disclaimer_provenance_kind,
+        label_manual_override=result.disclaimer_manual_override,
+        label_items=result.disclaimer_items,
         **meta,
     )
-    notices = collected_portrait_notices()
-    if notices:
+    notices = list(dict.fromkeys([*result.notices, *collected_portrait_notices()]))
+    if notices != result.notices:
         result = result.model_copy(update={"notices": notices})
     return result
 
@@ -5790,7 +5873,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
 # 規矩與 /api/images/refine 完全一致。
 class ImageRestampRequest(BaseModel):
     # 置框「前」的原始生成圖（base64，不是 data URL），同 ImageRefineRequest。
-    source_image_base64: str = Field(min_length=1, max_length=28_000_000)
+    source_image_base64: str = Field(default="", max_length=28_000_000)
     source_mime_type: str = "image/png"
     model: str = ""
     # 下面這組必須與當初那次生圖**完全一致**，否則重算出來的不是同一張圖：
@@ -5805,13 +5888,187 @@ class ImageRestampRequest(BaseModel):
     frame_strategy: Literal["", "model_extension"] = ""
     safe_frame_profile: str = "記者"
     broadcast_hole: str = ""
+    hole_side: Literal["", "left", "right"] = ""
+    # 新介面：所有固定元素都已合成、唯獨尚未貼標籤的 PNG。帶這格時不重跑置框或版型
+    # compose，只做幾何驗證＋Pillow 貼字；舊 caller 不帶時仍走下方相容路徑。
+    disclaimer_base_image_base64: str = Field(default="", max_length=28_000_000)
+    target: Literal[
+        "cg", "broadcast", "ten_cover", "yt_news", "yt_hourly",
+        "yt_live24", "yt_hot", "yt_vstrip",
+    ] = "cg"
+    target_side: Literal["global", "left", "right"] = "global"
+    position: NormalizedDisclaimerPosition | None = None
+    context: dict = Field(default_factory=dict)
+    # 後端 provenance 的原始判定。kind 與它不同仍允許，但必須進稽核並回提示。
+    provenance_kind: Literal["", "ai", "source"] = ""
+    manual_override: bool = False
+    items: list[DisclaimerRestampItem] = Field(default_factory=list, max_length=2)
+    # refine 後固定元素可能移位；只有該流程可要求自動夾位。一般拖曳仍須 400 拒絕碰撞。
+    clamp_to_legal: bool = False
     # 要貼的標籤：kind 與文字原樣沿用上一張（不重判，理由同 refine），
     # 只有 corner 是這次真正要改的東西。
-    disclaimer_kind: Literal["ai", "source"]
+    disclaimer_kind: Literal["", "ai", "source"] = ""
     disclaimer_source_text: str = Field(default="", max_length=40)
     disclaimer_corner: Literal[
         "lower_right", "lower_left", "upper_right", "upper_left", "lower_center"
-    ]
+    ] = "lower_right"
+
+
+def _refine_disclaimer_items(
+    req: ImageRefineRequest, *, force_ai: bool = False,
+) -> list[DisclaimerRestampItem]:
+    items = list(req.disclaimer_items)
+    if not items and (req.disclaimer_kind or req.disclaimer_position is not None or force_ai):
+        items = [DisclaimerRestampItem(
+            id="global", target_side="global",
+            kind="ai" if force_ai else req.disclaimer_kind,
+            source_text="" if force_ai else req.disclaimer_source_text,
+            position=req.disclaimer_position,
+            provenance_kind=req.disclaimer_provenance_kind or req.disclaimer_kind,
+            manual_override=req.disclaimer_manual_override,
+        )]
+    if force_ai:
+        items = [item.model_copy(update={
+            # 具名換臉的 AI 標籤是系統安全判定，不是使用者手動覆寫。
+            "kind": "ai", "source_text": "", "provenance_kind": "ai",
+            "manual_override": False,
+        }) for item in items]
+    return items
+
+
+def _refine_item_payload(
+    item: DisclaimerRestampItem, *, position: dict | None = None,
+    bbox: tuple[int, int, int, int] | list[int] | None = None,
+) -> dict:
+    manual_override = item.manual_override or item.kind != item.provenance_kind
+    return {
+        "id": item.id,
+        "side": item.target_side,
+        "kind": item.kind,
+        "source_text": item.source_text if item.kind == "source" else "",
+        "provenance_kind": item.provenance_kind,
+        "position": position if position is not None else (
+            item.position.model_dump() if item.position is not None else None
+        ),
+        "bbox": list(bbox) if bbox else [],
+        "manual_override": manual_override,
+    }
+
+
+def _apply_refine_label_snapshot(
+    result: ImageGenerateResponse, req: ImageRefineRequest, *,
+    profile: str, force_ai: bool = False,
+) -> ImageGenerateResponse:
+    """把 refine 前的完整標籤快照貼回新成品；障礙變動時移到最近合法位置。"""
+    items = _refine_disclaimer_items(req, force_ai=force_ai)
+    target = req.disclaimer_target
+    context = dict(req.disclaimer_context)
+    context.setdefault("hole_side", req.hole_side or req.broadcast_hole)
+    effective_profile = (
+        profile if target in ("cg", "broadcast") else safe_area_spec.EDITOR_FRAME_PROFILE
+    )
+    manual_override = req.disclaimer_manual_override or any(
+        item.manual_override or item.kind != item.provenance_kind for item in items
+    )
+
+    # 封面 refine 回來的只是模型底圖，Logo／標題帶會由前端接著 recompose；這一站
+    # 先完整保留 items，待固定元素合成後再送 /restamp-disclaimer 做同一套夾位與貼字。
+    if req.cover_kind:
+        response_items = [_refine_item_payload(item) for item in items]
+        first = response_items[0] if len(response_items) == 1 else None
+        return result.model_copy(update={
+            "disclaimer_base_image_base64": result.image_data_base64,
+            "disclaimer_kind": first["kind"] if first else req.disclaimer_kind,
+            "disclaimer_source_text": first["source_text"] if first else req.disclaimer_source_text,
+            "disclaimer_corner": req.disclaimer_corner,
+            "disclaimer_position": first["position"] if first else (
+                req.disclaimer_position.model_dump()
+                if req.disclaimer_position is not None else None
+            ),
+            "disclaimer_manual_override": manual_override,
+            "disclaimer_provenance_kind": (
+                first["provenance_kind"] if first else req.disclaimer_provenance_kind
+            ),
+            "disclaimer_items": response_items,
+        })
+
+    clean_base = result.image_data_base64
+    raw = base64.b64decode(clean_base)
+    with Image.open(io.BytesIO(raw)) as opened:
+        canvas = opened.size
+    work = raw
+    response_items: list[dict] = []
+    moved_any = False
+    for item in items:
+        requested = (
+            (item.position.x, item.position.y) if item.position is not None else None
+        )
+        actual = requested
+        if requested is not None and item.kind:
+            actual, moved = compose.nearest_legal_free_label_position(
+                target, item.kind, item.source_text, canvas, requested,
+                profile=effective_profile, side=item.target_side, context=context,
+            )
+            moved_any = moved_any or moved
+        try:
+            work, item_bbox = compose.paste_free_label(
+                work, target=target, kind=item.kind, source_text=item.source_text,
+                position=actual, profile=effective_profile,
+                side=item.target_side, context=context,
+            )
+        except compose.ComposeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if actual is None and item_bbox is not None:
+            actual = (
+                ((item_bbox[0] + item_bbox[2]) / 2) / canvas[0],
+                ((item_bbox[1] + item_bbox[3]) / 2) / canvas[1],
+            )
+        response_items.append(_refine_item_payload(
+            item,
+            position=(None if actual is None else {"x": actual[0], "y": actual[1]}),
+            bbox=item_bbox,
+        ))
+
+    first = response_items[0] if len(response_items) == 1 else None
+    notices = list(result.notices)
+    if moved_any:
+        notices.append("新圖的固定元素位置已變動，標籤已移到最近的合法位置")
+    if manual_override:
+        if any(
+            item["provenance_kind"] == "ai" and item["kind"] == "source"
+            for item in response_items
+        ):
+            notices.append("此圖含 AI 生成內容，改成「畫面來源」請自行確認")
+        else:
+            notices.append("標籤種類已由使用者手動覆寫，請自行確認內容正確")
+    return result.model_copy(update={
+        "image_data_base64": base64.b64encode(work).decode("ascii"),
+        "mime_type": "image/png",
+        "source_image_base64": (
+            result.source_image_base64 or clean_base
+            if items else result.source_image_base64
+        ),
+        "source_mime_type": result.source_mime_type or result.mime_type,
+        "notices": list(dict.fromkeys(notices)),
+        "disclaimer_base_image_base64": clean_base,
+        "disclaimer_kind": first["kind"] if first else req.disclaimer_kind,
+        "disclaimer_source_text": first["source_text"] if first else req.disclaimer_source_text,
+        "disclaimer_corner": req.disclaimer_corner,
+        "disclaimer_position": first["position"] if first else None,
+        "disclaimer_bbox": first["bbox"] if first else [],
+        "disclaimer_safe_rect": list(compose.free_label_safe_rect(
+            target, canvas, profile=effective_profile,
+            side=items[0].target_side if len(items) == 1 else "global",
+        )),
+        "disclaimer_obstacles": compose.free_label_obstacles(
+            target, canvas, context=context, profile=effective_profile,
+        ),
+        "disclaimer_manual_override": manual_override,
+        "disclaimer_provenance_kind": (
+            first["provenance_kind"] if first else req.disclaimer_provenance_kind
+        ),
+        "disclaimer_items": response_items,
+    })
 
 
 @app.post(
@@ -5820,58 +6077,165 @@ class ImageRestampRequest(BaseModel):
     dependencies=[Depends(verify_internal_api_key)],
 )
 def restamp_disclaimer(req: ImageRestampRequest) -> ImageGenerateResponse:
-    """把標籤改貼到另一個角落，不重新生圖（F47）。"""
+    """自由移動／換種類／改文字；全程只用 Pillow，不重新生圖（F47 擴充）。"""
     request_id = request_log.new_request_id()
     started = _generation_clock()
     try:
-        if req.disclaimer_kind == "source" and not req.disclaimer_source_text.strip():
+        if req.disclaimer_kind == "source" and not req.disclaimer_source_text.strip() and not req.items:
             raise HTTPException(status_code=400, detail="畫面來源文字不可空白")
-        if req.broadcast_hole:
-            # 播出鏡面的標籤版位綁在挖空框上，不能單獨挪動。
-            raise HTTPException(
-                status_code=400,
-                detail="播出鏡面的「示意圖」浮水印位置綁在挖空框上，不能單獨挪動",
+        if req.target == "yt_vstrip" and req.disclaimer_kind == "ai" and not req.items:
+            raise HTTPException(status_code=400, detail="YT 直播直標只支援畫面來源或無標籤")
+        manual_override = req.manual_override or req.disclaimer_kind != req.provenance_kind
+        if req.disclaimer_base_image_base64:
+            raw = base64.b64decode(req.disclaimer_base_image_base64)
+            with Image.open(io.BytesIO(raw)) as opened:
+                canvas = opened.size
+            profile = (
+                req.safe_frame_profile
+                if req.target in ("cg", "broadcast") and req.safe_frame_profile in safe_area_spec.PROFILES
+                else safe_area_spec.EDITOR_FRAME_PROFILE
             )
-        base = ImageGenerateResponse(
-            image_data_base64=req.source_image_base64,
-            mime_type=req.source_mime_type,
-            model=req.model,
-        )
-        sizing = ImageGenerateRequest(
-            prompt="restamp",  # 只為了算畫布，不會送給任何模型
-            provider=req.provider,
-            aspect_ratio=req.aspect_ratio,
-            image_size=req.image_size,
-            density=req.density,
-            safe_frame=req.safe_frame,
-            frame_strategy=req.frame_strategy,
-            safe_frame_profile=req.safe_frame_profile,
-            disclaimer_kind=req.disclaimer_kind,
-            disclaimer_source_text=req.disclaimer_source_text,
-            disclaimer_corner=req.disclaimer_corner,
-        )
-        _, needs_frame, frame_profile = resolve_frame_plan(
-            req.safe_frame_profile, req.safe_frame, req.density
-        )
-        if model_extension_active(
-            req.safe_frame_profile, req.safe_frame, req.frame_strategy
-        ):
-            # D26：同一張原圖、同一支確定性守門，結果與當初生成時相同
-            result = finalize_model_extension(
-                base,
-                aspect_ratio=req.aspect_ratio,
-                canvas=image_generation_size(sizing)[1],
-                allow_no_text=req.density == "no_text",
+            context = dict(req.context)
+            context.setdefault("hole_side", req.hole_side)
+            work = raw
+            response_items: list[dict] = []
+            moved_any = False
+            request_items = req.items or [DisclaimerRestampItem(
+                id="global", target_side=req.target_side, kind=req.disclaimer_kind,
+                source_text=req.disclaimer_source_text, position=req.position,
+                provenance_kind=req.provenance_kind,
+            )]
+            for item in request_items:
+                if item.kind == "source" and not item.source_text.strip():
+                    raise HTTPException(status_code=400, detail="畫面來源文字不可空白")
+                if req.target == "yt_vstrip" and item.kind == "ai":
+                    raise HTTPException(status_code=400, detail="YT 直播直標只支援畫面來源或無標籤")
+                item_position = (
+                    (item.position.x, item.position.y) if item.position is not None else None
+                )
+                if req.clamp_to_legal and item_position is not None and item.kind:
+                    item_position, moved = compose.nearest_legal_free_label_position(
+                        req.target, item.kind, item.source_text, canvas, item_position,
+                        profile=profile, side=item.target_side, context=context,
+                    )
+                    moved_any = moved_any or moved
+                try:
+                    work, item_bbox = compose.paste_free_label(
+                        work, target=req.target, kind=item.kind,
+                        source_text=item.source_text, position=item_position,
+                        profile=profile, side=item.target_side, context=context,
+                    )
+                except compose.ComposeError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                item_override = item.manual_override or item.kind != item.provenance_kind
+                manual_override = manual_override or item_override
+                response_items.append({
+                    "id": item.id, "side": item.target_side, "kind": item.kind,
+                    "source_text": item.source_text if item.kind == "source" else "",
+                    "provenance_kind": item.provenance_kind,
+                    "position": (
+                        {"x": item_position[0], "y": item_position[1]}
+                        if item_position is not None else None
+                    ),
+                    "bbox": list(item_bbox) if item_bbox is not None else [],
+                    "manual_override": item_override,
+                })
+            stamped = work
+            bbox = tuple(response_items[0]["bbox"]) if response_items and response_items[0]["bbox"] else None
+            safe_rect = compose.free_label_safe_rect(
+                req.target, canvas, profile=profile, side=req.target_side,
+            )
+            obstacles = compose.free_label_obstacles(req.target, canvas, context=context, profile=profile)
+            notices = []
+            if moved_any:
+                notices.append("新圖的固定元素位置已變動，標籤已移到最近的合法位置")
+            if manual_override:
+                if any(
+                    item["provenance_kind"] == "ai" and item["kind"] == "source"
+                    for item in response_items
+                ):
+                    notices.append("此圖含 AI 生成內容，改成「畫面來源」請自行確認")
+                else:
+                    notices.append("標籤種類已由使用者手動覆寫，請自行確認內容正確")
+            first = response_items[0] if len(response_items) == 1 else None
+            result = ImageGenerateResponse(
+                image_data_base64=base64.b64encode(stamped).decode("ascii"),
+                mime_type="image/png",
+                model=req.model or "label-restamp:pillow",
+                source_image_base64=req.source_image_base64,
+                source_mime_type=req.source_mime_type,
+                notices=notices,
+                disclaimer_kind=first["kind"] if first else req.disclaimer_kind,
+                disclaimer_source_text=(
+                    first["source_text"] if first else (
+                        req.disclaimer_source_text if req.disclaimer_kind == "source" else ""
+                    )
+                ),
+                disclaimer_corner="",
+                disclaimer_base_image_base64=req.disclaimer_base_image_base64,
+                disclaimer_position=(
+                    first["position"] if first else (
+                        req.position.model_dump() if req.position is not None else None
+                    )
+                ),
+                disclaimer_bbox=list(bbox) if bbox is not None else [],
+                disclaimer_safe_rect=list(safe_rect),
+                disclaimer_obstacles=obstacles,
+                disclaimer_manual_override=manual_override,
+                disclaimer_provenance_kind=(
+                    first["provenance_kind"] if first else req.provenance_kind
+                ),
+                disclaimer_items=response_items,
             )
         else:
-            result = finalize_image_result(
-                base,
-                aspect_ratio=req.aspect_ratio,
-                safe_frame=needs_frame,
-                profile=frame_profile,
-                canvas=image_generation_size(sizing)[1],
+            if not req.source_image_base64:
+                raise HTTPException(status_code=400, detail="缺少可重貼的底圖")
+            if req.broadcast_hole:
+                raise HTTPException(
+                    status_code=400,
+                    detail="舊版重貼資料沒有乾淨成品底圖；請先重新產生一次播出鏡面",
+                )
+            if not req.disclaimer_kind:
+                raise HTTPException(status_code=400, detail="舊版重貼介面不支援移除標籤")
+            base = ImageGenerateResponse(
+                image_data_base64=req.source_image_base64,
+                mime_type=req.source_mime_type,
+                model=req.model,
             )
-        result = apply_image_disclaimer(result, sizing, profile=frame_profile)
+            sizing = ImageGenerateRequest(
+                prompt="restamp",  # 只為了算畫布，不會送給任何模型
+                provider=req.provider,
+                aspect_ratio=req.aspect_ratio,
+                image_size=req.image_size,
+                density=req.density,
+                safe_frame=req.safe_frame,
+                frame_strategy=req.frame_strategy,
+                safe_frame_profile=req.safe_frame_profile,
+                disclaimer_kind=req.disclaimer_kind,
+                disclaimer_source_text=req.disclaimer_source_text,
+                disclaimer_corner=req.disclaimer_corner,
+            )
+            _, needs_frame, frame_profile = resolve_frame_plan(
+                req.safe_frame_profile, req.safe_frame, req.density
+            )
+            if model_extension_active(
+                req.safe_frame_profile, req.safe_frame, req.frame_strategy
+            ):
+                result = finalize_model_extension(
+                    base,
+                    aspect_ratio=req.aspect_ratio,
+                    canvas=image_generation_size(sizing)[1],
+                    allow_no_text=req.density == "no_text",
+                )
+            else:
+                result = finalize_image_result(
+                    base,
+                    aspect_ratio=req.aspect_ratio,
+                    safe_frame=needs_frame,
+                    profile=frame_profile,
+                    canvas=image_generation_size(sizing)[1],
+                )
+            result = apply_image_disclaimer(result, sizing, profile=frame_profile)
     except Exception as exc:
         # 失敗也要留紀錄：這條路沒有生圖模型可以怪，出事一定是置框或貼字，
         # 後台查得到才知道是哪一種（沿用 web-refine 的同一套失敗歸檔）。
@@ -5890,6 +6254,14 @@ def restamp_disclaimer(req: ImageRestampRequest) -> ImageGenerateResponse:
         mime_type=result.mime_type,
         source="web-restamp",
         prompt="",
+        label_target=req.target,
+        label_target_side=req.target_side,
+        label_kind=result.disclaimer_kind,
+        label_source_text=result.disclaimer_source_text,
+        label_position=result.disclaimer_position,
+        label_provenance_kind=result.disclaimer_provenance_kind,
+        label_manual_override=result.disclaimer_manual_override,
+        label_items=result.disclaimer_items,
         **meta,
     )
     return result
@@ -6354,6 +6726,43 @@ class TenCoverResponse(ImageGenerateResponse):
     source_right: str = ""
     # 這次實際採用的 seed（F0）。前端拿它當「重新生成」的遞增起點。
     seed: int = 0
+
+
+def _default_label_item(
+    *, target: str, item_id: str, side: str, kind: str, source_text: str,
+    provenance_kind: str, context: dict | None = None,
+) -> dict:
+    """前端拖曳 handle 的初始幾何；kind=none 也保留一個可啟用的位置。"""
+    measure_kind = kind or "ai"
+    bbox = compose.free_label_box(
+        target, measure_kind, source_text, compose.COVER_CANVAS,
+        profile=safe_area_spec.EDITOR_FRAME_PROFILE, side=side, context=context or {},
+    )
+    # 舊版型的預設繪製位置仍原封不動（避免未編輯時像素漂移），但拖曳把手一旦送回
+    # restamp 就必須符合新版安全框。故只把「編輯用中心點」夾進合法範圍；第一次編輯
+    # 若舊位置貼著框外，會自然移到最近的合法位置。
+    safe = compose.free_label_safe_rect(
+        target, compose.COVER_CANVAS,
+        profile=safe_area_spec.EDITOR_FRAME_PROFILE, side=side,
+    )
+    box_w, box_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    center_x = round((bbox[0] + bbox[2]) / 2)
+    center_y = round((bbox[1] + bbox[3]) / 2)
+    center_x = max(safe[0] + box_w // 2, min(safe[2] - (box_w - box_w // 2), center_x))
+    center_y = max(safe[1] + box_h // 2, min(safe[3] - (box_h - box_h // 2), center_y))
+    position = {
+        "x": center_x / compose.COVER_CANVAS[0],
+        "y": center_y / compose.COVER_CANVAS[1],
+    }
+    bbox = compose.free_label_box(
+        target, measure_kind, source_text, compose.COVER_CANVAS,
+        position=(position["x"], position["y"]),
+        profile=safe_area_spec.EDITOR_FRAME_PROFILE, side=side, context=context or {},
+    )
+    return {
+        "id": item_id, "side": side, "kind": kind, "source_text": source_text,
+        "provenance_kind": provenance_kind, "position": position, "bbox": list(bbox),
+    }
 
 
 def ten_cover_asis_images(req: "TenCoverRequest") -> list[bytes]:
@@ -6852,7 +7261,7 @@ def _base_data_url(raw: bytes) -> str:
 def _cover_ai(
     req: TenCoverRequest, date_text: str, visuals: tuple[str, str], base: bytes | None = None,
     protect_base: bool = False, ai_sides: tuple[bool, bool] = (True, True),
-) -> tuple[bytes, str, bytes, str]:
+) -> tuple[bytes, str, bytes, str, bytes]:
     """純 prompt 版：整張封面由生圖模型畫，之後只補貼正版 Logo＋節目標籤＋AI示意圖。
 
     base（2026-09-13 使用者裁決）＝程式已拼好的無字底圖（原圖放置裁滿版／N 張切格／
@@ -6888,16 +7297,16 @@ def _cover_ai(
     的圖。拆法與合成版同一支 `compose.cover_title_lines`（使用者自己分的行優先，超寬再
     防呆拆），比照 YT ai-title 的 line1／line2。
     """
-    def _post_paste(raw: bytes) -> bytes:
+    def _post_paste(raw: bytes) -> tuple[bytes, bytes]:
         # 日期與 ON AIR 紅標從 2026-09-10 起也由程式貼（原本寫在 prompt 給模型畫，
         # 而補帶會把模型畫的那兩樣切成上下兩截，見 compose.paste_cover_header_right）。
         # 先放大裁滿定版 1920×1080（原生 GPT 16:9 出 1280×720），後面貼的東西才照定版比例算
         raw = compose.fit_cover_canvas(raw)
-        cover = compose.paste_cover_logo(raw, date_text=date_text, badge=req.badge)
+        fixed = compose.paste_cover_logo(raw, date_text=date_text, badge=req.badge)
         # B107（2026-09-26）：AI 標題不再等同 AI 素材。標籤只看底圖是否實際由 AI
         # 生成／修改；十點雙切按左右分側。refine 的呼叫端會傳回 (True, True)。
         cover = compose.paste_cover_ai_note(
-            cover,
+            fixed,
             split=req.layout != "full",
             left_is_ai=ai_sides[0],
             right_is_ai=ai_sides[1],
@@ -6906,11 +7315,13 @@ def _cover_ai(
         # AI 版標頭刻意維持 ON AIR，圓章要在這裡補貼；追加修改回來的 overlay 路徑同一串。
         if req.badge == "highlight":
             cover = compose.paste_cover_highlight_stamp(cover)
-        return cover
+            fixed = compose.paste_cover_highlight_stamp(fixed)
+        return cover, fixed
 
     if req.background_image_base64:
         raw = base64.b64decode(req.background_image_base64)
-        return _post_paste(raw), "ten-cover:overlay", raw, req.background_mime_type or "image/png"
+        cover, label_base = _post_paste(raw)
+        return cover, "ten-cover:overlay", raw, req.background_mime_type or "image/png", label_base
 
     badge_text = compose.COVER_BADGES[req.badge][0]
 
@@ -7117,7 +7528,18 @@ def _cover_ai(
                 left_is_ai=False, right_is_ai=False,
                 left_source_text=req.source_left.strip(),
             )
-            return cover, f"{result.model}＋ten-cover:title-layer-fallback", base, "image/png"
+            label_base = compose.compose_ten_cover(
+                base, None,
+                title_left=req.title_left.strip(), title_right="",
+                date_text=date_text, badge=req.badge,
+                left_is_ai=False, right_is_ai=False,
+                left_source_text=req.source_left.strip(),
+                draw_disclaimers=False,
+            )
+            return (
+                cover, f"{result.model}＋ten-cover:title-layer-fallback",
+                base, "image/png", label_base,
+            )
     elif protect_base and base is not None:
         raw = compose.restore_photo_outside_title_band(
             base, raw, band_top_ratio=compose.cover_title_band_top_ratio(),
@@ -7133,7 +7555,8 @@ def _cover_ai(
     # fit_cover_canvas 對已是定版尺寸的圖是原樣回，所以這裡先跑一次不影響 _post_paste。
     if protect_base and base is not None:
         raw = compose.paste_cover_header_band(compose.fit_cover_canvas(raw))
-    return _post_paste(raw), result.model, raw, result.mime_type
+    cover, label_base = _post_paste(raw)
+    return cover, result.model, raw, result.mime_type, label_base
 
 
 def _cover_full_image(
@@ -7264,7 +7687,7 @@ def _cover_panels(
 
 def _cover_composite(
     req: TenCoverRequest, date_text: str, visuals: tuple[str, str]
-) -> tuple[bytes, tuple[bool, bool], str, bytes]:
+) -> tuple[bytes, tuple[bool, bool], str, bytes, bytes]:
     """合成版：AI 只出無文字底圖（或直接用原圖放置的附圖），文字全部由 Pillow 畫。
 
     回 (PNG, (左格是否 AI, 右格是否 AI), 生圖模型名, 壓字前底圖)。兩格都是附圖時一次 API
@@ -7286,7 +7709,16 @@ def _cover_composite(
             prebuilt_split=True,
             left_source_text=req.source_left.strip(), right_source_text=req.source_right.strip(),
         )
-        return cover, (req.background_is_ai, req.background_right_is_ai), "ten-cover:recomposite", background
+        label_base = compose.compose_ten_cover(
+            background, None,
+            title_left=req.title_left.strip(), title_right=req.title_right.strip(),
+            date_text=date_text, badge=req.badge,
+            left_is_ai=req.background_is_ai, right_is_ai=req.background_right_is_ai,
+            prebuilt_split=True,
+            left_source_text=req.source_left.strip(), right_source_text=req.source_right.strip(),
+            draw_disclaimers=False,
+        )
+        return cover, (req.background_is_ai, req.background_right_is_ai), "ten-cover:recomposite", background, label_base
     panels, todo, models = _cover_panels(req, visuals)
     if panels[1] is None and not todo:
         # 舊路徑（不分左右的附圖）：單張原圖＝全版，兩個標題壓在同一張圖的左下與右下
@@ -7296,7 +7728,14 @@ def _cover_composite(
             date_text=date_text, badge=req.badge, left_is_ai=False, right_is_ai=False,
             left_source_text=req.source_left.strip(), right_source_text=req.source_right.strip(),
         )
-        return cover, (False, False), "ten-cover:asis", b""
+        label_base = compose.compose_ten_cover(
+            panels[0], None,
+            title_left=req.title_left.strip(), title_right=req.title_right.strip(),
+            date_text=date_text, badge=req.badge, left_is_ai=False, right_is_ai=False,
+            left_source_text=req.source_left.strip(), right_source_text=req.source_right.strip(),
+            draw_disclaimers=False,
+        )
+        return cover, (False, False), "ten-cover:asis", b"", label_base
     left_is_ai, right_is_ai = 0 in todo, 1 in todo
     cover = compose.compose_ten_cover(
         panels[0],
@@ -7312,7 +7751,16 @@ def _cover_composite(
     )
     buffer = io.BytesIO()
     compose.split_canvas([panels[0], panels[1]], compose.COVER_CANVAS).save(buffer, format="PNG")
-    return cover, (left_is_ai, right_is_ai), "、".join(models) or "ten-cover:asis", buffer.getvalue()
+    background = buffer.getvalue()
+    label_base = compose.compose_ten_cover(
+        background, None,
+        title_left=req.title_left.strip(), title_right=req.title_right.strip(),
+        date_text=date_text, badge=req.badge,
+        left_is_ai=left_is_ai, right_is_ai=right_is_ai, prebuilt_split=True,
+        left_source_text=req.source_left.strip(), right_source_text=req.source_right.strip(),
+        draw_disclaimers=False,
+    )
+    return cover, (left_is_ai, right_is_ai), "、".join(models) or "ten-cover:asis", background, label_base
 
 
 def _cover_split_base(
@@ -7701,7 +8149,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
             # B107：base 存在代表本次底圖完全由 asis 原圖拼成；AI 只畫標題，不標
             # AI示意圖。沒有 base（缺圖／aiedit），或 background overlay（refine）仍標。
             is_ai = not ai_over_base
-            cover, image_model, source_raw, source_mime = (
+            cover, image_model, source_raw, source_mime, label_base = (
                 _cover_ai(
                     req, date_text, visual_arg, base=base, protect_base=protect_base,
                     ai_sides=(is_ai, False),
@@ -7710,6 +8158,14 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
             )
         else:
             cover, is_ai, image_model, background_raw, background_mime = _cover_full_composite(req, date_text, visual)
+            label_base = compose.compose_ten_cover(
+                background_raw, None,
+                title_left=req.title_left.strip(), title_right="",
+                date_text=date_text, badge=req.badge,
+                left_is_ai=is_ai, right_is_ai=False,
+                left_source_text=req.source_left.strip(),
+                draw_disclaimers=False,
+            )
     except compose.ComposeError as exc:
         print(f"[compose] 封面失敗：{exc}", flush=True)
         http_exc = HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}")
@@ -7750,6 +8206,15 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         **portrait_fields,
         **meta,
     )
+    full_kind = (
+        "ai" if is_ai else
+        ("source" if req.mode == editor_formats.COVER_MODE_COMPOSITE and req.source_left.strip() else "")
+    )
+    full_item = _default_label_item(
+        target="ten_cover", item_id="left", side="global", kind=full_kind,
+        source_text=req.source_left.strip() if full_kind == "source" else "",
+        provenance_kind=full_kind,
+    )
     return TenCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
@@ -7769,6 +8234,22 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         # B107 只翻 AI 標籤判定；AI 標題路徑仍不新增／啟用畫面來源標籤。
         source_left=req.source_left.strip() if req.mode == editor_formats.COVER_MODE_COMPOSITE and not is_ai else "",
         source_right="",
+        disclaimer_base_image_base64=base64.b64encode(label_base).decode("ascii"),
+        disclaimer_kind=full_kind,
+        disclaimer_source_text=(
+            req.source_left.strip()
+            if req.mode == editor_formats.COVER_MODE_COMPOSITE and not is_ai else ""
+        ),
+        disclaimer_provenance_kind=full_kind,
+        disclaimer_safe_rect=list(compose.free_label_safe_rect(
+            "ten_cover", compose.COVER_CANVAS,
+            profile=safe_area_spec.EDITOR_FRAME_PROFILE, side="global",
+        )),
+        disclaimer_obstacles=compose.free_label_obstacles(
+            "ten_cover", compose.COVER_CANVAS,
+            profile=safe_area_spec.EDITOR_FRAME_PROFILE,
+        ),
+        disclaimer_items=[full_item],
         mode=req.mode,
         seed=req.seed,
         notices=collected_portrait_notices(),
@@ -7922,14 +8403,14 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
                 _cover_split_base(req, visuals) if ai_over_base
                 else (None, (True, True), [])
             )
-            cover, image_model, source_raw, source_mime = (
+            cover, image_model, source_raw, source_mime, label_base = (
                 _cover_ai(req, date_text, visuals, base=base, ai_sides=panel_is_ai) if base is not None
                 else _cover_ai(req, date_text, visuals)
             )
             if base_models:
                 image_model = "、".join([*base_models, image_model])
         else:
-            cover, panel_is_ai, image_model, background_raw = _cover_composite(req, date_text, visuals)
+            cover, panel_is_ai, image_model, background_raw, label_base = _cover_composite(req, date_text, visuals)
     except compose.ComposeError as exc:
         print(f"[compose] 封面失敗：{exc}", flush=True)
         http_exc = HTTPException(status_code=_compose_error_status(exc), detail=f"封面生成失敗：{exc}")
@@ -7972,6 +8453,24 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         **portrait_fields,
         **meta,
     )
+    left_kind = "ai" if panel_is_ai[0] else (
+        "source" if req.mode == editor_formats.COVER_MODE_COMPOSITE and req.source_left.strip() else ""
+    )
+    right_kind = "ai" if panel_is_ai[1] else (
+        "source" if req.mode == editor_formats.COVER_MODE_COMPOSITE and req.source_right.strip() else ""
+    )
+    split_items = [
+        _default_label_item(
+            target="ten_cover", item_id="left", side="left", kind=left_kind,
+            source_text=req.source_left.strip() if left_kind == "source" else "",
+            provenance_kind=left_kind,
+        ),
+        _default_label_item(
+            target="ten_cover", item_id="right", side="right", kind=right_kind,
+            source_text=req.source_right.strip() if right_kind == "source" else "",
+            provenance_kind=right_kind,
+        ),
+    ]
     return TenCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
@@ -7990,6 +8489,20 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         # B107 只翻 AI 標籤判定；AI 標題路徑仍不新增／啟用畫面來源標籤。
         source_left=req.source_left.strip() if req.mode == editor_formats.COVER_MODE_COMPOSITE and not panel_is_ai[0] else "",
         source_right=req.source_right.strip() if req.mode == editor_formats.COVER_MODE_COMPOSITE and not panel_is_ai[1] else "",
+        disclaimer_base_image_base64=base64.b64encode(label_base).decode("ascii"),
+        # split 的完整逐側狀態由 left_is_ai/right_is_ai 與 source_left/source_right 表示；
+        # 這組繼承欄位只代表全域，不拿來覆蓋逐側判定。
+        disclaimer_kind="",
+        disclaimer_provenance_kind="",
+        disclaimer_safe_rect=list(compose.free_label_safe_rect(
+            "ten_cover", compose.COVER_CANVAS,
+            profile=safe_area_spec.EDITOR_FRAME_PROFILE,
+        )),
+        disclaimer_obstacles=compose.free_label_obstacles(
+            "ten_cover", compose.COVER_CANVAS,
+            profile=safe_area_spec.EDITOR_FRAME_PROFILE,
+        ),
+        disclaimer_items=split_items,
         mode=req.mode,
         seed=req.seed,
         notices=collected_portrait_notices(),
@@ -9016,6 +9529,10 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 # AI 標題模式下標題已經畫在底圖上了，再壓一次會疊成兩層
                 draw_title=not ai_title,
             )
+            label_base = compose.compose_yt_live24_cover(
+                background, title=req.title.strip(), date_text=date_text,
+                ai_note=False, source_text="", draw_title=not ai_title,
+            )
         elif hot:
             cover = compose.compose_yt_hot_cover(
                 background,
@@ -9025,6 +9542,10 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 source_text=source_text,
                 draw_titles=not ai_title,
                 bottom_band=bottom_band,
+            )
+            label_base = compose.compose_yt_hot_cover(
+                background, line1=lines[0], line2=lines[1], ai_note=False,
+                source_text="", draw_titles=not ai_title, bottom_band=bottom_band,
             )
         elif hourly:
             cover = compose.compose_yt_hourly_cover(
@@ -9043,6 +9564,13 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 # composite（程式壓標題）那條路底圖是無文字的，沒有人畫牌，程式得自己畫。
                 draw_date=not (req.creativity >= 1 and ai_title),
             )
+            label_base = compose.compose_yt_hourly_cover(
+                background, line1=lines[0], line2=lines[1], date_text=date_text,
+                time_text=req.time_text.strip(), ai_note=False, source_text="",
+                draw_titles=not ai_title,
+                line_max_chars=compose.YT_HOURLY_LINE_MAX_CHARS if dual else None,
+                draw_date=not (req.creativity >= 1 and ai_title),
+            )
         else:
             cover = compose.compose_yt_cover(
                 background,
@@ -9054,6 +9582,12 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                 ai_note=is_ai,
                 source_text=source_text,
                 draw_titles=not ai_title,
+                bottom_band=bottom_band,
+            )
+            label_base = compose.compose_yt_cover(
+                background, line1=lines[0], line2=lines[1], date_text=date_text,
+                original_audio=original_audio, ai_translation=ai_translation,
+                ai_note=False, source_text="", draw_titles=not ai_title,
                 bottom_band=bottom_band,
             )
     except compose.ComposeError as exc:
@@ -9102,6 +9636,20 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         **_title_layer_archive_fields(),
         **meta,
     )
+    label_kind = "ai" if is_ai else ("source" if source_text else "")
+    label_target = f"yt_{req.layout}"
+    label_context = {
+        "original_audio": original_audio,
+        "ai_translation": ai_translation,
+        "draw_date": not (hourly and req.creativity >= 1 and ai_title),
+    }
+    label_item = _default_label_item(
+        target=label_target, item_id="global", side="global", kind=label_kind,
+        source_text=source_text if label_kind == "source" else "",
+        provenance_kind=label_kind, context=label_context,
+    )
+    label_bbox = label_item["bbox"] if label_kind else []
+    label_position = label_item["position"]
     return YtCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
@@ -9113,6 +9661,20 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         visual=visual,
         background_is_ai=is_ai,
         source_text="" if is_ai else source_text,
+        disclaimer_base_image_base64=base64.b64encode(label_base).decode("ascii"),
+        disclaimer_kind="ai" if is_ai else ("source" if source_text else ""),
+        disclaimer_source_text="" if is_ai else source_text,
+        disclaimer_provenance_kind="ai" if is_ai else ("source" if source_text else ""),
+        disclaimer_position=label_position,
+        disclaimer_bbox=list(label_bbox),
+        disclaimer_safe_rect=list(compose.free_label_safe_rect(
+            label_target, compose.YT_CANVAS, profile=safe_area_spec.EDITOR_FRAME_PROFILE,
+        )),
+        disclaimer_obstacles=compose.free_label_obstacles(
+            label_target, compose.YT_CANVAS, context=label_context,
+            profile=safe_area_spec.EDITOR_FRAME_PROFILE,
+        ),
+        disclaimer_items=[label_item],
         # 退回程式壓字時照實回報成品的模式（2026-09-20）：畫面上的標題確實是 Pillow 畫的，
         # 回 "ai" 會讓前端以為拿到的是 AI 標題版，下一次「只改文字」也會用錯的假設。
         title_mode=(
@@ -9165,6 +9727,13 @@ class YtOverlayResponse(BaseModel):
     height: int
     # 前端顯示「第一標題 9 格／第二標題 12 格」，以及各區塊的矩形（除錯用）
     layout: dict
+    disclaimer_base_image_base64: str = ""
+    disclaimer_kind: str = ""
+    disclaimer_source_text: str = ""
+    disclaimer_provenance_kind: str = ""
+    disclaimer_safe_rect: list[int] = Field(default_factory=list)
+    disclaimer_obstacles: list[dict] = Field(default_factory=list)
+    disclaimer_items: list[dict] = Field(default_factory=list)
 
 
 def _yt_overlay_layout_payload(layout: dict) -> dict:
@@ -9209,6 +9778,17 @@ def editor_yt_overlay(req: YtOverlayRequest) -> YtOverlayResponse:
             main_title=title,
             sub_title=second,
             source_text=req.source_text.strip(),
+            variant=req.variant,
+            logo_corner=req.logo_corner,
+            title_side=req.title_side,
+            source_follow_logo=req.source_follow_logo,
+            source_corner=req.source_corner,
+            live=req.live,
+        )
+        label_base = compose.compose_yt_overlay(
+            main_title=title,
+            sub_title=second,
+            source_text="",
             variant=req.variant,
             logo_corner=req.logo_corner,
             title_side=req.title_side,
@@ -9264,12 +9844,35 @@ def editor_yt_overlay(req: YtOverlayRequest) -> YtOverlayResponse:
         **meta,
     )
     width, height = compose.YT_CANVAS
+    overlay_context = {
+        "title": title, "title_second": second, "title_side": req.title_side,
+        "variant": req.variant, "logo_corner": req.logo_corner,
+        "source_corner": req.source_corner,
+    }
+    overlay_kind = "source" if req.source_text.strip() else ""
+    overlay_item = _default_label_item(
+        target="yt_vstrip", item_id="global", side="global", kind=overlay_kind,
+        source_text=req.source_text.strip(), provenance_kind=overlay_kind,
+        context=overlay_context,
+    )
     return YtOverlayResponse(
         image_base64=base64.b64encode(png).decode("ascii"),
         mime_type="image/png",
         width=width,
         height=height,
         layout=_yt_overlay_layout_payload(layout),
+        disclaimer_base_image_base64=base64.b64encode(label_base).decode("ascii"),
+        disclaimer_kind="source" if req.source_text.strip() else "",
+        disclaimer_source_text=req.source_text.strip(),
+        disclaimer_provenance_kind="source" if req.source_text.strip() else "",
+        disclaimer_safe_rect=list(compose.free_label_safe_rect(
+            "yt_vstrip", compose.YT_CANVAS, profile=safe_area_spec.EDITOR_FRAME_PROFILE,
+        )),
+        disclaimer_obstacles=compose.free_label_obstacles(
+            "yt_vstrip", compose.YT_CANVAS, context=overlay_context,
+            profile=safe_area_spec.EDITOR_FRAME_PROFILE,
+        ),
+        disclaimer_items=[overlay_item],
     )
 
 

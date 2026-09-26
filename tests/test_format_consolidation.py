@@ -162,7 +162,8 @@ class CoverLayoutAutoTests(unittest.TestCase):
 
         def fake_ai(req, date_text, visuals):
             seen["layout"] = req.layout
-            return b"cover", "fake-model", b"", ""
+            # 2026-09-27：多回一張「固定元素完成、尚未貼標籤」的乾淨底圖供拖曳重貼。
+            return b"cover", "fake-model", b"", "", b"label-base"
 
         with patch.object(main, "_editor_cover_full") as full, \
              patch.object(main, "resolve_cover_visuals", return_value=("左景", "右景")), \

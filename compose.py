@@ -511,6 +511,316 @@ def paste_disclaimer_note(
 
 
 # ============================================================
+# 成圖後自由放置：跨版型的純 Pillow 標籤 renderer／幾何守門
+# ============================================================
+
+FREE_LABEL_TARGETS = (
+    "cg", "broadcast", "ten_cover", "yt_news", "yt_hourly",
+    "yt_live24", "yt_hot", "yt_vstrip",
+)
+
+
+def _rects_intersect(a, b) -> bool:
+    return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+
+
+def _free_label_text(target: str, kind: str, source_text: str) -> str:
+    if kind == "ai":
+        if target in ("cg", "broadcast"):
+            return PORTRAIT_DISCLAIMER_TEXT
+        return YT_AI_NOTE if target.startswith("yt_") else COVER_AI_NOTE
+    if kind == "source":
+        text = (source_text or "").strip()
+        if not text:
+            raise ComposeError("畫面來源文字不可空白")
+        # 一般 CG 依 B90 逐字照貼；封面／直標維持各自既有的前綴規則。
+        return text if target in ("cg", "broadcast") else vstrip_source_text(text)
+    if kind == "":
+        return ""
+    raise ComposeError(f"未知的標籤種類：{kind!r}")
+
+
+def _free_label_metrics(target: str, text: str, canvas: tuple[int, int]):
+    width, height = canvas
+    if target in ("cg", "broadcast", "ten_cover"):
+        font = _font(round(height * 0.03))
+        pad = round(height * 0.012)
+        box_h = round(height * 0.03 * 1.6)
+        return font, font.getbbox(text)[2] + pad * 2, box_h, pad
+    if target == "yt_vstrip":
+        font = _font(round(height * VSTRIP_SOURCE_SIZE_RATIO))
+        return font, font.getbbox(text)[2], round(height * VSTRIP_SOURCE_SIZE_RATIO * 1.3), 0
+    # YT 四種封面沿用既有標籤字級與底板高度；自由位置不再因左／右家具縮字，
+    # 碰撞由統一 obstacle 守門負責。長來源名仍沿用既有縮字護欄，避免切換種類後
+    # 因字寬改變而無端失去原本已支援的 40 字上限。
+    if target == "yt_live24":
+        x0 = round(width * LIVE24_BADGE_LEFT_RATIO)
+        max_text_w = round(width * (1 - YT_NOTE_MIN_LEFT_RATIO)) - x0 - 24
+        blocked_by = "右上角的 Logo"
+    else:
+        margin = round(width * YT_MARGIN_RATIO)
+        x1 = width - margin - 12
+        max_text_w = x1 - round(width * YT_NOTE_MIN_LEFT_RATIO) - 24
+        blocked_by = "左上角的 LIVE 章與日期"
+    font, text_w = _fit_note_font(text, max_text_w, blocked_by)
+    return font, text_w + 24, round(height * YT_AI_NOTE_SIZE_RATIO * 1.5), 12
+
+
+def free_label_safe_rect(
+    target: str, canvas: tuple[int, int], *, profile: str = safe_area_spec.EDITOR_FRAME_PROFILE,
+    side: str = "global",
+) -> tuple[int, int, int, int]:
+    """回傳該枚標籤可用的安全框；十點 split 的左右標籤各自限制在自己的半版。"""
+    rect = safe_area_spec.safe_rect(*canvas, profile)
+    if target == "ten_cover" and side in ("left", "right"):
+        x0, y0, x1, y1 = rect
+        mid = canvas[0] // 2
+        return (x0, y0, min(x1, mid), y1) if side == "left" else (max(x0, mid), y0, x1, y1)
+    return rect
+
+
+def _free_label_default_box(
+    target: str, text: str, canvas: tuple[int, int], *, profile: str, side: str,
+    context: dict,
+) -> tuple[int, int, int, int]:
+    _, box_w, box_h, _ = _free_label_metrics(target, text, canvas)
+    width, height = canvas
+    if target in ("cg", "broadcast"):
+        corner = str(context.get("corner") or "lower_right")
+        if target == "broadcast" and str(context.get("hole_side") or "") in BROADCAST_SIDES:
+            # 影片洞（連同白框）是硬障礙；預設標籤移到相反半邊，保留原本上下方向。
+            vertical = "upper" if corner.startswith("upper") else "lower"
+            horizontal = "right" if context["hole_side"] == "left" else "left"
+            corner = f"{vertical}_{horizontal}"
+        return _disclaimer_box(canvas, corner, profile, box_w, box_h)
+    if target == "ten_cover":
+        top = round(height * COVER_HEADER_RATIO) + round(height * 0.025)
+        left = COVER_MARGIN if side != "right" else width - COVER_MARGIN - box_w
+        return left, top, left + box_w, top + box_h
+    if target == "yt_live24":
+        badge_w = round(width * LIVE24_BADGE_WIDTH_RATIO)
+        with Image.open(LIVE24_BADGE) as badge:
+            badge_h = round(badge.height * badge_w / badge.width)
+        left = round(width * LIVE24_BADGE_LEFT_RATIO)
+        top = round(height * LIVE24_BADGE_TOP_RATIO) + badge_h + 16
+        return left, top, left + box_w, top + box_h
+    if target == "yt_hourly":
+        top = round(height * YT_HOURLY_AI_NOTE_TOP_RATIO)
+    elif target == "yt_vstrip":
+        layout = yt_vertical_layout(
+            main_title=str(context.get("title") or "示意"),
+            sub_title=str(context.get("title_second") or ""),
+            title_side=str(context.get("title_side") or "left"),
+            variant=str(context.get("variant") or "normal"),
+            logo_corner=str(context.get("logo_corner") or "tr"),
+            source_text=text,
+            source_corner=str(context.get("source_corner") or "tl"),
+        )
+        return tuple(layout["source"])
+    else:
+        top = round(height * YT_AI_NOTE_TOP_RATIO)
+    right = width - round(width * YT_MARGIN_RATIO) - 12
+    return right - box_w, top, right, top + box_h
+
+
+def free_label_box(
+    target: str, kind: str, source_text: str, canvas: tuple[int, int], *,
+    position: tuple[float, float] | None = None,
+    profile: str = safe_area_spec.EDITOR_FRAME_PROFILE,
+    side: str = "global", context: dict | None = None,
+) -> tuple[int, int, int, int] | None:
+    """把 normalized 中心點換成實際 bbox；position=None 沿用版型預設位置。
+
+    播出鏡面是唯一例外：預設會移到影片洞相反側，因影片區／白框已升格為硬障礙。
+    """
+    if target not in FREE_LABEL_TARGETS:
+        raise ComposeError(f"未知的標籤版型：{target!r}")
+    text = _free_label_text(target, kind, source_text)
+    if not text:
+        return None
+    context = context or {}
+    if position is None:
+        return _free_label_default_box(
+            target, text, canvas, profile=profile, side=side, context=context,
+        )
+    x, y = position
+    if not (0 <= x <= 1 and 0 <= y <= 1):
+        raise ComposeError("標籤座標必須介於 0 與 1")
+    _, box_w, box_h, _ = _free_label_metrics(target, text, canvas)
+    cx, cy = round(x * canvas[0]), round(y * canvas[1])
+    left, top = cx - box_w // 2, cy - box_h // 2
+    return left, top, left + box_w, top + box_h
+
+
+def free_label_obstacles(
+    target: str, canvas: tuple[int, int], *, context: dict | None = None,
+    profile: str = safe_area_spec.EDITOR_FRAME_PROFILE,
+) -> list[dict]:
+    """輸出各版型不可碰的固定元素；bbox 一律是成品像素座標。"""
+    context = context or {}
+    width, height = canvas
+    boxes: list[dict] = []
+    if target in ("cg", "broadcast"):
+        side = str(context.get("hole_side") or "")
+        if side in BROADCAST_SIDES:
+            boxes.append({"name": "影片區／白框", "bbox": broadcast_hole_rect(canvas, side, profile)})
+        return boxes
+    if target == "ten_cover":
+        boxes.append({"name": "Logo／日期／節目標題帶", "bbox": (0, 0, width, round(height * COVER_HEADER_RATIO))})
+        # Pillow 標題固定在下半部；用保守區域避免來源標籤壓字。
+        boxes.append({"name": "封面標題", "bbox": (0, round(height * 0.56), width, height)})
+        return boxes
+    if target.startswith("yt_") and target != "yt_vstrip":
+        layout = target.removeprefix("yt_")
+        for box in yt_cover_protect_boxes(
+            layout,
+            original_audio=bool(context.get("original_audio")),
+            ai_translation=bool(context.get("ai_translation")),
+            ai_note=False,
+            protect_date_tab=bool(context.get("draw_date", True)),
+        ):
+            boxes.append({"name": "Logo／LIVE／日期", "bbox": box})
+        boxes.append({"name": "程式標題帶", "bbox": (0, round(height * 0.64), width, height)})
+        return boxes
+    if target == "yt_vstrip":
+        layout = yt_vertical_layout(
+            main_title=str(context.get("title") or "示意"),
+            sub_title=str(context.get("title_second") or ""),
+            title_side=str(context.get("title_side") or "left"),
+            variant=str(context.get("variant") or "normal"),
+            logo_corner=str(context.get("logo_corner") or "tr"),
+            source_text="",
+            source_corner=str(context.get("source_corner") or "tl"),
+        )
+        for key, name in (("box", "程式標題帶"), ("logo", "Logo"), ("live", "LIVE"), ("label", "小標")):
+            box = tuple(layout[key])
+            if box[2] > box[0] and box[3] > box[1]:
+                boxes.append({"name": name, "bbox": box})
+    return boxes
+
+
+def nearest_legal_free_label_position(
+    target: str, kind: str, source_text: str, canvas: tuple[int, int],
+    position: tuple[float, float], *,
+    profile: str = safe_area_spec.EDITOR_FRAME_PROFILE,
+    side: str = "global", context: dict | None = None,
+) -> tuple[tuple[float, float], bool]:
+    """把中心點移到距離原點最近的合法位置；回傳 (position, 是否移動)。
+
+    障礙與安全框都是軸對齊矩形。最近的合法點若不是原點本身，就必定位在安全框或
+    某個障礙的邊界上；因此只需檢查原點投影及所有邊界的笛卡兒積，不必用粗網格猜。
+    """
+    context = context or {}
+    bbox = free_label_box(
+        target, kind, source_text, canvas, position=position,
+        profile=profile, side=side, context=context,
+    )
+    if bbox is None:
+        return position, False
+
+    width, height = canvas
+    box_w, box_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    left_half, right_half = box_w // 2, box_w - box_w // 2
+    top_half, bottom_half = box_h // 2, box_h - box_h // 2
+    safe = free_label_safe_rect(target, canvas, profile=profile, side=side)
+    min_x, max_x = safe[0] + left_half, safe[2] - right_half
+    min_y, max_y = safe[1] + top_half, safe[3] - bottom_half
+    if min_x > max_x or min_y > max_y:
+        raise ComposeError("標籤尺寸大於可用安全區")
+
+    wanted_x, wanted_y = position[0] * width, position[1] * height
+    clamped_x = max(min_x, min(max_x, wanted_x))
+    clamped_y = max(min_y, min(max_y, wanted_y))
+    xs = {clamped_x, float(min_x), float(max_x)}
+    ys = {clamped_y, float(min_y), float(max_y)}
+    for obstacle in free_label_obstacles(target, canvas, context=context, profile=profile):
+        ox0, oy0, ox1, oy1 = obstacle["bbox"]
+        for edge in (ox0 - right_half, ox1 + left_half):
+            for offset in (-1, 0, 1):
+                xs.add(float(max(min_x, min(max_x, edge + offset))))
+        for edge in (oy0 - bottom_half, oy1 + top_half):
+            for offset in (-1, 0, 1):
+                ys.add(float(max(min_y, min(max_y, edge + offset))))
+
+    candidates: list[tuple[float, float, tuple[float, float]]] = []
+    for center_x in xs:
+        for center_y in ys:
+            candidate = (center_x / width, center_y / height)
+            candidate_box = free_label_box(
+                target, kind, source_text, canvas, position=candidate,
+                profile=profile, side=side, context=context,
+            )
+            try:
+                validate_free_label_box(
+                    candidate_box, target=target, canvas=canvas, profile=profile,
+                    side=side, context=context,
+                )
+            except ComposeError:
+                continue
+            distance = (center_x - wanted_x) ** 2 + (center_y - wanted_y) ** 2
+            candidates.append((distance, abs(center_y - wanted_y), candidate))
+    if not candidates:
+        raise ComposeError("找不到不碰固定元素的標籤位置")
+    candidate = min(candidates, key=lambda item: (item[0], item[1], item[2][0], item[2][1]))[2]
+    moved = abs(candidate[0] - position[0]) > 1e-9 or abs(candidate[1] - position[1]) > 1e-9
+    return candidate, moved
+
+
+def validate_free_label_box(
+    bbox: tuple[int, int, int, int] | None, *, target: str,
+    canvas: tuple[int, int], profile: str, side: str = "global", context: dict | None = None,
+) -> list[dict]:
+    if bbox is None:
+        return []
+    safe = free_label_safe_rect(target, canvas, profile=profile, side=side)
+    if bbox[0] < safe[0] or bbox[1] < safe[1] or bbox[2] > safe[2] or bbox[3] > safe[3]:
+        raise ComposeError(f"標籤超出安全框：bbox={bbox}，safe_rect={safe}")
+    hits = [item for item in free_label_obstacles(target, canvas, context=context, profile=profile)
+            if _rects_intersect(bbox, tuple(item["bbox"]))]
+    if hits:
+        names = "、".join(dict.fromkeys(item["name"] for item in hits))
+        raise ComposeError(f"標籤碰到固定元素：{names}")
+    return hits
+
+
+def paste_free_label(
+    image_bytes: bytes, *, target: str, kind: str, source_text: str = "",
+    position: tuple[float, float] | None = None,
+    profile: str = safe_area_spec.EDITOR_FRAME_PROFILE,
+    side: str = "global", context: dict | None = None,
+) -> tuple[bytes, tuple[int, int, int, int] | None]:
+    """在乾淨成品上貼一枚標籤；不含任何生成／文字模型呼叫。"""
+    with Image.open(io.BytesIO(image_bytes)) as opened:
+        canvas = opened.convert("RGBA")
+    text = _free_label_text(target, kind, source_text)
+    bbox = free_label_box(
+        target, kind, source_text, canvas.size, position=position,
+        profile=profile, side=side, context=context,
+    )
+    validate_free_label_box(
+        bbox, target=target, canvas=canvas.size, profile=profile, side=side, context=context,
+    )
+    if bbox is not None:
+        font, _, _, pad = _free_label_metrics(target, text, canvas.size)
+        if target == "yt_vstrip":
+            _draw_text(ImageDraw.Draw(canvas), (bbox[0], bbox[1]), text, font,
+                       fill=(255, 255, 255), stroke=YT_TITLE_STROKE,
+                       stroke_width=max(3, round(canvas.size[1] * 0.004)), anchor="la")
+        else:
+            plate = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+            radius = 6 if target in ("cg", "broadcast", "ten_cover") else 8
+            fill = PORTRAIT_DISCLAIMER_PLATE_FILL if target in ("cg", "broadcast", "ten_cover") else YT_AI_NOTE_PLATE
+            ImageDraw.Draw(plate).rounded_rectangle(bbox, radius=radius, fill=fill)
+            canvas.alpha_composite(plate)
+            _draw_text(ImageDraw.Draw(canvas), ((bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2),
+                       text, font, stroke_width=0, anchor="mm")
+    output = io.BytesIO()
+    # 直標需要保留透明背景；其他版型維持既有 RGB PNG。
+    (canvas if target == "yt_vstrip" else canvas.convert("RGB")).save(output, format="PNG")
+    return output.getvalue(), bbox
+
+
+# ============================================================
 # 版型 B：十點不一樣封面圖（左右兩張 AI 底圖＋程式畫的固定元素）
 # ============================================================
 
@@ -1528,6 +1838,7 @@ def compose_ten_cover(
     prebuilt_split: bool = False,
     left_source_text: str = "",
     right_source_text: str = "",
+    draw_disclaimers: bool = True,
 ) -> bytes:
     """合成「十點不一樣」封面圖（2026-09-06 斜切全幅版）。
 
@@ -1577,20 +1888,21 @@ def compose_ten_cover(
     band_h = _draw_cover_header(draw, canvas, date_text, badge)
 
     note_y = band_h + round(height * 0.025)
-    if left_is_ai:
-        _draw_cover_ai_note(canvas, COVER_MARGIN, note_y, align_right=False)
-    elif left_source_text.strip():
-        _draw_cover_ai_note(
-            canvas, COVER_MARGIN, note_y, align_right=False,
-            text=vstrip_source_text(left_source_text),
-        )
-    if right_is_ai:
-        _draw_cover_ai_note(canvas, width - COVER_MARGIN, note_y, align_right=True)
-    elif right_source_text.strip():
-        _draw_cover_ai_note(
-            canvas, width - COVER_MARGIN, note_y, align_right=True,
-            text=vstrip_source_text(right_source_text),
-        )
+    if draw_disclaimers:
+        if left_is_ai:
+            _draw_cover_ai_note(canvas, COVER_MARGIN, note_y, align_right=False)
+        elif left_source_text.strip():
+            _draw_cover_ai_note(
+                canvas, COVER_MARGIN, note_y, align_right=False,
+                text=vstrip_source_text(left_source_text),
+            )
+        if right_is_ai:
+            _draw_cover_ai_note(canvas, width - COVER_MARGIN, note_y, align_right=True)
+        elif right_source_text.strip():
+            _draw_cover_ai_note(
+                canvas, width - COVER_MARGIN, note_y, align_right=True,
+                text=vstrip_source_text(right_source_text),
+            )
 
     _draw_cover_bottom_line(canvas)
     if right_image is None and not prebuilt_split and not title_right.strip():
