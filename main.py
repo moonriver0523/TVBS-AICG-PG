@@ -2252,10 +2252,29 @@ _title_layer_blocked: contextvars.ContextVar[list[bytes]] = contextvars.ContextV
     "title_layer_blocked", default=[]
 )
 
+# B109（2026-09-26 使用者裁決）：AI 標題出問題時，只有畫面描述無法還原模型實際
+# 收到的完整 prompt。用 request-local ContextVar 從組 prompt 的深層函式帶回端點，
+# 不改既有回傳 tuple／API response；只供成功稽核歸檔使用。
+_cover_image_prompt: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "cover_image_prompt", default=""
+)
+
 
 def reset_title_layer_diags() -> None:
     _title_layer_diags.set([])
     _title_layer_blocked.set([])
+
+
+def reset_cover_image_prompt() -> None:
+    _cover_image_prompt.set("")
+
+
+def _record_cover_image_prompt(prompt: str) -> None:
+    _cover_image_prompt.set(prompt)
+
+
+def collected_cover_image_prompt() -> str:
+    return _cover_image_prompt.get()
 
 
 def _record_title_layer_diag(
@@ -6623,26 +6642,19 @@ def segment_titles_for_breaks(segments: list[str]) -> dict[str, list[str]]:
     return out
 
 
-def apply_title_break_hints(*titles: str, composite: bool = True) -> None:
+def apply_title_break_hints(*titles: str) -> None:
     """封面端點入口呼叫：切詞組並登記給 compose；沒有要切的段就一次模型都不打。
 
-    composite（B75，2026-09-16 使用者裁決「這個也要列入，跟 Gemini 一起修」）：
-    False ＝ AI 標題模式，**整張封面連標題都由生圖模型畫，compose 不壓字**
-    （YT 那邊是 `draw_title(s)=not ai_title`、十點是 `_cover_ai` 只補貼 Logo 與標籤）。
-    那種情況下斷句算出來的詞組邊界**一個字都不會被讀到**，打了純粹是白花錢與時間。
-
-    為什麼是新參數而不是在函式裡自己判斷：標題模式是端點層的決定（兩個端點各自
-    呼叫 `title_mode_for_creativity`），這裡看不到 req，硬要看就得把兩種 request
-    型別的知識拉進來。參數預設 True，舊呼叫端行為逐字元不變。
+    B109（2026-09-26 使用者裁決）撤回 B75 的 AI 模式守衛：十點與 YT（live24
+    除外）的 AI 生圖 prompt 都會先由程式算好最終列，`compose.cover_title_lines()`／
+    `fallback_split_title()` 會讀詞組邊界，所以 AI 模式也必須切。是否屬於會使用
+    預切列的版型，由端點呼叫處判斷。
 
     ⚠ 無論走哪條路都**先把 hints 清空**：ContextVar 雖然是每個請求各自一份
     （見 compose 的 `_BREAK_HINTS` 註解），但「跳過就不設」會讓這個不變式
     依賴外部行為，清一次的成本是零。
     """
     compose.set_break_hints({})
-    if not composite:
-        print("[title-break] AI 標題模式，斷句結果沒人會讀，跳過不打模型", flush=True)
-        return
     inputs = title_break_inputs(*titles)
     if inputs:
         compose.set_break_hints(segment_titles_for_breaks(inputs))
@@ -7036,6 +7048,9 @@ def _cover_ai(
     else:
         print("[cover:ai-over-base] 程式底圖當唯一附圖，模型只畫標題", flush=True)
         image_req = apply_user_references_to_image_request(image_req)
+    # generate_image_raw 會在真正送 provider 前強制補上共用 final baseline；稽核記的
+    # 必須是補完後的實際 prompt，而不是呼叫端手上的前一版。
+    _record_cover_image_prompt(ensure_final_image_baseline(image_req.prompt))
     result = generate_image_raw(image_req)
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
     raw = base64.b64decode(result.image_data_base64)
@@ -7068,13 +7083,8 @@ def _cover_ai(
                 + compose.format_title_layer_diagnostics(title_layer_diag)
             )
             _record_title_layer_diag(title_layer_diag, title_layer_raw, creativity=level)
-            # 斷句補打（2026-09-21 獨立複查第三輪）：端點入口的 apply_title_break_hints
-            # 帶的是 composite=False（B75：AI 標題模式下 compose 不壓字，斷句沒人讀），
-            # 所以走到這裡時**詞組邊界是空的**。現在這條路真的要用 Pillow 壓字了，
-            # 不補打的話 compose._split_line_near_middle 只能按規則硬切，會把詞腰斬
-            # （sol 的例子：「全球半導體供應鏈重新洗牌」切成「全球半導體供／應鏈重新洗牌」）。
-            # 只在真的退回時才打這一次文字模型，正常路徑不受影響。
-            apply_title_break_hints(req.title_left, req.title_right, composite=True)
+            # B109（2026-09-26）：AI 模式入口也已登記詞組邊界；fallback 直接沿用，
+            # 不再補打第二次斷句模型。
             cover = compose.compose_ten_cover(
                 base, None,
                 title_left=req.title_left.strip(), title_right="",
@@ -7472,7 +7482,12 @@ def editor_cover_titles(req: CoverTitleDigestRequest) -> CoverTitleDigestRespons
 
     def _logged(result: CoverTitleDigestResponse) -> CoverTitleDigestResponse:
         meta = _outcome_meta(started, image_model="")
-        variable = result.title or result.title_left
+        # B109：雙切右標題／hourly 第二題也是消化輸出的正式內容，稽核不能只留第一題。
+        variable = "\n".join(filter(None, (
+            result.title_left, result.title_right,
+        ))) or "\n".join(filter(None, (
+            result.title, result.title_second,
+        )))
         request_log.log_generation(
             request_id=request_id, source="cover-titles", news_text=news_text,
             variable=variable, type_label=req.target,
@@ -7693,6 +7708,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         digest_model=meta["digest_model"],
         **portrait_fields,
     )
+    final_lines = "\n".join(compose.cover_title_lines(req.title_left.strip(), full_width=True))
     _archive_generation(
         request_id=request_id,
         image_base64=base64.b64encode(cover).decode("ascii"),
@@ -7701,8 +7717,9 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         seed=req.seed,
         type_label=f"{COVER_TYPE_LABEL_TEN}（滿版）",
         news_text=req.title_left,
-        variable=req.title_left,
-        prompt=f"FULL: {visual}",
+        variable=final_lines if req.mode == editor_formats.COVER_MODE_AI else req.title_left,
+        prompt=(collected_cover_image_prompt() if req.mode == editor_formats.COVER_MODE_AI
+                else f"FULL: {visual}"),
         role="編輯",
         # B55 診斷（2026-09-21）：同 YT 封面，見 _title_layer_archive_fields。
         **_title_layer_archive_fields(),
@@ -7741,6 +7758,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
 )
 def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     reset_portrait_notices()
+    reset_cover_image_prompt()
     if req.badge not in compose.COVER_BADGES:
         _abort_generation(
             HTTPException(
@@ -7799,13 +7817,9 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
             provider=req.provider,
             type_label=COVER_TYPE_LABEL_TEN,
         )
-    # 斷句交給消化模型（2026-09-14）：入口登記詞組邊界，下游所有斷行都只在邊界上切。
-    # B75（2026-09-16）：AI 標題模式下整張封面連標題都由生圖模型畫、compose 不壓字，
-    # 斷句結果一個字都不會被讀到——所以只有 composite 才打。resolved_mode 在上面就算好了。
-    apply_title_break_hints(
-        req.title_left, req.title_right,
-        composite=resolved_mode == editor_formats.YT_COVER_TITLE_MODE_COMPOSITE,
-    )
+    # B109（2026-09-26 使用者裁決）：AI prompt 也寫入程式預切的最終列，因此與
+    # composite 共用 B108 詞組邊界；撤回 B75 的 AI 模式跳過守衛。
+    apply_title_break_hints(req.title_left, req.title_right)
     if req.layout == "full":
         full_result = _editor_cover_full(req, date_text)
         notices = collected_portrait_notices()
@@ -7912,6 +7926,10 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         digest_model=meta["digest_model"],
         **portrait_fields,
     )
+    final_lines = "\n\n".join((
+        "\n".join(compose.cover_title_lines(req.title_left.strip(), full_width=False)),
+        "\n".join(compose.cover_title_lines(req.title_right.strip(), full_width=False)),
+    ))
     _archive_generation(
         request_id=request_id,
         image_base64=base64.b64encode(cover).decode("ascii"),
@@ -7920,8 +7938,10 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         seed=req.seed,
         type_label=f"{COVER_TYPE_LABEL_TEN}（雙切）",
         news_text=f"{req.title_left} ｜ {req.title_right}",
-        variable=f"{req.title_left}\n{req.title_right}",
-        prompt=log_prompt,
+        variable=(final_lines if req.mode == editor_formats.COVER_MODE_AI
+                  else f"{req.title_left}\n{req.title_right}"),
+        prompt=(collected_cover_image_prompt() if req.mode == editor_formats.COVER_MODE_AI
+                else log_prompt),
         role="編輯",
         **portrait_fields,
         **meta,
@@ -8505,6 +8525,7 @@ def _yt_cover_full_image(
     image_req = apply_user_references_to_image_request(image_req)
     if base is None:
         image_req = _yt_cover_apply_slot_placement(req, image_req)
+    _record_cover_image_prompt(ensure_final_image_baseline(image_req.prompt))
     result = generate_image_raw(image_req)
     verify_output_aspect_ratio(result, image_req.aspect_ratio)
     return base64.b64decode(result.image_data_base64), result.mime_type, result.model
@@ -8662,6 +8683,7 @@ def yt_dual_background(
 )
 def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     reset_portrait_notices()
+    reset_cover_image_prompt()
     # F0：seed 在入口定一次。取代舊的 seed=f"{title}|{date}"——那種 seed 綁在內容上，
     # 標題與日期沒改就永遠同一種長相，使用者按「重新生成」拿到的是同一張。
     if req.seed is None:
@@ -8688,14 +8710,13 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     if not dual:
         # 單則整版原圖放置最多 4 張（2026-09-14），擋在下面的斷句模型之前
         reject_excess_asis(req.slot_refs(0) + req.slot_refs(1) + req.reference_images, where="單則", limit=caps.asis_max)
-    # 斷句交給消化模型（2026-09-14）：live24 單行不拆，不必打。
-    # B75（2026-09-16）：AI 標題模式下 compose 不壓字（下面的 draw_title(s)=not ai_title），
-    # 斷句結果沒人讀，只有 composite 才打。
-    if not live24:
-        apply_title_break_hints(
-            req.title, req.title_second,
-            composite=resolved_mode == editor_formats.YT_COVER_TITLE_MODE_COMPOSITE,
-        )
+    # B109（2026-09-26）：news／hourly 單題／hot 的 AI prompt 會寫入預切 line1/line2，
+    # 所以也要 B108 詞組邊界。hourly 雙題每題本來就是一整列，AI 模式不需另切；
+    # live24 固定單行，維持不打斷句模型。composite 行為維持原樣。
+    if not live24 and (
+        resolved_mode == editor_formats.YT_COVER_TITLE_MODE_COMPOSITE or not dual
+    ):
+        apply_title_break_hints(req.title, req.title_second)
     if not dual and req.uses_asis_slots():
         # 單則只有一格，附圖位裡的東西就是整版那一格的：整份清單併進共用清單，
         # 下游 1 張＝整版鋪滿那條路完全不用改。雙則不走這裡——它要保留左右格身分，
@@ -8912,11 +8933,8 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                         background, ai_title = base, False
                         image_model = f"{image_model}＋yt-cover:title-layer-fallback"
                         title_layer_fallback = True
-                        # 斷句補打，理由同 _cover_ai 的 fallback（2026-09-21 複查第三輪）：
-                        # 入口是用 composite=False 進來的，詞組邊界空的，現在要壓字了。
-                        # live24 單行不拆，本來就不打。
-                        if not live24:
-                            apply_title_break_hints(req.title, req.title_second, composite=True)
+                        # B109：非 live24 的 AI 路徑入口已完成斷句，fallback 直接沿用，
+                        # 不再重複呼叫斷句模型。
                 else:
                     background = compose.restore_yt_cover_photo(
                         base, background, layout=req.layout,
@@ -9048,7 +9066,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         type_label=type_label,
         news_text=log_title,
         variable="\n".join(filter(None, [lines[0], lines[1]])),
-        prompt=log_prompt,
+        prompt=(collected_cover_image_prompt() if ai_title else log_prompt),
         role="編輯",
         portrait_subject="、".join(subjects),
         # B55 診斷（2026-09-21）：量到的數字進 JSON，被擋下的那張原始圖層另存一個
