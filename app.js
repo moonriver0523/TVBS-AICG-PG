@@ -347,6 +347,10 @@ let state = {
     // 同順序的英文原名，生圖時一併送給後端當查圖備援：
     // 臺灣譯名常常不是中文維基的條目名（2026-08-18）
     portraitSubjectsEn: [],
+    // D22：最近一次**成功消化**回應所屬的畫面用摘要與原文版本。生圖只讀這份快照，
+    // 不在送出當下重讀 aiInput；因此改了原文但沒重消化時，不會把新原文和舊摘要混用。
+    digestVisualContext: '',
+    digestVisualContextSource: '',
     // 最終 Prompt 的類型標籤聽誰的：'digest'（第一頁自動生成）或 'library'（第二頁調版型）
     // 由「最後一次動作」決定
     promptTypeSource: 'library',
@@ -2488,8 +2492,22 @@ function noteChartTypeOverride(data) {
     showToast(`依指令欄改用「${label}」版面`);
 }
 
-function applyDigestToForm(data) {
+function rememberDigestVisualContext(data, sourceText, density) {
+    const value = data && typeof data.visual_context === 'string'
+        ? data.visual_context.trim()
+        : '';
+    // 第一版不改字硬關閉；後端也會清空，這裡是 client boundary 的第二道保險。
+    state.digestVisualContext = density === 'verbatim' ? '' : value;
+    state.digestVisualContextSource = String(sourceText || '');
+}
+
+function visualContextPayload() {
+    return {visual_context: state.digestVisualContext || ''};
+}
+
+function applyDigestToForm(data, sourceText = '', density = state.digestDensity) {
     rememberSeed('cgSeed', data);
+    rememberDigestVisualContext(data, sourceText, density);
     state.mapPoints = Array.isArray(data.map_points) ? data.map_points : [];
     // 地圖類：查不到座標的地名要講出來（2026-09-08）。不足 2 點時後端不做真實底圖，
     // 以前畫面完全沒提示，使用者重打六次都拿到一樣的結果。
@@ -3591,8 +3609,9 @@ async function handleOneClickGenerate() {
         hideGenerateErrorBanner();
         showToast("消化中…");
         beginGenerationProgress("digest");
+        const digestDensity = state.digestDensity;
         const digest = await digestNewsText(input);
-        applyDigestToForm(digest);
+        applyDigestToForm(digest, input, digestDensity);
         showGenerateNoticeBanner(digest.notices);
         const variable = (digest.variable || "").replace(SYSTEM_DISCLAIMER, "").trim();
         const prompt = buildPrompt({
@@ -3620,6 +3639,7 @@ async function handleOneClickGenerate() {
             headers: _apiHeaders(),
             body: JSON.stringify({
                 prompt,
+                ...visualContextPayload(),
                 provider: effectiveImageProvider(),
                 aspect_ratio: currentAspectRatio(),
                 image_size: state.imageSize,
@@ -3751,6 +3771,9 @@ async function handleImageGeneration() {
             headers: _apiHeaders(),
             body: JSON.stringify({
                 prompt,
+                // 即使第二／三頁手動改過 prompt，仍帶最近一次成功消化的同版摘要；
+                // prompt 編修是版面指令調整，不代表新聞背景版本改變。
+                ...visualContextPayload(),
                 provider,
                 aspect_ratio: currentAspectRatio(),
                 image_size: state.imageSize,

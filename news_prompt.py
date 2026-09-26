@@ -781,6 +781,41 @@ def localise_disclaimer_position(prompt: str, corner: str, *, stamping: bool) ->
     return text
 
 
+# D22 畫面用摘要。ownership 只在後端 generate_image_raw()：前端明送獨立欄位，
+# 這裡負責建立唯一的 prompt 區塊。空值逐位元 no-op；marker 讓 retry／誤重入冪等。
+VISUAL_CONTEXT_MARKER = "=== VISUAL CONTEXT (BACKGROUND UNDERSTANDING ONLY) ==="
+
+
+def append_visual_context(prompt: str, visual_context: str) -> str:
+    """把畫面用摘要附在最終硬規則之前；空值與已注入 prompt 原樣回傳。"""
+    context = (visual_context or "").strip()
+    if not context or VISUAL_CONTEXT_MARKER in (prompt or ""):
+        return prompt
+
+    block = f"""==================================================
+{VISUAL_CONTEXT_MARKER}
+==================================================
+以下「畫面用摘要」僅供理解新聞背景與消歧，不得把其中任何文字畫進圖中。
+Do not copy, quote, typeset, label, caption, or otherwise render any wording, names, numbers, logos or source text from this block. Use it only to understand the people, places, event, objects and scene described elsewhere in the approved image prompt.
+
+{context}"""
+
+    original = prompt or ""
+    marker_at = original.find(FINAL_IMAGE_BASELINE_MARKER)
+    if marker_at < 0:
+        stripped = original.rstrip()
+        return f"{stripped}\n\n{block}" if stripped else block
+
+    # 防禦既有 caller 已先附 baseline 的情況：仍把 context 插到整個最終硬規則區塊前，
+    # 不能讓背景材料跑到 FINAL IMAGE POLICY BASELINE 後面變成最後一句。
+    baseline_at = original.rfind("==================================================", 0, marker_at)
+    if baseline_at < 0:
+        baseline_at = marker_at
+    before = original[:baseline_at].rstrip()
+    after = original[baseline_at:].lstrip()
+    return f"{before}\n\n{block}\n\n{after}" if before else f"{block}\n\n{after}"
+
+
 # 全路徑最終生圖鐵律（B61／B62，2026-09-16）。ownership 只在後端：
 # generate_image_raw() 在 provider dispatch 正前方冪等注入一次。
 # 不要同步到 app.js／hybrid.js——新版型漏帶這段必須是紅燈，不是再複製一份。

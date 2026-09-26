@@ -66,6 +66,7 @@ import safe_content_gate
 import safe_frame
 from input_filter import check_input, note_accepted
 from news_prompt import (
+    append_visual_context,
     broadcast_hole_layout_rules,
     localise_disclaimer_position,
     MAP_TYPE_LABEL,
@@ -1022,6 +1023,9 @@ class GenerateResponse(BaseModel):
     style: str
     structure: str
     variable: str
+    # D22：只供下一段生圖理解人物、地點、事件、物件、場景與消歧；不是畫面文字。
+    # 不改字模式第一版固定為空，品質不合格也只降級為空，不拖累整次消化。
+    visual_context: str = ""
     # 這次實際採用的圖表類型（自動判斷模式下為 AI 所選）
     chart_type: str = ""
     # 版面會畫出臉孔的每一位具名真實人物，全部列進來（沒有就空陣列）。
@@ -1161,6 +1165,9 @@ def reject_excess_asis(
 
 class ImageGenerateRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=20_000)
+    # D22：與該次消化綁定的「畫面用摘要」。transport 留 4,000 字防線；正常的
+    # digest 輸出會在 400 字內。空字串是完整相容路徑，append_visual_context no-op。
+    visual_context: str = Field(default="", max_length=4_000)
     provider: Literal["gemini", "gpt"] = "gemini"
     aspect_ratio: str = "16:9"
     image_size: str = "1K"
@@ -1282,6 +1289,7 @@ DIGEST_OUTPUT_SCHEMA = {
         "style": {"type": "string"},
         "structure": {"type": "string"},
         "variable": {"type": "string"},
+        "visual_context": {"type": "string"},
         # 回報這次實際採用的圖表類型；自動判斷模式下前端用它顯示 AI 選了什麼
         "chart_type": {"type": "string", "enum": CHART_TYPE_CHOICES},
         # 版面會畫出臉孔的具名真實人物，全部列出；其餘一律空陣列
@@ -1296,6 +1304,7 @@ DIGEST_OUTPUT_SCHEMA = {
         "style",
         "structure",
         "variable",
+        "visual_context",
         "chart_type",
         "portrait_subjects",
         "portrait_subjects_en",
@@ -1468,7 +1477,7 @@ SYSTEM_PROMPT_TEMPLATE = """You are an elite broadcast news graphics director fo
 The current chart type is: "{type_label}".
 Digest the raw news text and organize it into a structured infographic specification suited to this chart type.
 
-Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style, structure, variable.
+Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style, structure, variable, visual_context.
 
 Requirements:
 1. "variable": Extract key points. Format using [標題], [內文小標], <強調文字>.
@@ -1479,13 +1488,14 @@ Requirements:
 3. "structure": Design the most readable, intuitive layout for a "{type_label}".
    - Propose concrete spatial arrangement and add instructions for relevant icons, technical illustrations, 3D diagrams, maps, or scene depictions that aid comprehension.
    - Written in professional English.
+4. "visual_context": In at most 400 Traditional Chinese characters (short source → shorter summary; never pad), describe only visually relevant people, places, events, objects, scenes and disambiguation from the source material. This is background context for a later image model, not wording to render. Do NOT include any title, sentence, quotation, number, logo, organisation/agency/source text, or other wording that should appear in the image.
 {layout_rule}"""
 
 
 # 編輯版：規範取自編輯台實戰 GEM「整理小幫手」（見 editor-templates/PROMPTS.md）
 EDITOR_SYSTEM_PROMPT_TEMPLATE = """你是一名專業的「新聞編播重點分析師」。你的任務是從繁雜的記者文稿、節目逐字稿或數據資訊中，去蕪存菁，提煉出最適合電視新聞主播解說的「鏡面 CG 文案」（圖表類型：{type_label}）。
 
-Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style, structure, variable.
+Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style, structure, variable, visual_context.
 
 1. "variable"（鏡面 CG 文案，必須嚴格遵守）:
    - 台灣繁體中文。總字數嚴禁超過 150-180 個字。寫作難度預設為高中程度，專業但不艱澀。
@@ -1501,6 +1511,7 @@ Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style
      "[標題] 聯準會三度降息\\n利率降至<4.25%>\\n[內文小標] 通膨降溫 就業穩健\\n[內文小標] 市場預期 明年再降<兩次>\\n[內文小標] 道瓊應聲<上漲350點>\\n<蓋章> 降息循環正式啟動"
 2. "style": 根據新聞調性（財經、災難、溫馨、政治）自行選擇最合適的主色調與畫面風格，written in professional English.
 3. "structure": Design the most readable anchor-wall CG layout for a "{type_label}", with concrete spatial arrangement and instructions for flat icons or 3D data charts that aid comprehension. Written in professional English.
+4. "visual_context"（畫面用摘要）: 以最多 400 個繁體中文字（原文短就寫短，不要湊字），只描述原文中的人物、地點、事件、物件、場景與消歧資訊。這是供下一段生圖模型理解背景的資料，不是要畫出的文案；嚴禁包含任何要畫出的標題、句子、引言、數字、Logo、機構／媒體／來源文字。
 {layout_rule}"""
 
 
@@ -2777,6 +2788,48 @@ DIGEST_CHANNEL_LEAK = re.compile(
     r"assistant\s+to\s*=|to=(?:assistant|system|final)\b|numerusform",
     re.IGNORECASE,
 )
+
+# D22 畫面用摘要：prompt 要求最多 400 字、原文短就寫短（2026-09-27 實拍 4 則有 3 則因下限 150 被清空，下限改 40）。超過上限時採 deterministic
+# 前綴裁切（這份內容只做背景理解，不拿來顯示）；低於下限、空值、型別錯或亂碼則
+# 降級成空字串。重要：這些都不是整份 digest 的失敗，不能因此多打一輪付費模型。
+VISUAL_CONTEXT_MIN_CHARS = 40
+VISUAL_CONTEXT_MAX_CHARS = 400
+
+
+def downgrade_visual_context(data: dict) -> str:
+    """清理 D22 畫面用摘要；回傳降級原因，永遠不讓原因進入 digest 重試判定。"""
+    raw = data.get("visual_context")
+    if not isinstance(raw, str):
+        data["visual_context"] = ""
+        return f"visual_context 不是字串（{type(raw).__name__}）"
+
+    value = raw.strip()
+    if not value:
+        data["visual_context"] = ""
+        return "visual_context 為空"
+
+    # 上限採裁切而非重試：模型多寫不值得再付一次錢；transport 的 4,000 字上限是
+    # 另一層防線，正常 digest 回應在這裡就會收斂到 400 字。
+    if len(value) > VISUAL_CONTEXT_MAX_CHARS:
+        value = value[:VISUAL_CONTEXT_MAX_CHARS].rstrip()
+
+    if len(value) < VISUAL_CONTEXT_MIN_CHARS:
+        data["visual_context"] = ""
+        return (
+            "visual_context 過短"
+            f"（{len(value)} < {VISUAL_CONTEXT_MIN_CHARS} 字）"
+        )
+
+    stray = DIGEST_ALLOWED_CHARS.sub("", value)
+    if len(stray) >= DIGEST_MAX_STRAY_CHARS:
+        data["visual_context"] = ""
+        return f"visual_context 含 {len(stray)} 個異常字元：{ascii(stray[:40])}"
+    if leak := DIGEST_CHANNEL_LEAK.search(value):
+        data["visual_context"] = ""
+        return f"visual_context 含角色／頻道標記「{leak.group(0)}」，模型頻道洩漏"
+
+    data["visual_context"] = value
+    return ""
 # 放寬 token 上限後出現的另一種失控：模型不再截斷，改成把原文每個詞都拆成一條
 # [內文小標] 灌到幾十行（實測撞到 90 行、同一詞重複出現）。長度本身不能當判準——
 # 逐字模式本來就會產生長 variable——但大量重複的行是失控獨有的訊號。
@@ -2937,6 +2990,11 @@ def digest_quality_problem(
     而且使用者看到的是「AI 回傳內容異常」——完全看不出是設定本身被擋掉。
     其餘檢查（型別、異常字元、頻道洩漏、簡體字）對無字照舊全部生效。
     """
+    # D22：摘要品質是 soft failure。先清理／降級，但絕不把它當成這支函式的
+    # return value；否則既有 generate() 會把它視為整份 digest 失敗並重試。
+    if visual_context_problem := downgrade_visual_context(data):
+        print(f"[digest] {visual_context_problem}，已降級為空摘要（不重試）", flush=True)
+
     if finish_reason == "length":
         return "輸出被截斷（finish_reason=length）"
 
@@ -3434,6 +3492,11 @@ def generate(req: GenerateRequest):
                 style=data.get("style", ""),
                 structure=data.get("structure", ""),
                 variable=variable,
+                # 不改字第一版不啟用 D22。即使 provider 依 schema 回了摘要，也在
+                # server boundary 清空，前端與稽核都不會誤以為它可用。
+                visual_context=(
+                    "" if req.density == "verbatim" else data.get("visual_context", "")
+                ),
                 chart_type=chart_type,
                 # 只有地圖類會真的去查（resolve_map_points 自己擋掉其他類型）。
                 # 查不到就是空陣列，後續一切照舊，不會有人拿到錯誤。
@@ -3489,6 +3552,7 @@ def generate(req: GenerateRequest):
                     style=result.style,
                     structure=result.structure,
                     variable=result.variable,
+                    visual_context=result.visual_context,
                     chart_type=result.chart_type,
                     type_label=req.type_label,
                     role=req.role,
@@ -3503,6 +3567,7 @@ def generate(req: GenerateRequest):
                     style=result.style,
                     structure=result.structure,
                     variable=result.variable,
+                    visual_context=result.visual_context,
                     chart_type=result.chart_type,
                     type_label=req.type_label,
                     role=req.role,
@@ -3845,6 +3910,8 @@ def generate_image(req: ImageGenerateRequest):
                 request_id, started, exc,
                 source="web-image", news_text="", prompt=req.prompt,
                 provider=req.provider,
+                visual_context=req.visual_context,
+                visual_context_chars=len(req.visual_context.strip()),
             )
         raise
     if own_clock:
@@ -3864,6 +3931,8 @@ def generate_image(req: ImageGenerateRequest):
             mime_type=result.mime_type,
             source="web-image",
             prompt=req.prompt,
+            visual_context=req.visual_context,
+            visual_context_chars=len(req.visual_context.strip()),
             **meta,
         )
     if own_notices:
@@ -4190,10 +4259,21 @@ def assert_aspect_ratio_supported(model: str, aspect_ratio: str) -> None:
 
 
 def generate_image_raw(req: ImageGenerateRequest) -> ImageGenerateResponse:
-    # B61／B62：唯一強制層。copy 再注入，不 mutate 呼叫端物件（retry／稽核
-    # 會再讀原 prompt）。冪等靠 FINAL_IMAGE_BASELINE_MARKER，不是模糊 substring。
+    # D22＋B61／B62：唯一強制層。畫面用摘要先注入，最終硬規則再壓在最後；copy
+    # 不 mutate 呼叫端物件（retry／稽核會再讀原 prompt）。兩段都以明確 marker 冪等。
+    # B55 透明標題圖層只能畫指定標題，無論 caller 是否誤帶 context 都硬清空。
+    visual_context = req.visual_context
+    if req.transparent_background or any(
+        ref.purpose == "titlelayer" for ref in req.reference_images
+    ):
+        visual_context = ""
     req = req.model_copy(
-        update={"prompt": ensure_final_image_baseline(req.prompt)}
+        update={
+            "prompt": ensure_final_image_baseline(
+                append_visual_context(req.prompt, visual_context)
+            ),
+            "visual_context": visual_context,
+        }
     )
     backend = os.getenv("IMAGE_BACKEND", "openrouter")
     if backend == "openrouter" and os.getenv("OPENROUTER_API_KEY"):
