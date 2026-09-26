@@ -419,11 +419,16 @@ class F1DensityLadderTests(unittest.TestCase):
         self.assertEqual(caps, sorted(set(caps)))
 
     def test_the_point_ceilings_are_monotonic_too(self):
-        self.assertIn("ONE point", main.MINIMAL_DENSITY_RULES)
-        self.assertIn("1 to 3 key points", main.SIMPLIFIED_DENSITY_RULES)
+        self.assertIn("TARGET ONE", main.MINIMAL_DENSITY_RULES)
+        self.assertEqual(main.MINIMAL_POINT_HARD_MAX, 3)
+        simplified_min, simplified_target = main.density_point_bounds("simplified")
         std_min, std_target = main.density_point_bounds("standard")
         max_min, max_target = main.density_point_bounds("maximum")
+        self.assertEqual((simplified_min, simplified_target), (3, 4))
+        self.assertLess(main.MINIMAL_POINT_HARD_MAX, simplified_target)
+        self.assertLess(simplified_target, std_target)
         self.assertLess(std_target, max_target)
+        self.assertLess(simplified_min, std_min)
         self.assertLess(std_min, max_min)
         prompt_std = main.build_digest_instructions("記者", "standard", "資料圖表")
         prompt_max = main.build_digest_instructions("記者", "maximum", "資料圖表")

@@ -37,21 +37,21 @@ class DigestPromptTests(unittest.TestCase):
         # 不能只斷言「SIMPLIFIED MODE OVERRIDE」字樣不存在——USER_INSTRUCTION_RULES
         # 的逐字模式明文引用它宣告優先序（每種模式都在）。改斷言簡化區塊
         # 本身的獨特條款沒被注入。
-        self.assertNotIn("dynamically select only 1 to 3 key points", prompt)
+        self.assertNotIn("POINT COUNT: TARGET four", prompt)
         self.assertIn("The current chart type is", prompt)
 
     def test_reporter_simplified_includes_focus_rules(self):
         prompt = build_digest_instructions("記者", "simplified", "資料圖表")
         self.assertIn("SIMPLIFIED MODE OVERRIDE", prompt)
-        self.assertIn("dynamically select only 1 to 3 key points", prompt)
+        self.assertIn("POINT COUNT: TARGET four", prompt)
         self.assertIn("ONE dominant visual focus", prompt)
-        self.assertIn("do not force three points", prompt.lower())
+        self.assertIn("For a genuinely thin source, use one or two instead", prompt)
 
     def test_editor_simplified_makes_stamp_optional(self):
         prompt = build_digest_instructions("編輯", "simplified", "資料圖表")
         self.assertIn("ignore the earlier 150-180 character target", prompt)
         self.assertIn("<蓋章> is optional", prompt)
-        self.assertIn("counts as one of the maximum three points", prompt)
+        self.assertIn("does not replace any [內文小標] point required by rule one", prompt)
 
     def test_editor_style_rule_chooses_colours_without_examples(self):
         prompt = build_digest_instructions("編輯", "standard", "資料圖表")

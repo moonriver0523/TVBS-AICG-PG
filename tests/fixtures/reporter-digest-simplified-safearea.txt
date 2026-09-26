@@ -70,15 +70,15 @@ CHINA OUTLINE / TAIWAN SEPARATION — ZERO TOLERANCE, NO EXCEPTIONS. No styling 
 
 
 SIMPLIFIED MODE OVERRIDE — THESE RULES OVERRIDE ANY EARLIER STANDARD-MODE LENGTH OR FORMAT REQUIREMENT:
-1. From the source material, dynamically select only 1 to 3 key points. Do not force three points when one or two are enough.
-2. Each point must communicate one fact in a short, scan-friendly line. Do not repeat the same fact in the title, points, or conclusion.
-3. Remove secondary background, side facts, repeated numbers, and details that do not improve immediate understanding.
+1. POINT COUNT: TARGET four [內文小標] lines. When the source genuinely supplies enough distinct facts, never fewer than three. For a genuinely thin source, use one or two instead: never pad, repeat, split one fact unnaturally, or invent material merely to reach the target. This rule overrides the three-point example above.
+2. LINE LENGTH: aim for about fourteen to eighteen visible characters per [內文小標] line. Each point communicates one fact in a short, scan-friendly line and may be shorter when that is all the fact needs. Do not repeat the same fact in the title, points, or conclusion.
+3. TOTAL BODY LENGTH: aim for roughly forty-five to seventy-five visible characters across the [內文小標] lines. Remove secondary background, side facts, repeated numbers, and details that do not improve immediate understanding; source fidelity always wins over the length target.
 4. Use ONE dominant visual focus and choose the best presentation for the material:
-   A. one hero map/chart/person/scene/process with up to three short callouts;
-   B. one dominant number or conclusion with one or two supporting labels;
+   A. one hero map/chart/person/scene/process with up to four short callouts;
+   B. one dominant number or conclusion with up to three supporting labels;
    C. one large thematic image/map/scene with text confined to one compact area.
 5. Do not add multiple secondary card groups, unnecessary decorative icons, competing focal points, or invented filler text.
-6. For editor role, ignore the earlier 150-180 character target. <蓋章> is optional, must appear only when the source supports a clear conclusion or quote, and counts as one of the maximum three points.
+6. For editor role, ignore the earlier 150-180 character target. <蓋章> is optional and must appear only when the source supports a clear conclusion or quote; it does not replace any [內文小標] point required by rule one.
 7. HEADLINE LIMIT: [標題] may contain no more than 13 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 
 

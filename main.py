@@ -1512,8 +1512,12 @@ _DENSITY_COUNT_WORDS = {
 }
 _DENSITY_COUNT_VALUES = {word: n for n, word in _DENSITY_COUNT_WORDS.items()}
 _DENSITY_POINT_LINE_RE = re.compile(r"^\s*[\[【]內文小標[\]】]")
-_DENSITY_POINT_TARGETS = {"standard": 6, "maximum": 8}
+_DENSITY_POINT_TARGETS = {"simplified": 4, "standard": 6, "maximum": 8}
 _DENSITY_POINT_FLOOR_DELTA = 1
+# B105：字少只有在來源確實有一定資訊量時才守三點下限。六十個可見字約能支撐
+# 三個十四至十八字的重點，並保留標題／取捨空間；低於門檻視為薄稿，不要求補點。
+SIMPLIFIED_SOURCE_MIN_VISIBLE_CHARS = 60
+MINIMAL_POINT_HARD_MAX = 3
 
 
 def density_count_word(n: int) -> str:
@@ -1540,9 +1544,10 @@ def density_point_bounds(
 ) -> tuple[int | None, int | None]:
     """[內文小標] 的 (minimum, target)。沒有塊數契約時兩邊都是 None。
 
-    一般版型：standard target 6／下限 5，maximum target 8／下限 7。
+    一般版型：simplified target 4／素材足夠時下限 3；standard target 6／下限 5，
+    maximum target 8／下限 7。
     特定版型若有更嚴格的 exact count，exact 優先——minimum 與 target 都等於該數。
-    只對 standard／maximum 生效；其他密度維持既有 1／1–3／逐字／無字契約。
+    minimal 的 1～3 點契約另由 hard max 守門；逐字／無字沒有塊數契約。
     """
     if density not in _DENSITY_POINT_TARGETS:
         return None, None
@@ -1612,15 +1617,15 @@ _STANDARD_LIMIT_CLAUSES = {
 SIMPLIFIED_DENSITY_RULES = """
 
 SIMPLIFIED MODE OVERRIDE — THESE RULES OVERRIDE ANY EARLIER STANDARD-MODE LENGTH OR FORMAT REQUIREMENT:
-1. From the source material, dynamically select only 1 to 3 key points. Do not force three points when one or two are enough.
-2. Each point must communicate one fact in a short, scan-friendly line. Do not repeat the same fact in the title, points, or conclusion.
-3. Remove secondary background, side facts, repeated numbers, and details that do not improve immediate understanding.
+1. POINT COUNT: TARGET four [內文小標] lines. When the source genuinely supplies enough distinct facts, never fewer than three. For a genuinely thin source, use one or two instead: never pad, repeat, split one fact unnaturally, or invent material merely to reach the target. This rule overrides the three-point example above.
+2. LINE LENGTH: aim for about fourteen to eighteen visible characters per [內文小標] line. Each point communicates one fact in a short, scan-friendly line and may be shorter when that is all the fact needs. Do not repeat the same fact in the title, points, or conclusion.
+3. TOTAL BODY LENGTH: aim for roughly forty-five to seventy-five visible characters across the [內文小標] lines. Remove secondary background, side facts, repeated numbers, and details that do not improve immediate understanding; source fidelity always wins over the length target.
 4. Use ONE dominant visual focus and choose the best presentation for the material:
-   A. one hero map/chart/person/scene/process with up to three short callouts;
-   B. one dominant number or conclusion with one or two supporting labels;
+   A. one hero map/chart/person/scene/process with up to four short callouts;
+   B. one dominant number or conclusion with up to three supporting labels;
    C. one large thematic image/map/scene with text confined to one compact area.
 5. Do not add multiple secondary card groups, unnecessary decorative icons, competing focal points, or invented filler text.
-6. For editor role, ignore the earlier 150-180 character target. <蓋章> is optional, must appear only when the source supports a clear conclusion or quote, and counts as one of the maximum three points.
+6. For editor role, ignore the earlier 150-180 character target. <蓋章> is optional and must appear only when the source supports a clear conclusion or quote; it does not replace any [內文小標] point required by rule one.
 7. HEADLINE LIMIT: [標題] may contain no more than 13 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 """
 
@@ -1630,10 +1635,10 @@ SIMPLIFIED MODE OVERRIDE — THESE RULES OVERRIDE ANY EARLIER STANDARD-MODE LENG
 MINIMAL_DENSITY_RULES = """
 
 字極少 MODE — THIS BLOCK IS EVEN TIGHTER THAN THE SIMPLIFIED BLOCK ABOVE AND OVERRIDES IT WHEREVER THEY DISAGREE:
-1. ONE point. Not one to three — one. Pick the single fact that the audience must leave with, and drop everything else, however interesting.
-2. That one [內文小標] line runs to at most about twelve characters. If it will not fit, cut words, never shrink the meaning into jargon.
-3. The graphic is a single dominant statement: one huge number, name or conclusion, with at most ONE short supporting label beside or beneath it. No card stack, no bullet列, no secondary group, no callout cluster.
-4. The headline and that one point must not say the same thing twice in different words. If they would, rewrite the point to carry what the headline does not.
+1. POINT COUNT: TARGET ONE [內文小標] point. One to three points are acceptable, but THREE is the HARD MAXIMUM. Pick the single fact that the audience must leave with first; add a second or third only when the source genuinely needs them for immediate understanding. Never pad, repeat or invent.
+2. LINE LENGTH: each [內文小標] line runs to at most about twelve visible characters. If it will not fit, cut words, never shrink the meaning into jargon.
+3. TOTAL BODY LENGTH: aim for roughly twelve to thirty visible characters across all [內文小標] lines. The graphic is one dominant statement — one huge number, name or conclusion — with at most two short supporting points beside or beneath it. No card stack, no secondary group, no callout cluster.
+4. The headline and the points must not say the same thing twice in different words. If they would, rewrite a point to carry what the headline does not.
 5. Design "structure" for that: one focal element occupying the middle of the content area at a size readable across a room, everything else empty.
 6. HEADLINE LIMIT: [標題] may contain no more than 10 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 """
@@ -2886,6 +2891,7 @@ def digest_quality_problem(
     finish_reason: str,
     density: str | None = None,
     format_key: str | None = None,
+    news_text: str = "",
 ) -> str:
     """檢查消化結果是否可用，通過回傳空字串，否則回傳給 log 用的問題描述。
 
@@ -2944,19 +2950,35 @@ def digest_quality_problem(
         if ratio < DIGEST_MIN_UNIQUE_LINE_RATIO:
             return f"variable {len(lines)} 行中僅 {ratio:.0%} 不重複，疑似逐詞灌行失控"
 
-    return digest_point_count_problem(variable, density, format_key)
+    return digest_point_count_problem(variable, density, format_key, news_text=news_text)
 
 
 def digest_point_count_problem(
-    variable: str, density: str | None = None, format_key: str | None = None
+    variable: str,
+    density: str | None = None,
+    format_key: str | None = None,
+    *,
+    news_text: str = "",
 ) -> str:
     """B57 的塊數防呆，單獨一支是為了讓 `generate()` 能問「這次唯一的問題是不是
     只有塊數」——B67（2026-09-16 使用者裁決）要在最後一次嘗試放行塊數不足，
     但截斷／型別錯／頻道洩漏那些仍然要擋到底，兩者必須分得出來。"""
+    observed = count_density_points(variable)
+    if density == "minimal" and observed > MINIMAL_POINT_HARD_MAX:
+        return (
+            "variable [內文小標] 塊數超過上限"
+            f"（observed={observed} maximum={MINIMAL_POINT_HARD_MAX}）"
+        )
+
     minimum, target = density_point_bounds(density, format_key)
     if minimum is None:
         return ""
-    observed = count_density_points(variable)
+    if density == "simplified":
+        # 薄稿不補點；播出鏡面的張數等 D17 落地後另驗，B105 不替它加守門。
+        if source_visible_char_count(news_text) < SIMPLIFIED_SOURCE_MIN_VISIBLE_CHARS:
+            return ""
+        if _format_exact_point_count(format_key, density) is not None:
+            return ""
     if target is not None and minimum == target:
         if observed != minimum:
             return (
@@ -2969,6 +2991,11 @@ def digest_point_count_problem(
             f"（observed={observed} required={minimum}）"
         )
     return ""
+
+
+def source_visible_char_count(news_text: str) -> int:
+    """來源可見字數：只排除 Unicode 空白，標點仍是觀眾可見且承載句界的字元。"""
+    return sum(1 for ch in (news_text or "") if not ch.isspace())
 
 
 def verify_internal_api_key(
@@ -3261,6 +3288,7 @@ def generate(req: GenerateRequest):
                 finish_reason,
                 density=req.density,
                 format_key=req.editor_format if req.role == "編輯" else None,
+                news_text=req.news_text,
             )
             # B67（2026-09-16 使用者裁決）：塊數不足在第 DIGEST_POINT_COUNT_ATTEMPTS
             # 次之後不再擋。防呆分不出「模型偷懶」與「原文本來就只有三個點」——兩者
@@ -3274,14 +3302,28 @@ def generate(req: GenerateRequest):
                     data.get("variable") or "",
                     req.density,
                     req.editor_format if req.role == "編輯" else None,
+                    news_text=req.news_text,
                 )
                 if count_problem and problem == count_problem:
-                    print(
-                        f"[generate] 塊數已試滿 {DIGEST_POINT_COUNT_ATTEMPTS} 次仍不足，"
-                        f"放行（{problem}）",
-                        flush=True,
-                    )
-                    problem = ""
+                    # 塊數不足（含 B105 字少的三點下限）照 B67 放行；只有字極少超過
+                    # 硬上限三點（B34 裁決）是模型不守規矩，不是素材單薄，才擋。
+                    if req.density != "minimal":
+                        print(
+                            f"[generate] 塊數已試滿 {DIGEST_POINT_COUNT_ATTEMPTS} 次仍不足，"
+                            f"放行（{problem}）",
+                            flush=True,
+                        )
+                        problem = ""
+                    else:
+                        print(
+                            f"[generate] 塊數已試滿 {DIGEST_POINT_COUNT_ATTEMPTS} 次仍不符，"
+                            f"停止（{problem}）",
+                            flush=True,
+                        )
+                        raise HTTPException(
+                            status_code=502,
+                            detail="AI 多次產出的重點數量仍不符合所選字量，請再試一次",
+                        )
             # 不消化的逐字比對排在通用檢查之後：兩者都過不了時，先報通用的那個。
             # B106（2026-09-26 使用者裁決「不改文字不加文字，使用者貼的全部文字都要，
             # 但要排除參雜的指令文字」）：

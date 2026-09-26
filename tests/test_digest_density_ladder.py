@@ -71,9 +71,10 @@ class BlockTests(unittest.TestCase):
                       main.MINIMAL_DENSITY_RULES)
         self.assertIn("GOES BEYOND THE 字多 BLOCK ABOVE", main.MAXIMUM_DENSITY_RULES)
 
-    def test_minimal_really_means_one_point(self):
-        """字極少若只寫「更少一點」，模型會交出跟字少一樣的 1–3 點。"""
-        self.assertIn("ONE point. Not one to three — one.", main.MINIMAL_DENSITY_RULES)
+    def test_minimal_has_the_court_ordered_hard_ceiling(self):
+        """B34 裁決：一至三點都合格，但三點必須是硬上限。"""
+        self.assertIn("TARGET ONE", main.MINIMAL_DENSITY_RULES)
+        self.assertIn("THREE is the HARD MAXIMUM", main.MINIMAL_DENSITY_RULES)
 
     def test_maximum_raises_the_ceiling_without_licensing_invention(self):
         """要求更多字最容易誘發補料，而編出來的數字是對外事故。"""
@@ -119,7 +120,8 @@ class DensityPointBoundsTests(unittest.TestCase):
     def test_standard_and_maximum_share_one_numeric_source(self):
         self.assertEqual(main.density_point_bounds("standard"), (5, 6))
         self.assertEqual(main.density_point_bounds("maximum"), (7, 8))
-        for density in ("simplified", "minimal", "verbatim", "no_text", None):
+        self.assertEqual(main.density_point_bounds("simplified"), (3, 4))
+        for density in ("minimal", "verbatim", "no_text", None):
             with self.subTest(density=density):
                 self.assertEqual(main.density_point_bounds(density), (None, None))
 
