@@ -181,15 +181,15 @@ class VerticalLayoutTests(unittest.TestCase):
         kw.setdefault("sub_title", SUB)
         return compose.yt_vertical_layout(**kw)
 
-    def test_the_main_column_is_the_one_nearer_the_middle_of_the_frame(self):
-        """兩欄都是深藍，像素分不出誰是誰——主標在內側只能靠幾何驗。"""
-        width = compose.YT_CANVAS[0]
+    def test_the_first_line_is_always_the_left_column(self):
+        """B111（2026-09-26 使用者裁決）：第一行一律在左欄、第二行在右欄——貼左緣時
+        第一行是外側，貼右緣時是內側。兩欄都是深藍，像素分不出誰是誰，只能靠幾何驗。"""
         for side in compose.VSTRIP_SIDES:
             with self.subTest(side=side):
                 layout = self._layout(title_side=side)
-                main_cx = (layout["main"][0] + layout["main"][2]) / 2
-                sub_cx = (layout["sub"][0] + layout["sub"][2]) / 2
-                self.assertLess(abs(main_cx - width / 2), abs(sub_cx - width / 2))
+                self.assertLess(layout["main"][0], layout["sub"][0])
+                self.assertEqual(layout["main"][0], layout["box"][0])
+                self.assertEqual(layout["sub"][2], layout["box"][2])
 
     def test_the_two_columns_are_the_same_width(self):
         """同字級就得同寬，不然窄的那欄字會被 0.94 欄寬的上限壓小。
