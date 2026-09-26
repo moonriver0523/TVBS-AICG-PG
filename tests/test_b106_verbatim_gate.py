@@ -131,6 +131,24 @@ class StampOffKeepsVerbatimTextTests(_GenerateHarness):
         # 後製完的成品仍要守住逐字承諾
         self.assertEqual(main.verbatim_fidelity_problem(result.variable, news), "")
 
+    def test_broadcast_stamp_off_does_not_reorder_user_text(self):
+        """播出鏡面＋蓋章 OFF 會跑 ensure_bottom_band_line：若只拿掉 <蓋章> 標記，
+        它會把最後一張 [內文小標] 搬到最後當底帶，使用者的正文順序就被改了。
+        蓋章本來就在最底一列，不改字時直接把它改標成 <底帶>。"""
+        news = "甲標題\n乙重點\n丙重點\n丁結尾"
+        request = GenerateRequest(
+            news_text=news, type_label="資料圖表", density="verbatim", stamp=False,
+            role="編輯", editor_format="broadcast_left",
+        )
+        result, exc, _ = self.run_generate(
+            request,
+            [response("[標題] 甲標題\n[內文小標] 乙重點\n[內文小標] 丙重點\n<蓋章> 丁結尾")],
+        )
+        self.assertIsNone(exc)
+        self.assertEqual(main.verbatim_fidelity_problem(result.variable, news), "")
+        self.assertTrue(result.variable.rstrip().endswith("丁結尾"))
+        self.assertIn("<底帶> 丁結尾", result.variable)
+
     def test_stamp_line_still_dropped_outside_verbatim(self):
         self.assertEqual(
             main.drop_stamp_lines("[標題] 甲\n<蓋章> 乙"), "[標題] 甲"

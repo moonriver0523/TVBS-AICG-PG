@@ -3321,7 +3321,17 @@ def generate(req: GenerateRequest):
 
             variable = strip_wrapping_quotes(data.get("variable", ""))
             if req.stamp is False and any(_STAMP_LINE_RE.match(line) for line in variable.splitlines()):
-                if req.density == "verbatim":
+                if req.density == "verbatim" and editor_formats.resolve_hole_side(
+                    req.editor_format, req.hole_side
+                ):
+                    # 播出鏡面：蓋章本來就在最底一列，直接改標成底帶。若只拿掉標記，
+                    # 下面的 ensure_bottom_band_line 會把最後一張卡搬到最後，正文順序就變了。
+                    print("[generate] 蓋章 OFF＋不改字＋播出鏡面：<蓋章> 改標為 <底帶>", flush=True)
+                    variable = "\n".join(
+                        _STAMP_LINE_RE.sub("<底帶>", line, count=1)
+                        for line in variable.splitlines()
+                    )
+                elif req.density == "verbatim":
                     print("[generate] 蓋章 OFF＋不改字：<蓋章> 標記拿掉、正文保留", flush=True)
                     variable = unmark_stamp_lines(variable)
                 else:
