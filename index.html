@@ -312,7 +312,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260926-03</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260926-04</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -726,7 +726,7 @@
                              忽略這個設定，擺著只會讓人以為按了有用。第二／三頁保留。 -->
                         <button id="p1-btnSafeFrame" onclick="toggleSafeFrame()" title="開啟後滿版生成，後端再置入安全框" class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-emerald-600 bg-emerald-600 text-white">安全框 ON</button>
                         <!-- D26（2026-09-26）：只在記者＋安全框 ON 顯示，見 app.js syncModelExtensionControl -->
-                        <label id="p1-extensionRow" class="hidden flex items-center gap-1 text-[9px] font-black text-emerald-400 cursor-pointer" title="模型把背景畫到四邊、文字縮在安全框內（2K 輸出）。生成後程式檢查文字是否都在安全框內，沒過就自動改回一般安全框（四周補底色）">
+                        <label id="p1-extensionRow" class="hidden flex items-center gap-1 text-[9px] font-black text-emerald-400 cursor-pointer" title="模型把背景畫到四邊、文字縮在安全框內（2K 輸出）。生成後程式檢查文字是否都在安全框內，超出會跳警告，由你決定要用還是重新生成">
                             <input id="p1-chkExtension" type="checkbox" onchange="toggleModelExtension(this.checked)" class="accent-emerald-500">延伸背景
                         </label>
                         <button id="p1-btnStamp" onclick="toggleStamp()" title="最後一行加 <蓋章> 結論條；指令欄若寫到蓋章，以指令欄為準" class="px-2.5 py-1 rounded text-[9px] font-black transition-all border border-amber-600 text-slate-400 hover:text-white">蓋章 OFF</button>

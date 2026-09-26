@@ -1,7 +1,7 @@
 """D26（2026-09-26 使用者裁決）：記者＋安全框 ON 的「延伸背景」模式。
 
-- 守門：文字偵測框全在記者安全框內才原圖交付；無法確認一律不合格
-- 不合格：同一張圖退回 FIT 置框＋通知，不重生
+- 守門：文字偵測框全在記者安全框內才算合格；無法確認一律不合格
+- 不合格（2026-09-26 使用者改裁）：圖照常交付＋「警告：超出安全框」通知，不退回置框、不重生
 - 勾選後一律 2K（使用者裁決），交付 2560×1440
 - 只開給記者＋安全框 ON；預設空字串時所有路徑與改動前相同
 - 4 張真實生成圖回放（tests/fixtures/d26/）
@@ -119,15 +119,29 @@ class FinalizeModelExtensionTests(unittest.TestCase):
         self.assertEqual(decoded_size(result.source_image_base64), (2752, 1548))
         self.assertEqual(main.collected_portrait_notices(), [])
 
-    def test_fail_falls_back_to_fit_frame_with_notice(self):
-        with patch.object(main, "frame_image_response", wraps=main.frame_image_response) as framed:
-            result = self.run_finalize([(400, 20, 2000, 200)])
-        framed.assert_called_once()
-        self.assertEqual(framed.call_args.args[1], safe_area_spec.REPORTER_PROFILE)
+    def test_fail_still_delivers_model_image_with_warning(self):
+        """使用者：「不要退回置框 還是生圖給使用者 但訊息跳出 警告:超出安全框」"""
+        with patch.object(main, "frame_image_response") as framed:
+            result = self.run_finalize([(400, 20, 2000, 200)], size=(2752, 1548))
+        framed.assert_not_called()
         self.assertEqual(decoded_size(result.image_data_base64), (2560, 1440))
+        self.assertEqual(decoded_size(result.source_image_base64), (2752, 1548))
         notices = main.collected_portrait_notices()
         self.assertEqual(len(notices), 1)
-        self.assertIn("一般安全框", notices[0])
+        self.assertIn("警告：超出安全框", notices[0])
+        self.assertIn("重新生成", notices[0])
+
+    def test_undecodable_image_is_returned_as_is_with_warning(self):
+        broken = main.ImageGenerateResponse(
+            image_data_base64=base64.b64encode(b"not an image").decode(),
+            mime_type="image/png", model="test",
+        )
+        with patch.object(main, "verify_output_aspect_ratio"):
+            result = main.finalize_model_extension(
+                broken, aspect_ratio="16:9", canvas=(2560, 1440)
+            )
+        self.assertIs(result, broken)
+        self.assertIn("警告：超出安全框", main.collected_portrait_notices()[0])
 
 
 class ActivationMatrixTests(unittest.TestCase):

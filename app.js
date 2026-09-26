@@ -1802,7 +1802,7 @@ function toggleModelExtension(checked) {
     updateAspectBadge();
     syncOutput();
     showToast(state.modelExtension
-        ? '延伸背景：模型把背景畫到四邊、字縮在安全框內（2K）；檢查沒過會自動改回一般安全框'
+        ? '延伸背景：模型把背景畫到四邊、字縮在安全框內（2K）；字若超出安全框會跳警告，由你決定用或重生'
         : '延伸背景：關閉');
 }
 
@@ -1836,7 +1836,7 @@ function updateAspectBadge() {
             ? `${currentAspectRatio()} → 編輯安全框（四邊 4%）1920×1080`
             : `${currentAspectRatio()} → 編輯對位框 1748×924`;
     } else if (modelExtensionActive()) {
-        text = `${currentAspectRatio()} → 延伸背景 2560×1440（未過檢查改一般安全框）`;
+        text = `${currentAspectRatio()} → 延伸背景 2560×1440（字出框會警告）`;
     } else if (state.safeFrame) {
         text = `${currentAspectRatio()} → 記者安全框 1920×1080`;
     } else {

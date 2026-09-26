@@ -4300,8 +4300,11 @@ def finalize_image_result(
     )
 
 
-MODEL_EXTENSION_FALLBACK_NOTICE = (
-    "延伸背景檢查未通過（{reason}），這張已改用一般安全框置入（四周補底色）。"
+# D26 修正（2026-09-26 使用者裁決）：守門不過**不再退回置框**。原話：「退回置框有問題
+# 不要退回置框 還是生圖給使用者 但訊息跳出 警告:超出安全框 讓使用者自行決定要用
+# 還是重新生成」。驗收時 OCR 曾把樹叢當成字（假陽性），硬退回會把一張能用的圖換掉。
+MODEL_EXTENSION_WARNING_NOTICE = (
+    "警告：超出安全框（{reason}）。圖照常交付，請自行判斷要使用還是重新生成。"
 )
 
 
@@ -4312,12 +4315,13 @@ def finalize_model_extension(
     canvas: tuple[int, int],
     allow_no_text: bool = False,
 ) -> ImageGenerateResponse:
-    """D26：延伸背景模式的收尾。文字都在記者安全框內→模型的圖原樣（縮放到交付
-    畫布）交付；否則同一張圖走現行 FIT 置框，並留一則通知。不重生。
+    """D26：延伸背景模式的收尾。模型的圖一律縮放到交付畫布後交付；守門只負責
+    發警告——文字不在記者安全框內（或無法確認）時留一則通知，由使用者決定。
 
     守門一律在**交付畫布**上量（safe_rect 依畫布等比換算），2K 自然成立。
     """
     verify_output_aspect_ratio(result, aspect_ratio)
+    image = None
     try:
         image = Image.open(io.BytesIO(base64.b64decode(result.image_data_base64)))
         image.load()
@@ -4331,16 +4335,13 @@ def finalize_model_extension(
         reason = f"成品無法檢查：{type(exc).__name__}"
     else:
         reason = gate.reason
-    print(f"[d26] 延伸背景守門：{'通過' if gate and gate.passed else '不通過'}（{reason}）", flush=True)
-    if gate is None or not gate.passed:
-        _record_portrait_notice(MODEL_EXTENSION_FALLBACK_NOTICE.format(reason=reason))
-        return finalize_image_result(
-            result,
-            aspect_ratio=aspect_ratio,
-            safe_frame=True,
-            profile=safe_area_spec.REPORTER_PROFILE,
-            canvas=canvas,
-        )
+    passed = bool(gate and gate.passed)
+    print(f"[d26] 延伸背景守門：{'通過' if passed else '不通過，照常交付＋警告'}（{reason}）", flush=True)
+    if not passed:
+        _record_portrait_notice(MODEL_EXTENSION_WARNING_NOTICE.format(reason=reason))
+    if image is None:
+        # 圖解不開就沒辦法縮放，原樣交付（上面已經發了警告）
+        return result
     buffer = io.BytesIO()
     image.convert("RGB").save(buffer, format="PNG")
     return result.model_copy(
@@ -4890,8 +4891,8 @@ def model_extension_active(role: str, safe_frame: bool, frame_strategy: str) -> 
     這個模式的三件事都從這裡分流：
     - 消化：版面寫成「中央內容＋四周背景區」（full_bleed=False），不是滿版
     - 生圖：16:9 一律 2K 生成（使用者裁決「勾選後一律生 2K」），交付 2560×1440
-    - 收尾：safe_content_gate 驗文字都在安全框內才原圖交付，否則同一張圖退回
-      FIT 置框（不重生，零額外 API 費）
+    - 收尾：模型的圖一律交付；safe_content_gate 驗到文字出框（或無法確認）時
+      只發警告通知，由使用者決定要用還是重生（2026-09-26 使用者改裁，不退回置框）
     """
     return (
         frame_strategy == "model_extension"
