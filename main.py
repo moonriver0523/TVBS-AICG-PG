@@ -2762,8 +2762,8 @@ def parse_digest_json(raw_content: str) -> dict:
 # 而這些字元會原樣被畫進鏡面。通用的 DIGEST_ALLOWED_CHARS 檢查抓不到（雜訊只有
 # 兩個字元超出白名單，沒到 3 個的門檻）。
 #
-# 只在「指令欄是空的」時才啟用：指令欄的優先序高於消化程度（使用者裁決），
-# 「濃縮成三點」本來就該把逐字要求放掉，這時候拿原文去比對會把正確結果判成錯的。
+# 原本只在「指令欄是空的」時才啟用（指令欄優先於消化程度）。B106（2026-09-26）
+# 使用者把不改字收緊成硬承諾：指令欄有字也照比，衝突時報錯請使用者二選一。
 _VERBATIM_MARKER_RE = re.compile(r"\[標題\]|\[內文小標\]|<蓋章>|<底帶>|[<>]")
 _VERBATIM_WS_RE = re.compile(r"\s+")
 
@@ -2802,6 +2802,16 @@ def drop_stamp_lines(variable: str) -> str:
     return "\n".join(kept).strip()
 
 
+def unmark_stamp_lines(variable: str) -> str:
+    """不改字模式的蓋章 OFF（B106，2026-09-26）：那一行是使用者自己的正文，
+    整行刪掉就是掉字。只拿掉 <蓋章> 標記，正文留下。"""
+    lines = [
+        _STAMP_LINE_RE.sub("", line).strip() if _STAMP_LINE_RE.match(line) else line
+        for line in (variable or "").splitlines()
+    ]
+    return "\n".join(line for line in lines if line.strip()).strip()
+
+
 # 播出鏡面 ＋ 蓋章 OFF 的底帶（2026-09-09 第四批）。挖空框是寬扁的 16:9 視窗、垂直
 # 置中，底下本來就空著一條橫帶；蓋章 ON 時那條由 <蓋章> 填，OFF 時使用者要求「其他
 # 資訊還是可以放底下」。prompt 已經改成要求一行 <底帶>，但 prompt 只是勸告——第三批
@@ -2825,12 +2835,35 @@ def ensure_bottom_band_line(variable: str) -> str:
     return variable
 
 
-def verbatim_fidelity_problem(variable: str, news_text: str) -> str:
-    """不消化模式：variable 去掉標記與空白後必須與原文逐字相同。"""
-    body = _VERBATIM_WS_RE.sub(
-        "", _VERBATIM_MARKER_RE.sub("", strip_wrapping_quotes(variable))
+# B106（2026-09-26）：以「指示:」「指令:」開頭的行保證是指令、不是正文
+# （USER_INSTRUCTION_RULES 第 2 條），比對前先從原文剔除——模型照規則把它排掉，
+# 不能反過來被判成掉字。沒標記的散文指令無法確定性辨識，仍當正文比對。
+_VERBATIM_INSTRUCTION_LINE_RE = re.compile(r"^\s*(?:指示|指令)\s*[:：]")
+VERBATIM_MISMATCH_DETAIL = (
+    "「不改字」模式下，AI 重試多次仍無法把原文一字不差地排進去。"
+    "常見原因：①原文裡夾了沒標記的指令——請在那行開頭加「指示:」，或改寫進指令欄；"
+    "②指令欄要求精簡／濃縮，與「不改字」互相衝突——請擇一。"
+)
+
+
+def verbatim_source_text(news_text: str) -> str:
+    """不改字要逐字保留的原文：剔除保證是指令的行。"""
+    return "\n".join(
+        line
+        for line in (news_text or "").splitlines()
+        if not _VERBATIM_INSTRUCTION_LINE_RE.match(line)
     )
-    source = _VERBATIM_WS_RE.sub("", news_text or "")
+
+
+def _verbatim_normalise(text: str) -> str:
+    # 兩邊走同一套：使用者貼的完稿本身常帶 [標題]／<蓋章>，正文裡也可能有 < >。
+    return _VERBATIM_WS_RE.sub("", _VERBATIM_MARKER_RE.sub("", text))
+
+
+def verbatim_fidelity_problem(variable: str, news_text: str) -> str:
+    """不消化模式：variable 去掉標記與空白後必須與原文（剔除指令行）逐字相同。"""
+    body = _verbatim_normalise(strip_wrapping_quotes(variable))
+    source = _verbatim_normalise(verbatim_source_text(news_text))
     if body == source:
         return ""
     missing = "".join(dict.fromkeys(ch for ch in source if ch not in body))
@@ -3239,9 +3272,14 @@ def generate(req: GenerateRequest):
                     )
                     problem = ""
             # 不消化的逐字比對排在通用檢查之後：兩者都過不了時，先報通用的那個。
-            # 最後一次刻意不擋——擋了就是整條 502，而這時手上的結果通常只是頭尾多了
-            # 雜訊，仍比沒有圖好；改成印警告讓回查時看得到。
-            if not problem and req.density == "verbatim" and not req.user_instruction.strip():
+            # B106（2026-09-26 使用者裁決「不改文字不加文字，使用者貼的全部文字都要，
+            # 但要排除參雜的指令文字」）：
+            # - 最後一次**不再放行**。以前放行的理由是「通常只是頭尾雜訊」，但交出去的
+            #   就是改過字的「不改字」，與承諾正面衝突；改成回一個說得出原因的錯誤。
+            # - 專用指令欄有字**不再**關掉比對。以前的前提是「指令欄優先於消化程度」
+            #   （「濃縮成三點」＋不改字時該縮），新裁決把不改字收緊成硬承諾，
+            #   兩者衝突時改為報錯請使用者二選一，不再默默縮寫。
+            if not problem and req.density == "verbatim":
                 verbatim_problem = verbatim_fidelity_problem(
                     data.get("variable") or "", req.news_text
                 )
@@ -3250,8 +3288,12 @@ def generate(req: GenerateRequest):
                         problem = verbatim_problem
                     else:
                         print(
-                            f"[generate] 最後一次嘗試仍未逐字相符，放行：{verbatim_problem}",
+                            f"[generate] 最後一次嘗試仍未逐字相符，停止：{verbatim_problem}",
                             flush=True,
+                        )
+                        raise HTTPException(
+                            status_code=400,
+                            detail=VERBATIM_MISMATCH_DETAIL,
                         )
             if problem:
                 last_detail = "AI 回傳內容異常，請稍後重試"
@@ -3279,8 +3321,12 @@ def generate(req: GenerateRequest):
 
             variable = strip_wrapping_quotes(data.get("variable", ""))
             if req.stamp is False and any(_STAMP_LINE_RE.match(line) for line in variable.splitlines()):
-                print("[generate] 蓋章 OFF 但消化結果仍有 <蓋章> 行，已強制移除", flush=True)
-                variable = drop_stamp_lines(variable)
+                if req.density == "verbatim":
+                    print("[generate] 蓋章 OFF＋不改字：<蓋章> 標記拿掉、正文保留", flush=True)
+                    variable = unmark_stamp_lines(variable)
+                else:
+                    print("[generate] 蓋章 OFF 但消化結果仍有 <蓋章> 行，已強制移除", flush=True)
+                    variable = drop_stamp_lines(variable)
             # 播出鏡面 ＋ 蓋章 OFF：底帶那一行沒生出來就自己補（見 ensure_bottom_band_line）
             if req.stamp is False and editor_formats.resolve_hole_side(req.editor_format, req.hole_side):
                 filled = ensure_bottom_band_line(variable)
