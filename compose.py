@@ -415,7 +415,10 @@ def apply_broadcast_hole(
 # 位置改用 `safe_area_spec.safe_rect` 的四個角落之一，內縮量沿用播出鏡面浮水印
 # 同一個 HOLE_INSET——保證落在安全框內（B70 動工前要釘的第②件事），不會被摳圖裁掉。
 PORTRAIT_DISCLAIMER_TEXT = "示意圖"
-PORTRAIT_DISCLAIMER_CORNERS = ("lower_right", "lower_left", "upper_right", "upper_left")
+# F48（2026-09-26 使用者裁決）：加「正下方」＝安全框下緣置中（基準是安全框，不是整張畫布）
+PORTRAIT_DISCLAIMER_CORNERS = (
+    "lower_right", "lower_left", "upper_right", "upper_left", "lower_center"
+)
 PORTRAIT_DISCLAIMER_SIZE_RATIO = 0.03        # 字級佔畫布高（同 _draw_cover_ai_note）
 PORTRAIT_DISCLAIMER_HEIGHT_RATIO = 1.6       # 底板高＝字級 × 這個倍數
 PORTRAIT_DISCLAIMER_PAD_RATIO = 0.012        # 底板左右各留的內距（佔畫布高）
@@ -425,14 +428,17 @@ PORTRAIT_DISCLAIMER_PLATE_FILL = (0, 0, 0, 130)
 def _disclaimer_box(
     canvas: tuple[int, int], corner: str, profile: str, box_w: int, box_h: int
 ) -> tuple[int, int, int, int]:
-    """算出標籤底板要貼的座標，釘在安全區四個角落之一，內縮 HOLE_INSET。"""
+    """算出標籤底板要貼的座標，釘在安全區四個角落之一（或下緣置中），內縮 HOLE_INSET。"""
     if corner not in PORTRAIT_DISCLAIMER_CORNERS:
         raise ComposeError(
             f"未知的標籤角落：{corner!r}（可用：{PORTRAIT_DISCLAIMER_CORNERS}）"
         )
     x0, y0, x1, y1 = safe_area_spec.safe_rect(*canvas, profile)
     inset = _scaled_pixel(HOLE_INSET, canvas[1])
-    if corner.endswith("left"):
+    if corner == "lower_center":
+        left = (x0 + x1) // 2 - box_w // 2
+        right = left + box_w
+    elif corner.endswith("left"):
         left, right = x0 + inset, x0 + inset + box_w
     else:
         right, left = x1 - inset, x1 - inset - box_w

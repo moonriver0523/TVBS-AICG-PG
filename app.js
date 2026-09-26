@@ -3011,6 +3011,7 @@ function toggleVstripLive(checkbox) {
 // 值是後端方位詞原文，四個角都在安全區內（compose._disclaimer_box 釘住）。
 const DISCLAIMER_CORNER_LABELS = {
     upper_left: '左上', lower_left: '左下', upper_right: '右上', lower_right: '右下',
+    lower_center: '正下方',  // F48（2026-09-26）：安全框下緣置中
 };
 
 function setDisclaimerCorner(corner) {
