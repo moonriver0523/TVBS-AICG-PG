@@ -4,7 +4,8 @@
 盤點依據見 docs/f43-source-label-inventory.md：`_yt_cover_background` 對 asis 圖
 （`compose.crop_background_16x9`／`compose.split_backgrounds`）回傳 `is_ai=False`，
 跟十點不一樣 composite 模式同一等級的保證——asis 圖直接進 compose 函式，完全不經
-過任何生圖模型。`title_mode="ai"` 那條路依賴 B55，本批仍不接（理由見同一份文件）。
+過任何生圖模型。歷史上 `title_mode="ai"` 未接；B107（2026-09-26 使用者裁決）已改成
+AI 標題不影響 AI 標籤，完整的新矩陣見 test_b107_cover_original_no_ai_label.py。
 
 三塊測試：
 1. compose 層：四個合成函式的 source_text／ai_note 互斥判定

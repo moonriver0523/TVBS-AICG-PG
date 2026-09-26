@@ -1200,6 +1200,12 @@ function setEditorFormat(key) {
         clearCoverAsis('right');
         clearYtAsis('left');
         clearYtAsis('right');
+        // B107（2026-09-26）：切到任何 YT 封面版型都回到可預期的預設值；
+        // applyEditorFormatInputs 會呼叫 updateYtCreativityBar，把拉桿與勾選框同步畫回。
+        if ((EDITOR_FORMATS[next] || {}).inputs === 'yt_cover') {
+            state.ytCreativity = 0;
+            state.ytAiTitle = false;
+        }
     }
     // 換版型就把挖空方向重置回左：還記著上一個版型選的右切，只會讓人選錯邊
     state.holeSide = 'left';
@@ -2807,7 +2813,7 @@ function ytCoverFields() {
 
 // 用既有底圖重疊文字（追加修改後、或只改標題／副標／日期）。
 // background 從 refineSource 來——那格語意就是「給改圖用的原圖」，這條線上它是無文字底圖。
-async function recomposeYtCover(refined) {
+async function recomposeYtCover(refined, backgroundIsAi = state.ytCoverBackgroundIsAi) {
     const source = refineSourceFromResponse(refined);
     const res = await fetch(YT_COVER_BACKEND_URL, {
         method: 'POST',
@@ -2819,7 +2825,9 @@ async function recomposeYtCover(refined) {
             provider: effectiveImageProvider(),
             background_image_base64: source.base64,
             background_mime_type: source.mimeType,
-            background_is_ai: state.ytCoverBackgroundIsAi,
+            // refine 是 AI 修改；handleRefine 會明送 true。單純「只改文字」仍沿用
+            // 後端上一輪算出的 provenance（B107，2026-09-26）。
+            background_is_ai: backgroundIsAi,
         }),
     });
     const data = await res.json().catch(() => ({}));
@@ -3977,7 +3985,7 @@ async function handleRefine() {
 
         // 封面兩條線：refine 只改了模型那張圖，要再走一次程式後貼才是成品。
         // 回來的 data 帶著 source_image_base64＝新的模型圖，refineSource 因此自動接上。
-        const shown = isYtCover ? await recomposeYtCover(data)
+        const shown = isYtCover ? await recomposeYtCover(data, true)
             : isTenCover ? await recomposeTenCover(data)
             : data;
 

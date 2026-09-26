@@ -873,7 +873,13 @@ def paste_cover_logo(
     return buffer.getvalue()
 
 
-def paste_cover_ai_note(image_bytes: bytes, *, split: bool) -> bytes:
+def paste_cover_ai_note(
+    image_bytes: bytes,
+    *,
+    split: bool,
+    left_is_ai: bool = True,
+    right_is_ai: bool | None = None,
+) -> bytes:
     """在純 AI 版封面壓上「AI示意圖」小標（2026-09-07）。
 
     為什麼改由程式壓：模板本來要模型自己畫這個小標，但只要使用者附了實景參考圖，
@@ -882,7 +888,9 @@ def paste_cover_ai_note(image_bytes: bytes, *, split: bool) -> bytes:
     程式畫的，這裡改成同一套，標籤在不在就不再取決於模型聽不聽話。做法比照 YT
     ai-title：文字類固定元素一律後貼。
 
-    split=True（雙切）左右格外側各一枚；False（滿版）只有左上一枚。位置與合成版
+    B107（2026-09-26）：是否壓標籤看底圖素材來源，不看標題是不是交給 AI 畫。
+    split=True 時左右格可各自決定；False（滿版）只看 left_is_ai。right_is_ai 省略時
+    沿用舊行為（與 left_is_ai 相同），保留既有呼叫端相容性。位置與合成版
     `compose_ten_cover` 一致：標頭帶下方 2.5% 畫面高處。
     """
     with Image.open(io.BytesIO(image_bytes)) as opened:
@@ -891,8 +899,9 @@ def paste_cover_ai_note(image_bytes: bytes, *, split: bool) -> bytes:
     # AI 版的標頭帶高由模型畫多少決定，不是 prompt 說的一成（2026-09-09），所以量出來再往下讓
     note_y = measure_ai_header_band(canvas) + round(height * 0.025)
     margin = round(width * COVER_MARGIN / COVER_CANVAS[0])
-    _draw_cover_ai_note(canvas, margin, note_y, align_right=False)
-    if split:
+    if left_is_ai:
+        _draw_cover_ai_note(canvas, margin, note_y, align_right=False)
+    if split and (left_is_ai if right_is_ai is None else right_is_ai):
         _draw_cover_ai_note(canvas, width - margin, note_y, align_right=True)
 
     buffer = io.BytesIO()

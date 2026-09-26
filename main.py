@@ -6343,6 +6343,8 @@ def ten_cover_uses_slots(req: "TenCoverRequest") -> bool:
     return bool(req.slot_refs(0) or req.slot_refs(1))
 
 
+
+
 class CoverVisuals(tuple):
     """(visual_left, visual_right) 加上每格的具名真人名單（2026-09-07）。
 
@@ -6763,7 +6765,7 @@ def _base_data_url(raw: bytes) -> str:
 
 def _cover_ai(
     req: TenCoverRequest, date_text: str, visuals: tuple[str, str], base: bytes | None = None,
-    protect_base: bool = False,
+    protect_base: bool = False, ai_sides: tuple[bool, bool] = (True, True),
 ) -> tuple[bytes, str, bytes, str]:
     """純 prompt 版：整張封面由生圖模型畫，之後只補貼正版 Logo＋節目標籤＋AI示意圖。
 
@@ -6806,10 +6808,14 @@ def _cover_ai(
         # 先放大裁滿定版 1920×1080（原生 GPT 16:9 出 1280×720），後面貼的東西才照定版比例算
         raw = compose.fit_cover_canvas(raw)
         cover = compose.paste_cover_logo(raw, date_text=date_text, badge=req.badge)
-        # 「AI示意圖」小標改由程式壓（2026-09-07）：模板要模型自己畫時，只要使用者附了
-        # 實景參考圖，apply_user_references_to_image_request 的「Do NOT render any 示意圖
-        # label」就會把它壓掉。整張都是 AI 生的，這個標籤不能取決於模型聽不聽話。
-        cover = compose.paste_cover_ai_note(cover, split=req.layout != "full")
+        # B107（2026-09-26）：AI 標題不再等同 AI 素材。標籤只看底圖是否實際由 AI
+        # 生成／修改；十點雙切按左右分側。refine 的呼叫端會傳回 (True, True)。
+        cover = compose.paste_cover_ai_note(
+            cover,
+            split=req.layout != "full",
+            left_is_ai=ai_sides[0],
+            right_is_ai=ai_sides[1],
+        )
         # 精華圓章（2026-09-07 使用者回報 AI 版選精華沒反應）：合成版由 compose_ten_cover 貼，
         # AI 版標頭刻意維持 ON AIR，圓章要在這裡補貼；追加修改回來的 overlay 路徑同一串。
         if req.badge == "highlight":
@@ -7225,9 +7231,12 @@ def _cover_composite(
     return cover, (left_is_ai, right_is_ai), "、".join(models) or "ten-cover:asis", buffer.getvalue()
 
 
-def _cover_split_base(req: TenCoverRequest, visuals: tuple[str, str]) -> tuple[bytes, list[str]]:
+def _cover_split_base(
+    req: TenCoverRequest, visuals: tuple[str, str]
+) -> tuple[bytes, tuple[bool, bool], list[str]]:
     """雙切「AI 標題疊底圖」的第一段（2026-09-13 使用者裁決）：兩格各自取得（原圖直接用、
-    AI改圖／沒圖的格各自生 1:1）後拼成一張無字無元素的 16:9 底圖。回 (PNG, 生圖模型名)。
+    AI改圖／沒圖的格各自生 1:1）後拼成一張無字無元素的 16:9 底圖。
+    B107 起回 (PNG, (左右是否 AI 素材), 生圖模型名)，讓 AI 標題不再覆蓋素材 provenance。
 
     這張底圖不能有標頭帶／Logo／日期／AI示意圖——那些是模板要模型畫或 _post_paste 後貼的，
     先畫上去會被模型重畫成兩層。所以走 compose.split_canvas（純拼圖），不走 compose_ten_cover。
@@ -7237,7 +7246,7 @@ def _cover_split_base(req: TenCoverRequest, visuals: tuple[str, str]) -> tuple[b
     canvas = compose.split_canvas(raws, compose.COVER_CANVAS)
     buffer = io.BytesIO()
     canvas.save(buffer, format="PNG")
-    return buffer.getvalue(), models
+    return buffer.getvalue(), (0 in todo, 1 in todo), models
 
 
 def ten_cover_full_asis_images(req: TenCoverRequest) -> list[bytes]:
@@ -7600,8 +7609,14 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
             protect_base = ai_over_base and len(asis_images) == 1
             visual_arg = visual if isinstance(visual, CoverVisuals) else CoverVisuals(visual, visual)
             # 沒 base 就照舊呼叫（既有測試的假 _cover_ai 不收 base）
+            # B107：base 存在代表本次底圖完全由 asis 原圖拼成；AI 只畫標題，不標
+            # AI示意圖。沒有 base（缺圖／aiedit），或 background overlay（refine）仍標。
+            is_ai = not ai_over_base
             cover, image_model, source_raw, source_mime = (
-                _cover_ai(req, date_text, visual_arg, base=base, protect_base=protect_base) if base is not None
+                _cover_ai(
+                    req, date_text, visual_arg, base=base, protect_base=protect_base,
+                    ai_sides=(is_ai, False),
+                ) if base is not None
                 else _cover_ai(req, date_text, visual_arg)
             )
         else:
@@ -7661,7 +7676,8 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         visual_right="",
         left_is_ai=is_ai,
         right_is_ai=False,
-        source_left="" if is_ai else req.source_left.strip(),
+        # B107 只翻 AI 標籤判定；AI 標題路徑仍不新增／啟用畫面來源標籤。
+        source_left=req.source_left.strip() if req.mode == editor_formats.COVER_MODE_COMPOSITE and not is_ai else "",
         source_right="",
         mode=req.mode,
         seed=req.seed,
@@ -7812,9 +7828,12 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
     }
     try:
         if req.mode == editor_formats.COVER_MODE_AI:
-            base, base_models = (_cover_split_base(req, visuals) if ai_over_base else (None, []))
+            base, panel_is_ai, base_models = (
+                _cover_split_base(req, visuals) if ai_over_base
+                else (None, (True, True), [])
+            )
             cover, image_model, source_raw, source_mime = (
-                _cover_ai(req, date_text, visuals, base=base) if base is not None
+                _cover_ai(req, date_text, visuals, base=base, ai_sides=panel_is_ai) if base is not None
                 else _cover_ai(req, date_text, visuals)
             )
             if base_models:
@@ -7873,8 +7892,9 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         visual_right=visuals[1],
         left_is_ai=panel_is_ai[0],
         right_is_ai=panel_is_ai[1],
-        source_left="" if panel_is_ai[0] else req.source_left.strip(),
-        source_right="" if panel_is_ai[1] else req.source_right.strip(),
+        # B107 只翻 AI 標籤判定；AI 標題路徑仍不新增／啟用畫面來源標籤。
+        source_left=req.source_left.strip() if req.mode == editor_formats.COVER_MODE_COMPOSITE and not panel_is_ai[0] else "",
+        source_right=req.source_right.strip() if req.mode == editor_formats.COVER_MODE_COMPOSITE and not panel_is_ai[1] else "",
         mode=req.mode,
         seed=req.seed,
         notices=collected_portrait_notices(),
@@ -7966,8 +7986,8 @@ class YtCoverRequest(BaseModel):
     background_is_ai: bool = False
     # 「畫面來源」（F43，2026-09-20）：只在底圖是原圖放置（is_ai=False）時才會顯示，
     # 與「AI示意圖」互斥、AI 標籤贏（見 compose 各 compose_yt_*cover 的 ai_note 分支）。
-    # 只有單一欄位：dual（雙則）的底圖一律是 yt_dual_background 羽化拼出來的
-    # （main.py 的 is_ai=True 寫死），本來就不會是原圖放置，不需要左右各一份。
+    # 只有單一欄位：YT 的規則是任一側有 AI 素材就標整張；雙則即使兩側全 asis 也只需
+    # 一份全域來源文字／AI 判定，不需要左右各一份（B107，2026-09-26）。
     source_text: str = Field(default="", max_length=40)
     # 變化池的 seed（F0／D1）。None＝後端現抽一顆並在回應裡回報。取代原本
     # seed=f"{title}|{date}" 的寫法——那種 seed 只要標題與日期沒變就永遠同一種長相，
@@ -8440,6 +8460,8 @@ def yt_cover_asis_count(req: "YtCoverRequest") -> int:
     return sum(1 for ref in req.reference_images if ref.purpose == "asis")
 
 
+
+
 # ---- 整點「雙則」（2026-09-08 WP2）----
 #
 # 兩則新聞一張封面：上白＝第一則、下黃＝第二則，兩行各是一則的完整標題（不拆段）。
@@ -8752,19 +8774,21 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         if ai_title and req.background_image_base64:
             # 追加修改後回來：模型圖已含標題，只補貼固定元素
             background = base64.b64decode(req.background_image_base64)
-            bg_mime, is_ai, image_model = req.background_mime_type or "image/png", req.background_is_ai, "yt-cover:overlay"
+            # AI 標題模式沒有「只改文字」overlay；帶底圖回來必是 refine 的 AI 修改結果。
+            bg_mime, is_ai, image_model = req.background_mime_type or "image/png", True, "yt-cover:overlay"
         elif ai_title:
             base = None
             base_models: list[str] = []
+            base_is_ai = True
             if ai_over_base:
                 # 第一段：底圖由程式取得（與 composite 同一條路），不打第二次文字模型
                 if dual:
-                    base, _, base_model = yt_dual_background(
+                    base, base_is_ai, base_model = yt_dual_background(
                         panel_reqs, plans,
                         mode=req.live24_bg if live24 else editor_formats.LIVE24_BG_BLEND,
                     )
                 else:
-                    base, _, _, base_model = _yt_cover_background(
+                    base, _, base_is_ai, base_model = _yt_cover_background(
                         req, visual, subjects, english, excluded=excluded
                     )
                 base_models = [base_model] if base_model else []
@@ -8850,9 +8874,10 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
                     )
             if base_models:
                 image_model = "、".join([*base_models, image_model])
-            # 退回程式壓字時畫面上的照片就是使用者那張未經模型的原圖（title_mode=
-            # "composite" 的語意），不該再標「AI示意圖」——標了等於對觀眾說這張是 AI 生的。
-            is_ai = not title_layer_fallback
+            # B107（2026-09-26）：AI 標題本身不決定標籤；只沿用底圖素材 provenance。
+            # 全 asis 的 base_is_ai=False，即使 title_mode=ai／創意度>0 也不標；缺圖生背景
+            # 或 aiedit 會由取得底圖的函式回 True。fallback 不再另改這個判定。
+            is_ai = base_is_ai
         elif dual and not req.background_image_base64:
             background, is_ai, image_model = yt_dual_background(
                 panel_reqs, plans,
@@ -8876,9 +8901,11 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         raise
     try:
         # F43（2026-09-20）：畫面來源與 AI示意圖互斥，is_ai=True 時 compose 端會自己
-        # 忽略這個參數（AI 標籤贏），這裡不用再判斷一次；dual 模式的底圖一律
-        # is_ai=True（yt_dual_background 寫死），傳了也不會生效。
-        source_text = req.source_text.strip()
+        # 忽略這個參數（AI 標籤贏），這裡不用再判斷一次。B107 起 dual 也以實際兩側
+        # 素材判定，不再因為是雙則就一律 is_ai=True。
+        # B107 只翻 AI 標籤 gate；成功的 AI 標題路徑仍不新增畫面來源標籤。
+        # 若標題圖層閘門失敗、ai_title 已退回 False，則沿用既有 composite 行為。
+        source_text = req.source_text.strip() if not ai_title else ""
         if live24:
             # 單行標題：這個版型不拆段，req.title 整句就是那一行。
             cover = compose.compose_yt_live24_cover(
