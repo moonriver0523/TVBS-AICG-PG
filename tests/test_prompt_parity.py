@@ -66,6 +66,12 @@ class ConstantParityTests(unittest.TestCase):
         """2026-09-14 D14／F20：無字檔的生圖端覆蓋，兩邊必須逐字相同。"""
         self.assert_same("NO_TEXT_IMAGE_OVERRIDE", news_prompt.NO_TEXT_IMAGE_OVERRIDE)
 
+    def test_model_extension_image_override(self):
+        """D26（2026-09-26）：延伸背景模式的生圖端覆蓋，兩邊必須逐字相同。"""
+        self.assert_same(
+            "MODEL_EXTENSION_IMAGE_OVERRIDE", news_prompt.MODEL_EXTENSION_IMAGE_OVERRIDE
+        )
+
     def test_reporter_safe_area(self):
         self.assert_same("REPORTER_SAFE_AREA", news_prompt.REPORTER_SAFE_AREA)
 

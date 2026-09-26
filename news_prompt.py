@@ -706,6 +706,24 @@ NO TEXT AT ALL (OVERRIDES EVERY EARLIER RULE ABOUT RENDERING WORDS)
 - The empty area where a headline would have gone is the correct result. Do not fill it with words."""
 
 
+
+# D26（2026-09-26 使用者裁決）：記者＋安全框 ON 勾「延伸背景」時的生圖端覆蓋。
+# 只有網頁版前端會接（app.js buildPrompt 的 modelExtension）；這裡只放鏡像常數
+# 給 test_prompt_parity 守逐字一致——LINE 短期不做（使用者 2026-09-24 裁示），
+# 所以 build_prompt() 刻意不接，接了會讓 LINE 出一種後端沒有守門的圖。
+# 用語刻意避開 "empty margin"：實拍字多記者那張就是被這個詞帶成純色平塗。
+MODEL_EXTENSION_IMAGE_OVERRIDE = """
+==================================================
+EXTENDED BACKGROUND SAFE LAYOUT (OVERRIDES EVERY EARLIER RULE ABOUT MARGINS, CANVAS USE AND TITLE POSITION)
+==================================================
+- The background artwork is ONE continuous illustrated scene that extends naturally all the way to the four edges of the canvas.
+- The outer border area is a background-only perimeter: it must be filled with continuing scenery, texture, lighting, atmosphere or visual motifs from the same scene. It must never become a blank, solid-colour, flat-gradient or letterboxed border.
+- Treat every headline, word, number, card, chart, icon, subject cutout, badge and banner as ONE foreground group, and keep that entire foreground group inside the central content region, clear of the perimeter on every side, with the widest clearance along the bottom.
+- Background scenery may run behind the foreground group and out into the perimeter; foreground information may not enter the perimeter.
+- Place the main title at the top of the foreground group, not at the top edge of the canvas.
+- Any closing banner or bottom line is the lowest element of the foreground group and stays well above the deeper background-only area at the bottom.
+- Do NOT render any frame, rectangle, outline, border line, guide line, crop mark or dimmed band to mark where the central region ends."""
+
 # 全路徑最終生圖鐵律（B61／B62，2026-09-16）。ownership 只在後端：
 # generate_image_raw() 在 provider dispatch 正前方冪等注入一次。
 # 不要同步到 app.js／hybrid.js——新版型漏帶這段必須是紅燈，不是再複製一份。

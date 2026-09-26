@@ -81,6 +81,7 @@ class B97B98RestampFrontendTests(unittest.TestCase):
             const effectiveImageProvider = () => 'gemini';
             const currentAspectRatio = () => '21:9';
             const broadcastHoleForApi = () => '';
+            const frameStrategyForApi = () => '';  // D26（2026-09-26）
             const DISCLAIMER_CORNER_LABELS = {{lower_left: '左下', upper_right: '右上'}};
             const updateRefineControls = () => {{}};
             const shown = [];

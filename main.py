@@ -61,6 +61,7 @@ import photo_lookup
 import name_aliases
 import request_log
 import safe_area_spec
+import safe_content_gate
 import safe_frame
 from input_filter import check_input, note_accepted
 from news_prompt import (
@@ -964,6 +965,9 @@ class GenerateRequest(BaseModel):
     visual_creativity: int = Field(default=0, ge=0, le=4)
     # True＝留白改由後端 safe_frame 置框，消化階段要出滿版版面而非縮小置中
     safe_frame: bool = False
+    # D26（2026-09-26）：記者＋安全框 ON 時可選「模型畫延伸背景」。空字串＝現行行為。
+    # 消化階段要知道：版面要改成中央內容（full_bleed=False），見 model_extension_active。
+    frame_strategy: Literal["", "model_extension"] = ""
     # 網頁版「給 AI 的指令」專用欄位（PLAN.md ①）。這是文內解析之外**多出來**的
     # 高信賴度通道，不是取代：LINE 是聊天框拆不了欄位，且有人習慣把「逐字保留」
     # 寫在完稿裡，文內解析（USER_INSTRUCTION_RULES）必須原樣保留。
@@ -1161,6 +1165,8 @@ class ImageGenerateRequest(BaseModel):
     # 使用者的安全框開關。⚠️ 不等於「要不要後製」——編輯版兩檔都會後製，
     # 這個旗標只決定用哪一種（見 resolve_frame_plan）。
     safe_frame: bool = False
+    # D26（2026-09-26）：見 GenerateRequest.frame_strategy 與 model_extension_active。
+    frame_strategy: Literal["", "model_extension"] = ""
     # 帶的是**角色**（記者／編輯），不是解析後的 profile 名稱。
     # 實際用哪個框由 resolve_frame_plan 依（角色, safe_frame）決定：
     #   記者      → 官方 Locked-Frame（底部較深）
@@ -3124,7 +3130,11 @@ def generate(req: GenerateRequest):
         type_label=type_label,
         map_scope_guard=classified_non_map,
         # 編輯版兩檔都要滿版版面，不能直接看 safe_frame（見 resolve_frame_plan）
-        full_bleed=resolve_frame_plan(req.role, req.safe_frame, req.density)[0],
+        full_bleed=(
+            False
+            if model_extension_active(req.role, req.safe_frame, req.frame_strategy)
+            else resolve_frame_plan(req.role, req.safe_frame, req.density)[0]
+        ),
         user_instruction=req.user_instruction,
         exclude_people=req.exclude_people,
         asis_reference_count=req.asis_reference_count,
@@ -3712,14 +3722,24 @@ def generate_image(req: ImageGenerateRequest):
         _, needs_frame, frame_profile = resolve_frame_plan(
             req.safe_frame_profile, req.safe_frame, req.density
         )
-        result = finalize_image_result(
-            generate_image_raw(req),
-            aspect_ratio=req.aspect_ratio,
-            safe_frame=needs_frame,
-            profile=frame_profile,
-            broadcast_hole=req.broadcast_hole,
-            canvas=output_canvas,
-        )
+        if model_extension_active(
+            req.safe_frame_profile, req.safe_frame, req.frame_strategy
+        ) and not req.broadcast_hole:
+            result = finalize_model_extension(
+                generate_image_raw(req),
+                aspect_ratio=req.aspect_ratio,
+                canvas=output_canvas,
+                allow_no_text=req.density == "no_text",
+            )
+        else:
+            result = finalize_image_result(
+                generate_image_raw(req),
+                aspect_ratio=req.aspect_ratio,
+                safe_frame=needs_frame,
+                profile=frame_profile,
+                broadcast_hole=req.broadcast_hole,
+                canvas=output_canvas,
+            )
         # B70／F43：置框、挖空框都處理完後最後貼「示意圖」／「畫面來源」標籤。
         # 播出鏡面挖空框已經在同一套安全區角落自己貼過一次「示意圖」浮水印
         # （compose.apply_broadcast_hole／compose.WATERMARK_TEXT），這裡不重貼第二次
@@ -4280,6 +4300,60 @@ def finalize_image_result(
     )
 
 
+MODEL_EXTENSION_FALLBACK_NOTICE = (
+    "延伸背景檢查未通過（{reason}），這張已改用一般安全框置入（四周補底色）。"
+)
+
+
+def finalize_model_extension(
+    result: ImageGenerateResponse,
+    *,
+    aspect_ratio: str,
+    canvas: tuple[int, int],
+    allow_no_text: bool = False,
+) -> ImageGenerateResponse:
+    """D26：延伸背景模式的收尾。文字都在記者安全框內→模型的圖原樣（縮放到交付
+    畫布）交付；否則同一張圖走現行 FIT 置框，並留一則通知。不重生。
+
+    守門一律在**交付畫布**上量（safe_rect 依畫布等比換算），2K 自然成立。
+    """
+    verify_output_aspect_ratio(result, aspect_ratio)
+    try:
+        image = Image.open(io.BytesIO(base64.b64decode(result.image_data_base64)))
+        image.load()
+        if image.size != canvas:
+            image = image.resize(canvas, Image.LANCZOS)
+        gate = safe_content_gate.check_text_inside_safe_area(
+            image, allow_no_text=allow_no_text
+        )
+    except Exception as exc:  # noqa: BLE001 — 解不開圖也是「無法確認」
+        gate = None
+        reason = f"成品無法檢查：{type(exc).__name__}"
+    else:
+        reason = gate.reason
+    print(f"[d26] 延伸背景守門：{'通過' if gate and gate.passed else '不通過'}（{reason}）", flush=True)
+    if gate is None or not gate.passed:
+        _record_portrait_notice(MODEL_EXTENSION_FALLBACK_NOTICE.format(reason=reason))
+        return finalize_image_result(
+            result,
+            aspect_ratio=aspect_ratio,
+            safe_frame=True,
+            profile=safe_area_spec.REPORTER_PROFILE,
+            canvas=canvas,
+        )
+    buffer = io.BytesIO()
+    image.convert("RGB").save(buffer, format="PNG")
+    return result.model_copy(
+        update={
+            "image_data_base64": base64.b64encode(buffer.getvalue()).decode("ascii"),
+            "mime_type": "image/png",
+            # 追加修改一律餵模型的原圖（語意同置框那條路，見欄位說明）
+            "source_image_base64": result.image_data_base64,
+            "source_mime_type": result.mime_type,
+        }
+    )
+
+
 def generate_via_openrouter(
     model: str,
     req: ImageGenerateRequest,
@@ -4475,10 +4549,14 @@ def image_generation_size(
     canvas gets worse when the flag is on, not better — that trade-off was
     accepted at e0f4df6/fc71891 and is not revisited here.
     """
+    extension = model_extension_active(
+        req.safe_frame_profile, req.safe_frame, req.frame_strategy
+    )
     high_res = (
         HIGH_RES_EDITOR_ENABLED
         and req.safe_frame_profile in HIGH_RES_ROLES
-        and req.density in HIGH_RES_EDITOR_DENSITIES
+        # D26：延伸背景模式不看檔位一律 2K——模型的圖就是交付物，不能再靠升採樣。
+        and (extension or req.density in HIGH_RES_EDITOR_DENSITIES)
         # 閘門看的是「這個生成比例有沒有高解析度的 provider size」，不是交付畫布
         # ——交付畫布只有一個（B87）。
         and req.aspect_ratio in HIGH_RES_GPT_IMAGE_SIZES
@@ -4491,7 +4569,8 @@ def image_generation_size(
         provider_size = size_map.get(req.aspect_ratio)
     else:
         # Gemini's existing image_size enum is intentionally unchanged in F38.
-        provider_size = req.image_size
+        # D26 延伸背景模式例外：一律 2K（同上，模型的圖就是交付物）。
+        provider_size = "2K" if extension else req.image_size
     return provider_size, output_canvas
 
 
@@ -4800,6 +4879,25 @@ def resolve_frame_plan(
             return True, needs_frame, safe_area_spec.EDITOR_PROFILE
         return True, True, safe_area_spec.EDITOR_FRAME_PROFILE
     return safe_frame, safe_frame, safe_area_spec.REPORTER_PROFILE
+
+
+def model_extension_active(role: str, safe_frame: bool, frame_strategy: str) -> bool:
+    """D26（2026-09-26 使用者裁決）：這次是不是「模型畫延伸背景」模式。
+
+    只開給記者＋安全框 ON（使用者：「只要處理記者版 編輯版不需要處理」）。
+    編輯、安全框 OFF、LINE（不送這個欄位）一律 False，行為與改動前逐位元相同。
+
+    這個模式的三件事都從這裡分流：
+    - 消化：版面寫成「中央內容＋四周背景區」（full_bleed=False），不是滿版
+    - 生圖：16:9 一律 2K 生成（使用者裁決「勾選後一律生 2K」），交付 2560×1440
+    - 收尾：safe_content_gate 驗文字都在安全框內才原圖交付，否則同一張圖退回
+      FIT 置框（不重生，零額外 API 費）
+    """
+    return (
+        frame_strategy == "model_extension"
+        and safe_frame
+        and role == safe_area_spec.REPORTER_PROFILE
+    )
 
 
 def resolve_aspect_ratio(
@@ -5395,6 +5493,8 @@ class ImageRefineRequest(BaseModel):
     aspect_ratio: str = "16:9"
     image_size: str = "1K"
     safe_frame: bool = False
+    # D26：延伸背景模式要跟著過來，否則改完／重貼會被 FIT 縮小補底色。
+    frame_strategy: Literal["", "model_extension"] = ""
     safe_frame_profile: str = "記者"
     # 追加修改要沿用同一個挖空側，否則改完圖那塊空位就不見了
     broadcast_hole: str = ""
@@ -5496,6 +5596,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             # B84：檔位要跟著過來，F38 的高解析度閘門才判得出來（見欄位說明）
             density=req.density,
             safe_frame=req.safe_frame,
+            frame_strategy=req.frame_strategy,
             safe_frame_profile=req.safe_frame_profile,
             broadcast_hole=req.broadcast_hole,
             reference_image_data_url=(
@@ -5524,14 +5625,25 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             _, needs_frame, frame_profile = resolve_frame_plan(
                 req.safe_frame_profile, req.safe_frame, req.density
             )
-        result = finalize_image_result(
-            generate_image_raw(image_req),
-            aspect_ratio=req.aspect_ratio,
-            safe_frame=needs_frame,
-            profile=frame_profile,
-            broadcast_hole=req.broadcast_hole,
-            canvas=image_generation_size(image_req)[1],
-        )
+        if not req.cover_kind and not req.broadcast_hole and model_extension_active(
+            req.safe_frame_profile, req.safe_frame, req.frame_strategy
+        ):
+            # D26：改過的圖要重驗一次（模型可能把字改到框外）
+            result = finalize_model_extension(
+                generate_image_raw(image_req),
+                aspect_ratio=req.aspect_ratio,
+                canvas=image_generation_size(image_req)[1],
+                allow_no_text=req.density == "no_text",
+            )
+        else:
+            result = finalize_image_result(
+                generate_image_raw(image_req),
+                aspect_ratio=req.aspect_ratio,
+                safe_frame=needs_frame,
+                profile=frame_profile,
+                broadcast_hole=req.broadcast_hole,
+                canvas=image_generation_size(image_req)[1],
+            )
         # B83（2026-09-22）：這一段以前整個不存在——refine 從不貼標籤，所以
         # 「畫面來源」與「示意圖」追加修改後都會消失。條件與 generate_image()
         # 的同一行一字不差（挖空框自己已經貼過浮水印，不重貼第二次）。
@@ -5595,6 +5707,8 @@ class ImageRestampRequest(BaseModel):
     image_size: str = "1K"
     density: str = ""
     safe_frame: bool = False
+    # D26：延伸背景模式要跟著過來，否則改完／重貼會被 FIT 縮小補底色。
+    frame_strategy: Literal["", "model_extension"] = ""
     safe_frame_profile: str = "記者"
     broadcast_hole: str = ""
     # 要貼的標籤：kind 與文字原樣沿用上一張（不重判，理由同 refine），
@@ -5636,6 +5750,7 @@ def restamp_disclaimer(req: ImageRestampRequest) -> ImageGenerateResponse:
             image_size=req.image_size,
             density=req.density,
             safe_frame=req.safe_frame,
+            frame_strategy=req.frame_strategy,
             safe_frame_profile=req.safe_frame_profile,
             disclaimer_kind=req.disclaimer_kind,
             disclaimer_source_text=req.disclaimer_source_text,
@@ -5644,13 +5759,24 @@ def restamp_disclaimer(req: ImageRestampRequest) -> ImageGenerateResponse:
         _, needs_frame, frame_profile = resolve_frame_plan(
             req.safe_frame_profile, req.safe_frame, req.density
         )
-        result = finalize_image_result(
-            base,
-            aspect_ratio=req.aspect_ratio,
-            safe_frame=needs_frame,
-            profile=frame_profile,
-            canvas=image_generation_size(sizing)[1],
-        )
+        if model_extension_active(
+            req.safe_frame_profile, req.safe_frame, req.frame_strategy
+        ):
+            # D26：同一張原圖、同一支確定性守門，結果與當初生成時相同
+            result = finalize_model_extension(
+                base,
+                aspect_ratio=req.aspect_ratio,
+                canvas=image_generation_size(sizing)[1],
+                allow_no_text=req.density == "no_text",
+            )
+        else:
+            result = finalize_image_result(
+                base,
+                aspect_ratio=req.aspect_ratio,
+                safe_frame=needs_frame,
+                profile=frame_profile,
+                canvas=image_generation_size(sizing)[1],
+            )
         result = apply_image_disclaimer(result, sizing, profile=frame_profile)
     except Exception as exc:
         # 失敗也要留紀錄：這條路沒有生圖模型可以怪，出事一定是置框或貼字，

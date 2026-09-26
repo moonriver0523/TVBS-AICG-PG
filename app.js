@@ -333,6 +333,8 @@ let state = {
     imageSize: '1K',
     // 安全框置框：滿版生成後由後端 safe_frame.py 數學置入 TVBS 安全框
     safeFrame: true,
+    // D26（2026-09-26）：「延伸背景」勾選框，只在記者＋安全框 ON 生效，預設不勾
+    modelExtension: false,
     activeParent: null,
     currentPage: 1,
     // 第一頁「自動生成」專用的圖表類型，與第二頁模板庫的 chartType 完全獨立
@@ -802,6 +804,7 @@ window.onload = () => {
     resetToType('data');
     updateAIBtnRoleHint();
     syncEngineSizeButtons();
+    syncModelExtensionControl();
     updateAspectBadge();
     ["btnSafeFrame", "p1-btnSafeFrame"].forEach(id => {
         const btn = document.getElementById(id);
@@ -977,6 +980,7 @@ function renderTabs() {
 
 function switchRole(role) {
     state.currentRole = role;
+    syncModelExtensionControl();
     document.querySelectorAll('[data-role]').forEach(btn => {
         const isActive = btn.dataset.role === role;
         // 未選態的紅字由 .role-btn 提供，不再套 text-slate-500
@@ -1083,6 +1087,7 @@ function applyEditorFormatLocks() {
     // 那個輸入框就在那裡等人打字，打完按下去卻什麼都不會發生。
     _hide(document.getElementById('refineBox'), !!hides.refine);
     _hide(document.getElementById('p1-btnSafeFrame'), !!hides.safeFrame);
+    syncModelExtensionControl();
     _hide(document.getElementById('p1-btnStamp'), !!hides.stamp);
     // 壓框開關與挖空方向都只對有挖空側的版型有意義
     _hide(document.getElementById('p1-btnHole'), !format.hole);
@@ -1477,6 +1482,7 @@ function toggleSafeFrame() {
         btn.className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' + (state.safeFrame ? 'border border-emerald-600 bg-emerald-600 text-white' : 'border border-emerald-600 text-slate-400 hover:text-white');
         btn.innerText = state.safeFrame ? '安全框 ON' : '安全框 OFF';
     });
+    syncModelExtensionControl();
     updateAspectBadge();
     syncOutput();
 }
@@ -1780,7 +1786,39 @@ function switchTone(tone) {
 const SAFE_FRAME_ASPECT_RATIO = '21:9';
 const DEFAULT_ASPECT_RATIO = '16:9';
 
+// D26（2026-09-26 使用者裁決）：記者＋安全框 ON 才有「延伸背景」勾選框。
+// 三個條件缺一就當沒勾，勾選狀態本身保留（切回記者 ON 時還在）。
+function modelExtensionActive() {
+    return !!state.modelExtension && state.safeFrame && state.currentRole === '記者';
+}
+
+function frameStrategyForApi() {
+    return modelExtensionActive() ? 'model_extension' : '';
+}
+
+function toggleModelExtension(checked) {
+    state.modelExtension = !!checked;
+    syncModelExtensionControl();
+    updateAspectBadge();
+    syncOutput();
+    showToast(state.modelExtension
+        ? '延伸背景：模型把背景畫到四邊、字縮在安全框內（2K）；檢查沒過會自動改回一般安全框'
+        : '延伸背景：關閉');
+}
+
+function syncModelExtensionControl() {
+    const row = document.getElementById('p1-extensionRow');
+    if (!row) return;
+    const formatHidesSafeFrame = !!((editorFormat() || {}).hides || {}).safeFrame;
+    const visible = state.currentRole === '記者' && state.safeFrame && !formatHidesSafeFrame;
+    row.classList.toggle('hidden', !visible);
+    const box = document.getElementById('p1-chkExtension');
+    if (box) box.checked = !!state.modelExtension;
+}
+
 function currentAspectRatio() {
+    // D26：延伸背景的圖就是交付物，要直接生 16:9（後端一律 2K）
+    if (modelExtensionActive()) return DEFAULT_ASPECT_RATIO;
     // 編輯對位框接近 16:9；記者官方框才用 21:9 塞底部跑馬燈留白
     if (state.safeFrame && state.currentRole === '編輯') return DEFAULT_ASPECT_RATIO;
     return state.safeFrame ? SAFE_FRAME_ASPECT_RATIO : DEFAULT_ASPECT_RATIO;
@@ -1797,6 +1835,8 @@ function updateAspectBadge() {
         text = state.safeFrame
             ? `${currentAspectRatio()} → 編輯安全框（四邊 4%）1920×1080`
             : `${currentAspectRatio()} → 編輯對位框 1748×924`;
+    } else if (modelExtensionActive()) {
+        text = `${currentAspectRatio()} → 延伸背景 2560×1440（未過檢查改一般安全框）`;
     } else if (state.safeFrame) {
         text = `${currentAspectRatio()} → 記者安全框 1920×1080`;
     } else {
@@ -1912,7 +1952,8 @@ function syncOutput() {
         variable: processedVariable,
         safeFrame: state.safeFrame,
         aspectRatio: currentAspectRatio(),
-        noText: state.digestDensity === 'no_text'
+        noText: state.digestDensity === 'no_text',
+        modelExtension: modelExtensionActive(),
     });
     updatePromptCounter();
 }
@@ -1930,9 +1971,27 @@ NO TEXT AT ALL (OVERRIDES EVERY EARLIER RULE ABOUT RENDERING WORDS)
 - Everything else still binds in full: the reserved margin, likeness and scene fidelity, the use of any attached references, and the ban on inventing content.
 - The empty area where a headline would have gone is the correct result. Do not fill it with words.`;
 
-function buildPrompt({ role, engine, typeLabel, style, structure, variable, safeFrame = false, aspectRatio = '16:9', noText = false }) {
+// D26（2026-09-26）延伸背景模式的生圖端覆蓋。與 news_prompt.MODEL_EXTENSION_IMAGE_OVERRIDE
+// 逐字相同（test_prompt_parity 守著）。接在 body 後面、不寫進樣板字串，理由同無字檔。
+const MODEL_EXTENSION_IMAGE_OVERRIDE =
+`
+==================================================
+EXTENDED BACKGROUND SAFE LAYOUT (OVERRIDES EVERY EARLIER RULE ABOUT MARGINS, CANVAS USE AND TITLE POSITION)
+==================================================
+- The background artwork is ONE continuous illustrated scene that extends naturally all the way to the four edges of the canvas.
+- The outer border area is a background-only perimeter: it must be filled with continuing scenery, texture, lighting, atmosphere or visual motifs from the same scene. It must never become a blank, solid-colour, flat-gradient or letterboxed border.
+- Treat every headline, word, number, card, chart, icon, subject cutout, badge and banner as ONE foreground group, and keep that entire foreground group inside the central content region, clear of the perimeter on every side, with the widest clearance along the bottom.
+- Background scenery may run behind the foreground group and out into the perimeter; foreground information may not enter the perimeter.
+- Place the main title at the top of the foreground group, not at the top edge of the canvas.
+- Any closing banner or bottom line is the lowest element of the foreground group and stays well above the deeper background-only area at the bottom.
+- Do NOT render any frame, rectangle, outline, border line, guide line, crop mark or dimmed band to mark where the central region ends.`;
+
+function buildPrompt({ role, engine, typeLabel, style, structure, variable, safeFrame = false, aspectRatio = '16:9', noText = false, modelExtension = false }) {
     // 共用的正文區塊（style / structure / variable）
     const textRules = role === '編輯' ? EDITOR_TEXT_RULES : REPORTER_TEXT_RULES;
+    // D26 延伸背景：模型的圖就是交付物，版面走「中央內容」那條（跟安全框 OFF 同組），
+    // 再在最後接 MODEL_EXTENSION_IMAGE_OVERRIDE。只有記者會進來（modelExtensionActive）。
+    if (modelExtension) safeFrame = false;
     // 分流的依據是「後端會不會水平拉伸」，不是安全框開關本身：
     //   編輯 OFF → 拉伸填滿對位框，要上下背景帶把拉伸失真吃掉
     //   編輯 ON  → 2% 薄框走 FIT 不拉伸，再留背景帶會讓實際邊界遠超過 2%
@@ -1998,7 +2057,8 @@ FINAL OUTPUT RULE
     // tests/test_content_fidelity 的雙來源比對是用正規表示式從 app.js 原始碼抓
     // 「FINAL OUTPUT RULE 到樣板結尾」那一段，跟 news_prompt 逐字比對。在樣板裡
     // 插一個 ${...} 會讓抓到的字面多出那段程式碼、比對就永遠對不起來。
-    const fullBody = noText ? `${body}\n${NO_TEXT_IMAGE_OVERRIDE}` : body;
+    let fullBody = noText ? `${body}\n${NO_TEXT_IMAGE_OVERRIDE}` : body;
+    if (modelExtension) fullBody = `${fullBody}\n${MODEL_EXTENSION_IMAGE_OVERRIDE}`;
 
     // 依引擎切換開頭語法
     if (engine === 'gpt') {
@@ -2332,6 +2392,7 @@ async function _digestFetch(input, signal) {
             // 對面，只在生圖端決定的話，重點會剛好被影片蓋掉。
             hole_side: state.holeSide,
             safe_frame: state.safeFrame,
+            frame_strategy: frameStrategyForApi(),
             user_instruction: currentUserInstruction(),
             portrait_photo_count: uploadedPortraitCount(),
             asis_reference_count: uploadedAsisCount(),
@@ -2985,6 +3046,7 @@ async function restampDisclaimer() {
                 // 少了這格會把一張 2K 成品悄悄重算成 1K（同 B84）
                 density: params.density,
                 safe_frame: params.safe_frame,
+                frame_strategy: params.frame_strategy || '',
                 safe_frame_profile: params.safe_frame_profile,
                 broadcast_hole: broadcastHoleForApi(),
                 disclaimer_kind: applied.kind,
@@ -3189,6 +3251,7 @@ async function handleOneClickGenerate() {
             safeFrame: state.safeFrame,
             aspectRatio: currentAspectRatio(),
             noText: state.digestDensity === 'no_text',
+            modelExtension: modelExtensionActive(),
         });
         showToast("生圖中，約 30–120 秒…");
         // 2K 與 GPT 都明顯較慢，預估時間拉長免得進度早早貼上限乾等
@@ -3207,6 +3270,7 @@ async function handleOneClickGenerate() {
                 image_size: state.imageSize,
                 density: state.density,
                 safe_frame: state.safeFrame,
+                frame_strategy: frameStrategyForApi(),
                 safe_frame_profile: state.currentRole,
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
@@ -3338,6 +3402,7 @@ async function handleImageGeneration() {
                 // 與第一頁那個送出點一致，兩邊少一邊就有一邊靜靜降級。
                 density: state.density,
                 safe_frame: state.safeFrame,
+                frame_strategy: frameStrategyForApi(),
                 safe_frame_profile: state.currentRole,
                 // 播出鏡面的挖空側。框由後端在**置框之後**用數學貼上，不寫進 prompt——
                 // 模型會把數字當文字畫進圖裡（見 compose.py 開頭的實驗紀錄）。
@@ -3775,6 +3840,7 @@ function refineParametersFromState(display = null) {
     return {
         density: state.density,
         safe_frame: state.safeFrame,
+        frame_strategy: frameStrategyForApi(),
         safe_frame_profile: state.currentRole,
         aspect_ratio: currentAspectRatio(),
         image_size: state.imageSize,
@@ -3886,6 +3952,7 @@ async function handleRefine() {
                 disclaimer_source_text: isCover ? '' : appliedDisclaimer().sourceText,
                 disclaimer_corner: appliedDisclaimer().corner,
                 safe_frame: refineParameters.safe_frame,
+                frame_strategy: isCover ? '' : (refineParameters.frame_strategy || ''),
                 // B51：封面不能只送 safe_frame=false 卻仍帶「編輯」——編輯身分在
                 // resolve_frame_plan 一律會被置對位框（見 main.py 的說明），safe_frame
                 // 的值因此完全無效。封面一律送空字串，並改用下面的 cover_kind 讓後端

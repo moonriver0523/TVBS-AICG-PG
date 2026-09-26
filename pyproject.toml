@@ -14,6 +14,8 @@ dependencies = [
     "pillow>=12.3.0",
     "pyjwt[crypto]>=2.10.1",
     "python-dotenv>=1.2.2",
+    # D26（2026-09-26）：延伸背景模式的安全框守門，本機文字偵測（onnx，不打外部 API）
+    "rapidocr-onnxruntime>=1.4.4",
     "uvicorn[standard]>=0.51.0",
 ]
 
