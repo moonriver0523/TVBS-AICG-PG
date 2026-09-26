@@ -7726,7 +7726,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         source="editor-cover-full",
         news_text=req.title_left,
         variable=req.title_left,
-        prompt=f"FULL: {visual}",
+        prompt=collected_cover_image_prompt() or f"FULL: {visual}",
         role="編輯",
         provider=req.provider,
         image_model=image_model,
@@ -7743,8 +7743,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         type_label=f"{COVER_TYPE_LABEL_TEN}（滿版）",
         news_text=req.title_left,
         variable=final_lines if req.mode == editor_formats.COVER_MODE_AI else req.title_left,
-        prompt=(collected_cover_image_prompt() if req.mode == editor_formats.COVER_MODE_AI
-                else f"FULL: {visual}"),
+        prompt=collected_cover_image_prompt() or f"FULL: {visual}",
         role="編輯",
         # B55 診斷（2026-09-21）：同 YT 封面，見 _title_layer_archive_fields。
         **_title_layer_archive_fields(),
@@ -7842,9 +7841,12 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
             provider=req.provider,
             type_label=COVER_TYPE_LABEL_TEN,
         )
-    # B109（2026-09-26 使用者裁決）：AI prompt 也寫入程式預切的最終列，因此與
-    # composite 共用 B108 詞組邊界；撤回 B75 的 AI 模式跳過守衛。
-    apply_title_break_hints(req.title_left, req.title_right)
+    # B109：會送出生圖 prompt 的 AI 路徑也需要詞組邊界；但 refine 帶回的模型圖
+    # 已含標題，只補貼固定元素，沒有任何下游會再讀 hints，故不打斷句模型。
+    if req.mode == editor_formats.COVER_MODE_AI and req.background_image_base64:
+        compose.set_break_hints({})
+    else:
+        apply_title_break_hints(req.title_left, req.title_right)
     if req.layout == "full":
         full_result = _editor_cover_full(req, date_text)
         notices = collected_portrait_notices()
@@ -7944,7 +7946,7 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         source="editor-cover",
         news_text=f"{req.title_left} ｜ {req.title_right}",
         variable=f"{req.title_left}\n{req.title_right}",
-        prompt=log_prompt,
+        prompt=collected_cover_image_prompt() or log_prompt,
         role="編輯",
         provider=req.provider,
         image_model=image_model,
@@ -7965,8 +7967,7 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         news_text=f"{req.title_left} ｜ {req.title_right}",
         variable=(final_lines if req.mode == editor_formats.COVER_MODE_AI
                   else f"{req.title_left}\n{req.title_right}"),
-        prompt=(collected_cover_image_prompt() if req.mode == editor_formats.COVER_MODE_AI
-                else log_prompt),
+        prompt=collected_cover_image_prompt() or log_prompt,
         role="編輯",
         **portrait_fields,
         **meta,
@@ -8735,10 +8736,11 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     if not dual:
         # 單則整版原圖放置最多 4 張（2026-09-14），擋在下面的斷句模型之前
         reject_excess_asis(req.slot_refs(0) + req.slot_refs(1) + req.reference_images, where="單則", limit=caps.asis_max)
-    # B109（2026-09-26）：news／hourly 單題／hot 的 AI prompt 會寫入預切 line1/line2，
-    # 所以也要 B108 詞組邊界。hourly 雙題每題本來就是一整列，AI 模式不需另切；
-    # live24 固定單行，維持不打斷句模型。composite 行為維持原樣。
-    if not live24 and (
+    # B109：news／hourly 單題／hot 的 AI 生圖 prompt 會寫入預切 line1/line2，
+    # 所以需要 B108 詞組邊界；refine 帶回的圖已含標題，只補貼固定元素，不再讀 hints。
+    if resolved_mode == editor_formats.YT_COVER_TITLE_MODE_AI and req.background_image_base64:
+        compose.set_break_hints({})
+    elif not live24 and (
         resolved_mode == editor_formats.YT_COVER_TITLE_MODE_COMPOSITE or not dual
     ):
         apply_title_break_hints(req.title, req.title_second)
@@ -9071,7 +9073,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
             editor_formats.YT_COVER_AI_TRANSLATION_LABEL if ai_translation else "",
             req.time_text.strip() if hourly else "",
         ])),
-        prompt=log_prompt,
+        prompt=collected_cover_image_prompt() or log_prompt,
         role="編輯",
         provider=req.provider,
         image_model=image_model,
@@ -9091,7 +9093,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         type_label=type_label,
         news_text=log_title,
         variable="\n".join(filter(None, [lines[0], lines[1]])),
-        prompt=(collected_cover_image_prompt() if ai_title else log_prompt),
+        prompt=collected_cover_image_prompt() or log_prompt,
         role="編輯",
         portrait_subject="、".join(subjects),
         # B55 診斷（2026-09-21）：量到的數字進 JSON，被擋下的那張原始圖層另存一個
