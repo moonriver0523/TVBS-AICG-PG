@@ -129,6 +129,10 @@
   最少 3 點，並把 minimal 放寬為 1～3 點但加 hard max 3。只有四份 simplified
   digest 快照因 `SIMPLIFIED_DENSITY_RULES` 改寫而重建；standard、image prompt、
   RNG fixture 均未改。`EDITOR_SYSTEM_PROMPT_TEMPLATE` 保持逐位元不變。
+- 2026-09-27（D22 第一關，使用者明確授權重凍）：記者／編輯兩份 digest system
+  prompt 都新增同次回應的 `visual_context` 畫面用摘要定義，因此八份 digest 快照
+  各只新增 schema key 宣告與一條最多 400 字、禁止標題／句子／引言／數字／Logo／
+  來源文字的規則。兩份 reporter image prompt 以空 context 重跑仍逐位元相同，未重凍。
 """
 
 import os

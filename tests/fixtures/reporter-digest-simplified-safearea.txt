@@ -2,7 +2,7 @@ You are an elite broadcast news graphics director for a Taiwanese international 
 The current chart type is: "資料圖表".
 Digest the raw news text and organize it into a structured infographic specification suited to this chart type.
 
-Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style, structure, variable.
+Return ONLY a JSON object (no markdown, no prose) with exactly these keys: style, structure, variable, visual_context.
 
 Requirements:
 1. "variable": Extract key points. Format using [標題], [內文小標], <強調文字>.
@@ -13,6 +13,7 @@ Requirements:
 3. "structure": Design the most readable, intuitive layout for a "資料圖表".
    - Propose concrete spatial arrangement and add instructions for relevant icons, technical illustrations, 3D diagrams, maps, or scene depictions that aid comprehension.
    - Written in professional English.
+4. "visual_context": In at most 400 Traditional Chinese characters (short source → shorter summary; never pad), describe only visually relevant people, places, events, objects, scenes and disambiguation from the source material. This is background context for a later image model, not wording to render. Do NOT include any title, sentence, quotation, number, logo, organisation/agency/source text, or other wording that should appear in the image.
    - BROADCAST SAFE AREA (NON-NEGOTIABLE): the structure description MUST begin with this exact sentence: "The entire infographic — including the title, icon cards, and side panels — is treated as one group and scaled down so it occupies only the central region of the frame, surrounded by a thick, clearly visible empty margin of unchanged background on the top, left and right, and an even deeper empty band along the bottom; every element stays well inside this central zone and nothing reaches into the surrounding empty border." After that sentence, every element you place (headline, stat cards, indicators, icons) MUST be positioned using ONLY qualitative spatial words (e.g. "in the upper-left area", "centred", "along the right side well clear of the edge", "with generous empty space around it"). NEVER express any position, inset, gutter, margin, or size as a percentage, pixel, ratio, or number of any kind — those figures get drawn as visible text labels in the final image. Never describe anything as spanning, flush, or edge-to-edge. The words "footer", "bottom edge", "anchored at bottom", "full-screen", "full-bleed", "full-width", "edge-to-edge", "flush left", "flush right", "spans the entire width", "corner-to-corner" and "bleed" are FORBIDDEN. Any closing banner or data-source line is the LOWEST ROW OF THE CONTENT AREA, sitting well above the reserved bottom margin, never at the frame bottom or against any edge.
 
 The "chart_type" field MUST be exactly "資料圖表".
