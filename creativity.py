@@ -189,6 +189,132 @@ COVER_ACCESSORY_POOL: tuple[tuple[str, str], ...] = (
     ("iconrow", "A SHORT ROW OF SMALL {shape} WORDLESS ICON CHIPS along the lower edge, just ABOVE the navy bottom strip and never inside it, evenly spaced and equal in size, each holding one flat pictogram from the story."),
 )
 
+# 2026-09-27：十五個非方向性元素另住固定長度的第二池，不插進上面的九格池。
+# 舊池先完成洗牌、形狀替換與國旗換入，第二池才開始消耗 RNG；因此第二池不會改變
+# 舊池抽到什麼。第二池每次獨立抽一個候選，再依等級閘門決定是否換入舊池的一個槽；
+# 沒過閘門就維持舊結果。直接把十五招併進九招會讓單一槽多半落到新招，
+# 且 Fisher-Yates 的長度改變會洗掉所有舊結果。
+#
+# 文字一律無字、無數字、無 Logo。02／03／05／06／08／09／12 是依 2026-09-27
+# 試拍把「看得出的視覺特徵」寫實；09 改成同一張來源也能做寬／中／細節裁切，不再
+# 依賴程式無法在所有四條路徑可靠取得的原圖張數。
+NON_DIRECTIONAL_ELEMENT_POOL: tuple[tuple[str, str], ...] = (
+    (
+        "detail_sidebar",
+        "CUT A WORDLESS DETAIL SIDEBAR from a genuine detail visible in the photograph:"
+        " enlarge it in a narrow panel and ring both source and enlargement in one solid"
+        " colour; no arrow, leader or invented object. Keep within its panel and safe frame."
+        " Add no text, digits or Logo.",
+    ),
+    (
+        "duotone_subject_separation",
+        "MAKE THE TWO-TONE SEPARATION UNMISTAKABLE: genuine subject in one solid hue,"
+        " background in a strongly contrasting second hue, with a crisp visible boundary."
+        " Preserve identifying detail. Keep within safe frame. Add no text,"
+        " digits or Logo.",
+    ),
+    (
+        "frosted_data_panel",
+        "PLACE ONE CLEARLY VISIBLE FROSTED-GLASS PANE behind supplied copy: give it a broad"
+        " milky translucent blur, crisp pale rim and soft shadow; the background through it is"
+        " visibly blurred while the area outside stays sharp. Keep copy legible and within the"
+        " safe frame. Add no text, digits or Logo.",
+    ),
+    (
+        "timeline_bead_chain",
+        "BUILD A WORDLESS TIMELINE BEAD CHAIN from the supplied chronology: set clearly"
+        " separated circular nodes on one neutral line and pair them with existing dated or"
+        " ordered facts, without arrows or extra dates. Keep within its panel and safe frame."
+        " Add no text, digits or Logo.",
+    ),
+    (
+        "depth_card_shelf",
+        "MAKE AN UNMISTAKABLE DEPTH SHELF from existing cards: the front card is largest and"
+        " razor-sharp; rear cards are visibly smaller, offset, partly occluded and progressively"
+        " softer or less saturated. Keep every supplied line legible and within the safe frame."
+        " Add no text, digits or Logo.",
+    ),
+    (
+        "diagonal_light_focus",
+        "THROW ONE BROAD HIGH-CONTRAST DIAGONAL LIGHT SHAFT across the background, visibly"
+        " entering from one side and leaving the opposite side, with soft edge haze and the"
+        " genuine subject in its brightest core. Keep it behind all copy and within the safe"
+        " frame. Add no text, digits or Logo.",
+    ),
+    (
+        "newspaper_halftone",
+        "APPLY A CONTROLLED NEWSPAPER HALFTONE AND SLIGHT MISREGISTER to photographic"
+        " background areas only; keep faces, evidence and every character clean, solid and"
+        " unscreened. Keep within its panel and safe frame. Add no text, digits or Logo.",
+    ),
+    (
+        "folder_index_tabs",
+        "MAKE INFORMATION ZONES A FILE-FOLDER STACK: clearly protruding WORDLESS TABS stagger"
+        " along one edge; visible folder lips and layered paper edges show through shape and"
+        " colour. Add no filing marks, text, digits or Logo.",
+    ),
+    (
+        "contact_sheet",
+        "FORM A WORDLESS CONTACT SHEET from the supplied photograph or photographs: use visibly"
+        " different wide, medium and detail crops in distinct film-like frames with consistent"
+        " gutters. Different crops of one source never imply separate moments. Keep within its"
+        " panel and safe frame. Add no text, digits or Logo.",
+    ),
+    (
+        "negative_space_aperture",
+        "CUT A NEGATIVE-SPACE APERTURE through one saturated flat shape so the genuine subject"
+        " or a non-geographic symbol appears in clean empty space; make the cutout the visual"
+        " hierarchy. Keep within its panel and safe frame. Add no text, digits or Logo.",
+    ),
+    (
+        "selective_depth_of_field",
+        "KEEP THE MAIN SUBJECT tack-sharp; apply shallow-depth blur only to"
+        " outer background, never to evidence, identifying features or supplied copy, and"
+        " fabricate no bokeh objects. Keep within its panel and safe frame. Add no text, digits"
+        " or Logo.",
+    ),
+    (
+        "signal_glitch_edge",
+        "ADD A VISIBLE NARROW SIGNAL-INTERFERENCE BAND at edges: combine broken"
+        " scan lines, unmistakable red-blue channel splitting and clipped rectangular digital"
+        " tears; keep the centre clean and never cross a face, evidence or character. Add no"
+        " timecode, text, digits or Logo.",
+    ),
+    (
+        "concentric_impact_rings",
+        "DRAW ONLY ABSTRACT, PERFECTLY GEOMETRIC CONCENTRIC CIRCLES OR RIPPLE BANDS at the genuine impact"
+        " point; vary ring weight and spacing for supplied intensity or range. Never depict or"
+        " trace a country, island, coast, region, territory, landmass or real place. Keep within"
+        " the safe frame. Add no boundaries, coordinates, text, digits or Logo.",
+    ),
+    (
+        "proportion_block_wall",
+        "BUILD A WORDLESS WALL OF SOLID PROPORTION BLOCKS from supplied comparative values:"
+        " scale every block consistently, use one baseline, and place only existing figures"
+        " beside it without new ticks or categories. Keep within its panel and safe frame. Add"
+        " no text, digits or Logo beyond supplied figures.",
+    ),
+    (
+        "motion_echo_slices",
+        "CREATE TRANSLUCENT MOTION-ECHO SLICES from the same genuine fast-moving subject: keep"
+        " one sharp leader and trail clearly separated, progressively fainter slices behind its"
+        " real travel direction, without inventing participants. Keep within the safe frame."
+        " Add no text, digits or Logo.",
+    ),
+)
+
+# UI 第 1–5 格對應內部 level 0–4。前兩格不啟用；第 3–5 格各從固定十五格池
+# 等機率抽一個候選，再以 1/3、1/2、2/3 的精確整數閘門決定是否換入。
+# 總件數仍是舊梯子的 0／0／1／2／3；越高級越常看見新招，但新招在總畫面中的
+# 期望占比依序只有 1/3、1/4、2/9，不會壓過舊池。
+NON_DIRECTIONAL_ELEMENT_GATE = {
+    0: (0, 1),
+    1: (0, 1),
+    2: (1, 3),
+    3: (1, 2),
+    4: (2, 3),
+}
+
 # 2026-09-27：arrow／magnifier 保留在原本的九格池與原本的位置，抽籤也照舊；
 # 只有抽完之後，才依新聞內容做確定性換字。這兩段不進池子，否則即使 tuple 長度
 # 沒變，替換原條目的文字也會讓所有既有 fixture 看起來像全面改版。
@@ -252,6 +378,115 @@ def condition_directional_accessory(
     if key == "magnifier":
         return MAGNIFIER_WITHOUT_ARROW
     return text
+
+
+# 第二池的內容資格也在程式端判定。抽中後才換字，不刪、不補抽、不重洗；因此同 seed
+# 的其他槽完全相同。所有不合格條目共用一個保守、非方向、無字的同槽替代。
+NON_DIRECTIONAL_CONDITION_FALLBACK = (
+    "USE A WORDLESS DIRECTIONLESS FOCUS HALO IN THIS SLOT: broad offset rings frame the"
+    " genuine subject without pointed ends, route, scale, boundary, origin or destination."
+    " Keep within its panel and safe frame. Add no text, digits or Logo."
+)
+
+_TIMELINE_TYPE_RE = re.compile(r"(?:時間|時序|年表|timeline|chronolog)", re.IGNORECASE)
+_TIMELINE_CONTENT_RES = (
+    re.compile(r"(?:\d{2,4}[年./-]\d{1,2}(?:[月./-]\d{1,2}日?)?|\d{1,2}月\d{0,2}日?)"),
+    re.compile(r"(?:[一二三四五六七八九十]{1,3}月(?:[一二三四五六七八九十]{1,3}日)?)"),
+    re.compile(r"(?:今(?:天|日)|明(?:天|日|年)|昨(?:天|日)|翌日|隔天|本月|下月|上月|本週|下週|上週|季度|上半年|下半年)"),
+    re.compile(r"(?:先.{0,40}(?:再|後|接著|隨後)|第一階段|第二階段|下一階段|依序|此前|之後|隨後)"),
+    re.compile(r"\b(?:january|february|march|april|may|june|july|august|september|october|november|december|first.{0,80}(?:then|next)|before|after|followed by|stage)\b", re.IGNORECASE),
+)
+
+_ARABIC_VALUE_RE = re.compile(
+    r"(?<![A-Za-z])[-+]?\d+(?:[.,]\d+)?\s*(?P<unit>%|％|成|倍|元|萬|億|兆|人|戶|票|件|宗|"
+    r"公里|公尺|米|秒|分|小時|天|週|月|年|級|度|噸|公頃|坪|GB|TB|km|m|s)?",
+    re.IGNORECASE,
+)
+_CHINESE_VALUE_RE = re.compile(
+    r"[零〇一二兩三四五六七八九十百千萬億兆]+(?:點[零〇一二三四五六七八九]+)?"
+    r"(?P<unit>百分之|成|倍|元|萬|億|兆|人|戶|票|件|宗|公里|公尺|米|秒|分|小時|天|週|月|年|級|度|噸|公頃|坪)"
+)
+_COMPARATIVE_CUE_RE = re.compile(
+    r"(?:相較|比較|對比|分別|各(?:占|有|為)|占比|比例|比率|高於|低於|多於|少於|"
+    r"增加|減少|上升|下降|vs\.?|versus|compared|respectively)",
+    re.IGNORECASE,
+)
+
+_RANGE_STRENGTH_RE = re.compile(
+    r"(?:地震|震度|震央|餘震|規模.{0,8}(?:級|以上|以下)|影響範圍|波及範圍|涵蓋範圍|"
+    r"作用範圍|半徑|距離|強度|烈度|earthquake|seismic|magnitude|intensity|affected range|radius)",
+    re.IGNORECASE,
+)
+_RANGE_STRENGTH_TYPE_RE = re.compile(r"(?:地震|震度|earthquake|seismic)", re.IGNORECASE)
+
+_SPORT_TYPE_RE = re.compile(r"(?:運動|體育|sports?)", re.IGNORECASE)
+_HIGH_SPEED_ACTION_RE = re.compile(
+    r"(?:衝刺|加速|超越|追趕|奔跑|疾駛|飛馳|高速|急駛|飆速|競速|接力|賽車|賽跑|"
+    r"滑行|起飛|降落|進站|出站|撞擊|急煞|翻車|揮拍|投球|射門|扣殺|"
+    r"sprint|accelerat|overtak|high-speed|racing|race\b|running|dash(?:ed|ing)?|"
+    r"speeding|takeoff|landing|crash(?:ed|ing)?|brak(?:e|ed|ing))",
+    re.IGNORECASE,
+)
+
+
+def timeline_content_eligible(content: str = "", type_label: str = "") -> bool:
+    """只有明文日期、月份或先後順序才允許時間珠鏈。"""
+    if _TIMELINE_TYPE_RE.search(type_label or ""):
+        return True
+    text = " ".join((content or "").split())
+    return bool(text) and any(pattern.search(text) for pattern in _TIMELINE_CONTENT_RES)
+
+
+def comparative_values_eligible(content: str = "", type_label: str = "") -> bool:
+    """比例積木至少要有兩個可比較的明文數值；類型名稱本身不能代替資料。"""
+    del type_label
+    text = " ".join((content or "").split())
+    matches = list(_ARABIC_VALUE_RE.finditer(text)) + list(_CHINESE_VALUE_RE.finditer(text))
+    if len(matches) < 2:
+        return False
+    if _COMPARATIVE_CUE_RE.search(text):
+        return True
+    units = [match.group("unit") or "" for match in matches]
+    non_date_units = [unit.lower() for unit in units if unit not in {"年", "月", "週", "天"}]
+    return any(non_date_units.count(unit) >= 2 for unit in set(non_date_units) if unit)
+
+
+def range_strength_content_eligible(content: str = "", type_label: str = "") -> bool:
+    """同心波紋只服務地震，或明文描述強度／影響範圍的內容。"""
+    return bool(
+        _RANGE_STRENGTH_TYPE_RE.search(type_label or "")
+        or _RANGE_STRENGTH_RE.search(content or "")
+    )
+
+
+def high_speed_motion_eligible(content: str = "", type_label: str = "") -> bool:
+    """動作殘影只服務運動，或明文出現高速移動／競速動作的內容。"""
+    return bool(
+        _SPORT_TYPE_RE.search(type_label or "")
+        or _HIGH_SPEED_ACTION_RE.search(content or "")
+    )
+
+
+_NON_DIRECTIONAL_ELIGIBILITY = {
+    "timeline_bead_chain": timeline_content_eligible,
+    "concentric_impact_rings": range_strength_content_eligible,
+    "proportion_block_wall": comparative_values_eligible,
+    "motion_echo_slices": high_speed_motion_eligible,
+}
+
+
+def condition_non_directional_element(
+    key: str,
+    text: str,
+    *,
+    content_context: str | None,
+    type_label: str = "",
+) -> str:
+    """條件元素不合格時同槽換字；沒有內容可判斷也視為不合格。"""
+    predicate = _NON_DIRECTIONAL_ELIGIBILITY.get(key)
+    if predicate is None or predicate(content_context or "", type_label):
+        return text
+    return NON_DIRECTIONAL_CONDITION_FALLBACK
 
 # 國旗招式（2026-09-11 第十批）。**不進上面那個 tuple**，不跟其他九件一起被
 # rng.shuffle：那九件是「模型自己挑不出花樣，交給程式亂數抽」的東西，這一件不是
@@ -346,10 +581,15 @@ def accessories(
     `visuals`：畫面描述。偵測到旗子、且這一級抽得到 FLAG_ACCESSORY_MIN_COUNT 件
     以上時，把抽到的**最後一件**確定性換成國旗招式（不進隨機池，理由見
     COVER_FLAG_ACCESSORY 上方）。換掉之後仍然接同一句 placement_note。
-    `overrides`：{key: 替代條目文字}。池子裡有少數條目帶著十點封面的版面家具
+    `overrides`：{key: 替代條目文字}。舊池裡有少數條目帶著十點封面的版面家具
     （iconrow 寫的是「深藍底條上方」，CG 根本沒有那條底帶），那種條目要換掉措辭
     才用得到別條線上。**只換文字、不動池子長度也不動抽籤順序**——增刪條目會把所有
     既有 seed 的長相換掉，這正是本檔案開頭「風險 2」要擋的事。
+
+    舊池全部處理完後，才從固定十五格第二池獨立抽候選，並依
+    NON_DIRECTIONAL_ELEMENT_GATE 決定是否換入一槽；沒過閘門就維持舊槽。條件式元素
+    不合格時由 condition_non_directional_element 同槽換字，絕不重抽。若國旗已換入
+    最後一槽，新元素改換前一槽，避免吞掉確定性的國旗規則。
     """
     counts = COVER_ACCESSORY_COUNTS if counts is None else counts
     want = counts.get(level, 0)
@@ -375,8 +615,33 @@ def accessories(
             text = _ICON_SUBJECT_GUIDANCE + text
             icon_guidance_used = True
         picked.append(text + placement_note)
-    if want >= FLAG_ACCESSORY_MIN_COUNT and visuals_mention_flag(visuals):
+    flag_swapped = want >= FLAG_ACCESSORY_MIN_COUNT and visuals_mention_flag(visuals)
+    if flag_swapped:
         picked[-1] = COVER_FLAG_ACCESSORY[1] + placement_note
+
+    gate_numerator, gate_denominator = NON_DIRECTIONAL_ELEMENT_GATE.get(level, (0, 1))
+    if gate_numerator:
+        # 先抽候選、再抽閘門；固定十五格池的每一項始終等機率。兩步都在舊池完成後，
+        # 所以不會回頭擾動既有 seed 的舊招或外框形狀。
+        key, text = rng.choice(NON_DIRECTIONAL_ELEMENT_POOL)
+        if rng.randrange(gate_denominator) < gate_numerator:
+            text = condition_non_directional_element(
+                key,
+                text,
+                content_context=direction_context,
+                type_label=type_label,
+            )
+            # 固定換第一槽：國旗永遠在最後槽，所以不會被吞掉；plain／flag 兩條路也
+            # 仍會在同一槽得到同一個第二池候選。
+            replaced_had_icon_guidance = _ICON_SUBJECT_GUIDANCE in picked[0]
+            picked[0] = text + placement_note
+            if replaced_had_icon_guidance:
+                for index, (old_key, _old_text) in enumerate(entries[1:want], start=1):
+                    if flag_swapped and index == want - 1:
+                        continue
+                    if old_key in _ICON_LIKE_KEYS:
+                        picked[index] = _ICON_SUBJECT_GUIDANCE + picked[index]
+                        break
     return picked
 
 

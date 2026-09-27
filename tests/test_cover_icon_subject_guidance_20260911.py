@@ -70,9 +70,17 @@ class CentralGuidanceCoversAllThreeIconLikeAccessoriesTests(unittest.TestCase):
         saw_with = saw_without = False
         for seed in range(40):
             for level in (2, 3, 4):
-                keys = self._picked_keys(level, seed)
-                expect_guidance = any(k in editor_formats._ICON_LIKE_KEYS for k in keys)
                 picked = editor_formats.cover_accessories(level, seed=seed)
+                # 第二池可能在抽籤完成後確定性換掉第一槽；資格應看最終仍在清單裡的
+                # 圖示招式，而不是換入前的舊池 key。
+                icon_markers = (
+                    "flat WORDLESS PICTOGRAM",
+                    "CLUSTER OF SMALL",
+                    "SHORT ROW OF SMALL",
+                )
+                expect_guidance = any(
+                    marker in text for marker in icon_markers for text in picked
+                )
                 has_guidance = any(editor_formats._ICON_SUBJECT_GUIDANCE in text for text in picked)
                 with self.subTest(seed=seed, level=level):
                     self.assertEqual(has_guidance, expect_guidance)
