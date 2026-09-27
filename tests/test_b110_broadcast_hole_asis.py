@@ -74,7 +74,11 @@ class BroadcastHolePromptTests(unittest.TestCase):
                     )
                     self.assertIn(f"goes in the {content_side} half", prompt)
                     self.assertIn("PLACE AS-IS image MUST appear there", prompt)
-                    self.assertIn("headline at the top and the bottom band may still span the full width", prompt)
+                    self.assertIn(
+                        "headline at the top, and a supplied bottom band when VARIABLE FIELDS "
+                        "contains one, may span the full width",
+                        prompt,
+                    )
 
     def test_frontend_sends_layout_side_independently_from_pressure_frame(self):
         source = (ROOT / "app.js").read_text(encoding="utf-8")

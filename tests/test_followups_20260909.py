@@ -219,27 +219,20 @@ class BroadcastBottomStripTests(unittest.TestCase):
                 off = editor_formats.digest_rules(key, "編輯", stamp=False)
                 self.assertIn("<底帶> line is the one other full-width element", off)
 
-    def test_stamp_off_fills_the_bottom_strip_with_its_own_marked_line(self):
-        """2026-09-09（第三批＋第四批）使用者：「沒有開蓋章，其他資訊還是可以放底下」。
-
-        第三批寫成「最後一張卡下移到底帶」，使用者實測（蓋章 OFF ＋字多）底部仍然全空：
-        那張卡在 variable 裡跟其他卡一模一樣，模型沒有依據把它挑出來。第四批改成給它
-        自己的標記 <底帶>，比照 <蓋章>（那個開著就做得到）。使用者同時開放底帶跨版。
-        """
+    def test_stamp_off_uses_an_optional_marked_bottom_strip(self):
+        """2026-09-27：底帶只在有未使用實質重點時出現，否則必須留空。"""
         for key in self.KEYS:
             with self.subTest(key=key):
                 rules = editor_formats.digest_rules(key, "編輯", stamp=False)
                 self.assertIn("THERE IS NO STAMP BANNER IN THIS GRAPHIC", rules)
-                self.assertIn("THE LOW STRIP UNDER THE RESERVED AREA IS STILL FILLED", rules)
-                self.assertIn("BY A <底帶> LINE INSTEAD", rules)
-                self.assertIn("BELOW the reserved area", rules)
-                # variable 的收尾必須是那一行，才有東西可以擺到底帶
-                self.assertIn("then exactly one line beginning with the marker <底帶>", rules)
-                # 使用者：底部元素可跨版（就像標題可跨版）
-                self.assertIn("it crosses both halves", rules)
+                self.assertIn("ONLY IF the source contains a substantive point", rules)
+                self.assertIn("OMIT <底帶> ENTIRELY", rules)
+                self.assertIn("keep that low strip as background with NO TEXT", rules)
+                self.assertIn("add exactly one line beginning with <底帶> ONLY when", rules)
+                self.assertIn("spanning the full width", rules)
                 # 不能被讀成又要生一條蓋章
-                self.assertIn("do not put a <蓋章> line", rules)
-                self.assertIn("NOT as a closing slogan", rules)
+                self.assertIn("do not put a <蓋章> line", rules.lower())
+                self.assertIn("NOT a closing slogan", rules)
                 # 浮水印一樣蓋在右下角，OFF 也要留位
                 self.assertIn("extreme lower-RIGHT corner", rules)
 
@@ -255,18 +248,16 @@ class BroadcastBottomStripTests(unittest.TestCase):
                     off = editor_formats.digest_rules(
                         key, "編輯", stamp=False, density=density
                     )
+                    self.assertIn("unused substantive point of its own", off)
+                    self.assertIn("none of the lines above already used", off)
                     self.assertIn(
-                        "MUST CARRY A SUBSTANTIVE POINT OF ITS OWN", off
-                    )
-                    self.assertIn("has not appeared yet", off)
-                    self.assertIn(
-                        "the date or time period the material's statistics were "
-                        "collected over",
+                        "the date or time period the statistics were collected over",
                         off,
                     )
-                    self.assertIn("never settle for a vague background sentence", off)
+                    self.assertIn("generic scene-setting", off)
+                    self.assertIn("EMPTY IS REQUIRED", off)
                 on = editor_formats.digest_rules(key, "編輯", stamp=True)
-                self.assertNotIn("MUST CARRY A SUBSTANTIVE POINT OF ITS OWN", on)
+                self.assertNotIn("unused substantive point of its own", on)
 
     def test_the_reserved_window_is_described_as_wide_and_short(self):
         """第 1 條原本寫「filling most of the half」，模型畫成整片高牆，底下那條帶
@@ -282,13 +273,10 @@ class BroadcastBottomStripTests(unittest.TestCase):
                     self.assertIn("does NOT reach the bottom of the frame", rules)
                     self.assertNotIn("filling most of the", rules)
 
-    def test_the_backstop_promotes_the_last_card_when_the_model_forgets(self):
-        """prompt 只是勸告，第三批就是敗在這裡。漏寫 <底帶> 就把最後一張卡升級。"""
+    def test_the_backstop_does_not_promote_the_last_card(self):
+        """沒有合格底帶時保持原樣，不能挪用最後一張內文卡。"""
         variable = "[標題] 甲\n[內文小標] 乙\n[內文小標] 丙\n[內文小標] 丁"
-        self.assertEqual(
-            main.ensure_bottom_band_line(variable),
-            "[標題] 甲\n[內文小標] 乙\n[內文小標] 丙\n<底帶> 丁",
-        )
+        self.assertEqual(main.ensure_bottom_band_line(variable), variable)
 
     def test_the_backstop_leaves_a_compliant_result_alone(self):
         variable = "[標題] 甲\n[內文小標] 乙\n<底帶> 丙"

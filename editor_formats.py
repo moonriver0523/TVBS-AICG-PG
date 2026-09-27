@@ -108,8 +108,8 @@ BROADCAST INSERT LAYOUT ({side_zh}側留給後製) — OVERRIDES THE LAYOUT SENT
 _BROADCAST_STAMP_ON = """5. THE CLOSING <蓋章> BANNER RUNS THE FULL WIDTH ALONG THE VERY BOTTOM IN THIS FORMAT. The reserved video window does not reach the bottom of the frame: it is centred vertically, so a clear horizontal strip is left underneath it. Write into "structure" that the stamp banner is a single full-width bar lying in that low strip, BELOW the reserved area, hugging the bottom of the design and spanning from the {side_en} edge across to the {opposite_en} edge — it is the counterweight to the headline, which spans the full width across the top strip. Nothing of the banner may rise up beside or into the video window, and it stays a single line. Keep the extreme lower-RIGHT corner of that banner clear of essential wording: a small mark is added there afterwards. (It is the lower-right corner whichever half is reserved — the mark's position does not mirror.)
 6. "variable" must be exactly one [標題] line, then exactly {count_word} [內文小標] lines, then one <蓋章> line. {count_word_cap} points, no more and no fewer: this format's card stack has {count_word} rows.{density_rules}
 """
-_BROADCAST_STAMP_OFF = """5. THERE IS NO STAMP BANNER IN THIS GRAPHIC (the user switched it OFF, and that setting wins over every rule above or below that mentions a closing banner). Do NOT write any stamp banner, conclusion strip or closing bar into "structure", and do not put a <蓋章> line in "variable". BUT THE LOW STRIP UNDER THE RESERVED AREA IS STILL FILLED, BY A <底帶> LINE INSTEAD. Leaving that strip empty makes the graphic look unfinished, and it is what the user complained about. Write into "structure" that the <底帶> line is a single bar lying in that low strip, BELOW the reserved area, hugging the bottom of the design and spanning the FULL width from the {side_en} edge across to the {opposite_en} edge — it crosses both halves, exactly like the headline does across the top strip, and the two of them sandwich the video window. It is styled as an ordinary information card like the ones stacked above it, NOT as a coloured stamp and NOT as a closing slogan: it carries a real fact of its own. The remaining cards stay stacked in the {opposite_en} half under the headline. Nothing of it may rise up beside or into the video window, and it stays a single line. Keep the extreme lower-RIGHT corner of it clear of essential wording: a small mark is added there afterwards. (It is the lower-right corner whichever half is reserved — the mark's position does not mirror.)
-6. THIS RULE OVERRIDES THE STAMP-OFF BLOCK ABOVE WHERE THEY DISAGREE ABOUT THE LAST LINE. "variable" must be exactly one [標題] line, then exactly {count_word} [內文小標] lines, then exactly one line beginning with the marker <底帶>. {count_word_cap} points, no more and no fewer: this format's card stack has {count_word} rows, and the <底帶> line is separate from them — it is the bar along the bottom, not one of the rows. Still no <蓋章> line anywhere. THE <底帶> LINE MUST CARRY A SUBSTANTIVE POINT OF ITS OWN — a figure, an outcome, or a named party from the material that none of the lines above it already used. It is never a slogan, a sign-off or a repeat of the headline, and it is never padding: do NOT fill it with the date or time period the material's statistics were collected over, an "as of" remark, generic scene-setting, or a restatement of the topic the headline already gave. If every strong fact is already spent on the headline and the cards, pull forward whichever fact from the material has not appeared yet — never settle for a vague background sentence just to fill the line.{density_rules}
+_BROADCAST_STAMP_OFF = """5. THERE IS NO STAMP BANNER IN THIS GRAPHIC (the user switched it OFF, and that setting wins over every rule above or below that mentions a closing banner). Do NOT write any stamp banner, conclusion strip or closing bar into "structure", and do not put a <蓋章> line in "variable". The low strip under the reserved area remains part of the continuous background. ONLY IF the source contains a substantive point that the headline and cards have not used, put that point there as one <底帶> information bar spanning the full width from the {side_en} edge across to the {opposite_en} edge. It is an ordinary information card, NOT a coloured stamp and NOT a closing slogan. If no unused substantive point remains, OMIT <底帶> ENTIRELY and keep that low strip as background with NO TEXT. The remaining cards stay stacked in the {opposite_en} half under the headline. Any <底帶> stays BELOW the reserved area, never rises beside or into the video window, and stays a single line. Keep its extreme lower-RIGHT corner clear of essential wording: a small mark is added there afterwards. (It is the lower-right corner whichever half is reserved — the mark's position does not mirror.)
+6. "variable" must be exactly one [標題] line followed by exactly {count_word} [內文小標] lines. {count_word_cap} points, no more and no fewer: this format's card stack has {count_word} rows. After those rows, add exactly one line beginning with <底帶> ONLY when it carries an unused substantive point of its own — a figure, an outcome, or a named party from the material that none of the lines above already used. Otherwise end after the final [內文小標] and do not output a <底帶> marker. Still no <蓋章> line anywhere. A <底帶> is never a slogan, a sign-off, a repeat of the headline or padding: do NOT fill it with the date or time period the statistics were collected over, an "as of" remark, generic scene-setting, or a restatement of the topic. EMPTY IS REQUIRED when no qualifying unused fact remains; never move or duplicate an [內文小標] merely to fill the band.{density_rules}
 """
 
 
@@ -131,23 +131,18 @@ _BROADCAST_DENSITY_STANDARD = """ THIS GRAPHIC IS RUNNING AT THE 字多 DENSITY,
 # 第 3 條的「標題是唯一可以跨全寬的元素」在蓋章 ON 之後不再成立（第 5 條把蓋章條
 # 也放到全寬），兩條會被模型讀成互相衝突，所以 ON 的時候補一句指回第 5 條。
 #
-# 2026-09-09（第三批）使用者：「底下的除了蓋章之外，如果沒有開蓋章，其他資訊還是可以
-# 放底下」。蓋章 OFF 也改成有東西跨全寬（最後一張卡下移到底帶），所以 OFF 同樣要補句。
-#
-# 2026-09-09（第四批）使用者實測蓋章 OFF ＋字多，底部還是空的。第三批只是叫模型「把
-# 最後一張卡下移」——那張卡在 variable 裡跟其他卡長得一模一樣，模型沒有理由把它挑出來，
-# 於是四張一起疊在半邊。蓋章 ON 之所以做得到，是因為 <蓋章> 是 variable 裡一個**看得見
-# 的標記**。所以這一版比照辦理，給底帶自己的標記 <底帶>，並在 main 端做確定性兜底
-# （ensure_bottom_band_line）：模型漏寫就把最後一張卡升級成底帶。
+# 2026-09-09 起，蓋章 OFF 時允許用 <底帶> 把一項資訊放進跨全寬的低帶。
+# 2026-09-27 裁決：<底帶> 只在來源另有「尚未使用的實質重點」時輸出；沒有就讓低帶
+# 維持純背景。不得為了填滿版面把最後一張內文卡搬下去，也不得複製既有重點。
 # 同一批也修第 1 條——挖空框其實是 16:9 的寬扁視窗（compose.apply_broadcast_hole），
 # 舊句「filling most of the half」讓模型畫成整片高牆，底下那條帶根本不存在。
 # 使用者同時開放底帶跨版（「就像標題可跨版」），第 5 條照這個寫。
 _BROADCAST_STAMP_SPAN_NOTE = " (the closing <蓋章> banner is the one other full-width element — rule five lays it along the very bottom, under the reserved area)"
-_BROADCAST_NO_STAMP_SPAN_NOTE = " (the <底帶> line is the one other full-width element — rule five lays it along the very bottom, under the reserved area, and it may cross both halves)"
+_BROADCAST_NO_STAMP_SPAN_NOTE = " (an optional <底帶> line is the one other full-width element — when present, rule five lays it along the very bottom under the reserved area; when absent, that strip is background only)"
 
 
-# 蓋章 OFF 時，播出鏡面底帶那一行的標記（2026-09-09 第四批）。與 <蓋章> 平行：
-# 有標記，模型才挑得出哪一行要放到底下那條橫帶。
+# 蓋章 OFF 時，播出鏡面「可選」底帶那一行的標記。只有真的有這個標記時，生圖模型
+# 才把該行放到底下橫帶；沒有標記代表整條低帶不放字。
 BROADCAST_BOTTOM_MARKER = "底帶"
 
 
@@ -604,7 +599,8 @@ _ICON_SUBJECT_GUIDANCE = creativity._ICON_SUBJECT_GUIDANCE
 
 
 def cover_accessories(level: int, titles=(), seed=None, full_width: bool = False,
-                      rng=None, visuals=()) -> list[str]:
+                      rng=None, visuals=(), direction_context: str | None = None,
+                      type_label: str = "") -> list[str]:
     """十點封面的招式 adapter：抽籤走共用的 creativity.accessories，幾何自己補。
 
     公開的參數與名稱一個都沒變（既有呼叫點與測試指名這一支），但抽籤本體已經搬到
@@ -627,6 +623,8 @@ def cover_accessories(level: int, titles=(), seed=None, full_width: bool = False
         seed=seed,
         visuals=visuals,
         placement_note=_accessory_geometry_note(full_width),
+        direction_context=direction_context,
+        type_label=type_label,
     )
 
 
@@ -822,7 +820,8 @@ def _size_hierarchy_line(ratio: str, titles, full_width: bool) -> str:
 
 
 def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = False,
-                       visuals=("", ""), layer_mode: bool = False) -> str:
+                       visuals=("", ""), layer_mode: bool = False,
+                       direction_context: str | None = None) -> str:
     """CANVAS 正後方那塊。愈短愈好——這是模型真的會讀的位置。
 
     2026-09-11 第四輪起，這裡同時是**變化池的出口**：底板形狀、錯位方式、字體骨架、
@@ -907,6 +906,7 @@ def cover_design_brief(level: int, titles=(), seed=None, full_width: bool = Fals
     # 今天已經踩過三次的「prompt 叫它畫、守門當它竄改」同型矛盾。要拿掉就從源頭拿掉。
     picked = () if layer_mode else cover_accessories(
         level, titles=titles, full_width=full_width, rng=rng, visuals=visuals,
+        direction_context=direction_context,
     )
     if picked:
         rows.append(
@@ -1975,7 +1975,8 @@ _YT_STYLE_CLAUSES = {
 
 def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
                     bottom_band: bool = False, visual: str = "",
-                    layer_mode: bool = False) -> str:
+                    layer_mode: bool = False,
+                    direction_context: str | None = None) -> str:
     """CANVAS 正後方那塊。與十點的 cover_design_brief 同一批池子、同一個抽籤順序。
 
     順序刻意跟十點一致（plate → stagger → typeface → palette → tilt），只少了
@@ -2097,6 +2098,7 @@ def yt_design_brief(level: int, lines=(), seed=None, layout: str = "hourly",
     # 同一個 with_title_layer_note 與同一套守門，留一邊不改等於留一個已知的雷。
     picked = () if layer_mode else cover_accessories(
         level, titles=lines, full_width=False, rng=rng, visuals=visual,
+        direction_context=direction_context,
     )
     if picked:
         rows.append(
