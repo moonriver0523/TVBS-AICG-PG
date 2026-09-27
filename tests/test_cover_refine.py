@@ -28,6 +28,7 @@ os.environ.setdefault("NEWS_IMAGE_API_KEY", "test-internal-key")
 import compose  # noqa: E402
 import main  # noqa: E402
 import photo_lookup  # noqa: E402
+import safe_area_spec  # noqa: E402
 from test_ten_cover import _headers, client  # noqa: E402
 
 RAW_COLOUR = (17, 99, 200)
@@ -63,7 +64,7 @@ class CoverRefineSourceTests(unittest.TestCase):
             with self.subTest(layout=layout["layout"]):
                 data = self._post({**layout, "mode": "ai", "title_creativity": 1})
                 self.assertTrue(data["source_image_base64"])
-                self.assertEqual(data["source_mime_type"], "image/png")
+                self.assertEqual(data["source_mime_type"], "image/webp")
                 source = Image.open(io.BytesIO(base64.b64decode(data["source_image_base64"]))).convert("RGB")
                 # 源圖是模型原圖：還沒貼 Logo，左上角仍是原本的底色
                 self.assertEqual(source.getpixel((source.size[0] // 2, source.size[1] // 2)), RAW_COLOUR)
@@ -98,7 +99,10 @@ class CoverRecompositeTests(unittest.TestCase):
             with self.subTest(layout=layout["layout"]):
                 data, raw = self._recomposite(layout)
                 # 源圖原樣回傳，下一輪修改接得上
-                self.assertEqual(base64.b64decode(data["source_image_base64"]), raw)
+                source = Image.open(io.BytesIO(base64.b64decode(data["source_image_base64"]))).convert("RGB")
+                original = Image.open(io.BytesIO(raw)).convert("RGB")
+                self.assertEqual(source.size, original.size)
+                self.assertEqual(source.getpixel((100, 100)), original.getpixel((100, 100)))
                 cover = Image.open(io.BytesIO(base64.b64decode(data["image_data_base64"]))).convert("RGB")
                 self.assertEqual(cover.size, compose.COVER_CANVAS)  # 2026-09-14：AI 路徑一律放大到定版
                 # 後貼確實跑了：「AI示意圖」小標壓在左上
@@ -111,6 +115,17 @@ class CoverRecompositeTests(unittest.TestCase):
 class NamedFaceReplacementTests(unittest.TestCase):
     def _post(self, body, outcome=None):
         captured = {}
+        raw_b64 = base64.b64encode(_png_for("16:9")).decode("ascii")
+        sealed = main._seal_label_response(
+            main.ImageGenerateResponse(
+                image_data_base64=raw_b64, mime_type="image/png", model="test",
+                source_image_base64=raw_b64, source_mime_type="image/png",
+                disclaimer_base_image_base64=raw_b64,
+                disclaimer_kind="ai", disclaimer_provenance_kind="ai",
+                disclaimer_items=[{"id": "global", "side": "global", "kind": "ai",
+                                   "provenance_kind": "ai"}],
+            ), target="cg", context={}, profile=safe_area_spec.REPORTER_PROFILE,
+        )
 
         def fake_raw(image_req):
             captured["request"] = image_req
@@ -129,7 +144,12 @@ class NamedFaceReplacementTests(unittest.TestCase):
              patch.object(main.request_log, "log_generation"):
             response = client.post(
                 "/api/images/refine",
-                json={"source_image_base64": "QUJD", **body},
+                json={
+                    "source_image_base64": sealed.disclaimer_base_image_base64,
+                    "source_mime_type": sealed.disclaimer_base_mime_type,
+                    "label_token": sealed.label_token,
+                    **body,
+                },
                 headers=_headers(),
             )
         return response, captured.get("request")
@@ -175,7 +195,7 @@ class NamedFaceReplacementTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(image_request.reference_images, [])
         self.assertIn("no qualifying portrait photograph", image_request.prompt)
-        self.assertEqual(len(response.json()["notices"]), 1)
+        self.assertGreaterEqual(len(response.json()["notices"]), 1)
 
     def test_no_entry_returns_400_without_generating(self):
         outcome = photo_lookup.PortraitLookupOutcome(

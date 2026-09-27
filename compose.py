@@ -692,7 +692,11 @@ def free_label_obstacles(
             source_text="",
             source_corner=str(context.get("source_corner") or "tl"),
         )
-        for key, name in (("box", "程式標題帶"), ("logo", "Logo"), ("live", "LIVE"), ("label", "小標")):
+        fixed = [("box", "程式標題帶"), ("logo", "Logo")]
+        if bool(context.get("live", True)):
+            fixed.append(("live", "LIVE"))
+        fixed.append(("label", "小標"))
+        for key, name in fixed:
             box = tuple(layout[key])
             if box[2] > box[0] and box[3] > box[1]:
                 boxes.append({"name": name, "bbox": box})

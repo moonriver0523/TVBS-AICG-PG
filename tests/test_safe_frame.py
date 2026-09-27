@@ -408,7 +408,9 @@ class EndpointWiringTests(unittest.TestCase):
             result = generate_image(req)
         with Image.open(io.BytesIO(base64.b64decode(result.image_data_base64))) as img:
             self.assertEqual(img.size, (2560, 1440))
-        self.assertEqual(result.source_image_base64, raw.image_data_base64)
+        with Image.open(io.BytesIO(base64.b64decode(result.source_image_base64))) as got, \
+             Image.open(io.BytesIO(base64.b64decode(raw.image_data_base64))) as expected:
+            self.assertEqual(got.convert("RGBA").tobytes(), expected.convert("RGBA").tobytes())
         with Image.open(io.BytesIO(base64.b64decode(result.source_image_base64))) as img:
             self.assertEqual(img.size, (1280, 720))
 

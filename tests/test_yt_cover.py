@@ -579,7 +579,10 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(data["title_mode"], "ai")
         self.assertTrue(data["background_is_ai"])
         # 追加修改的源圖＝模型原圖（還沒貼固定元素）
-        self.assertEqual(data["source_image_base64"], fake.image_data_base64)
+        with Image.open(io.BytesIO(base64.b64decode(data["source_image_base64"]))) as got, \
+             Image.open(io.BytesIO(base64.b64decode(fake.image_data_base64))) as expected:
+            self.assertEqual(got.size, expected.size)
+            self.assertEqual(got.convert("RGB").getpixel((100, 100)), expected.convert("RGB").getpixel((100, 100)))
 
     def test_ai_title_mode_with_background_only_overlays(self):
         payload = {

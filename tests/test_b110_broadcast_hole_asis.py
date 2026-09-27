@@ -111,8 +111,10 @@ class BroadcastHoleFinalizerTests(unittest.TestCase):
                     with patch.object(main, "generate_image_raw", return_value=raw):
                         result = main.generate_image(request)
 
-                    self.assertEqual(result.source_image_base64, original)
-                    self.assertEqual(result.source_mime_type, "image/png")
+                    with Image.open(io.BytesIO(base64.b64decode(result.source_image_base64))) as got, \
+                         Image.open(io.BytesIO(base64.b64decode(original))) as expected:
+                        self.assertEqual(got.convert("RGBA").tobytes(), expected.convert("RGBA").tobytes())
+                    self.assertEqual(result.source_mime_type, "image/webp")
                     self.assertNotEqual(result.image_data_base64, original)
                     x0, y0, x1, y1 = compose.broadcast_hole_rect(
                         (320, 180), side, safe_area_spec.EDITOR_PROFILE

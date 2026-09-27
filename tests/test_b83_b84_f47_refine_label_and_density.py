@@ -130,6 +130,28 @@ class RestampTests(unittest.TestCase):
             disclaimer_corner=corner,
         )
         payload.update(over)
+        raw = payload["source_image_base64"]
+        target = "broadcast" if payload.get("broadcast_hole") else "cg"
+        context = {
+            "safe_frame": payload.get("safe_frame", False),
+            "frame_strategy": payload.get("frame_strategy", ""),
+            "broadcast_hole": payload.get("broadcast_hole", ""),
+            "hole_side": payload.get("hole_side", ""),
+        }
+        sealed = main._seal_label_response(
+            main.ImageGenerateResponse(
+                image_data_base64=raw, mime_type="image/png", model="test",
+                source_image_base64=raw, source_mime_type="image/png",
+                disclaimer_base_image_base64=raw, disclaimer_kind="source",
+                disclaimer_provenance_kind="source",
+                disclaimer_items=[{"id": "global", "side": "global", "kind": "source",
+                                   "provenance_kind": "source"}],
+            ), target=target, context=context,
+            profile=payload.get("safe_frame_profile", safe_area_spec.REPORTER_PROFILE),
+        )
+        payload["source_image_base64"] = sealed.disclaimer_base_image_base64
+        payload["source_mime_type"] = sealed.disclaimer_base_mime_type
+        payload["label_token"] = sealed.label_token
         return main.ImageRestampRequest(**payload)
 
     def test_it_never_calls_a_generation_model(self):
@@ -266,16 +288,22 @@ class ExactlyOneLabelTests(unittest.TestCase):
     def test_restamping_at_the_same_corner_reproduces_the_same_picture(self):
         """同角落重貼要跟原本那張**逐像素相同**——不同就代表貼了兩枚。"""
         stamped = self._stamped_unframed("lower_right")
+        sealed = main._seal_label_response(
+            stamped, target="cg",
+            context={"safe_frame": False, "frame_strategy": "", "broadcast_hole": "", "hole_side": ""},
+            profile=safe_area_spec.REPORTER_PROFILE,
+        )
         again = main.restamp_disclaimer(
             main.ImageRestampRequest(
-                source_image_base64=stamped.source_image_base64,
-                source_mime_type=stamped.source_mime_type,
+                source_image_base64=sealed.source_image_base64 or sealed.disclaimer_base_image_base64,
+                source_mime_type=sealed.source_mime_type or sealed.disclaimer_base_mime_type,
                 aspect_ratio="16:9",
                 safe_frame=False,
                 safe_frame_profile=safe_area_spec.REPORTER_PROFILE,
                 disclaimer_kind="source",
                 disclaimer_source_text="美聯社",
                 disclaimer_corner="lower_right",
+                label_token=sealed.label_token,
             )
         )
         self.assertEqual(again.image_data_base64, stamped.image_data_base64)

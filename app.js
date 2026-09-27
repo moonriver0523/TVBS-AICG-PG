@@ -351,6 +351,7 @@ let state = {
     // 不在送出當下重讀 aiInput；因此改了原文但沒重消化時，不會把新原文和舊摘要混用。
     digestVisualContext: '',
     digestVisualContextSource: '',
+    digestId: '',
     // 最終 Prompt 的類型標籤聽誰的：'digest'（第一頁自動生成）或 'library'（第二頁調版型）
     // 由「最後一次動作」決定
     promptTypeSource: 'library',
@@ -374,6 +375,7 @@ let state = {
     // refineStack 供「退回上一版」
     refineSource: null,
     refineDisplay: null,
+    refineInFlight: false,
     // 與 refineSource 同一版成品實際使用的置框／模型參數；事後重貼標籤不可讀當下 UI。
     refineParameters: null,
     restampRequestId: 0,
@@ -2353,6 +2355,9 @@ const RESTAMP_BACKEND_URL = `${API_BASE}/api/images/restamp-disclaimer`;
 // 會給錯的下一步（B38 驗收時發現）。只有 _digestFetch 傳 'digest'，其餘呼叫點走中性版本。
 function _apiError(data, status, context) {
     const detail = data && data.detail;
+    if (status === 400 && typeof detail === "string" && /標籤.*(?:憑證|資料)/.test(detail)) {
+        return '標籤資料已過期，請重新整理頁面或重新生成';
+    }
     if (typeof detail === "string") return detail;
     if (status === 408 || status === 504 || status === 524) {
         return context === "digest"
@@ -2499,10 +2504,14 @@ function rememberDigestVisualContext(data, sourceText, density) {
     // 第一版不改字硬關閉；後端也會清空，這裡是 client boundary 的第二道保險。
     state.digestVisualContext = density === 'verbatim' ? '' : value;
     state.digestVisualContextSource = String(sourceText || '');
+    state.digestId = String(data?.digest_id || '');
 }
 
-function visualContextPayload() {
-    return {visual_context: state.digestVisualContext || ''};
+function visualContextPayload(density = state.density) {
+    return {
+        visual_context: density === 'verbatim' ? '' : (state.digestVisualContext || ''),
+        digest_id: state.digestId || '',
+    };
 }
 
 function applyDigestToForm(data, sourceText = '', density = state.digestDensity) {
@@ -3104,6 +3113,7 @@ async function restampDisclaimer() {
             body: JSON.stringify({
                 source_image_base64: state.refineSource.base64,
                 source_mime_type: state.refineSource.mimeType,
+                label_token: (state.refineDisplay || {}).label_token || '',
                 model: params.model,
                 provider: params.provider,
                 aspect_ratio: params.aspect_ratio,
@@ -3180,9 +3190,13 @@ function setupFreeLabelEditor(data, imageId) {
         : [_defaultFreeLabelItem(data)];
     state.labelEditor = {
         imageId,
-        target: currentFreeLabelTarget(),
-        context: currentFreeLabelContext(),
+        // 只讀這次回應攜帶的伺服器快照；await 期間 UI 即使切版型也不能污染舊圖。
+        target: data.label_target || 'cg',
+        context: data.label_context || {},
+        safeFrameProfile: data.label_safe_frame_profile || '',
+        labelToken: data.label_token || '',
         base64: data.disclaimer_base_image_base64,
+        baseMimeType: data.disclaimer_base_mime_type || 'image/webp',
         model: data.model || '',
         items,
         safeRect: data.disclaimer_safe_rect || [],
@@ -3285,8 +3299,8 @@ function renderFreeLabelEditor() {
         return `<div class="${index ? 'mt-2 pt-2 border-t border-amber-900/60' : ''}">
             <div class="flex items-center gap-2 flex-wrap">
                 <span class="text-[9px] font-black text-amber-300">${side}</span>
-                <select data-free-label-kind="${index}" class="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-[10px]">${options}</select>
-                <input data-free-label-source="${index}" maxlength="40" value="${(item.source_text || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"
+                <select data-free-label-kind="${index}" ${state.refineInFlight ? 'disabled' : ''} class="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-[10px]">${options}</select>
+                <input data-free-label-source="${index}" ${state.refineInFlight ? 'disabled' : ''} maxlength="40" value="${(item.source_text || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"
                     placeholder="來源文字" class="${item.kind === 'source' ? '' : 'hidden'} flex-1 min-w-[150px] bg-slate-950 border border-slate-700 rounded px-2 py-1 text-[10px]" />
                 <span class="text-[9px] text-slate-500">桌機可直接拖曳圖片上的虛線框</span>
             </div>
@@ -3304,7 +3318,7 @@ function renderFreeLabelEditor() {
         const size = _freeLabelBoxRatio(item, editor);
         const handle = document.createElement('div');
         handle.dataset.freeLabelHandle = String(index);
-        handle.className = 'absolute border-2 border-dashed border-amber-400 bg-amber-400/10 cursor-move pointer-events-auto';
+        handle.className = `absolute border-2 border-dashed border-amber-400 bg-amber-400/10 ${state.refineInFlight ? 'cursor-not-allowed opacity-60' : 'cursor-move pointer-events-auto'}`;
         handle.style.left = `${(item.position.x - size.w / 2) * 100}%`;
         handle.style.top = `${(item.position.y - size.h / 2) * 100}%`;
         handle.style.width = `${size.w * 100}%`;
@@ -3316,6 +3330,7 @@ function renderFreeLabelEditor() {
 }
 
 function beginFreeLabelDrag(event, index, handle, stage) {
+    if (state.refineInFlight) return showToast('追加修改進行中，標籤編輯暫時鎖定');
     if (event.pointerType === 'touch' || window.matchMedia('(max-width: 767px)').matches) return;
     event.preventDefault();
     const editor = state.labelEditor;
@@ -3358,6 +3373,7 @@ function beginFreeLabelDrag(event, index, handle, stage) {
 }
 
 function changeFreeLabelKind(index, kind) {
+    if (state.refineInFlight) return showToast('追加修改進行中，標籤編輯暫時鎖定');
     const editor = state.labelEditor;
     if (!editor?.items[index]) return;
     const item = editor.items[index];
@@ -3375,6 +3391,7 @@ function changeFreeLabelKind(index, kind) {
 }
 
 function changeFreeLabelSource(index, text) {
+    if (state.refineInFlight) return showToast('追加修改進行中，標籤編輯暫時鎖定');
     const editor = state.labelEditor;
     if (!editor?.items[index]) return;
     const item = editor.items[index];
@@ -3407,6 +3424,9 @@ async function restampFreeLabels() {
         const download = document.getElementById(editor.imageId === 'generatedImage' ? 'downloadGeneratedImage' : 'oneClickDownload');
         if (download) download.href = imageUrl;
         editor.items = data.disclaimer_items?.length ? data.disclaimer_items : editor.items;
+        editor.labelToken = data.label_token || editor.labelToken;
+        editor.base64 = data.disclaimer_base_image_base64 || editor.base64;
+        editor.baseMimeType = data.disclaimer_base_mime_type || editor.baseMimeType;
         editor.safeRect = data.disclaimer_safe_rect || editor.safeRect;
         editor.obstacles = data.disclaimer_obstacles || editor.obstacles;
         if (editor.imageId === 'oneClickImage') state.refineDisplay = {...(state.refineDisplay || {}), ...data};
@@ -3424,9 +3444,11 @@ async function restampFreeLabels() {
 function buildFreeLabelPayload(editor, role) {
     return {
         disclaimer_base_image_base64: editor.base64,
+        disclaimer_base_mime_type: editor.baseMimeType,
+        label_token: editor.labelToken,
         target: editor.target,
         context: editor.context,
-        safe_frame_profile: editor.target === 'cg' || editor.target === 'broadcast' ? role : '編輯安全框',
+        safe_frame_profile: editor.safeFrameProfile || (editor.target === 'cg' || editor.target === 'broadcast' ? role : '編輯安全框'),
         hole_side: editor.context.hole_side || '',
         model: editor.model,
         items: editor.items.map(item => ({
@@ -3639,7 +3661,7 @@ async function handleOneClickGenerate() {
             headers: _apiHeaders(),
             body: JSON.stringify({
                 prompt,
-                ...visualContextPayload(),
+                ...visualContextPayload(generationParameters.density),
                 provider: effectiveImageProvider(),
                 aspect_ratio: currentAspectRatio(),
                 image_size: state.imageSize,
@@ -3773,7 +3795,7 @@ async function handleImageGeneration() {
                 prompt,
                 // 即使第二／三頁手動改過 prompt，仍帶最近一次成功消化的同版摘要；
                 // prompt 編修是版面指令調整，不代表新聞背景版本改變。
-                ...visualContextPayload(),
+                ...visualContextPayload(generationParameters.density),
                 provider,
                 aspect_ratio: currentAspectRatio(),
                 image_size: state.imageSize,
@@ -4200,6 +4222,10 @@ function refineSourceFromResponse(data) {
     if (data.source_image_base64) {
         return { base64: data.source_image_base64, mimeType: data.source_mime_type || 'image/png' };
     }
+    if (data.disclaimer_base_image_base64) {
+        return {base64: data.disclaimer_base_image_base64,
+                mimeType: data.disclaimer_base_mime_type || 'image/webp'};
+    }
     return { base64: data.image_data_base64, mimeType: data.mime_type };
 }
 
@@ -4243,8 +4269,8 @@ function appliedDisclaimer() {
         position: d.disclaimer_position || null,
         provenanceKind: d.disclaimer_provenance_kind || d.disclaimer_kind || '',
         manualOverride: !!d.disclaimer_manual_override,
-        target: currentFreeLabelTarget(),
-        context: currentFreeLabelContext(),
+        target: d.label_target || 'cg',
+        context: d.label_context || {},
         items: Array.isArray(d.disclaimer_items) ? d.disclaimer_items.map(item => ({
             id: item.id || 'global',
             target_side: item.side || item.target_side || 'global',
@@ -4259,6 +4285,7 @@ function appliedDisclaimer() {
 
 function refineDisclaimerPayload(applied) {
     return {
+        label_token: (state.refineDisplay || {}).label_token || '',
         disclaimer_kind: applied.kind,
         disclaimer_source_text: applied.sourceText,
         disclaimer_corner: applied.corner,
@@ -4273,16 +4300,31 @@ function refineDisclaimerPayload(applied) {
 
 async function restampRefinedCoverLabels(display, applied) {
     if (!display?.disclaimer_base_image_base64) return display;
+    // recompose 已依新滿版／雙切狀態回傳正確 items；不能再拿 refine 送出前的舊 items 覆蓋。
+    const responseItems = Array.isArray(display.disclaimer_items) ? display.disclaimer_items : [];
+    const responseFirst = responseItems.length === 1 ? responseItems[0] : null;
+    applied = {
+        kind: responseFirst?.kind || display.disclaimer_kind || '',
+        sourceText: responseFirst?.source_text || display.disclaimer_source_text || '',
+        position: responseFirst?.position || display.disclaimer_position || null,
+        provenanceKind: responseFirst?.provenance_kind || display.disclaimer_provenance_kind || '',
+        manualOverride: responseItems.some(item => !!item.manual_override),
+        target: display.label_target || applied?.target || 'cg',
+        context: display.label_context || applied?.context || {},
+        items: responseItems.map(item => ({...item, target_side: item.side || item.target_side || 'global'})),
+    };
     const response = await fetch(`${API_BASE}/api/images/restamp-disclaimer`, {
         method: 'POST', headers: _apiHeaders(),
         body: JSON.stringify({
             disclaimer_base_image_base64: display.disclaimer_base_image_base64,
+            disclaimer_base_mime_type: display.disclaimer_base_mime_type || 'image/webp',
+            label_token: display.label_token || '',
             source_image_base64: display.source_image_base64 || '',
             source_mime_type: display.source_mime_type || display.mime_type || 'image/png',
             model: display.model || '',
             target: applied.target,
             context: applied.context,
-            safe_frame_profile: '編輯安全框',
+            safe_frame_profile: display.label_safe_frame_profile || '編輯安全框',
             disclaimer_kind: applied.kind,
             disclaimer_source_text: applied.sourceText,
             position: applied.position,
@@ -4380,6 +4422,9 @@ async function handleRefine() {
     const btnText = document.getElementById('refineBtnText');
     const loading = document.getElementById('refineLoading');
     btn.disabled = true;
+    state.refineInFlight = true;
+    if (typeof renderFreeLabelEditor === 'function') renderFreeLabelEditor();
+    showToast('追加修改進行中，標籤編輯暫時鎖定');
     btnText.innerText = '修改中…';
     loading.classList.remove('hidden');
 
@@ -4408,6 +4453,7 @@ async function handleRefine() {
             body: JSON.stringify({
                 source_image_base64: state.refineSource.base64,
                 source_mime_type: state.refineSource.mimeType,
+                label_token: (state.refineDisplay || {}).label_token || '',
                 instruction,
                 provider: refineParameters.provider,
                 aspect_ratio: refineParameters.aspect_ratio,
@@ -4479,6 +4525,8 @@ async function handleRefine() {
         console.error(err);
         showToast(err.message || '修改失敗，請稍後再試');
     } finally {
+        state.refineInFlight = false;
+        if (typeof renderFreeLabelEditor === 'function') renderFreeLabelEditor();
         btnText.innerText = '修改';
         loading.classList.add('hidden');
         updateRefineControls();
