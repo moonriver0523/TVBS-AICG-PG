@@ -133,11 +133,17 @@
   prompt 都新增同次回應的 `visual_context` 畫面用摘要定義，因此八份 digest 快照
   各只新增 schema key 宣告與一條最多 400 字、禁止標題／句子／引言／數字／Logo／
   來源文字的規則。兩份 reporter image prompt 以空 context 重跑仍逐位元相同，未重凍。
+- 2026-09-28（資訊呈現模式 A＋B，使用者明確授權重凍八份 digest）：預設 on 在
+  密度／播出規則之後注入程式選定的 timeline、comparison、hero_number、
+  annotated_subject、icon_grid 或 cards 幾何，並明寫「[內文小標] 是內容單位，不是
+  卡片邊界」。八份 digest 快照重建；舊內容另存 fixtures/info-layout-off 供
+  INFO_LAYOUT_MODE=off 逐字相容測試。兩份 image prompt 與 RNG pins 均未改。
 """
 
 import os
 import pathlib
 import unittest
+from unittest.mock import patch
 
 import news_prompt
 
@@ -154,18 +160,19 @@ def frozen(name: str) -> str:
 
 class ReporterDigestFrozenTests(unittest.TestCase):
     def test_digest_instructions_unchanged(self):
-        for role, fixture_role in (("記者", "reporter"), ("編輯", "editor")):
-            for density in ("standard", "simplified"):
-                for full_bleed in (True, False):
-                    tag = "fullbleed" if full_bleed else "safearea"
-                    with self.subTest(role=role, density=density, mode=tag):
-                        self.assertEqual(
-                            build_digest_instructions(
-                                role, density, "資料圖表", full_bleed=full_bleed
-                            ),
-                            frozen(f"{fixture_role}-digest-{density}-{tag}.txt"),
-                            f"{role}的消化指令被改到了",
-                        )
+        with patch.dict(os.environ, {"INFO_LAYOUT_MODE": "on"}, clear=False):
+            for role, fixture_role in (("記者", "reporter"), ("編輯", "editor")):
+                for density in ("standard", "simplified"):
+                    for full_bleed in (True, False):
+                        tag = "fullbleed" if full_bleed else "safearea"
+                        with self.subTest(role=role, density=density, mode=tag):
+                            self.assertEqual(
+                                build_digest_instructions(
+                                    role, density, "資料圖表", full_bleed=full_bleed
+                                ),
+                                frozen(f"{fixture_role}-digest-{density}-{tag}.txt"),
+                                f"{role}的消化指令被改到了",
+                            )
 
 
 class ReporterImagePromptFrozenTests(unittest.TestCase):

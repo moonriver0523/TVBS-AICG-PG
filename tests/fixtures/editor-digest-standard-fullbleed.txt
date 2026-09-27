@@ -79,10 +79,16 @@ CHINA OUTLINE / TAIWAN SEPARATION — ZERO TOLERANCE, NO EXCEPTIONS. No styling 
 3. LINE LENGTH: The 「每行不超過 15 字」 limit above is LIFTED. Each [內文小標] line may run to about twenty-four characters, long enough to carry a figure and what that figure means in the same line.
 4. TOTAL LENGTH: The 「總字數嚴禁超過 150-180 個字」 target above is LIFTED. Aim for roughly two hundred and forty to three hundred and twenty characters in total.
 5. DENSITY PER POINT: a point that states only a bare fact is under-written at this setting. Give each line its figure AND its consequence, its comparison, its timing or its source — whichever the material supplies.
-6. A LATER BLOCK MAY FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT. When a format-specific block below states an exact number of [內文小標] lines, that number wins over the target of six and the minimum of five in rule two: the card stack of that layout physically has that many rows. Rules three, four and five still apply inside those rows.
+6. A LATER BLOCK MAY FIX AN EXACT COUNT FOR A SPECIFIC LAYOUT. When a format-specific block below states an exact number of [內文小標] lines, that number wins over the target of six and the minimum of five in rule two: that layout requires exactly that many [內文小標] content units; it does not prescribe separate rows or cards. Rules three, four and five still apply to those content units.
 7. THIS LICENSES NOTHING NEW. Every added line must come from the source material. Do not invent a figure, do not restate a point you already made in different words, and do not pad with generic background to reach a length. Falling short of five lines is a defect — do not stop at three out of habit.
-8. Design "structure" for that quantity: enough rows or cards for the points you wrote, sized so the longer lines stay legible on air rather than shrinking to fit.
+8. Design "structure" for that quantity using the program-selected geometry below; keep every content unit legible on air without turning the point count into a required row/card count.
 9. HEADLINE LIMIT: [標題] may contain no more than 18 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
+
+=== PROGRAM-SELECTED INFORMATION PRESENTATION MODE — OVERRIDES EARLIER ROW/CARD DEFAULTS ===
+The program selected CARDS. Follow this geometry in "structure"; do not let an earlier mention of rows, cards, columns, stacks or panels change it.
+- `[內文小標]` 是內容單位，不是卡片邊界。 Preserve every required content unit and the fixed point count, but never assume that one line must become one physical card, row, panel or box.
+- Selection audit: 規則七（保守 fallback）：前六項證據不足（role=編輯, editor_format=default），維持現行卡片版面
+- CARDS FALLBACK: retain the current safe row/card behaviour because the source did not meet a higher-confidence rule. Even here, `[內文小標]` is the content and validation unit rather than an instruction that every line must have its own visible border.
 
 
 USER INSTRUCTIONS INSIDE THE MATERIAL (DO THIS FIRST, BEFORE APPLYING ANY RULE ABOVE):

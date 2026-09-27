@@ -157,13 +157,17 @@ _BROADCAST_POINT_RULE_STANDARD = """7. Each [內文小標] is written as the two
 
 
 def _broadcast_rules(
-    side: str, stamp: bool | None = None, density: str | None = None
+    side: str,
+    stamp: bool | None = None,
+    density: str | None = None,
+    *,
+    info_layout: bool = False,
 ) -> str:
     left = side == "left"
     # 字超多沿用字多的版面加碼（四張卡、每卡兩行）：卡片列數是版面實體限制，不隨密度長。
     standard = density in ("standard", "maximum")
     stamp_block = _BROADCAST_STAMP_OFF if stamp is False else _BROADCAST_STAMP_ON
-    return _BROADCAST_RULES_TEMPLATE.format(
+    rules = _BROADCAST_RULES_TEMPLATE.format(
         stamp_rules=stamp_block.format(
             density_rules=_BROADCAST_DENSITY_STANDARD if standard else "",
             side_en="left" if left else "right",
@@ -180,6 +184,58 @@ def _broadcast_rules(
             _BROADCAST_NO_STAMP_SPAN_NOTE if stamp is False else _BROADCAST_STAMP_SPAN_NOTE
         ),
     )
+    if info_layout:
+        # INFO_LAYOUT_MODE=off 必須逐字回到 2026-09-27 線上 prompt，因此不能直接改
+        # 上方舊常數；只在 on 路徑把「固定點數＝實體卡片列」解除。真正的 mode 幾何
+        # 會由 main.build_digest_instructions 在更後方注入，這裡只先拆掉矛盾。
+        rules = rules.replace(
+            "Every OTHER content block — every card, figure, icon and label — sits in the "
+            f"{'right' if left else 'left'} half, stacked from top to bottom under the headline, "
+            f"entirely clear of the {'left' if left else 'right'} half.",
+            "Every OTHER content unit — including every figure, icon and label — stays in the "
+            f"{'right' if left else 'left'} half under the headline, entirely clear of the "
+            f"{'left' if left else 'right'} half. Arrange those units in the program-selected "
+            "geometry stated later; they do not have to form equal rows or a card stack.",
+        )
+        rules = rules.replace(
+            "The remaining cards stay stacked in the "
+            f"{'right' if left else 'left'} half under the headline.",
+            "The remaining content units stay in the "
+            f"{'right' if left else 'left'} half under the headline, using the program-selected "
+            "geometry stated later.",
+        )
+        rules = rules.replace(
+            "the headline and cards have not used",
+            "the headline and other content units have not used",
+        ).replace(
+            "It is an ordinary information card,",
+            "It is an ordinary information unit,",
+        ).replace(
+            "After those rows, add exactly one line",
+            "After those content units, add exactly one line",
+        )
+        for word in ("three", "four"):
+            rules = rules.replace(
+                f"this format's card stack has {word} rows.",
+                f"this format has exactly {word} [內文小標] content units; that count does not "
+                "require separate rows or cards.",
+            )
+        rules = rules.replace(
+            "SO EACH OF THOSE CARDS CARRIES TWO LINES INSTEAD OF ONE:",
+            "SO EACH OF THOSE CONTENT UNITS CARRIES TWO TEXT PARTS:",
+        ).replace(
+            'say in "structure" that each card stacks its label above its supporting line, '
+            "the label set larger than the line under it. Fill every card:",
+            'say in "structure" that every content unit keeps its label visually larger than '
+            "its supporting detail. Fill every content unit:",
+        ).replace(
+            "Each [內文小標] line is one short scannable fact.",
+            "Each [內文小標] is one short scannable content unit, not a card boundary.",
+        ).replace(
+            "so a card carrying only a couple of characters after the bar is a defect.",
+            "so a content unit carrying only a couple of characters after the bar is a defect.",
+        )
+    return rules
 
 
 # 十點不一樣封面：AI 只出**無文字**底圖，節目名／Logo／日期／標籤／兩邊標題全部
@@ -2681,6 +2737,7 @@ def digest_rules(
     stamp: bool | None = None,
     density: str | None = None,
     side: str | None = None,
+    info_layout: bool = False,
 ) -> str:
     """消化階段要注入的規則。非編輯角色一律空字串——第三層防呆。
 
@@ -2694,7 +2751,9 @@ def digest_rules(
         return ""
     resolved = resolve_hole_side(key, side)
     if resolved:
-        return _broadcast_rules(resolved, stamp=stamp, density=density)
+        return _broadcast_rules(
+            resolved, stamp=stamp, density=density, info_layout=info_layout
+        )
     return get(key)["digest_rules"]
 
 
