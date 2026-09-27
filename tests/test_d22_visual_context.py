@@ -1,6 +1,8 @@
 """D22 第一關：一般 CG／播出鏡面的畫面用摘要。全程不呼叫外部 API。"""
 
 import json
+import base64
+import io
 import os
 from pathlib import Path
 import shutil
@@ -10,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from pydantic import ValidationError
+from PIL import Image
 
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 
@@ -26,6 +29,12 @@ VALID_CONTEXT = (
     "畫面中的車輛、制服與建築皆屬臺灣都會場景，避免畫成外國城市或選舉造勢活動。"
     "鏡頭應呈現陰雨天的真實採訪現場、群眾等待與工作人員往來的關係。"
 )
+
+
+def valid_png_base64():
+    out = io.BytesIO()
+    Image.new("RGB", (64, 36), (12, 34, 56)).save(out, "PNG")
+    return base64.b64encode(out.getvalue()).decode("ascii")
 
 
 def valid_digest(**updates):
@@ -216,7 +225,7 @@ class AuditArchiveTests(unittest.TestCase):
 
         req = main.ImageGenerateRequest(prompt="approved", visual_context=VALID_CONTEXT)
         result = main.ImageGenerateResponse(
-            image_data_base64="eA==", mime_type="image/png", model="fake",
+            image_data_base64=valid_png_base64(), mime_type="image/png", model="fake",
         )
         identities = (
             "apply_portrait_to_image_request", "apply_map_reference_to_image_request",
@@ -241,8 +250,8 @@ class FrontendVisualContextTests(unittest.TestCase):
         one_click = one_click[:one_click.index("/* ============================================================\n   圖片生成")]
         manual = APP_JS[APP_JS.index("async function handleImageGeneration"):]
         manual = manual[:manual.index("/* ============================================================\n   ① 專用指令欄位")]
-        self.assertIn("...visualContextPayload()", one_click)
-        self.assertIn("...visualContextPayload()", manual)
+        self.assertIn("...visualContextPayload(generationParameters.density)", one_click)
+        self.assertIn("...visualContextPayload(generationParameters.density)", manual)
 
         node = shutil.which("node")
         if not node:
@@ -265,11 +274,11 @@ class FrontendVisualContextTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         out = json.loads(proc.stdout.strip())
-        self.assertEqual(out["first"], {"visual_context": VALID_CONTEXT})
+        self.assertEqual(out["first"], {"visual_context": VALID_CONTEXT, "digest_id": ""})
         self.assertEqual(out["afterEdit"], out["first"])
         self.assertEqual(out["boundSource"], "舊原文")
         self.assertNotEqual(out["boundSource"], out["editedTextarea"])
-        self.assertEqual(out["verbatim"], {"visual_context": ""})
+        self.assertEqual(out["verbatim"], {"visual_context": "", "digest_id": ""})
 
 
 if __name__ == "__main__":

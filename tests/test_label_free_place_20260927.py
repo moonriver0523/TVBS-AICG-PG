@@ -27,6 +27,20 @@ def png_base64(size=(1920, 1080), mode="RGB"):
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+def seal_for_test(raw, *, target="cg", context=None, profile=safe_area_spec.REPORTER_PROFILE,
+                  items=None, kind="ai"):
+    items = items or [{"id": "global", "side": "global", "kind": kind,
+                       "provenance_kind": kind}]
+    return main._seal_label_response(
+        main.ImageGenerateResponse(
+            image_data_base64=raw, mime_type="image/png", model="test",
+            source_image_base64=raw, source_mime_type="image/png",
+            disclaimer_base_image_base64=raw, disclaimer_kind=kind,
+            disclaimer_provenance_kind=kind, disclaimer_items=items,
+        ), target=target, context=context or {}, profile=profile,
+    )
+
+
 class CoordinateAndPixelTests(unittest.TestCase):
     def test_normalized_position_is_the_bbox_center(self):
         bbox = compose.free_label_box(
@@ -126,8 +140,19 @@ class CoordinateAndPixelTests(unittest.TestCase):
 
 class GeometryGateTests(unittest.TestCase):
     def _request(self, target, position, *, context=None, side="global", kind="source"):
+        profile = (
+            safe_area_spec.EDITOR_FRAME_PROFILE
+            if target not in ("cg", "broadcast") else safe_area_spec.REPORTER_PROFILE
+        )
+        raw = png_base64(mode="RGBA" if target == "yt_vstrip" else "RGB")
+        sealed = seal_for_test(
+            raw, target=target, context=context or {}, profile=profile,
+            items=[{"id": "global", "side": side, "kind": kind, "provenance_kind": kind}],
+            kind=kind,
+        )
         return main.ImageRestampRequest(
-            disclaimer_base_image_base64=png_base64(mode="RGBA" if target == "yt_vstrip" else "RGB"),
+            disclaimer_base_image_base64=sealed.disclaimer_base_image_base64,
+            label_token=sealed.label_token,
             target=target,
             target_side=side,
             position=main.NormalizedDisclaimerPosition(x=position[0], y=position[1]),
@@ -135,10 +160,7 @@ class GeometryGateTests(unittest.TestCase):
             disclaimer_kind=kind,
             disclaimer_source_text="中央社" if kind == "source" else "",
             provenance_kind=kind,
-            safe_frame_profile=(
-                safe_area_spec.EDITOR_FRAME_PROFILE
-                if target not in ("cg", "broadcast") else safe_area_spec.REPORTER_PROFILE
-            ),
+            safe_frame_profile=profile,
         )
 
     def test_outside_safe_frame_is_400(self):
@@ -231,8 +253,11 @@ class GeometryGateTests(unittest.TestCase):
 
 class OverrideAuditTests(unittest.TestCase):
     def test_kind_override_warns_and_is_archived(self):
+        raw = png_base64()
+        sealed = seal_for_test(raw, kind="ai")
         req = main.ImageRestampRequest(
-            disclaimer_base_image_base64=png_base64(),
+            disclaimer_base_image_base64=sealed.disclaimer_base_image_base64,
+            label_token=sealed.label_token,
             target="cg",
             position=main.NormalizedDisclaimerPosition(x=0.5, y=0.5),
             disclaimer_kind="source",
@@ -249,8 +274,18 @@ class OverrideAuditTests(unittest.TestCase):
         self.assertEqual(archive.call_args.kwargs["label_kind"], "source")
 
     def test_ten_cover_batch_restamps_both_sides_in_one_request(self):
+        raw = png_base64()
+        token_items = [
+            {"id": "left", "side": "left", "kind": "ai", "provenance_kind": "ai"},
+            {"id": "right", "side": "right", "kind": "source", "provenance_kind": ""},
+        ]
+        sealed = seal_for_test(
+            raw, target="ten_cover", profile=safe_area_spec.EDITOR_FRAME_PROFILE,
+            items=token_items, kind="",
+        )
         req = main.ImageRestampRequest(
-            disclaimer_base_image_base64=png_base64(),
+            disclaimer_base_image_base64=sealed.disclaimer_base_image_base64,
+            label_token=sealed.label_token,
             target="ten_cover",
             safe_frame_profile=safe_area_spec.EDITOR_FRAME_PROFILE,
             items=[
@@ -460,6 +495,11 @@ global.fetch = async (_url, options) => {{
 const display = {{
   disclaimer_base_image_base64:'clean',source_image_base64:'raw',
   source_mime_type:'image/png',mime_type:'image/png',model:'fake',notices:[],
+  label_token:'signed',label_target:'ten_cover',label_context:{{layout:'split'}},
+  disclaimer_items:[
+    {{id:'left',side:'left',kind:'ai',source_text:'',position:{{x:0.2,y:0.3}},provenance_kind:'ai',manual_override:false}},
+    {{id:'right',side:'right',kind:'source',source_text:'路透社',position:{{x:0.8,y:0.3}},provenance_kind:'',manual_override:true}},
+  ],
 }};
 const applied = {{
   kind:'',sourceText:'',position:null,provenanceKind:'',manualOverride:true,
@@ -520,8 +560,16 @@ class RefineSchemaTests(unittest.TestCase):
                 provenance_kind="", manual_override=True,
             ),
         ]
+        raw = png_base64()
+        sealed = seal_for_test(
+            raw, target="ten_cover", profile=safe_area_spec.EDITOR_FRAME_PROFILE,
+            items=[{"id": i.id, "side": i.target_side, "kind": i.kind,
+                    "provenance_kind": i.provenance_kind} for i in items], kind="",
+        )
         request = main.ImageRefineRequest(
-            source_image_base64=png_base64(), instruction="change it",
+            source_image_base64=sealed.disclaimer_base_image_base64,
+            source_mime_type=sealed.disclaimer_base_mime_type,
+            label_token=sealed.label_token, instruction="change it",
             provider="gemini", cover_kind="ten_cover",
             disclaimer_target="ten_cover", disclaimer_items=items,
         )
@@ -549,8 +597,17 @@ class RefineSchemaTests(unittest.TestCase):
             x=((obstacle[0] + obstacle[2]) / 2) / 1920,
             y=((obstacle[1] + obstacle[3]) / 2) / 1080,
         )
+        raw = png_base64()
+        sealed = seal_for_test(
+            raw, target="broadcast", context=context,
+            profile=safe_area_spec.REPORTER_PROFILE,
+            items=[{"id": "global", "side": "global", "kind": "source",
+                    "provenance_kind": "source"}], kind="source",
+        )
         request = main.ImageRefineRequest(
-            source_image_base64=png_base64(), instruction="change it",
+            source_image_base64=sealed.disclaimer_base_image_base64,
+            source_mime_type=sealed.disclaimer_base_mime_type,
+            label_token=sealed.label_token, instruction="change it",
             provider="gemini", broadcast_hole="left", hole_side="left",
             safe_frame_profile=safe_area_spec.REPORTER_PROFILE,
             disclaimer_target="broadcast", disclaimer_context=context,

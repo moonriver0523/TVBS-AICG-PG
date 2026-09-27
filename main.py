@@ -3,6 +3,7 @@ import concurrent.futures
 import copy
 import contextvars
 import datetime
+import hashlib
 import hmac
 import io
 import json
@@ -86,6 +87,25 @@ from news_prompt import (
 )
 
 load_dotenv()
+
+# B113：成品標籤編輯憑證。不能把 NEWS_IMAGE_API_KEY 本身當 HMAC key；固定加上
+# domain separator 後再雜湊，避免同一把 secret 在不同用途間互相影響。正式環境也可
+# 另設 LABEL_TOKEN_SECRET，輪替時舊憑證會自然失效。
+_label_secret_source = (
+    os.getenv("LABEL_TOKEN_SECRET", "").strip()
+    or os.getenv("NEWS_IMAGE_API_KEY", "").strip()
+)
+if not _label_secret_source:
+    _label_secret_source = secrets.token_urlsafe(32)
+    print(
+        "[label-token] 未設定 LABEL_TOKEN_SECRET／NEWS_IMAGE_API_KEY；"
+        "本次啟動使用隨機金鑰，重啟後既有標籤憑證會失效",
+        flush=True,
+    )
+LABEL_TOKEN_KEY = hashlib.sha256(
+    b"aicg-label-token-v1\0" + _label_secret_source.encode("utf-8")
+).digest()
+LABEL_TOKEN_TTL_SECONDS = 24 * 60 * 60
 
 # Digest（生成 Prompt）預設走 OpenRouter，與生圖共用同一把 OPENROUTER_API_KEY；
 # 未設定 OPENROUTER_API_KEY 時退回 OpenAI 原生直連。
@@ -531,32 +551,36 @@ except ImportError:  # 沒裝 langfuse 時退成什麼都不做的空 context ma
 # 的前端主檔，風險高於效益。同一人短時間內換稿再生圖時，補上的是最近一次消化的原文,
 # 與使用者當下畫面上看到的內容一致。
 _DIGEST_MEMO_TTL = 1800
-_digest_memo: dict[str, tuple[float, dict]] = {}
+_digest_memo: dict[str, tuple[float, dict[str, dict]]] = {}
 _digest_memo_lock = threading.Lock()
 
 
 def _remember_digest(**fields) -> None:
-    """記下這位使用者最近一次消化的新聞原文與消化結果。"""
+    """依 digest_id 記下消化；同使用者跨分頁也不會互相覆蓋。"""
     user_id = current_user().get("user_id") or ""
-    if not user_id:
+    digest_id = str(fields.get("digest_id") or "")
+    if not user_id or not digest_id:
         return
     now = time.time()
     with _digest_memo_lock:
-        _digest_memo[user_id] = (now, fields)
+        previous = _digest_memo.get(user_id)
+        entries = dict(previous[1]) if previous and now - previous[0] <= _DIGEST_MEMO_TTL else {}
+        entries[digest_id] = fields
+        _digest_memo[user_id] = (now, entries)
         # 順手清掉過期的，避免這個 dict 隨使用者數無限成長。
         for key in [k for k, (ts, _) in _digest_memo.items() if now - ts > _DIGEST_MEMO_TTL]:
             _digest_memo.pop(key, None)
 
 
-def _recall_digest() -> dict:
+def _recall_digest(digest_id: str) -> dict:
     user_id = current_user().get("user_id") or ""
-    if not user_id:
+    if not user_id or not digest_id:
         return {}
     with _digest_memo_lock:
         found = _digest_memo.get(user_id)
     if not found or time.time() - found[0] > _DIGEST_MEMO_TTL:
         return {}
-    return found[1]
+    return found[1].get(digest_id, {})
 
 
 _UPSTREAM_STATUS_RE = re.compile(r"[（(](\d{3})[）)]")
@@ -732,11 +756,17 @@ def _outcome_meta(
 
 def _enrich_archive_fields(kwargs: dict) -> dict:
     enriched = dict(kwargs)
-    memo = _recall_digest()
-    if memo:
-        for key, value in memo.items():
-            if not enriched.get(key):
-                enriched[key] = value
+    # 只有明帶 digest_id 的生圖請求才補原文；配不到就留下 unknown，絕不拿另一分頁
+    # 最近一次稿件湊數。其他本來就自帶 news_text 的端點不走這條關聯。
+    if "digest_id" in enriched:
+        memo = _recall_digest(str(enriched.get("digest_id") or ""))
+        if memo:
+            for key, value in memo.items():
+                if not enriched.get(key):
+                    enriched[key] = value
+            enriched["digest_match"] = "matched"
+        else:
+            enriched["digest_match"] = "unknown"
     return enriched
 
 
@@ -1026,6 +1056,9 @@ class GenerateResponse(BaseModel):
     # D22：只供下一段生圖理解人物、地點、事件、物件、場景與消歧；不是畫面文字。
     # 不改字模式第一版固定為空，品質不合格也只降級為空，不拖累整次消化。
     visual_context: str = ""
+    # D22/B113：同一次消化與後續生圖的不可猜測關聯 ID。歸檔只接受完全相同的 ID，
+    # 不再用「該使用者最近一次消化」猜原文。
+    digest_id: str = ""
     # 這次實際採用的圖表類型（自動判斷模式下為 AI 所選）
     chart_type: str = ""
     # 版面會畫出臉孔的每一位具名真實人物，全部列進來（沒有就空陣列）。
@@ -1168,6 +1201,7 @@ class ImageGenerateRequest(BaseModel):
     # D22：與該次消化綁定的「畫面用摘要」。transport 留 4,000 字防線；正常的
     # digest 輸出會在 400 字內。空字串是完整相容路徑，append_visual_context no-op。
     visual_context: str = Field(default="", max_length=4_000)
+    digest_id: str = Field(default="", max_length=80)
     provider: Literal["gemini", "gpt"] = "gemini"
     aspect_ratio: str = "16:9"
     image_size: str = "1K"
@@ -1268,6 +1302,13 @@ class ImageGenerateResponse(BaseModel):
     # 成品已完成所有版型固定元素、但尚未貼來源／AI 標籤的 PNG。事後拖曳、改字或
     # 切換種類一律從這張重貼，避免舊標籤殘留；只由 Pillow 消費，不送進任何模型。
     disclaimer_base_image_base64: str = ""
+    disclaimer_base_mime_type: str = ""
+    # HMAC 簽章的標籤憑證：綁定乾淨底圖／refine 原圖、版型 context、safe profile
+    # 與每枚標籤的伺服器 provenance。restamp/refine 沒有有效憑證一律拒絕。
+    label_token: str = ""
+    label_target: str = ""
+    label_context: dict = Field(default_factory=dict)
+    label_safe_frame_profile: str = ""
     disclaimer_position: dict | None = None
     disclaimer_bbox: list[int] = Field(default_factory=list)
     disclaimer_safe_rect: list[int] = Field(default_factory=list)
@@ -1275,6 +1316,164 @@ class ImageGenerateResponse(BaseModel):
     disclaimer_items: list[dict] = Field(default_factory=list)
     disclaimer_manual_override: bool = False
     disclaimer_provenance_kind: str = ""
+
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def _image_sha256(image_base64: str) -> str:
+    try:
+        raw = base64.b64decode(image_base64, validate=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="圖片資料不是有效的 base64") from exc
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _compact_reusable_image(image_base64: str, mime_type: str = "") -> tuple[str, str]:
+    """把只供下一次 refine/restamp 的副本轉成 WebP，避免 2K PNG 在 JSON 內重複。
+
+    人看的 image_data_base64 完全不動；因此未拖曳、未追加修改的輸出像素不變。
+    已是 WebP 時不重編碼，避免每次拖曳累積有損壓縮。
+    """
+    if not image_base64:
+        return "", ""
+    if (mime_type or "").lower() == "image/webp":
+        return image_base64, "image/webp"
+    try:
+        raw = base64.b64decode(image_base64, validate=True)
+        with Image.open(io.BytesIO(raw)) as opened:
+            image = opened.convert("RGBA" if "A" in opened.getbands() else "RGB")
+            out = io.BytesIO()
+            if image.width * image.height <= 1920 * 1080:
+                image.save(out, format="WEBP", lossless=True, method=4)
+            else:
+                image.save(out, format="WEBP", quality=88, method=4)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"無法壓縮標籤底圖：{exc}") from exc
+    return base64.b64encode(out.getvalue()).decode("ascii"), "image/webp"
+
+
+def _token_item_provenance(result: ImageGenerateResponse) -> list[dict]:
+    items = result.disclaimer_items or [{
+        "id": "global", "side": "global",
+        "provenance_kind": result.disclaimer_provenance_kind or result.disclaimer_kind,
+    }]
+    return [{
+        "id": str(item.get("id") or "global"),
+        "side": str(item.get("side") or item.get("target_side") or "global"),
+        "provenance_kind": str(item.get("provenance_kind") or ""),
+    } for item in items]
+
+
+def _encode_label_token(payload: dict) -> str:
+    body = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    signature = hmac.new(LABEL_TOKEN_KEY, body, hashlib.sha256).digest()
+    return f"{_b64url_encode(body)}.{_b64url_encode(signature)}"
+
+
+LABEL_DATA_EXPIRED_DETAIL = "標籤資料已過期，請重新整理頁面或重新生成"
+
+
+def _decode_label_token(token: str) -> dict:
+    try:
+        body_part, signature_part = token.split(".", 1)
+        body = _b64url_decode(body_part)
+        signature = _b64url_decode(signature_part)
+        expected = hmac.new(LABEL_TOKEN_KEY, body, hashlib.sha256).digest()
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError("bad signature")
+        payload = json.loads(body.decode("utf-8"))
+        issued = int(payload["iat"])
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=LABEL_DATA_EXPIRED_DETAIL) from exc
+    now = int(time.time())
+    if issued > now + 300 or now - issued > LABEL_TOKEN_TTL_SECONDS:
+        raise HTTPException(status_code=400, detail=LABEL_DATA_EXPIRED_DETAIL)
+    return payload
+
+
+def _seal_label_response(
+    result: ImageGenerateResponse, *, target: str, context: dict, profile: str,
+    source_sha256: str = "",
+) -> ImageGenerateResponse:
+    """壓縮可重用副本並簽發憑證。context/profile 是實際 renderer 使用值。
+
+    restamp 不必每次重送體積很大的 refine 原圖；該路徑會把已驗證舊憑證中的
+    source hash 傳進來。若沒有覆寫值（generate/refine），才由本次回應實際攜帶的
+    source 計算。
+    """
+    clean = result.disclaimer_base_image_base64 or result.image_data_base64
+    clean_mime = result.disclaimer_base_mime_type or result.mime_type
+    compact_clean, compact_clean_mime = _compact_reusable_image(clean, clean_mime)
+    source = result.source_image_base64
+    source_mime = result.source_mime_type or result.mime_type
+    # 未置框時 source 與 clean 是同一張；只攜帶一份，前端會以 clean 作 refine source。
+    same_source = bool(source) and _image_sha256(source) == _image_sha256(clean)
+    if source and not same_source:
+        compact_source, compact_source_mime = _compact_reusable_image(source, source_mime)
+    else:
+        compact_source, compact_source_mime = "", ""
+    source_for_hash = compact_source or compact_clean
+    payload = {
+        "v": 1,
+        "iat": int(time.time()),
+        "clean_sha256": _image_sha256(compact_clean),
+        "source_sha256": source_sha256 or _image_sha256(source_for_hash),
+        "target": target,
+        "context": json.loads(json.dumps(context or {}, ensure_ascii=False)),
+        "safe_frame_profile": profile,
+        "items": _token_item_provenance(result),
+    }
+    return result.model_copy(update={
+        "disclaimer_base_image_base64": compact_clean,
+        "disclaimer_base_mime_type": compact_clean_mime,
+        "source_image_base64": compact_source,
+        "source_mime_type": compact_source_mime,
+        "label_token": _encode_label_token(payload),
+        "label_target": target,
+        "label_context": payload["context"],
+        "label_safe_frame_profile": profile,
+    })
+
+
+MAX_REUSABLE_LONG_EDGE = 4096
+MAX_REUSABLE_PIXELS = 4096 * 2160
+
+
+def _validate_reusable_image(image_base64: str, *, field_name: str) -> tuple[int, int]:
+    """只讀 header 先驗尺寸；超限時不 convert、不配置同尺寸 plate。"""
+    try:
+        raw = base64.b64decode(image_base64, validate=True)
+        with Image.open(io.BytesIO(raw)) as opened:
+            width, height = opened.size
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"{field_name} 不是可解碼圖片") from exc
+    if (
+        width <= 0 or height <= 0
+        or max(width, height) > MAX_REUSABLE_LONG_EDGE
+        or width * height > MAX_REUSABLE_PIXELS
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(f"{field_name} 畫素尺寸 {width}×{height} 超過上限："
+                    f"長邊 ≤ {MAX_REUSABLE_LONG_EDGE}、總畫素 ≤ {MAX_REUSABLE_PIXELS}"),
+        )
+    return width, height
+
+
+def _verified_label_claims(token: str, image_base64: str, *, use_source: bool) -> dict:
+    if not token:
+        raise HTTPException(status_code=400, detail=LABEL_DATA_EXPIRED_DETAIL)
+    payload = _decode_label_token(token)
+    expected = payload.get("source_sha256" if use_source else "clean_sha256")
+    if not expected or not hmac.compare_digest(str(expected), _image_sha256(image_base64)):
+        raise HTTPException(status_code=400, detail=LABEL_DATA_EXPIRED_DETAIL)
+    return payload
 
 
 # 第一頁「懶人機制」：type_label 傳這個值代表由 AI 自行判斷最適合的圖表類型
@@ -2794,6 +2993,20 @@ DIGEST_CHANNEL_LEAK = re.compile(
 # 降級成空字串。重要：這些都不是整份 digest 的失敗，不能因此多打一輪付費模型。
 VISUAL_CONTEXT_MIN_CHARS = 40
 VISUAL_CONTEXT_MAX_CHARS = 400
+VISUAL_CONTEXT_FORBIDDEN_ORG = re.compile(
+    r"(?:TVBS|CNN|BBC|Logo|路透社|中央社|美聯社|法新社|新華社|共同社|彭博|"
+    r"壹電視|東森新聞|三立新聞|民視新聞|公視新聞|中天新聞)",
+    re.IGNORECASE,
+)
+VISUAL_CONTEXT_DIGIT = re.compile(r"[0-9０-９]")
+
+
+def _visual_context_sentence_is_forbidden(sentence: str) -> bool:
+    return bool(
+        VISUAL_CONTEXT_DIGIT.search(sentence)
+        or VISUAL_CONTEXT_FORBIDDEN_ORG.search(sentence)
+        or any(ch in DIGEST_NON_TW_CHARS for ch in sentence)
+    )
 
 
 def downgrade_visual_context(data: dict) -> str:
@@ -2807,6 +3020,17 @@ def downgrade_visual_context(data: dict) -> str:
     if not value:
         data["visual_context"] = ""
         return "visual_context 為空"
+
+    # D22 裁決：逐句移除含數字、Logo、已知媒體／通訊社名或簡體字的句子；若沒有
+    # 任何合格句，再依下方共同規則降級為空。優先保留其餘乾淨背景資訊。
+    sentences = re.findall(r"[^。！？!?]+[。！？!?]?", value)
+    value = "".join(
+        sentence for sentence in sentences
+        if not _visual_context_sentence_is_forbidden(sentence)
+    ).strip()
+    if not value:
+        data["visual_context"] = ""
+        return "visual_context 所有句子都含禁用的數字／Logo／來源機構／簡體字"
 
     # 上限採裁切而非重試：模型多寫不值得再付一次錢；transport 的 4,000 字上限是
     # 另一層防線，正常 digest 回應在這裡就會收斂到 400 字。
@@ -3497,6 +3721,7 @@ def generate(req: GenerateRequest):
                 visual_context=(
                     "" if req.density == "verbatim" else data.get("visual_context", "")
                 ),
+                digest_id=secrets.token_urlsafe(18),
                 chart_type=chart_type,
                 # 只有地圖類會真的去查（resolve_map_points 自己擋掉其他類型）。
                 # 查不到就是空陣列，後續一切照舊，不會有人拿到錯誤。
@@ -3563,6 +3788,7 @@ def generate(req: GenerateRequest):
                 # 存給稍後的生圖請求取用：那支端點只收到 prompt，拿不到新聞原文，
                 # 稽核歸檔要靠這裡記住的內容才補得齊（見 _archive_generation）。
                 _remember_digest(
+                    digest_id=result.digest_id,
                     news_text=req.news_text,
                     style=result.style,
                     structure=result.structure,
@@ -3904,6 +4130,19 @@ def generate_image(req: ImageGenerateRequest):
             })
         if req.disclaimer_kind:
             result = apply_image_disclaimer(result, req, profile=frame_profile)
+        label_target = "broadcast" if req.hole_side or req.broadcast_hole else "cg"
+        result = _seal_label_response(
+            result,
+            target=label_target,
+            context={
+                "corner": req.disclaimer_corner,
+                "hole_side": req.hole_side or req.broadcast_hole,
+                "broadcast_hole": req.broadcast_hole,
+                "safe_frame": req.safe_frame,
+                "frame_strategy": req.frame_strategy,
+            },
+            profile=frame_profile,
+        )
     except Exception as exc:
         if own_clock:
             _record_generation_failure(
@@ -3912,6 +4151,7 @@ def generate_image(req: ImageGenerateRequest):
                 provider=req.provider,
                 visual_context=req.visual_context,
                 visual_context_chars=len(req.visual_context.strip()),
+                digest_id=req.digest_id,
             )
         raise
     if own_clock:
@@ -3933,6 +4173,7 @@ def generate_image(req: ImageGenerateRequest):
             prompt=req.prompt,
             visual_context=req.visual_context,
             visual_context_chars=len(req.visual_context.strip()),
+            digest_id=req.digest_id,
             **meta,
         )
     if own_notices:
@@ -4263,7 +4504,7 @@ def generate_image_raw(req: ImageGenerateRequest) -> ImageGenerateResponse:
     # 不 mutate 呼叫端物件（retry／稽核會再讀原 prompt）。兩段都以明確 marker 冪等。
     # B55 透明標題圖層只能畫指定標題，無論 caller 是否誤帶 context 都硬清空。
     visual_context = req.visual_context
-    if req.transparent_background or any(
+    if req.density == "verbatim" or req.transparent_background or any(
         ref.purpose == "titlelayer" for ref in req.reference_images
     ):
         visual_context = ""
@@ -5715,12 +5956,39 @@ class DisclaimerRestampItem(BaseModel):
     manual_override: bool = False
 
 
+def _items_with_server_provenance(
+    items: list[DisclaimerRestampItem], claims: dict,
+) -> list[DisclaimerRestampItem]:
+    trusted = {
+        (str(item.get("id") or "global"), str(item.get("side") or "global")):
+        str(item.get("provenance_kind") or "")
+        for item in claims.get("items", []) if isinstance(item, dict)
+    }
+    requested = {(item.id, item.target_side) for item in items}
+    if requested != set(trusted) or len(requested) != len(items):
+        # 不能藉由少送一枚、重複同一枚或換 id/side，讓憑證列管的標籤從稽核消失。
+        # 要關閉某枚標籤仍可把 kind 設為空；後端會依同一枚 provenance 記 manual override。
+        raise HTTPException(status_code=400, detail="標籤項目與憑證不符")
+    secured: list[DisclaimerRestampItem] = []
+    for item in items:
+        key = (item.id, item.target_side)
+        if key not in trusted:
+            raise HTTPException(status_code=400, detail="標籤項目與憑證不符")
+        provenance = trusted[key]
+        secured.append(item.model_copy(update={
+            "provenance_kind": provenance,
+            "manual_override": item.kind != provenance,
+        }))
+    return secured
+
+
 class ImageRefineRequest(BaseModel):
     # 置框「前」的原始生成圖（base64，不是 data URL）。一律送
     # ImageGenerateResponse.source_image_base64；把已置框成品送進來會二次拉伸
     # （見 ImageGenerateResponse 欄位說明）。未置框流程則送 image_data_base64。
     source_image_base64: str = Field(min_length=1, max_length=28_000_000)
     source_mime_type: str = "image/png"
+    label_token: str = Field(default="", max_length=8_000)
     # 使用者的修改指令，例如「把標題改成紅色」「左邊那張圖換成長條圖」
     instruction: str = Field(min_length=1, max_length=2_000)
     provider: Literal["gemini", "gpt"] = "gemini"
@@ -5798,6 +6066,40 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
     reset_portrait_notices()
     prompt = ""
     try:
+        _validate_reusable_image(req.source_image_base64, field_name="refine 原圖")
+        claims = _verified_label_claims(
+            req.label_token, req.source_image_base64, use_source=True,
+        )
+        claimed_target = str(claims.get("target") or "cg")
+        claimed_context = dict(claims.get("context") or {})
+        raw_items = list(req.disclaimer_items)
+        if not raw_items:
+            raw_items = [DisclaimerRestampItem(
+                id="global", target_side="global", kind=req.disclaimer_kind,
+                source_text=req.disclaimer_source_text, position=req.disclaimer_position,
+            )]
+        secured_items = _items_with_server_provenance(raw_items, claims)
+        cover_kinds = {
+            "ten_cover": "ten_cover", "yt_news": "yt_live_cover",
+            "yt_hourly": "yt_hourly_cover", "yt_live24": "yt_live24_cover",
+            "yt_hot": "yt_hot_cover",
+        }
+        first_secured = secured_items[0] if len(secured_items) == 1 else None
+        req = req.model_copy(update={
+            "disclaimer_target": claimed_target,
+            "disclaimer_context": claimed_context,
+            "safe_frame_profile": str(claims.get("safe_frame_profile") or safe_area_spec.REPORTER_PROFILE),
+            "safe_frame": bool(claimed_context.get("safe_frame", req.safe_frame)),
+            "frame_strategy": str(claimed_context.get("frame_strategy", req.frame_strategy)),
+            "broadcast_hole": str(claimed_context.get("broadcast_hole") or ""),
+            "hole_side": str(claimed_context.get("hole_side") or ""),
+            "cover_kind": cover_kinds.get(claimed_target, ""),
+            "disclaimer_items": secured_items,
+            "disclaimer_provenance_kind": (
+                first_secured.provenance_kind if first_secured else ""
+            ),
+            "disclaimer_manual_override": any(item.manual_override for item in secured_items),
+        })
         if not supports_reference_image(req.provider):
             raise HTTPException(
                 status_code=400,
@@ -5955,6 +6257,7 @@ class ImageRestampRequest(BaseModel):
     # 置框「前」的原始生成圖（base64，不是 data URL），同 ImageRefineRequest。
     source_image_base64: str = Field(default="", max_length=28_000_000)
     source_mime_type: str = "image/png"
+    label_token: str = Field(default="", max_length=8_000)
     model: str = ""
     # 下面這組必須與當初那次生圖**完全一致**，否則重算出來的不是同一張圖：
     # 畫布尺寸由 image_generation_size() 依 provider／density／檔位／角色推導，
@@ -6056,7 +6359,7 @@ def _apply_refine_label_snapshot(
     if req.cover_kind:
         response_items = [_refine_item_payload(item) for item in items]
         first = response_items[0] if len(response_items) == 1 else None
-        return result.model_copy(update={
+        covered = result.model_copy(update={
             "disclaimer_base_image_base64": result.image_data_base64,
             "disclaimer_kind": first["kind"] if first else req.disclaimer_kind,
             "disclaimer_source_text": first["source_text"] if first else req.disclaimer_source_text,
@@ -6071,6 +6374,9 @@ def _apply_refine_label_snapshot(
             ),
             "disclaimer_items": response_items,
         })
+        return _seal_label_response(
+            covered, target=target, context=context, profile=effective_profile,
+        )
 
     clean_base = result.image_data_base64
     raw = base64.b64decode(clean_base)
@@ -6121,7 +6427,7 @@ def _apply_refine_label_snapshot(
             notices.append("此圖含 AI 生成內容，改成「畫面來源」請自行確認")
         else:
             notices.append("標籤種類已由使用者手動覆寫，請自行確認內容正確")
-    return result.model_copy(update={
+    stamped_result = result.model_copy(update={
         "image_data_base64": base64.b64encode(work).decode("ascii"),
         "mime_type": "image/png",
         "source_image_base64": (
@@ -6149,6 +6455,9 @@ def _apply_refine_label_snapshot(
         ),
         "disclaimer_items": response_items,
     })
+    return _seal_label_response(
+        stamped_result, target=target, context=context, profile=effective_profile,
+    )
 
 
 @app.post(
@@ -6161,11 +6470,44 @@ def restamp_disclaimer(req: ImageRestampRequest) -> ImageGenerateResponse:
     request_id = request_log.new_request_id()
     started = _generation_clock()
     try:
+        claim_image = req.disclaimer_base_image_base64 or req.source_image_base64
+        if not claim_image:
+            raise HTTPException(status_code=400, detail="缺少可重貼的底圖")
+        _validate_reusable_image(claim_image, field_name="restamp 底圖")
+        claims = _verified_label_claims(
+            req.label_token, claim_image,
+            use_source=not bool(req.disclaimer_base_image_base64),
+        )
+        if req.source_image_base64:
+            _validate_reusable_image(req.source_image_base64, field_name="restamp refine 原圖")
+            _verified_label_claims(req.label_token, req.source_image_base64, use_source=True)
+        claimed_context = dict(claims.get("context") or {})
+        raw_items = list(req.items) or [DisclaimerRestampItem(
+            id="global", target_side=req.target_side, kind=req.disclaimer_kind,
+            source_text=req.disclaimer_source_text, position=req.position,
+        )]
+        secured_items = _items_with_server_provenance(raw_items, claims)
+        first_secured = secured_items[0] if len(secured_items) == 1 else None
+        req = req.model_copy(update={
+            "target": str(claims.get("target") or "cg"),
+            "context": claimed_context,
+            "safe_frame_profile": str(claims.get("safe_frame_profile") or safe_area_spec.REPORTER_PROFILE),
+            "hole_side": str(claimed_context.get("hole_side") or ""),
+            "broadcast_hole": str(claimed_context.get("broadcast_hole") or ""),
+            "safe_frame": bool(claimed_context.get("safe_frame", req.safe_frame)),
+            "frame_strategy": str(claimed_context.get("frame_strategy", req.frame_strategy)),
+            "items": secured_items,
+            "provenance_kind": first_secured.provenance_kind if first_secured else "",
+            "manual_override": any(item.manual_override for item in secured_items),
+        })
         if req.disclaimer_kind == "source" and not req.disclaimer_source_text.strip() and not req.items:
             raise HTTPException(status_code=400, detail="畫面來源文字不可空白")
         if req.target == "yt_vstrip" and req.disclaimer_kind == "ai" and not req.items:
             raise HTTPException(status_code=400, detail="YT 直播直標只支援畫面來源或無標籤")
-        manual_override = req.manual_override or req.disclaimer_kind != req.provenance_kind
+        # items 已在 _items_with_server_provenance 逐枚依憑證重算。帶 items 的新版介面
+        # top-level disclaimer_kind 預設是空字串，不能拿它和 provenance 比，否則合法的
+        # 生成時 source 標籤第一次拖曳就會被誤判成手動覆寫。
+        manual_override = req.manual_override
         if req.disclaimer_base_image_base64:
             raw = base64.b64decode(req.disclaimer_base_image_base64)
             with Image.open(io.BytesIO(raw)) as opened:
@@ -6316,6 +6658,24 @@ def restamp_disclaimer(req: ImageRestampRequest) -> ImageGenerateResponse:
                     canvas=image_generation_size(sizing)[1],
                 )
             result = apply_image_disclaimer(result, sizing, profile=frame_profile)
+            trusted_provenance = first_secured.provenance_kind if first_secured else ""
+            result = result.model_copy(update={
+                "disclaimer_provenance_kind": trusted_provenance,
+                "disclaimer_manual_override": req.disclaimer_kind != trusted_provenance,
+                "disclaimer_items": [{
+                    **item,
+                    "provenance_kind": trusted_provenance,
+                    "manual_override": item.get("kind", "") != trusted_provenance,
+                } for item in result.disclaimer_items],
+            })
+        trusted_profile = str(claims.get("safe_frame_profile") or safe_area_spec.REPORTER_PROFILE)
+        result = _seal_label_response(
+            result,
+            target=str(claims.get("target") or "cg"),
+            context=claimed_context,
+            profile=trusted_profile,
+            source_sha256=str(claims.get("source_sha256") or ""),
+        )
     except Exception as exc:
         # 失敗也要留紀錄：這條路沒有生圖模型可以怪，出事一定是置框或貼字，
         # 後台查得到才知道是哪一種（沿用 web-refine 的同一套失敗歸檔）。
@@ -8295,7 +8655,7 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         source_text=req.source_left.strip() if full_kind == "source" else "",
         provenance_kind=full_kind,
     )
-    return TenCoverResponse(
+    return _seal_label_response(TenCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
         model="ten-cover-full:recomposite" if recomposite
@@ -8333,7 +8693,8 @@ def _editor_cover_full(req: TenCoverRequest, date_text: str) -> TenCoverResponse
         mode=req.mode,
         seed=req.seed,
         notices=collected_portrait_notices(),
-    )
+    ), target="ten_cover", context={"layout": "full"},
+       profile=safe_area_spec.EDITOR_FRAME_PROFILE)
 
 
 @app.post(
@@ -8551,7 +8912,7 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
             provenance_kind=right_kind,
         ),
     ]
-    return TenCoverResponse(
+    return _seal_label_response(TenCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
         model="ten-cover:recomposite" if recomposite else f"ten-cover:{req.mode}{asis_label}",
@@ -8586,7 +8947,8 @@ def editor_cover(req: TenCoverRequest) -> TenCoverResponse:
         mode=req.mode,
         seed=req.seed,
         notices=collected_portrait_notices(),
-    )
+    ), target="ten_cover", context={"layout": "split"},
+       profile=safe_area_spec.EDITOR_FRAME_PROFILE)
 
 
 # ============================================================
@@ -9730,7 +10092,7 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
     )
     label_bbox = label_item["bbox"] if label_kind else []
     label_position = label_item["position"]
-    return YtCoverResponse(
+    return _seal_label_response(YtCoverResponse(
         image_data_base64=base64.b64encode(cover).decode("ascii"),
         mime_type="image/png",
         model=image_model,
@@ -9764,7 +10126,8 @@ def editor_yt_cover(req: YtCoverRequest) -> YtCoverResponse:
         dual=dual,
         seed=req.seed,
         notices=collected_portrait_notices(),
-    )
+    ), target=label_target, context=label_context,
+       profile=safe_area_spec.EDITOR_FRAME_PROFILE)
 
 
 # ============================================================
@@ -9808,6 +10171,11 @@ class YtOverlayResponse(BaseModel):
     # 前端顯示「第一標題 9 格／第二標題 12 格」，以及各區塊的矩形（除錯用）
     layout: dict
     disclaimer_base_image_base64: str = ""
+    disclaimer_base_mime_type: str = ""
+    label_token: str = ""
+    label_target: str = ""
+    label_context: dict = Field(default_factory=dict)
+    label_safe_frame_profile: str = ""
     disclaimer_kind: str = ""
     disclaimer_source_text: str = ""
     disclaimer_provenance_kind: str = ""
@@ -9928,6 +10296,7 @@ def editor_yt_overlay(req: YtOverlayRequest) -> YtOverlayResponse:
         "title": title, "title_second": second, "title_side": req.title_side,
         "variant": req.variant, "logo_corner": req.logo_corner,
         "source_corner": req.source_corner,
+        "live": req.live,
     }
     overlay_kind = "source" if req.source_text.strip() else ""
     overlay_item = _default_label_item(
@@ -9935,13 +10304,31 @@ def editor_yt_overlay(req: YtOverlayRequest) -> YtOverlayResponse:
         source_text=req.source_text.strip(), provenance_kind=overlay_kind,
         context=overlay_context,
     )
+    sealed = _seal_label_response(
+        ImageGenerateResponse(
+            image_data_base64=base64.b64encode(png).decode("ascii"),
+            mime_type="image/png", model="yt-overlay:compose",
+            disclaimer_base_image_base64=base64.b64encode(label_base).decode("ascii"),
+            disclaimer_kind=overlay_kind,
+            disclaimer_source_text=req.source_text.strip(),
+            disclaimer_provenance_kind=overlay_kind,
+            disclaimer_items=[overlay_item],
+        ),
+        target="yt_vstrip", context=overlay_context,
+        profile=safe_area_spec.EDITOR_FRAME_PROFILE,
+    )
     return YtOverlayResponse(
         image_base64=base64.b64encode(png).decode("ascii"),
         mime_type="image/png",
         width=width,
         height=height,
         layout=_yt_overlay_layout_payload(layout),
-        disclaimer_base_image_base64=base64.b64encode(label_base).decode("ascii"),
+        disclaimer_base_image_base64=sealed.disclaimer_base_image_base64,
+        disclaimer_base_mime_type=sealed.disclaimer_base_mime_type,
+        label_token=sealed.label_token,
+        label_target=sealed.label_target,
+        label_context=sealed.label_context,
+        label_safe_frame_profile=sealed.label_safe_frame_profile,
         disclaimer_kind="source" if req.source_text.strip() else "",
         disclaimer_source_text=req.source_text.strip(),
         disclaimer_provenance_kind="source" if req.source_text.strip() else "",

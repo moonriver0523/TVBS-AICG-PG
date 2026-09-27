@@ -20,6 +20,7 @@ os.environ.setdefault("OPENAI_API_KEY", "test-key")
 os.environ.setdefault("NEWS_IMAGE_API_KEY", "b61-baseline-key")
 
 import main  # noqa: E402
+import safe_area_spec  # noqa: E402
 import news_prompt  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -298,10 +299,20 @@ class PathTableTests(_TransportHarness):
         self._assert_each_payload_has_marker_once(min_calls=1, label="news_image")
 
     def test_refine(self):
+        raw = _png_b64("16:9")
+        token = main._encode_label_token({
+            "v": 1, "iat": int(main.time.time()),
+            "clean_sha256": main._image_sha256(raw),
+            "source_sha256": main._image_sha256(raw),
+            "target": "cg", "context": {"safe_frame": False},
+            "safe_frame_profile": safe_area_spec.REPORTER_PROFILE,
+            "items": [{"id": "global", "side": "global", "provenance_kind": ""}],
+        })
         res = client.post(
             "/api/images/refine",
             json={
-                "source_image_base64": _png_b64("16:9"),
+                "source_image_base64": raw,
+                "label_token": token,
                 "instruction": "把天空改暗",
                 "provider": "gpt",
                 "aspect_ratio": "16:9",

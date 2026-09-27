@@ -9,12 +9,14 @@
 4. **消化自動判定主題數**：一個主題只回第一標題，兩個主題依內文順序填左右。
 """
 import json
+import io
 import os
 import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -163,7 +165,10 @@ class CoverLayoutAutoTests(unittest.TestCase):
         def fake_ai(req, date_text, visuals):
             seen["layout"] = req.layout
             # 2026-09-27：多回一張「固定元素完成、尚未貼標籤」的乾淨底圖供拖曳重貼。
-            return b"cover", "fake-model", b"", "", b"label-base"
+            out = io.BytesIO()
+            Image.new("RGB", (1920, 1080), (10, 20, 30)).save(out, "PNG")
+            raw = out.getvalue()
+            return raw, "fake-model", b"", "", raw
 
         with patch.object(main, "_editor_cover_full") as full, \
              patch.object(main, "resolve_cover_visuals", return_value=("左景", "右景")), \

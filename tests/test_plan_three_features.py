@@ -38,6 +38,12 @@ def png_base64(width: int, height: int, colour=(200, 30, 30)) -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+def assert_same_pixels(testcase, left_b64, right_b64):
+    with Image.open(io.BytesIO(base64.b64decode(left_b64))) as left, \
+         Image.open(io.BytesIO(base64.b64decode(right_b64))) as right:
+        testcase.assertEqual(left.convert("RGBA").tobytes(), right.convert("RGBA").tobytes())
+
+
 # 編輯版生成尺寸（16:9）與置框後的對位框內緣尺寸（PLAN.md 現況速查）
 EDITOR_RAW = png_base64(1536, 864)
 # PROFILES 是 (x, y, w, h)；編輯置框成品＝對位框內緣 1748×924（無畫布、無留白）
@@ -48,6 +54,31 @@ def fake_raw_response(image_base64: str) -> main.ImageGenerateResponse:
     return main.ImageGenerateResponse(
         image_data_base64=image_base64, mime_type="image/png", model="fake-model"
     )
+
+
+def credentialed_refine_payload(payload):
+    cover_targets = {
+        "ten_cover": "ten_cover", "yt_live_cover": "yt_news",
+        "yt_hourly_cover": "yt_hourly", "yt_live24_cover": "yt_live24",
+        "yt_hot_cover": "yt_hot",
+    }
+    target = cover_targets.get(payload.get("cover_kind"), "cg")
+    context = {
+        "safe_frame": payload.get("safe_frame", False),
+        "frame_strategy": payload.get("frame_strategy", ""),
+        "broadcast_hole": payload.get("broadcast_hole", ""),
+        "hole_side": payload.get("hole_side", ""),
+    }
+    raw = payload["source_image_base64"]
+    payload["label_token"] = main._encode_label_token({
+        "v": 1, "iat": int(main.time.time()),
+        "clean_sha256": main._image_sha256(raw),
+        "source_sha256": main._image_sha256(raw),
+        "target": target, "context": context,
+        "safe_frame_profile": payload.get("safe_frame_profile") or safe_area_spec.REPORTER_PROFILE,
+        "items": [{"id": "global", "side": "global", "provenance_kind": ""}],
+    })
+    return payload
 
 
 class RefineEndpointTests(unittest.TestCase):
@@ -63,7 +94,7 @@ class RefineEndpointTests(unittest.TestCase):
             safe_frame_profile="編輯",
         )
         payload.update(overrides)
-        return main.ImageRefineRequest(**payload)
+        return main.ImageRefineRequest(**credentialed_refine_payload(payload))
 
     def test_refine_sends_pre_frame_image_as_reference(self):
         with patch.object(
@@ -134,7 +165,7 @@ class RefineEndpointTests(unittest.TestCase):
                             )
                         )
                     # 下一輪一律用新的置框前原圖，成品只拿來顯示
-                    self.assertEqual(result.source_image_base64, EDITOR_RAW)
+                    assert_same_pixels(self, result.source_image_base64, EDITOR_RAW)
                     sent = mock_raw.call_args[0][0]
                     self.assertNotIn(
                         result.image_data_base64,
@@ -159,7 +190,7 @@ class RefineEndpointTests(unittest.TestCase):
         )
         with patch.object(main, "generate_image_raw", return_value=raw):
             result = main.refine_image(self.refine_request())
-        self.assertEqual(result.source_mime_type, "image/jpeg")
+        self.assertEqual(result.source_mime_type, "image/webp")
 
     def test_reporter_profile_refine_fits_into_official_canvas(self):
         """記者 profile：21:9 原圖 FIT 進 1920×1080 畫布（與編輯的拉伸是兩條路）。"""
@@ -174,7 +205,7 @@ class RefineEndpointTests(unittest.TestCase):
                     safe_frame_profile="記者",
                 )
             )
-        self.assertEqual(result.source_image_base64, reporter_raw)
+        assert_same_pixels(self, result.source_image_base64, reporter_raw)
         with Image.open(
             io.BytesIO(base64.b64decode(result.image_data_base64))
         ) as image:
@@ -202,7 +233,7 @@ class RefineEndpointTests(unittest.TestCase):
             main, "generate_image_raw", return_value=fake_raw_response(EDITOR_RAW)
         ):
             result = main.refine_image(self.refine_request(safe_frame=False))
-        self.assertEqual(result.source_image_base64, EDITOR_RAW)
+        assert_same_pixels(self, result.source_image_base64, EDITOR_RAW)
         with Image.open(
             io.BytesIO(base64.b64decode(result.image_data_base64))
         ) as image:
@@ -250,7 +281,7 @@ class CoverRefineFrameBypassTests(unittest.TestCase):
             safe_frame_profile="",
         )
         payload.update(overrides)
-        return main.ImageRefineRequest(**payload)
+        return main.ImageRefineRequest(**credentialed_refine_payload(payload))
 
     def test_each_whitelisted_cover_kind_skips_framing(self):
         for cover_kind in sorted(editor_formats.COVER_REFINE_KINDS):
@@ -313,7 +344,7 @@ class GenerateImageSourceFieldTests(unittest.TestCase):
             main, "generate_image_raw", return_value=fake_raw_response(EDITOR_RAW)
         ):
             result = main.generate_image(req)
-        self.assertEqual(result.source_image_base64, EDITOR_RAW)
+        assert_same_pixels(self, result.source_image_base64, EDITOR_RAW)
         self.assertNotEqual(result.image_data_base64, EDITOR_RAW)
 
     def test_unframed_response_has_empty_source(self):
