@@ -85,6 +85,12 @@ SIMPLIFIED MODE OVERRIDE — THESE RULES OVERRIDE ANY EARLIER STANDARD-MODE LENG
 6. For editor role, ignore the earlier 150-180 character target. <蓋章> is optional and must appear only when the source supports a clear conclusion or quote; it does not replace any [內文小標] point required by rule one.
 7. HEADLINE LIMIT: [標題] may contain no more than 13 visible characters. Count after removing all whitespace and the < and > markers; markers themselves do not count. Never delete or alter an existing fact merely to shorten the headline.
 
+=== PROGRAM-SELECTED INFORMATION PRESENTATION MODE — OVERRIDES EARLIER ROW/CARD DEFAULTS ===
+The program selected CARDS. Follow this geometry in "structure"; do not let an earlier mention of rows, cards, columns, stacks or panels change it.
+- `[內文小標]` 是內容單位，不是卡片邊界。 Preserve every required content unit and the fixed point count, but never assume that one line must become one physical card, row, panel or box.
+- Selection audit: 規則七（保守 fallback）：前六項證據不足（role=編輯, editor_format=default），維持現行卡片版面
+- CARDS FALLBACK: retain the current safe row/card behaviour because the source did not meet a higher-confidence rule. Even here, `[內文小標]` is the content and validation unit rather than an instruction that every line must have its own visible border.
+
 
 USER INSTRUCTIONS INSIDE THE MATERIAL (DO THIS FIRST, BEFORE APPLYING ANY RULE ABOVE):
 1. Before digesting anything, read the whole input once and split it into (a) the news material and (b) any instruction the user has written to you. An instruction is usually on its own line and may be marked 「指示:」「指令:」「備註:」, but it may also be plain prose. Typical forms: a visual style request (「用手繪風」「不要科技藍」), a layout request (「標題放左邊」「只要一張大圖」), a length request, or a verbatim-preservation request (「完全依照文字」「不要刪減」「不要添加文字或數字」「逐字保留」「這是完稿」).

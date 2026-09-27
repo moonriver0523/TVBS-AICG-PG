@@ -87,7 +87,7 @@ class _Harness(unittest.TestCase):
             full_bleed=main.resolve_frame_plan(req.role, req.safe_frame)[0],
             user_instruction=req.user_instruction, exclude_people=req.exclude_people,
             asis_reference_count=req.asis_reference_count, stamp=req.stamp,
-            tone=req.tone, editor_format=req.editor_format,
+            tone=req.tone, editor_format=req.editor_format, news_text=NEWS,
         )
 
 
@@ -201,7 +201,8 @@ class MapScopeGuardTests(_Harness):
         self.assertEqual(spec_calls[0]["system_prompt"],
                          main.build_digest_instructions(
                              role="記者", density="standard", type_label="情境示意圖",
-                             full_bleed=main.resolve_frame_plan("記者", False)[0]))
+                             full_bleed=main.resolve_frame_plan("記者", False)[0],
+                             news_text=NEWS))
 
     def test_the_guard_flag_no_longer_changes_anything_for_non_map_types(self):
         """兩段式分類成非地圖、與使用者自己指定非地圖，走的是同一條守門。"""

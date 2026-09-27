@@ -58,6 +58,7 @@ import compose
 import creativity
 import editor_formats
 import gcs_archive
+import info_layout
 import map_lookup
 import photo_lookup
 import name_aliases
@@ -1083,6 +1084,10 @@ class GenerateResponse(BaseModel):
     notices: list[str] = Field(default_factory=list)
     # 這次實際採用的 seed（F0）：前端要拿它當「重新生成」的遞增起點，稽核要拿它回查。
     seed: int = 0
+    # 程式選出的資訊呈現模式與可讀理由；前端不必依賴它，稽核與 A/B 實拍可直接保存。
+    # INFO_LAYOUT_MODE=off 時 mode="off"，逐字／無字等刻意停用時 mode="disabled"。
+    info_layout_mode: str = ""
+    info_layout_rule: str = ""
 
 
 # input_references 的上限。模型端 GPT Image 2／2.5 收 0–16、Gemini 0–14（PLAN.md 查證），
@@ -1781,6 +1786,53 @@ def density_point_bounds(
         return exact, exact
     target = _DENSITY_POINT_TARGETS[density]
     return target - _DENSITY_POINT_FLOOR_DELTA, target
+
+
+def info_layout_mode_enabled() -> bool:
+    """Runtime switch; read on every call so one process can run a true A/B pair."""
+
+    return os.getenv("INFO_LAYOUT_MODE", "on").strip().lower() != "off"
+
+
+def resolve_info_layout_decision(
+    *,
+    news_text: str,
+    type_label: str,
+    density: str,
+    role: str,
+    editor_format: str | None,
+    user_instruction: str = "",
+    point_count: int | None = None,
+) -> tuple[str, info_layout.InfoLayoutDecision]:
+    """Resolve runtime state plus the pure selector decision for prompt/audit parity."""
+
+    if not info_layout_mode_enabled():
+        return (
+            "off",
+            info_layout.InfoLayoutDecision(
+                "cards", "INFO_LAYOUT_MODE=off，完全沿用 2026-09-27 既有消化 prompt", False
+            ),
+        )
+    if info_layout.requests_verbatim(user_instruction):
+        return (
+            "disabled",
+            info_layout.InfoLayoutDecision(
+                "cards", "專用指令欄明示逐字保留／完稿要求，停用資訊呈現 selector", False
+            ),
+        )
+    if point_count is None:
+        _, point_count = density_point_bounds(density, editor_format)
+        if density == "minimal":
+            point_count = 1
+    decision = info_layout.select_info_layout(
+        news_text=news_text,
+        type_label=type_label,
+        density=density,
+        role=role,
+        editor_format=editor_format,
+        point_count=point_count,
+    )
+    return (decision.mode if decision.enabled else "disabled", decision)
 
 
 def _density_bound_words(density: str) -> dict[str, str]:
@@ -2618,10 +2670,24 @@ def build_digest_instructions(
     visual_creativity: int = 0,
     seed: int | None = None,
     direction_context: str | None = None,
+    news_text: str = "",
+    point_count: int | None = None,
 ) -> str:
     # seed（F0）：這一步只把資料流打通到這裡，實際拿去抽變化池是 2-6 的事。
     # 它**永遠不會被拼進回傳的字串**——見 next_generation_seed 上方的說明。
     is_editor = role == "編輯"
+    # editor_format 是編輯角色專屬；記者請求即使誤帶欄位，也必須維持逐字相同。
+    info_editor_format = editor_format if is_editor else None
+    info_layout_state, info_layout_decision = resolve_info_layout_decision(
+        news_text=news_text,
+        type_label=type_label,
+        density=density,
+        role=role,
+        editor_format=info_editor_format,
+        user_instruction=user_instruction,
+        point_count=point_count,
+    )
+    use_info_layout = info_layout_state not in ("off", "disabled")
     template = EDITOR_SYSTEM_PROMPT_TEMPLATE if is_editor else SYSTEM_PROMPT_TEMPLATE
     if full_bleed:
         layout_rule = EDITOR_LAYOUT_FULL_BLEED if is_editor else REPORTER_LAYOUT_FULL_BLEED
@@ -2660,12 +2726,17 @@ def build_digest_instructions(
     # 擋不住「畫一塊裝飾用的中國大陸輪廓」；兩條路都可能出現這塊輪廓，因此兩條都要有。
     instructions += CHINA_TAIWAN_OUTLINE_RULES
     if density in ("standard", "maximum"):
-        instructions += STANDARD_DENSITY_RULES.format(
+        density_rules = STANDARD_DENSITY_RULES.format(
             **_STANDARD_LIMIT_CLAUSES[is_editor],
             **_density_bound_words("standard"),
         )
         if density == "maximum":
-            instructions += MAXIMUM_DENSITY_RULES.format(**_density_bound_words("maximum"))
+            density_rules += MAXIMUM_DENSITY_RULES.format(**_density_bound_words("maximum"))
+        instructions += (
+            info_layout.adapt_density_instructions(density_rules)
+            if use_info_layout
+            else density_rules
+        )
     elif density in ("simplified", "minimal"):
         instructions += SIMPLIFIED_DENSITY_RULES
         if density == "minimal":
@@ -2697,7 +2768,12 @@ def build_digest_instructions(
     # density 一併傳進去：字多檔位在播出鏡面要把每張卡從一行改成兩行（2026-09-08 回饋 D）
     # hole_side 同理：合併後的播出鏡面靠請求決定挖哪一側（2026-09-08 WP1）
     instructions += editor_formats.digest_rules(
-        editor_format, role, stamp, density, side=hole_side
+        editor_format,
+        role,
+        stamp,
+        density,
+        side=hole_side,
+        info_layout=use_info_layout,
     )
     # 創意拉桿放在版型區塊之後：本 repo 的慣例是「位置在後＋明文 OVERRIDE」才壓得住
     # 前面那些命令句。但它自己第一句就限縮成「只覆蓋美術」，而 FIXED 段再把
@@ -2718,6 +2794,12 @@ def build_digest_instructions(
             seed=seed,
             direction_context=direction_context,
             type_label=type_label,
+        )
+    # 放在播出規則與創意規則之後，才能真正壓過前面的 rows/cards/card-stack 慣性；
+    # 使用者自己的 layout 指令仍在更後方，明示需求照舊有最高優先序。
+    if use_info_layout:
+        instructions += info_layout.structure_instruction(
+            info_layout_decision, editor_format=info_editor_format
         )
     # 沒有 asis 附圖時完全不注入，消化 prompt 逐字元不變。
     if asis_reference_count:
@@ -3465,6 +3547,14 @@ def generate(req: GenerateRequest):
     classified_non_map = (
         req.type_label == AUTO_TYPE_LABEL and type_label not in (AUTO_TYPE_LABEL, MAP_TYPE_LABEL)
     )
+    info_layout_state, info_layout_decision = resolve_info_layout_decision(
+        news_text=req.news_text,
+        type_label=type_label,
+        density=req.density,
+        role=req.role,
+        editor_format=req.editor_format if req.role == "編輯" else None,
+        user_instruction=req.user_instruction,
+    )
     system_prompt = build_digest_instructions(
         role=req.role,
         density=req.density,
@@ -3486,6 +3576,7 @@ def generate(req: GenerateRequest):
         visual_creativity=req.visual_creativity,
         seed=seed,
         direction_context=req.news_text,
+        news_text=req.news_text,
     )
 
     # 上游（OpenRouter 多 provider 輪替）偶發 502、輸出截斷或不合 schema 的回傳是常態，
@@ -3726,6 +3817,8 @@ def generate(req: GenerateRequest):
                     data.get("portrait_subjects"),
                 ),
                 seed=seed,
+                info_layout_mode=info_layout_state,
+                info_layout_rule=info_layout_decision.rule,
             )
             # 網頁版走這個端點後自己在前端組生圖 prompt，後端看不到最終 prompt，
             # 因此這裡只記到消化為止——有輸入與消化結果，事後仍可重跑重現。
@@ -3770,6 +3863,8 @@ def generate(req: GenerateRequest):
                     role=req.role,
                     density=req.density,
                     seed=seed,
+                    info_layout_mode=result.info_layout_mode,
+                    info_layout_rule=result.info_layout_rule,
                     **digest_meta,
                 )
                 # 存給稍後的生圖請求取用：那支端點只收到 prompt，拿不到新聞原文，
@@ -3786,6 +3881,8 @@ def generate(req: GenerateRequest):
                     role=req.role,
                     density=req.density,
                     digest_model=model,
+                    info_layout_mode=result.info_layout_mode,
+                    info_layout_rule=result.info_layout_rule,
                 )
             return result
 
@@ -3801,6 +3898,8 @@ def generate(req: GenerateRequest):
                 source="digest", news_text=req.news_text,
                 role=req.role, density=req.density, type_label=req.type_label,
                 seed=seed,
+                info_layout_mode=info_layout_state,
+                info_layout_rule=info_layout_decision.rule,
             )
         raise
     finally:

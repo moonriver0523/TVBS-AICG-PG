@@ -167,17 +167,17 @@ class WiringTests(unittest.TestCase):
         self.assertIn("state.density = density", source)
         self.assertRegex(source, r"density:\s*state\.density")
 
-    def test_full_prompt_carries_the_two_line_cards_only_when_字多(self):
+    def test_full_prompt_carries_two_part_content_units_only_when_字多(self):
         standard = main.build_digest_instructions(
             role="編輯", density="standard", type_label="資料圖表",
             stamp=False, editor_format="broadcast_left",
         )
-        self.assertIn("TWO LINES INSTEAD OF ONE", standard)
+        self.assertIn("EACH OF THOSE CONTENT UNITS CARRIES TWO TEXT PARTS", standard)
         simplified = main.build_digest_instructions(
             role="編輯", density="simplified", type_label="資料圖表",
             stamp=False, editor_format="broadcast_left",
         )
-        self.assertNotIn("TWO LINES INSTEAD OF ONE", simplified)
+        self.assertNotIn("EACH OF THOSE CONTENT UNITS CARRIES TWO TEXT PARTS", simplified)
 
 
 if __name__ == "__main__":
