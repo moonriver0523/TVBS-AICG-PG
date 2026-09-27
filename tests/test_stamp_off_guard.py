@@ -81,9 +81,9 @@ class GenerateGuardTests(unittest.TestCase):
                 if fmt == "default":
                     self.assertIn("[內文小標] 停班課<晚間>宣布", result.variable)
                 else:
-                    # 播出鏡面（2026-09-09 第四批）：蓋章 OFF 時挖空框底下那條帶要有東西，
-                    # 消化沒生出 <底帶> 就把最後一張卡升級（見 main.ensure_bottom_band_line）。
-                    self.assertIn("<底帶> 停班課<晚間>宣布", result.variable)
+                    # 2026-09-27：沒有獨立新重點時允許底帶無字；不得再挪用最後一張卡。
+                    self.assertIn("[內文小標] 停班課<晚間>宣布", result.variable)
+                    self.assertNotIn("<底帶>", result.variable)
 
     def test_stamp_off_on_broadcast_leaves_a_compliant_bottom_band_alone(self):
         payload = _payload(_variable(4, stamp=False, bottom="停班課<晚間>宣布"))

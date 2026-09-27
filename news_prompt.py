@@ -8,6 +8,8 @@ LINE Bot 是純後端流程、沒有瀏覽器，因此在這裡有一份對應�
 並讓前端改用 API 取得。
 """
 
+import re
+
 # 供外部整合（如 /api/news-image/generate 的呼叫端）追蹤這批規則的版本；
 # 這裡或對應的 app.js 常數只要有實質修改，就手動遞增這個字串。
 PROMPT_VERSION = "v7-2026-09-16"
@@ -352,11 +354,11 @@ ATTACHED IMAGE — PLACE AS-IS, DO NOT REDRAW (CRITICAL)
 BROADCAST_HOLE_LAYOUT_RULES_TEMPLATE = """==================================================
 BROADCAST VIDEO HOLE — {hole_side_upper} VIDEO ZONE IS BACKGROUND-ONLY (CRITICAL OVERRIDE)
 ==================================================
-- The video zone is a 16:9 area on the {hole_side} side of the frame, filling roughly the {hole_side} half of the space between the headline at the top and the bottom band. Post-production will place live video there.
+- The video zone is a 16:9 area on the {hole_side} side of the frame, filling roughly the {hole_side} half of the space between the headline at the top and the low strip below it. Post-production will place live video there.
 - Inside the video zone: background ONLY. The same full-frame scene continues naturally through it; do not leave it blank and do not draw a white box, frame, guide or placeholder there.
 - No attached image, generated subject, text, number, card, chart, logo, badge or callout may enter or overlap the video zone.
-- The headline at the top and the bottom band may still span the full width as the layout requires; they stay above and below the video zone, never inside it.
-- Every other content element goes in the {content_side} half between the headline and the bottom band. Every attached PLACE AS-IS image MUST appear there, clearly visible and unaltered — as the main picture of that half or inside a card. Never omit it and never move it into the video zone.
+- The headline at the top, and a supplied bottom band when VARIABLE FIELDS contains one, may span the full width; they stay above and below the video zone, never inside it.
+- Every other content element goes in the {content_side} half between the headline and the low strip. Every attached PLACE AS-IS image MUST appear there, clearly visible and unaltered — as the main picture of that half or inside a card. Never omit it and never move it into the video zone.
 - This applies whether the software white alignment frame is ON or OFF. It OVERRIDES any earlier instruction to make an attached image full-frame, extend or crop it across the canvas, or place content on the {hole_side} side."""
 
 
@@ -370,6 +372,24 @@ def broadcast_hole_layout_rules(side: str) -> str:
         hole_side_upper=side.upper(),
         content_side=content_side,
     )
+
+
+_BOTTOM_BAND_MARKER_RE = re.compile(r"^\s*[<＜]\s*底帶\s*[>＞]", re.MULTILINE)
+
+
+def broadcast_bottom_band_rules(variable: str, hole_side: str) -> str:
+    """播出挖空版的底帶有字／無字由 variable 決定，不讓生圖模型自行補字。"""
+    if hole_side not in ("left", "right"):
+        return ""
+    if _BOTTOM_BAND_MARKER_RE.search(variable or ""):
+        return """==================================================
+BROADCAST BOTTOM BAND CONTENT
+==================================================
+- VARIABLE FIELDS supplies one <底帶> line. Remove the <底帶> marker, then render exactly that line's supplied wording in the low full-width information bar below the video zone. Do not add, repeat or paraphrase any other wording there."""
+    return """==================================================
+BROADCAST BOTTOM BAND IS TEXT-FREE
+==================================================
+- VARIABLE FIELDS contains no <底帶> line. Keep the entire low strip below the video zone as continuous background only: NO text, digits, caption, slogan, label, icon or invented filler. Do not move or copy a body card into it."""
 
 # AI改圖（2026-09-13 使用者裁決）：介於 asis 與 scene 之間的第三種用途。
 # * asis  ＝原圖原封不動貼進去，完全不經過生圖模型
@@ -944,6 +964,7 @@ FINAL OUTPUT RULE
     hole_rules = broadcast_hole_layout_rules(hole_side)
     if hole_rules:
         body += "\n\n" + hole_rules
+        body += "\n\n" + broadcast_bottom_band_rules(variable, hole_side)
 
     if engine == "gpt":
         return (

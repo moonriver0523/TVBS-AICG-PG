@@ -2021,7 +2021,9 @@ _CG_ACCESSORY_OVERRIDES = {
 }
 
 
-def cg_creativity_rules(level: int, *, seed=None) -> str:
+def cg_creativity_rules(
+    level: int, *, seed=None, direction_context: str | None = None, type_label: str = ""
+) -> str:
     """0＝完全不注入（現行成品）；1–4 追加該級的美術條文＋這一輪的抽籤＋不變的 FIXED 段。
 
     `seed`：同一顆 seed 抽出同一種長相（F0／D1）。**seed 本身不會出現在回傳的字串裡**
@@ -2050,6 +2052,8 @@ def cg_creativity_rules(level: int, *, seed=None) -> str:
         rng=d.rng,
         placement_note=_CG_ACCESSORY_NOTE,
         overrides=_CG_ACCESSORY_OVERRIDES,
+        direction_context=direction_context,
+        type_label=type_label,
     )
     device_block = ""
     if devices:
@@ -2613,6 +2617,7 @@ def build_digest_instructions(
     hole_side: str | None = None,
     visual_creativity: int = 0,
     seed: int | None = None,
+    direction_context: str | None = None,
 ) -> str:
     # seed（F0）：這一步只把資料流打通到這裡，實際拿去抽變化池是 2-6 的事。
     # 它**永遠不會被拼進回傳的字串**——見 next_generation_seed 上方的說明。
@@ -2708,7 +2713,12 @@ def build_digest_instructions(
     # ——一律「draw every one of them」，不是選項。無字要的是「只要示意圖插圖」，
     # 這整組東西沒有半塊留得住，所以直接整段跳過，不試著切一半保留。
     if density != "no_text":
-        instructions += cg_creativity_rules(visual_creativity, seed=seed)
+        instructions += cg_creativity_rules(
+            visual_creativity,
+            seed=seed,
+            direction_context=direction_context,
+            type_label=type_label,
+        )
     # 沒有 asis 附圖時完全不注入，消化 prompt 逐字元不變。
     if asis_reference_count:
         instructions += USER_REFERENCE_ASIS_DIGEST_RULES
@@ -3137,24 +3147,11 @@ def unmark_stamp_lines(variable: str) -> str:
 
 # 播出鏡面 ＋ 蓋章 OFF 的底帶（2026-09-09 第四批）。挖空框是寬扁的 16:9 視窗、垂直
 # 置中，底下本來就空著一條橫帶；蓋章 ON 時那條由 <蓋章> 填，OFF 時使用者要求「其他
-# 資訊還是可以放底下」。prompt 已經改成要求一行 <底帶>，但 prompt 只是勸告——第三批
-# 就是敗在這裡（叫模型「把最後一張卡下移」，模型分不出哪張是最後一張）。這裡做確定性
-# 兜底：漏寫就把最後一行 [內文小標] 升級成 <底帶>，位置與內容都不動，只換標記。
-_BOTTOM_BAND_LINE_RE = re.compile(r"^\s*[<＜]\s*底帶\s*[>＞]")
-_POINT_LINE_RE = re.compile(r"^\s*\[內文小標\]\s*")
-
-
+# 資訊還是可以放底下」。2026-09-27 改為「只允許留空」：模型沒有尚未使用的實質重點時，
+# 底帶可以沒有字。
+# 這支保留作為既有呼叫端的相容接點，但不再搬動或改標任何內文卡。
 def ensure_bottom_band_line(variable: str) -> str:
-    lines = (variable or "").splitlines()
-    if any(_BOTTOM_BAND_LINE_RE.match(line) for line in lines):
-        return variable
-    for index in range(len(lines) - 1, -1, -1):
-        if _POINT_LINE_RE.match(lines[index]):
-            body = _POINT_LINE_RE.sub("", lines[index]).strip()
-            if not body:
-                return variable
-            promoted = lines[:index] + lines[index + 1:] + [f"<底帶> {body}"]
-            return "\n".join(promoted).strip()
+    """相容接點：底帶可留空，因此不得替 variable 新增或搬動任何一行。"""
     return variable
 
 
@@ -3488,6 +3485,7 @@ def generate(req: GenerateRequest):
         hole_side=req.hole_side,
         visual_creativity=req.visual_creativity,
         seed=seed,
+        direction_context=req.news_text,
     )
 
     # 上游（OpenRouter 多 provider 輪替）偶發 502、輸出截斷或不合 schema 的回傳是常態，
@@ -3690,28 +3688,17 @@ def generate(req: GenerateRequest):
 
             variable = strip_wrapping_quotes(data.get("variable", ""))
             if req.stamp is False and any(_STAMP_LINE_RE.match(line) for line in variable.splitlines()):
-                if req.density == "verbatim" and editor_formats.resolve_hole_side(
-                    req.editor_format, req.hole_side
-                ):
-                    # 播出鏡面：蓋章本來就在最底一列，直接改標成底帶。若只拿掉標記，
-                    # 下面的 ensure_bottom_band_line 會把最後一張卡搬到最後，正文順序就變了。
-                    print("[generate] 蓋章 OFF＋不改字＋播出鏡面：<蓋章> 改標為 <底帶>", flush=True)
-                    variable = "\n".join(
-                        _STAMP_LINE_RE.sub("<底帶>", line, count=1)
-                        for line in variable.splitlines()
-                    )
-                elif req.density == "verbatim":
+                if req.density == "verbatim":
+                    # 不改字模式不能刪正文；但 <蓋章> 也不是「尚未使用的實質重點」
+                    # 的可靠證據，所以只去標記，不擅自改成 <底帶>。
                     print("[generate] 蓋章 OFF＋不改字：<蓋章> 標記拿掉、正文保留", flush=True)
                     variable = unmark_stamp_lines(variable)
                 else:
                     print("[generate] 蓋章 OFF 但消化結果仍有 <蓋章> 行，已強制移除", flush=True)
                     variable = drop_stamp_lines(variable)
-            # 播出鏡面 ＋ 蓋章 OFF：底帶那一行沒生出來就自己補（見 ensure_bottom_band_line）
+            # 播出鏡面 ＋ 蓋章 OFF：沒有新的實質重點時允許無字，不再挪用內文卡。
             if req.stamp is False and editor_formats.resolve_hole_side(req.editor_format, req.hole_side):
-                filled = ensure_bottom_band_line(variable)
-                if filled != variable:
-                    print("[generate] 蓋章 OFF 但消化結果沒有 <底帶> 行，已把最後一張卡升級成底帶", flush=True)
-                variable = filled
+                variable = ensure_bottom_band_line(variable)
             result = GenerateResponse(
                 style=data.get("style", ""),
                 structure=data.get("structure", ""),
@@ -7829,6 +7816,9 @@ def _cover_ai(
     design_brief = editor_formats.cover_design_brief(
         level, titles=titles, seed=seed, full_width=(req.layout == "full"), visuals=visuals,
         layer_mode=transparent_mode,
+        direction_context="\n".join(
+            part for part in (req.news_text, *titles, *visuals) if part
+        ),
     )
     colour_rule = editor_formats.cover_title_colour_rule(level)
     # 3 級起才把反色底字釘在行清單上（條文本身也是 3 級起才要求）。
@@ -9445,6 +9435,9 @@ def _yt_cover_full_image(
                 # transparent_background 與 with_title_layer_note 完全一致，
                 # 三處分岔同一個條件——有測試釘住不准各寫各的。
                 layer_mode=protect_base and base is not None,
+                direction_context="\n".join(
+                    part for part in (req.news_text, req.title, visual) if part
+                ),
             ),
             layout_rules=editor_formats.yt_layout_rules(req.creativity, req.layout),
             title_top=editor_formats.yt_title_top(req.creativity),

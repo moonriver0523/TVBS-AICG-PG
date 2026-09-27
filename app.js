@@ -2012,11 +2012,11 @@ EXTENDED BACKGROUND SAFE LAYOUT (OVERRIDES EVERY EARLIER RULE ABOUT MARGINS, CAN
 const BROADCAST_HOLE_LAYOUT_RULES_TEMPLATE = `==================================================
 BROADCAST VIDEO HOLE — {hole_side_upper} VIDEO ZONE IS BACKGROUND-ONLY (CRITICAL OVERRIDE)
 ==================================================
-- The video zone is a 16:9 area on the {hole_side} side of the frame, filling roughly the {hole_side} half of the space between the headline at the top and the bottom band. Post-production will place live video there.
+- The video zone is a 16:9 area on the {hole_side} side of the frame, filling roughly the {hole_side} half of the space between the headline at the top and the low strip below it. Post-production will place live video there.
 - Inside the video zone: background ONLY. The same full-frame scene continues naturally through it; do not leave it blank and do not draw a white box, frame, guide or placeholder there.
 - No attached image, generated subject, text, number, card, chart, logo, badge or callout may enter or overlap the video zone.
-- The headline at the top and the bottom band may still span the full width as the layout requires; they stay above and below the video zone, never inside it.
-- Every other content element goes in the {content_side} half between the headline and the bottom band. Every attached PLACE AS-IS image MUST appear there, clearly visible and unaltered — as the main picture of that half or inside a card. Never omit it and never move it into the video zone.
+- The headline at the top, and a supplied bottom band when VARIABLE FIELDS contains one, may span the full width; they stay above and below the video zone, never inside it.
+- Every other content element goes in the {content_side} half between the headline and the low strip. Every attached PLACE AS-IS image MUST appear there, clearly visible and unaltered — as the main picture of that half or inside a card. Never omit it and never move it into the video zone.
 - This applies whether the software white alignment frame is ON or OFF. It OVERRIDES any earlier instruction to make an attached image full-frame, extend or crop it across the canvas, or place content on the {hole_side} side.`;
 
 function broadcastHoleLayoutRules(side) {
@@ -2025,6 +2025,20 @@ function broadcastHoleLayoutRules(side) {
         .replaceAll('{hole_side_upper}', side.toUpperCase())
         .replaceAll('{hole_side}', side)
         .replaceAll('{content_side}', side === 'left' ? 'right' : 'left');
+}
+
+function broadcastBottomBandRules(variable, side) {
+    if (side !== 'left' && side !== 'right') return '';
+    if (/^\s*[<＜]\s*底帶\s*[>＞]/m.test(variable || '')) {
+        return `==================================================
+BROADCAST BOTTOM BAND CONTENT
+==================================================
+- VARIABLE FIELDS supplies one <底帶> line. Remove the <底帶> marker, then render exactly that line's supplied wording in the low full-width information bar below the video zone. Do not add, repeat or paraphrase any other wording there.`;
+    }
+    return `==================================================
+BROADCAST BOTTOM BAND IS TEXT-FREE
+==================================================
+- VARIABLE FIELDS contains no <底帶> line. Keep the entire low strip below the video zone as continuous background only: NO text, digits, caption, slogan, label, icon or invented filler. Do not move or copy a body card into it.`;
 }
 
 function buildPrompt({ role, engine, typeLabel, style, structure, variable, safeFrame = false, aspectRatio = '16:9', noText = false, modelExtension = false, holeSide = '' }) {
@@ -2101,7 +2115,9 @@ FINAL OUTPUT RULE
     let fullBody = noText ? `${body}\n${NO_TEXT_IMAGE_OVERRIDE}` : body;
     if (modelExtension) fullBody = `${fullBody}\n${MODEL_EXTENSION_IMAGE_OVERRIDE}`;
     const holeRules = broadcastHoleLayoutRules(holeSide);
-    if (holeRules) fullBody = `${fullBody}\n\n${holeRules}`;
+    if (holeRules) {
+        fullBody = `${fullBody}\n\n${holeRules}\n\n${broadcastBottomBandRules(variable, holeSide)}`;
+    }
 
     // 依引擎切換開頭語法
     if (engine === 'gpt') {

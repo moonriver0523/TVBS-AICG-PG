@@ -189,6 +189,70 @@ COVER_ACCESSORY_POOL: tuple[tuple[str, str], ...] = (
     ("iconrow", "A SHORT ROW OF SMALL {shape} WORDLESS ICON CHIPS along the lower edge, just ABOVE the navy bottom strip and never inside it, evenly spaced and equal in size, each holding one flat pictogram from the story."),
 )
 
+# 2026-09-27：arrow／magnifier 保留在原本的九格池與原本的位置，抽籤也照舊；
+# 只有抽完之後，才依新聞內容做確定性換字。這兩段不進池子，否則即使 tuple 長度
+# 沒變，替換原條目的文字也會讓所有既有 fixture 看起來像全面改版。
+DIRECTIONLESS_ARROW_REPLACEMENT = (
+    "A DIRECTIONLESS FOCUS HALO: offset broken rings of saturated colour framing the main"
+    " subject or headline block, balanced around it with no pointed ends, motion path or"
+    " implied origin and destination."
+)
+MAGNIFIER_WITHOUT_ARROW = (
+    "A {shape} MAGNIFIER INSET: a clean window cut from the photograph enlarging one telling"
+    " detail, ringed in a bright colour, with the matching source area marked by an outline in"
+    " that same colour — no arrow, leader line or pointed connector."
+)
+
+# 可重現的內容資格。只認明文訊號，不把「看起來好像有方向」交給生圖模型猜。
+_DIRECTIONAL_TYPE_RE = re.compile(
+    r"(?:流程|程序|步驟|時間軸|因果|flow|process|workflow|timeline)", re.IGNORECASE
+)
+_DIRECTIONAL_CONTENT_RES = (
+    # 明確來源→目標／路徑；中間限制長度，避免把兩段無關長文誤接成關係。
+    re.compile(r"(?:從|由).{1,40}?(?:到|至|往|向|移至|轉至|進入|移交給|交付給|輸往|流向)"),
+    re.compile(r"\bfrom\b.{1,80}?\b(?:to|toward|towards|into)\b", re.IGNORECASE),
+    # 移動方向或可辨識的轉向／運送目的地。
+    re.compile(r"(?:北上|南下|東移|西移|左轉|右轉|直行|逆向|回流|匯入|流向|移往|移至|轉往|送往|輸往|運往|撤往|進入|駛入|駛往)"),
+    re.compile(r"\b(?:northbound|southbound|eastbound|westbound|turn(?:ed|ing)? left|turn(?:ed|ing)? right|moved? (?:to|toward|towards|into)|sent to|shipped to|flow(?:ed|ing)? (?:to|toward|towards|into))\b", re.IGNORECASE),
+    # 流程／時間順序。
+    re.compile(r"(?:先.{1,40}(?:再|後|接著|隨後)|第一階段|第二階段|下一階段|依序|流程|程序|步驟)"),
+    re.compile(r"\b(?:first.{1,80}?(?:then|next)|followed by|step|stage|workflow|process)\b", re.IGNORECASE),
+    # 因果鏈。
+    re.compile(r"(?:因為?|由於).{1,60}?(?:導致|造成|致使|引發|因此|所以|使得|以致)"),
+    re.compile(r"(?:導致|致使|引發|因而|因此|所以|使得|以致)"),
+    re.compile(r"\b(?:caus(?:e|ed|es|ing)|lead(?:s|ing)? to|led to|result(?:s|ed|ing)? in|therefore)\b", re.IGNORECASE),
+    # 漲跌／增減方向。
+    re.compile(r"(?:上漲|下跌|上升|下降|增加|減少|成長|衰退|攀升|回落|走高|走低|漲幅|跌幅|年增|年減|升至|降至|調升|調降|暴增|驟減)"),
+    re.compile(r"\b(?:rose|risen|rise|rising|fell|fallen|falling|increase[ds]?|decrease[ds]?|grew|growth|decline[ds]?|surged?|dropped?|up by|down by)\b", re.IGNORECASE),
+    # 原文自己已經給了關係箭頭。
+    re.compile(r"(?:→|⇒|->)"),
+)
+
+
+def directional_content_eligible(content: str = "", type_label: str = "") -> bool:
+    """新聞明文具方向／流程／因果／漲跌／來源目標關係時才允許方向箭頭。"""
+    if _DIRECTIONAL_TYPE_RE.search(type_label or ""):
+        return True
+    text = " ".join((content or "").split())
+    return bool(text) and any(pattern.search(text) for pattern in _DIRECTIONAL_CONTENT_RES)
+
+
+def condition_directional_accessory(
+    key: str,
+    text: str,
+    *,
+    direction_context: str | None,
+    type_label: str = "",
+) -> str:
+    """抽籤後確定性換字；None 代表舊呼叫端未提供內容，維持逐字相容。"""
+    if direction_context is None or directional_content_eligible(direction_context, type_label):
+        return text
+    if key == "arrow":
+        return DIRECTIONLESS_ARROW_REPLACEMENT
+    if key == "magnifier":
+        return MAGNIFIER_WITHOUT_ARROW
+    return text
+
 # 國旗招式（2026-09-11 第十批）。**不進上面那個 tuple**，不跟其他九件一起被
 # rng.shuffle：那九件是「模型自己挑不出花樣，交給程式亂數抽」的東西，這一件不是
 # ——它成不成立取決於照片裡有沒有旗子，是個確定性判斷，不是隨機的。放進池子讓
@@ -269,6 +333,8 @@ def accessories(
     visuals=(),
     placement_note: str = "",
     overrides=None,
+    direction_context: str | None = None,
+    type_label: str = "",
 ) -> list[str]:
     """該級要畫的招式（無字），形狀已填好、每一件後面接著呼叫端給的幾何提示。
 
@@ -299,6 +365,9 @@ def accessories(
     for key, text in entries[:want]:
         if overrides and key in overrides:
             text = overrides[key]
+        text = condition_directional_accessory(
+            key, text, direction_context=direction_context, type_label=type_label
+        )
         if "{shape}" in text:
             text = text.replace("{shape}", rng.choice(COVER_ACCESSORY_SHAPES))
         if key in _ICON_LIKE_KEYS and not icon_guidance_used:
