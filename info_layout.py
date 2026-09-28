@@ -33,11 +33,30 @@ class InfoLayoutDecision:
     enabled: bool = True
 
 
-_TEMPORAL_TOKEN_RE = re.compile(
+_TEXTUAL_TEMPORAL_TOKEN_RE = re.compile(
     r"(?:\d{4}年\d{1,2}月(?:\d{1,2}日)?|\d{1,2}月\d{1,2}日|"
     r"(?:上午|中午|下午|晚間|晚上|凌晨)?\d{1,2}(?:時|點)(?:\d{1,2}分)?|"
     r"(?:週|星期)[一二三四五六日天]|今早|今晚|隔天|翌日)"
 )
+# 舊的離線分布分析會直接讀這個名稱；保留別名，實際 selector 一律走下方
+# `_temporal_tokens()`，確保斜線日期與中文字日期使用同一個入口。
+_TEMPORAL_TOKEN_RE = _TEXTUAL_TEMPORAL_TOKEN_RE
+_SLASH_MONTH_PATTERN = r"(?:0?[1-9]|1[0-2])"
+_SLASH_DAY_PATTERN = r"(?:0?[1-9]|[12]\d|3[01])"
+_SLASH_DATE_BODY = (
+    rf"(?:(?:19|20)\d{{2}}/)?{_SLASH_MONTH_PATTERN}/{_SLASH_DAY_PATTERN}"
+)
+_SLASH_DATE_RE = re.compile(rf"(?<![\d/]){_SLASH_DATE_BODY}(?![\d/])")
+_SLASH_DATE_RANGE_RE = re.compile(
+    rf"(?<![\d/]){_SLASH_DATE_BODY}\s*[~～—–-]\s*{_SLASH_DATE_BODY}(?![\d/])"
+)
+_DATE_SEMANTIC_RE = re.compile(
+    r"(?:日期|日程|期間|於|在|自|從|截至|至|到|當天|當日|上午|中午|下午|晚間|"
+    r"凌晨|出借|歸還|上路|生效|舉行|發生|公布|發布|開始|結束|啟程|抵達|繞境|"
+    r"開幕|閉幕|預定|原定|預計|恢復|截止)"
+)
+_SCORE_RATIO_RE = re.compile(r"(?:比分|比數|比例|比率|配比|戰績|局數|盤數)")
+_URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 _SEQUENCE_TOKEN_RE = re.compile(
     r"(?:首先|先是|先|接著|隨後|再來|然後|之後|最終|最後|第一步|第二步|第三步|"
     r"步驟[一二三四五六123456])"
@@ -72,8 +91,8 @@ _HERO_CUE_RE = re.compile(
     r"多達|高達|僅有|只剩|縮減|增加|減少|上漲|下跌|外洩|失蹤|受惠)"
 )
 _NON_HERO_UNIT_RE = re.compile(r"^(?:歲|天|項|國|分鐘|小時)$")
-_DATE_CONTEXT_RE = re.compile(
-    r"(?:19|20)\d{2}年|\d{1,2}月\d{1,2}日|\d{1,2}/\d{1,2}|第?\d+條|\d+年次"
+_NON_SLASH_DATE_CONTEXT_RE = re.compile(
+    r"(?:19|20)\d{2}年|\d{1,2}月\d{1,2}日|第?\d+條|\d+年次"
 )
 _ROLE_NAME_PATTERNS = (
     re.compile(
@@ -138,6 +157,7 @@ _PARALLEL_CUE_RE = re.compile(
     r"(?:包括|分為|涵蓋|分別是|分別為|主要有|項目為|對象為|可分成|可分為|"
     r"依序為|重點包括)"
 )
+_QUANTITY_LABEL_RE = re.compile(r"([\u4e00-\u9fffA-Za-z][\u4e00-\u9fffA-Za-z0-9（）()·-]{0,19})[：:]\s*$")
 _FEATURE_EVENT_RE = re.compile(
     r"(?:發生|爆發|發現|宣布|發布|公布|推出|上路|啟動|舉行|開賣|攻擊|襲擊|"
     r"逮捕|攔查|追緝|遭|受困|失蹤|外洩|起火|洪災|車禍|事故|爭議|控訴|"
@@ -171,8 +191,40 @@ def requests_verbatim(text: str) -> bool:
     return bool(_VERBATIM_REQUEST_RE.search(text or ""))
 
 
+def _slash_date_tokens(text: str) -> list[str]:
+    """Return slash dates only when syntax and nearby semantics make them dates."""
+
+    range_spans = [match.span() for match in _SLASH_DATE_RANGE_RE.finditer(text)]
+    url_spans = [match.span() for match in _URL_RE.finditer(text)]
+    tokens: list[str] = []
+    for match in _SLASH_DATE_RE.finditer(text):
+        start, end = match.span()
+        if any(url_start <= start < url_end for url_start, url_end in url_spans):
+            continue
+        value = match.group(0)
+        explicit_year = bool(re.match(r"(?:19|20)\d{2}/", value))
+        in_range = any(range_start <= start and end <= range_end for range_start, range_end in range_spans)
+        context = text[max(0, start - 12) : min(len(text), end + 14)]
+        if explicit_year:
+            tokens.append(value)
+            continue
+        if _SCORE_RATIO_RE.search(context):
+            continue
+        if in_range or _DATE_SEMANTIC_RE.search(context):
+            tokens.append(value)
+    return tokens
+
+
+def _temporal_tokens(text: str) -> list[str]:
+    return _TEXTUAL_TEMPORAL_TOKEN_RE.findall(text) + _slash_date_tokens(text)
+
+
+def _has_date_context(text: str) -> bool:
+    return bool(_NON_SLASH_DATE_CONTEXT_RE.search(text) or _slash_date_tokens(text))
+
+
 def _timeline_evidence(text: str, type_label: str) -> str | None:
-    temporal = _TEMPORAL_TOKEN_RE.findall(text)
+    temporal = _temporal_tokens(text)
     sequence = _SEQUENCE_TOKEN_RE.findall(text)
     if len(temporal) >= 2:
         return f"原文有 {len(temporal)} 個明示日期／時間節點，可按原文順序排列"
@@ -211,6 +263,8 @@ def _comparison_evidence(text: str) -> str | None:
 def _hero_number_evidence(text: str) -> str | None:
     if _HERO_UNSAFE_RE.search(text):
         return None
+    if _parallel_quantity_count(text):
+        return None
     quantities = _quantities(text)
     if not 1 <= len(quantities) <= 8:
         return None
@@ -222,7 +276,7 @@ def _hero_number_evidence(text: str) -> str | None:
     eligible: list[tuple[str, str, int]] = []
     for value, unit, pos in quantities:
         context = text[max(0, pos - 12) : pos + len(value) + len(unit) + 8]
-        if _NON_HERO_UNIT_RE.match(unit) or _DATE_CONTEXT_RE.search(context):
+        if _NON_HERO_UNIT_RE.match(unit) or _has_date_context(context):
             continue
         if unit in {"公里", "公尺"} and re.search(r"每小時\s*\d", context):
             continue
@@ -331,11 +385,28 @@ def _parallel_item_count(text: str) -> int:
     inline_numbered = _INLINE_NUMBERED_RE.findall(text)
     if 3 <= len(inline_numbered) <= 6:
         return len(inline_numbered)
+    quantity_count = _parallel_quantity_count(text)
+    if quantity_count:
+        return quantity_count
     if _COUNTED_LIST_RE.search(text):
         colon_count = len(re.findall(r"[^，。；;\n]{2,14}[：:]", text))
         if 3 <= colon_count <= 6:
             return colon_count
     return 0
+
+
+def _parallel_quantity_count(text: str) -> int:
+    """Count 3–6 ``label: number + unit`` rows sharing one measurement unit."""
+
+    units: list[str] = []
+    for _, unit, pos in _quantities(text):
+        prefix = text[max(0, pos - 24) : pos]
+        if _QUANTITY_LABEL_RE.search(prefix):
+            units.append(unit)
+    if not 3 <= len(units) <= 6:
+        return 0
+    dominant_count = max(Counter(units).values(), default=0)
+    return dominant_count if dominant_count >= 3 else 0
 
 
 def _parallel_semantics(text: str) -> bool:

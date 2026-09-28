@@ -3401,8 +3401,11 @@ def verify_internal_api_key(
     # app.js 不烙金鑰），改由 index.html 包的那層 fetch 帶上 Bearer 權杖。
     # 這裡再驗一次而不是信任 middleware，是為了讓這支 Depends 自成防線——
     # 日後有人改動 middleware 的放行清單，這道門不會跟著破掉。
-    # JWKS 有快取，重複驗證不會產生額外的對外請求。
+    # middleware 已在同一請求放入使用者時，不重打 Clerk 使用者 API；若未經 middleware
+    #（例如日後有人改放行清單），仍自行驗 Bearer，保留這道門的獨立防線。
     if clerk_auth.ENABLED and authorization.startswith("Bearer "):
+        if current_user().get("user_id"):
+            return
         if clerk_auth.verify_token(authorization[7:].strip()):
             return
 

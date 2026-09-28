@@ -116,10 +116,11 @@ def _row(record: dict) -> str:
     # 姓名與 email 都顯示：姓名好認人，email 是唯一的（同名同姓分得開）。
     name = record.get("user_name", "")
     email = record.get("user_email", "")
+    user_id = record.get("user_id", "")
     if name and email:
         who = f'{_esc(name)}<br><span class="muted">{_esc(email)}</span>'
     else:
-        who = _esc(name or email or "（未署名）")
+        who = _esc(name or email or user_id or "（未署名）")
     month = record.get("_month", "")
     image_file = record.get("image_file", "")
     failed = audit_archive.record_status(record) == audit_archive.STATUS_FAILED

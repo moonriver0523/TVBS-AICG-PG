@@ -246,7 +246,8 @@ def _iter_records(*, month: str = "", user: str = "", type_value: str = ""):
                 continue
             if needle:
                 haystack = (
-                    f"{record.get('user_email', '')} {record.get('user_name', '')}"
+                    f"{record.get('user_email', '')} {record.get('user_name', '')} "
+                    f"{record.get('user_id', '')}"
                 ).lower()
                 if needle not in haystack:
                     continue
@@ -360,7 +361,12 @@ def stats() -> dict:
     summary = summarize_records()
     users: set[str] = set()
     for record in _iter_records():
-        label = record.get("user_email") or record.get("user_name") or "(未署名)"
+        label = (
+            record.get("user_email")
+            or record.get("user_name")
+            or record.get("user_id")
+            or "(未署名)"
+        )
         users.add(label)
     return {
         "enabled": True,

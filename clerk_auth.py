@@ -52,6 +52,11 @@ _USER_CACHE_TTL = 3600
 _user_cache: dict[str, tuple[float, dict]] = {}
 _user_cache_lock = threading.Lock()
 
+# 使用者補充資料不是登入憑證；每次最多等兩個短 timeout，避免 Clerk 暫時抖動時
+# 把空姓名寫進稽核，也避免把生成請求拖住太久。只有可能短暫恢復的狀態才重試。
+_USER_FETCH_TIMEOUT = 2.0
+_USER_FETCH_RETRIES = 1
+
 _jwk_client: PyJWKClient | None = None
 
 
@@ -93,17 +98,38 @@ def _fetch_user(user_id: str) -> dict:
     """用 Backend API 補上 email 與姓名。失敗回空 dict，呼叫端要能接受。"""
     if not SECRET_KEY or not user_id:
         return {}
-    try:
-        response = httpx.get(
-            f"https://api.clerk.com/v1/users/{user_id}",
-            headers={"Authorization": f"Bearer {SECRET_KEY}"},
-            timeout=5.0,
-        )
-        if response.status_code != 200:
-            return {}
-        data = response.json()
-    except Exception as exc:  # noqa: BLE001 - 查不到人名不該擋住生成
-        print(f"[clerk_auth] fetch user failed: {exc}", flush=True)
+
+    data = None
+    attempts = _USER_FETCH_RETRIES + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            response = httpx.get(
+                f"https://api.clerk.com/v1/users/{user_id}",
+                headers={"Authorization": f"Bearer {SECRET_KEY}"},
+                timeout=_USER_FETCH_TIMEOUT,
+            )
+            if response.status_code != 200:
+                print(
+                    f"[clerk_auth] fetch user failed: user_id={user_id} "
+                    f"status={response.status_code} attempt={attempt}/{attempts}",
+                    flush=True,
+                )
+                transient = response.status_code in {408, 429} or response.status_code >= 500
+                if transient and attempt < attempts:
+                    continue
+                return {}
+            data = response.json()
+            break
+        except Exception as exc:  # noqa: BLE001 - 查不到人名不該擋住生成
+            print(
+                f"[clerk_auth] fetch user failed: user_id={user_id} "
+                f"error={type(exc).__name__} attempt={attempt}/{attempts}",
+                flush=True,
+            )
+            if attempt >= attempts:
+                return {}
+
+    if not isinstance(data, dict):
         return {}
 
     email = ""
@@ -114,7 +140,11 @@ def _fetch_user(user_id: str) -> dict:
     name = " ".join(
         part for part in (data.get("first_name"), data.get("last_name")) if part
     ).strip()
-    return {"email": email, "name": name or data.get("username") or ""}
+    return {
+        "user_id": user_id,
+        "email": email,
+        "name": name or data.get("username") or user_id,
+    }
 
 
 def _user_info(user_id: str) -> dict:
@@ -124,12 +154,19 @@ def _user_info(user_id: str) -> dict:
         if cached and now - cached[0] < _USER_CACHE_TTL:
             return cached[1]
     info = _fetch_user(user_id)
-    # 查詢失敗（回空 dict）不進快取：否則 Clerk 一次短暫的故障會被記住一小時，
-    # 而在網域檢查啟用時「查不到 email」等於擋人，代價太高。
     if info:
         with _user_cache_lock:
             _user_cache[user_id] = (now, info)
-    return info
+        return info
+
+    # TTL 只決定何時重新整理，不代表舊的成功資料要丟掉。重新整理失敗時沿用該
+    # instance 最後一次成功結果；全新 instance 尚無資料時，至少保留 token 的 sub。
+    # email 仍可能為空，所以下方 allowlist 檢查照舊 fail-closed。
+    with _user_cache_lock:
+        stale = _user_cache.get(user_id) or cached
+    if stale:
+        return stale[1]
+    return {"user_id": user_id, "email": "", "name": user_id}
 
 
 def _domain_allowed(email: str) -> bool:
@@ -179,7 +216,8 @@ def verify_token(token: str) -> dict | None:
 
     # 網域檢查是 fail-closed：查不到 email 就擋。這裡的代價不對稱——放行的代價是
     # 陌生人可以消耗會花錢的 API，擋掉的代價只是使用者重試一次。
-    # 查詢失敗不會被快取（見 _user_info），所以 Clerk 短暫故障會自行恢復。
+    # 查詢失敗只會使用最後一次成功資料或空 email（見 _user_info）；沒有可信 email
+    # 時仍會進到這裡被擋，不能因為稽核顯示有 user_id 就變成 fail-open。
     if ALLOWED_EMAIL_DOMAINS and not _domain_allowed(email):
         print(
             f"[clerk_auth] denied: user={user_id} email={email or '(查不到)'} "
