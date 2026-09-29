@@ -376,6 +376,9 @@ let state = {
     refineSource: null,
     refineDisplay: null,
     refineInFlight: false,
+    // F53：另一張「前一張」只供預覽／下載；永遠不取代 refineDisplay（完整版）。
+    titleOnlyDisplay: null,
+    titleOnlyInFlight: false,
     // 與 refineSource 同一版成品實際使用的置框／模型參數；事後重貼標籤不可讀當下 UI。
     refineParameters: null,
     restampRequestId: 0,
@@ -679,27 +682,30 @@ function downloadDateStamp() {
 /* 檔名欄在結果區裡，生圖當下還是空的——使用者是看到圖之後才打字。
    所以下載當下再算一次；同步在 click handler 裡改 download 屬性，瀏覽器吃得到。 */
 function wireDownloadNames() {
-    ['oneClickDownload', 'downloadGeneratedImage'].forEach(id => {
+    ['oneClickDownload', 'downloadGeneratedImage', 'titleOnlyDownload'].forEach(id => {
         const link = document.getElementById(id);
         if (!link) return;
         link.addEventListener('click', () => {
             const ext = (link.href || '').startsWith('data:image/png') ? 'png' : 'jpg';
-            link.download = downloadFileName(state.editorFormat, undefined, ext);
+            const suffix = id === 'titleOnlyDownload' ? '_前一張' : '';
+            link.download = downloadFileName(state.editorFormat, undefined, ext, suffix);
         });
     });
 }
 
-function downloadFileName(kind, title, ext) {
+function downloadFileName(kind, title, ext, suffix = '') {
     const clean = s => String(s == null ? '' : s).replace(DOWNLOAD_NAME_ILLEGAL, '').trim();
     const extension = clean(ext) || 'png';
-    const custom = clean(customDownloadName());
+    const cleanSuffix = clean(suffix);
+    const customBase = clean(customDownloadName());
+    const custom = customBase ? `${customBase}${cleanSuffix}` : '';
     if (custom) return `${custom}.${extension}`;
     const name = clean(title === undefined ? downloadTitleSource(kind) : title)
         .slice(0, DOWNLOAD_TITLE_MAX)
         .trim();
     const parts = [downloadDateStamp(), clean(downloadFormatName(kind))];
     if (name) parts.push(name);
-    return `${parts.filter(Boolean).join('_')}.${extension}`;
+    return `${parts.filter(Boolean).join('_')}${cleanSuffix}.${extension}`;
 }
 
 /* 消化程度六檔。key 與後端 DigestDensity 一致，改這裡要同步改 main.py */
@@ -1227,6 +1233,7 @@ function setEditorFormat(key) {
     state.refineSource = null;
     state.refineDisplay = null;
     state.refineParameters = null;
+    if (typeof clearTitleOnlyResult === 'function') clearTitleOnlyResult();
     state.restampRequestId += 1;
     const coverRecompose = document.getElementById('coverRecomposeBtn');
     if (coverRecompose) coverRecompose.disabled = true;
@@ -3445,7 +3452,10 @@ async function restampFreeLabels() {
         editor.baseMimeType = data.disclaimer_base_mime_type || editor.baseMimeType;
         editor.safeRect = data.disclaimer_safe_rect || editor.safeRect;
         editor.obstacles = data.disclaimer_obstacles || editor.obstacles;
-        if (editor.imageId === 'oneClickImage') state.refineDisplay = {...(state.refineDisplay || {}), ...data};
+        if (editor.imageId === 'oneClickImage') {
+            state.refineDisplay = {...(state.refineDisplay || {}), ...data};
+            if (typeof clearTitleOnlyResult === 'function') clearTitleOnlyResult();
+        }
         hideToast();
         hideGenerateErrorBanner(true);
         showGenerateNoticeBanner(data.notices);
@@ -4374,6 +4384,29 @@ function refineParametersFromState(display = null) {
     };
 }
 
+function supportsTitleOnlyFormat() {
+    // 十點與四種 YT 封面本身就是「標題＋固定播出元素」；直標沒有生圖底圖。
+    // F53 只對真的含標題＋內文的編輯 CG／播出鏡面開放。
+    return state.editorFormat === EDITOR_FORMAT_DEFAULT || state.editorFormat === 'broadcast';
+}
+
+function titleOnlyInstruction(title) {
+    return `保留標題「${title}」的文字內容、字形、字級、顏色、位置與外觀完全不變。
+保留所有既有版面框架、卡片、底板、照片、人物、圖示、背景、整體構圖與每個元素的位置完全不變。
+刪除標題以外的所有文字，包括內文、數字、小標、說明、註記與標籤牌上的字；刪字後原本的框、卡片、底板、標籤牌與色塊必須留空保留，不要把框或任何容器一起刪掉。
+不要新增任何文字、圖像、符號或元素，不要重新設計，不要改變構圖，只做上述刪字。`;
+}
+
+function clearTitleOnlyResult() {
+    state.titleOnlyDisplay = null;
+    const result = document.getElementById('titleOnlyResult');
+    if (result) result.classList.add('hidden');
+    const image = document.getElementById('titleOnlyImage');
+    if (image) image.removeAttribute('src');
+    const download = document.getElementById('titleOnlyDownload');
+    if (download) download.removeAttribute('href');
+}
+
 function resetRefineState(source, display, parameters = null) {
     // 新成品會讓先前尚未回來的 restamp 全部失效。
     state.restampRequestId += 1;
@@ -4386,6 +4419,7 @@ function resetRefineState(source, display, parameters = null) {
         model: (display || {}).model || (parameters || {}).model || '',
     } : null;
     state.refineStack = [];
+    if (typeof clearTitleOnlyResult === 'function') clearTitleOnlyResult();
     const input = document.getElementById('refineInput');
     if (input) input.value = '';
     const replacement = document.getElementById('replacementPerson');
@@ -4394,10 +4428,17 @@ function resetRefineState(source, display, parameters = null) {
 }
 
 function updateRefineControls() {
+    const busy = state.refineInFlight || state.titleOnlyInFlight;
     const undoBtn = document.getElementById('refineUndoBtn');
-    if (undoBtn) undoBtn.disabled = state.refineStack.length === 0;
+    if (undoBtn) undoBtn.disabled = busy || state.refineStack.length === 0;
     const btn = document.getElementById('refineBtn');
-    if (btn) btn.disabled = !state.refineSource;
+    if (btn) btn.disabled = busy || !state.refineSource;
+    const titleOnlyAvailable = !!state.refineSource && !!state.refineDisplay
+        && supportsTitleOnlyFormat();
+    const action = document.getElementById('titleOnlyAction');
+    if (action) action.classList.toggle('hidden', !titleOnlyAvailable);
+    const titleOnlyBtn = document.getElementById('titleOnlyBtn');
+    if (titleOnlyBtn) titleOnlyBtn.disabled = busy || !titleOnlyAvailable;
 }
 
 function showRefinedImage(data) {
@@ -4409,6 +4450,95 @@ function showRefinedImage(data) {
     download.href = imageUrl;
     download.download = downloadFileName(state.editorFormat, undefined, isPng ? 'png' : 'jpg');
     document.getElementById('oneClickLabel').innerText = data.model || 'AI Generated';
+}
+
+function showTitleOnlyImage(data) {
+    const imageUrl = `data:${data.mime_type};base64,${data.image_data_base64}`;
+    const isPng = data.mime_type === 'image/png';
+    state.titleOnlyDisplay = data;
+    const image = document.getElementById('titleOnlyImage');
+    const download = document.getElementById('titleOnlyDownload');
+    image.src = imageUrl;
+    download.href = imageUrl;
+    download.download = downloadFileName(
+        state.editorFormat, undefined, isPng ? 'png' : 'jpg', '_前一張'
+    );
+    document.getElementById('titleOnlyQuality').innerText = 'AI 追加修改完成';
+    document.getElementById('titleOnlyResult').classList.remove('hidden');
+}
+
+async function handleTitleOnly() {
+    if (!state.refineSource || !state.refineDisplay) {
+        return showToast('請先生成完整版，再製作前一張');
+    }
+    if (!supportsTitleOnlyFormat()) {
+        return showToast('這個版型本身只有標題與固定元素，不需要另做前一張');
+    }
+    const title = downloadTitleSource(state.editorFormat);
+    if (!title) {
+        showGenerateErrorBanner('只留標題失敗：找不到目前完整版的標題文字；完整版未受影響。');
+        return;
+    }
+    const display = state.refineDisplay;
+    const params = state.refineParameters || refineParametersFromState(display);
+    const applied = appliedDisclaimer();
+    const instruction = titleOnlyInstruction(title);
+    const btnText = document.getElementById('titleOnlyBtnText');
+    const loading = document.getElementById('titleOnlyLoading');
+    clearGenerateBannerForNewRequest();
+    state.titleOnlyInFlight = true;
+    state.refineInFlight = true; // 同步鎖住完整版標籤，避免請求途中兩張的標籤版本分岔。
+    updateRefineControls();
+    if (typeof renderFreeLabelEditor === 'function') renderFreeLabelEditor();
+    btnText.innerText = '製作中…';
+    loading.classList.remove('hidden');
+    try {
+        const response = await fetch(REFINE_BACKEND_URL, {
+            method: 'POST',
+            headers: _apiHeaders(),
+            body: JSON.stringify({
+                source_image_base64: state.refineSource.base64,
+                source_mime_type: state.refineSource.mimeType,
+                label_token: display.label_token || '',
+                instruction,
+                audit_action: 'title-only',
+                provider: params.provider,
+                aspect_ratio: params.aspect_ratio,
+                image_size: params.image_size,
+                density: params.density,
+                disclaimer_kind: applied.kind,
+                disclaimer_source_text: applied.sourceText,
+                disclaimer_corner: applied.corner,
+                disclaimer_position: applied.position || null,
+                disclaimer_provenance_kind: applied.provenanceKind || '',
+                disclaimer_manual_override: !!applied.manualOverride,
+                disclaimer_target: applied.target || 'cg',
+                disclaimer_context: applied.context || {},
+                disclaimer_items: applied.items || [],
+                safe_frame: params.safe_frame,
+                frame_strategy: params.frame_strategy || '',
+                safe_frame_profile: params.safe_frame_profile,
+                broadcast_hole: broadcastHoleForApi(),
+                hole_side: editorFormat().hole ? state.holeSide : '',
+            }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(_apiError(data, response.status));
+        showTitleOnlyImage(data);
+        showToast('前一張製作完成；完整版仍保留在上方');
+    } catch (err) {
+        console.error(err);
+        const message = err.message || '檢查未通過';
+        showGenerateErrorBanner(`只留標題失敗：${message}；完整版未受影響。`);
+        showToast(`只留標題失敗：${message}`);
+    } finally {
+        state.titleOnlyInFlight = false;
+        state.refineInFlight = false;
+        btnText.innerText = '只留標題（前一張）';
+        loading.classList.add('hidden');
+        if (typeof renderFreeLabelEditor === 'function') renderFreeLabelEditor();
+        updateRefineControls();
+    }
 }
 
 // F32（2026-09-20）：輸入框改成多行 textarea，Enter 換行，Ctrl+Enter／⌘+Enter 才送出，
@@ -4529,6 +4659,7 @@ async function handleRefine() {
         state.refineSource = refineSourceFromResponse(shown);
         state.refineDisplay = shown;
         state.refineParameters = {...refineParameters, model: shown.model || refineParameters.model};
+        if (typeof clearTitleOnlyResult === 'function') clearTitleOnlyResult();
         showRefinedImage(shown);
         showGenerateNoticeBanner(
             Array.isArray(shown.notices) && shown.notices.length ? shown.notices : data.notices
@@ -4555,6 +4686,7 @@ function undoRefine() {
     state.refineSource = previous.source;
     state.refineDisplay = previous.display;
     state.refineParameters = previous.parameters;
+    if (typeof clearTitleOnlyResult === 'function') clearTitleOnlyResult();
     showRefinedImage(previous.display);
     updateRefineControls();
     showToast('已退回上一版');

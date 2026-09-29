@@ -108,8 +108,8 @@ _DIGEST_SOURCES = ("digest", "hybrid-digest", "cover-titles")
 def record_action(record: dict) -> str:
     """這筆是「新生成」「追加修改」「消化」還是「合成」——見上方模組層級註解。
 
-    `action` 明確帶值時直接採用（目前沒有寫入端會帶，留給未來需要更細分類時用，
-    不必再改這支函式的 fallback 表）；沒帶就照 source 的字面值／前綴推。
+    `action` 明確帶值時直接採用（例如 F53 的「只留標題（前一張）」）；沒帶就照
+    source 的字面值／前綴推。
     """
     action = record.get("action")
     if action:
