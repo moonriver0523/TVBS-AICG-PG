@@ -66,6 +66,24 @@ class UpstreamErrorDetailTests(unittest.TestCase):
         self.assertNotIn("\n", detail)
         self.assertIn("line one line two", detail)
 
+    def test_generic_upstream_status_survives_the_outer_proxy_status(self):
+        from fastapi import HTTPException
+
+        for upstream_status, outer_status, expected_type in (
+            (403, 503, "provider_4xx"),
+            (502, 503, "provider_5xx"),
+        ):
+            with self.subTest(upstream_status=upstream_status):
+                detail = main.upstream_error_detail(
+                    _FakeAPIError("provider detail", upstream_status)
+                )
+                self.assertIn(f"（{upstream_status}）", detail)
+                meta = main.classify_generation_error(
+                    HTTPException(status_code=outer_status, detail=detail)
+                )
+                self.assertEqual(meta["http_status"], upstream_status)
+                self.assertEqual(meta["error_type"], expected_type)
+
 
 class CreditsExhaustedStopsRetryingTests(unittest.TestCase):
     """B95：B94 上線後第一筆 DEV 失敗就寫出了真因——
@@ -177,6 +195,16 @@ class FriendlyUpstreamMessageTests(unittest.TestCase):
     def test_other_errors_keep_the_raw_body(self):
         detail = main.friendly_image_http_error("OpenRouter", 500, "Provider returned error")
         self.assertEqual(detail, "OpenRouter 圖片生成失敗（500）：Provider returned error")
+
+    def test_empty_body_still_preserves_the_upstream_status(self):
+        from fastapi import HTTPException
+
+        detail = main.friendly_image_http_error("OpenRouter", 403, "")
+        self.assertIn("（403）", detail)
+        meta = main.classify_generation_error(
+            HTTPException(status_code=502, detail=detail)
+        )
+        self.assertEqual((meta["error_type"], meta["http_status"]), ("provider_4xx", 403))
 
     def test_upstream_status_survives_for_the_admin_grouping(self):
         from fastapi import HTTPException

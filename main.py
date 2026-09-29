@@ -655,7 +655,7 @@ def friendly_image_http_error(provider: str, code: int, body: str) -> str:
         return safety_rejection_message(code)
     if body:
         return f"{provider} 圖片生成失敗（{code}）：{body}"
-    return f"{provider} 圖片生成失敗，請確認金鑰、模型權限或稍後重試"
+    return f"{provider} 圖片生成失敗（{code}），請確認金鑰、模型權限或稍後重試"
 
 
 def upstream_error_detail(
@@ -672,8 +672,12 @@ def upstream_error_detail(
         str(getattr(exc, "message", "") or exc),
         max_chars=UPSTREAM_DETAIL_MAX_CHARS,
     ).replace("[redacted]", "[已遮蔽]")
-    parts = [p for p in (f"上游 {status}" if status else "", body) if p]
-    return f"{base}（{' · '.join(parts)}）" if parts else base
+    if status:
+        parts = [p for p in (f"上游 {status}", body) if p]
+        # classify_generation_error() 會從第一組「（NNN）」取回真正的上游
+        # 狀態碼；不能把「上游」或訊息一起塞進同一組括號。
+        return f"{base}（{status}）：{' · '.join(parts)}"
+    return f"{base}（{body}）" if body else base
 
 
 def non_retryable_upstream_error(exc: BaseException) -> HTTPException | None:

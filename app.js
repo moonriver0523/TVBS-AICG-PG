@@ -3884,6 +3884,7 @@ async function handleImageGeneration() {
         updateImageGenerationControls();
         return;
     }
+    clearGenerateBannerForNewRequest();
 
     const provider = effectiveImageProvider();
     const providerName = provider === 'gpt' ? 'GPT' : 'Gemini';
@@ -3924,12 +3925,15 @@ async function handleImageGeneration() {
                 map_points: state.mapPoints,
                 portrait_subjects: state.portraitSubjects,
                 portrait_subjects_en: state.portraitSubjectsEn,
+                reference_images: userRefImagesPayload(),
+                // AI改圖與第一頁一鍵生成走同一支生圖 API，不能在第二／三頁漏掉改圖指示。
+                editor_instruction: currentUserInstruction(),
                 // B70／F43：同上，兩個送出點要一致，不然第二／三頁按生成就沒有標籤。
                 ...disclaimerPayload(),
             })
         });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(_apiError(data, response.status));
 
         const image = document.getElementById('generatedImage');
         const download = document.getElementById('downloadGeneratedImage');
@@ -3947,6 +3951,7 @@ async function handleImageGeneration() {
         result.classList.remove('hidden');
         // 第二／三頁也保存同一組置框前原圖與送出快照，成圖後拖曳／切種類才有乾淨底圖可重貼。
         resetRefineState(refineSourceFromResponse(data), data, generationParameters);
+        showGenerateNoticeBanner(data.notices);
         showToast(`${providerName} 已完成圖片生成`);
     } catch (err) {
         console.error(err);
