@@ -615,6 +615,48 @@ def _generation_retries() -> int:
 # （見 2026-09-17 那筆 safety system 的紀錄），消化這條補上同樣的待遇。
 UPSTREAM_DETAIL_MAX_CHARS = 200
 
+# B119（2026-09-29）：兩種最常見的上游失敗改成使用者看得懂的中文。
+# - 安全系統擋題材：09-29 一天三筆（槍殺／兒虐題材的追加修改），前端吐的是整段
+#   OpenRouter JSON。實際上同一個要求再按一次就過了，所以直接告訴使用者「再按一次」。
+#   訊息裡保留「（400）」／「（402）」這種緊貼括號的狀態碼：classify_generation_error
+#   靠 _UPSTREAM_STATUS_RE 反解析，寫成「（上游 402 · …）」會抓不到而記成外層 502／503。
+# - 額度不足（402）：英文原文看不懂也不知道找誰，改成中文並指名儲值窗口；
+#   上游給的「需要多少／只夠多少」換成中文數字留著，後台才知道差多少。
+CREDITS_CONTACT = "國際組許岱軒"
+_SAFETY_REJECTION_RE = re.compile(
+    r"safety system|moderation_blocked|safety_violations|content[_ ]policy", re.IGNORECASE
+)
+_CREDITS_AFFORD_RE = re.compile(
+    r"requested up to (\d+) tokens, but can only afford (\d+)", re.IGNORECASE
+)
+
+
+def is_safety_rejection(text: str) -> bool:
+    return bool(_SAFETY_REJECTION_RE.search(text or ""))
+
+
+def safety_rejection_message(status: int | str = 400) -> str:
+    return f"這次題材被 AI 安全系統擋下（{status}），通常直接再按一次就會過；連續被擋請調整描述用詞"
+
+
+def credits_exhausted_message(text: str = "") -> str:
+    base = f"AI 服務額度不足，請通知{CREDITS_CONTACT}儲值後再試"
+    match = _CREDITS_AFFORD_RE.search(text or "")
+    if match:
+        return f"{base}（402）：本次需要 {match.group(1)} tokens，餘額只夠 {match.group(2)}"
+    return f"{base}（402）"
+
+
+def friendly_image_http_error(provider: str, code: int, body: str) -> str:
+    """生圖端 HTTPError → 前端 toast 直接顯示的 detail。"""
+    if code == 402:
+        return credits_exhausted_message(body)
+    if is_safety_rejection(body):
+        return safety_rejection_message(code)
+    if body:
+        return f"{provider} 圖片生成失敗（{code}）：{body}"
+    return f"{provider} 圖片生成失敗，請確認金鑰、模型權限或稍後重試"
+
 
 def upstream_error_detail(
     exc: BaseException, base: str = "AI 服務處理失敗，請確認模型權限或稍後重試"
@@ -654,7 +696,12 @@ def non_retryable_upstream_error(exc: BaseException) -> HTTPException | None:
     status = getattr(exc, "status_code", None)
     if not isinstance(status, int) or not (400 <= status < 500) or status in (408, 429):
         return None
-    base = "AI 服務額度不足，請儲值後再試" if status == 402 else "AI 服務拒絕這次請求，重試不會成功"
+    body = str(getattr(exc, "message", "") or exc)
+    if status == 402:
+        return HTTPException(status_code=503, detail=credits_exhausted_message(body))
+    if is_safety_rejection(body):
+        return HTTPException(status_code=503, detail=safety_rejection_message(status))
+    base = "AI 服務拒絕這次請求，重試不會成功"
     return HTTPException(
         status_code=503,
         detail=upstream_error_detail(exc, base=base),
@@ -677,7 +724,7 @@ def _error_type_from_http(
         return "parse"
     if "封面生成失敗" in text or "合成失敗" in text or "直標合成" in text:
         return "compose"
-    if "金鑰" in text or "計費" in text or "credits" in lowered:
+    if "金鑰" in text or "計費" in text or "額度不足" in text or "credits" in lowered:
         return "provider_4xx"
     if status in (408, 504):
         return "timeout"
@@ -4977,9 +5024,7 @@ def generate_via_openrouter(
         print(f"[OpenRouter image HTTPError] {exc.code}: {body}", flush=True)
         raise HTTPException(
             status_code=502,
-            detail=f"OpenRouter 圖片生成失敗（{exc.code}）：{body}"
-            if body
-            else "OpenRouter 圖片生成失敗，請確認金鑰、模型權限或稍後重試",
+            detail=friendly_image_http_error("OpenRouter", exc.code, body),
         ) from exc
     except (URLError, TimeoutError) as exc:
         raise HTTPException(
@@ -5206,10 +5251,14 @@ def generate_gpt_image(
     except APIError as exc:
         reason = str(getattr(exc, "message", "") or exc)[:300]
         print(f"[GPT image APIError] {type(exc).__name__}: {reason}", flush=True)
-        raise HTTPException(
-            status_code=502,
-            detail=f"GPT 圖片生成失敗：{reason}",
-        ) from exc
+        status = getattr(exc, "status_code", None) or 400
+        if is_safety_rejection(reason) or getattr(exc, "code", None) == "moderation_blocked":
+            detail = safety_rejection_message(status)
+        elif status == 402:
+            detail = credits_exhausted_message(reason)
+        else:
+            detail = f"GPT 圖片生成失敗：{reason}"
+        raise HTTPException(status_code=502, detail=detail) from exc
 
     image_data = result.data[0].b64_json if result.data else None
     if not image_data:
@@ -5279,7 +5328,7 @@ def generate_gemini_image(req: ImageGenerateRequest) -> ImageGenerateResponse:
         print(f"[Gemini image HTTPError] {exc.code}: {body}", flush=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Gemini 圖片生成失敗（{exc.code}）：{body}" if body else "Gemini 圖片生成失敗，請確認金鑰、模型權限或稍後重試",
+            detail=friendly_image_http_error("Gemini", exc.code, body),
         ) from exc
     except (URLError, TimeoutError) as exc:
         raise HTTPException(
@@ -8567,6 +8616,13 @@ def _editor_cover_titles_impl(
             data = parse_digest_json(response.choices[0].message.content or "")
         except Exception as exc:  # noqa: BLE001
             print(f"[cover-titles] 消化標題失敗：{type(exc).__name__}: {exc}", flush=True)
+            # B119：額度不足／安全系統這兩種要講人話，其餘維持原本的例外名稱。
+            friendly = non_retryable_upstream_error(exc)
+            if friendly is not None and (
+                getattr(exc, "status_code", None) == 402
+                or is_safety_rejection(str(getattr(exc, "message", "") or exc))
+            ):
+                raise friendly from exc
             raise HTTPException(status_code=502, detail=f"消化標題失敗：{type(exc).__name__}") from exc
         if not isinstance(data, dict):
             raise HTTPException(status_code=502, detail="消化標題失敗：回傳格式不對")
@@ -9545,7 +9601,7 @@ def _yt_cover_full_image(
                 # 三處分岔同一個條件——有測試釘住不准各寫各的。
                 layer_mode=protect_base and base is not None,
                 direction_context="\n".join(
-                    part for part in (req.news_text, req.title, visual) if part
+                    part for part in (req.news_text, req.title, req.title_second, visual) if part
                 ),
             ),
             layout_rules=editor_formats.yt_layout_rules(req.creativity, req.layout),

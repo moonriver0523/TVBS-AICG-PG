@@ -88,7 +88,9 @@ class CreditsExhaustedStopsRetryingTests(unittest.TestCase):
         self.assertIsNotNone(stop)
         self.assertEqual(stop.status_code, 503)
         self.assertIn("額度不足", stop.detail)
-        self.assertIn("can only afford 15030", stop.detail, "餘額數字要留著，才知道差多少")
+        self.assertIn("餘額只夠 15030", stop.detail, "餘額數字要留著，才知道差多少")
+        self.assertIn("本次需要 16000", stop.detail)
+        self.assertIn("國際組許岱軒", stop.detail, "B119：要告訴使用者找誰儲值")
 
     def test_transient_statuses_keep_retrying(self):
         for status in (408, 429, 500, 502, 503):
@@ -129,6 +131,83 @@ class BothDigestPathsUseItTests(unittest.TestCase):
     def test_the_helper_is_called_on_both_paths(self):
         source = Path(main.__file__).read_text(encoding="utf-8")
         self.assertEqual(source.count("last_detail = upstream_error_detail(exc)"), 2)
+
+
+
+class FriendlyUpstreamMessageTests(unittest.TestCase):
+    """B119：安全系統擋題材與額度不足，前端 toast 要是看得懂的中文。"""
+
+    SAFETY_BODY = (
+        '{"error":{"message":"Your request was rejected by the safety system. If you believe '
+        'this is an error, contact us at help.openai.com and include the request ID req_x"}}'
+    )
+
+    def test_safety_rejection_tells_the_user_to_retry(self):
+        detail = main.friendly_image_http_error("OpenRouter", 400, self.SAFETY_BODY)
+        self.assertIn("安全系統", detail)
+        self.assertIn("再按一次", detail)
+        self.assertNotIn("help.openai.com", detail)
+
+    def test_safety_rejection_still_groups_as_provider_4xx(self):
+        from fastapi import HTTPException
+
+        detail = main.friendly_image_http_error("OpenRouter", 400, self.SAFETY_BODY)
+        meta = main.classify_generation_error(HTTPException(status_code=502, detail=detail))
+        self.assertEqual(meta["error_type"], "provider_4xx")
+        self.assertEqual(meta["http_status"], 400)
+
+    def test_image_402_names_who_to_contact(self):
+        body = '{"error":{"message":"You requested up to 16000 tokens, but can only afford 4829."}}'
+        detail = main.friendly_image_http_error("OpenRouter", 402, body)
+        self.assertIn("額度不足", detail)
+        self.assertIn("國際組許岱軒", detail)
+        self.assertIn("餘額只夠 4829", detail)
+        self.assertNotIn("can only afford", detail)
+
+    def test_digest_402_is_chinese_and_still_provider_4xx(self):
+        from fastapi import HTTPException
+
+        stop = main.non_retryable_upstream_error(
+            _FakeAPIError(CreditsExhaustedStopsRetryingTests.REAL, 402)
+        )
+        self.assertNotIn("can only afford", stop.detail)
+        meta = main.classify_generation_error(stop)
+        self.assertEqual(meta["error_type"], "provider_4xx")
+
+    def test_other_errors_keep_the_raw_body(self):
+        detail = main.friendly_image_http_error("OpenRouter", 500, "Provider returned error")
+        self.assertEqual(detail, "OpenRouter 圖片生成失敗（500）：Provider returned error")
+
+    def test_upstream_status_survives_for_the_admin_grouping(self):
+        from fastapi import HTTPException
+
+        image_402 = main.friendly_image_http_error("OpenRouter", 402, "can only afford 1")
+        meta = main.classify_generation_error(HTTPException(status_code=502, detail=image_402))
+        self.assertEqual((meta["error_type"], meta["http_status"]), ("provider_4xx", 402))
+        digest_402 = main.non_retryable_upstream_error(
+            _FakeAPIError(CreditsExhaustedStopsRetryingTests.REAL, 402)
+        )
+        meta = main.classify_generation_error(digest_402)
+        self.assertEqual((meta["error_type"], meta["http_status"]), ("provider_4xx", 402))
+
+    def test_digest_safety_rejection_is_chinese_and_grouped_as_400(self):
+        stop = main.non_retryable_upstream_error(_FakeAPIError(self.SAFETY_BODY, 400))
+        self.assertIn("安全系統", stop.detail)
+        self.assertNotIn("help.openai.com", stop.detail)
+        meta = main.classify_generation_error(stop)
+        self.assertEqual((meta["error_type"], meta["http_status"]), ("provider_4xx", 400))
+
+    def test_cover_titles_forwards_credits_and_safety_stops(self):
+        source = Path(main.__file__).read_text(encoding="utf-8")
+        block = source.split('print(f"[cover-titles] 消化標題失敗')[1][:600]
+        self.assertIn("non_retryable_upstream_error(exc)", block)
+        self.assertIn("raise friendly from exc", block)
+
+    def test_hybrid_ui_shows_the_backend_detail(self):
+        source = (Path(main.__file__).parent / "hybrid.js").read_text(encoding="utf-8")
+        self.assertIn("data.detail", source)
+        self.assertNotIn("throw new Error('HTTP ' + res.status)", source)
+        self.assertNotIn("throw new Error('消化失敗 HTTP ' + res.status)", source)
 
 
 if __name__ == "__main__":

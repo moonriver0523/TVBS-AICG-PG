@@ -371,7 +371,12 @@ def condition_directional_accessory(
     type_label: str = "",
 ) -> str:
     """抽籤後確定性換字；None 代表舊呼叫端未提供內容，維持逐字相容。"""
-    if direction_context is None or directional_content_eligible(direction_context, type_label):
+    if direction_context is None:
+        return text
+    if key == "magnifier" and not detail_content_eligible(direction_context, type_label):
+        # B118：沒有可放大的細節就不畫放大鏡，同槽換成無方向焦點光環。
+        return DIRECTIONLESS_ARROW_REPLACEMENT
+    if directional_content_eligible(direction_context, type_label):
         return text
     if key == "arrow":
         return DIRECTIONLESS_ARROW_REPLACEMENT
@@ -467,7 +472,30 @@ def high_speed_motion_eligible(content: str = "", type_label: str = "") -> bool:
     )
 
 
+# B118（2026-09-29 使用者裁決）：放大鏡「真的有需要才用，不要為了用而用」。
+# 09-28 十點實例抽到放大鏡，題材沒有可放大的細節，模型只好畫一個空框。改成跟方向
+# 箭頭同一套：只認新聞／標題／畫面描述裡明文點到的「小而關鍵的細節」。
+_DETAIL_CONTENT_RE = re.compile(
+    # 刻意不收「特寫」（拍攝尺度，人物特寫不是細節）、「細節」（「調查細節」是抽象說法）、「訊息」「文件」「螢幕」這類泛詞
+    # （「政府發布防災訊息」不該開放大鏡），英文一律加字界避免 screening 這種誤中。
+    r"(?:監視器|監視畫面|行車紀錄器|行車記錄器|截圖|畫圈|圈起|圈出|字樣|寫著|寫有|"
+    r"紙板|紙條|告示牌|標語|車牌|刺青|胎記|傷痕|傷口|瘀青|血跡|彈孔|彈殼|裂縫|裂痕|"
+    r"痕跡|指紋|腳印|證物|物證|單據|收據|帳單|判決書|對話紀錄|簡訊內容|"
+    r"\b(?:cctv|surveillance|dashcam|screenshots?|circled|placard|license plate|"
+    r"number plate|tattoos?|wounds?|bruises?|bullet holes?|cracks?|cracked|fingerprints?|"
+    r"footprints?|receipts?)\b)",
+    re.IGNORECASE,
+)
+
+
+def detail_content_eligible(content: str = "", type_label: str = "") -> bool:
+    """內容明文點到值得放大的小細節，才允許放大鏡／細節側欄。"""
+    del type_label
+    return bool(_DETAIL_CONTENT_RE.search(content or ""))
+
+
 _NON_DIRECTIONAL_ELIGIBILITY = {
+    "detail_sidebar": detail_content_eligible,
     "timeline_bead_chain": timeline_content_eligible,
     "concentric_impact_rings": range_strength_content_eligible,
     "proportion_block_wall": comparative_values_eligible,
@@ -605,11 +633,15 @@ def accessories(
     for key, text in entries[:want]:
         if overrides and key in overrides:
             text = overrides[key]
+        had_shape = "{shape}" in text
         text = condition_directional_accessory(
             key, text, direction_context=direction_context, type_label=type_label
         )
-        if "{shape}" in text:
-            text = text.replace("{shape}", rng.choice(COVER_ACCESSORY_SHAPES))
+        if had_shape:
+            # B118：放大鏡換成光環後字裡沒有 {shape}，但形狀照抽，否則後面各槽的
+            # 亂數序列會位移、同 seed 其他招式跟著變。
+            shape = rng.choice(COVER_ACCESSORY_SHAPES)
+            text = text.replace("{shape}", shape)
         if key in _ICON_LIKE_KEYS and not icon_guidance_used:
             # 同一輪最多掛一次：件數上限只有 3，重複三遍只是噪音。
             text = _ICON_SUBJECT_GUIDANCE + text

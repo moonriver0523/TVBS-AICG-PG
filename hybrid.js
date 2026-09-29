@@ -335,6 +335,16 @@ Requirements:
 - Dark navy blue overall tone, subtle atmospheric lighting, pure background imagery only`;
 }
 
+// B119：後端 detail 是刻意寫給人看的中文（安全系統擋題材、額度不足找誰），有就照用。
+async function responseError(res, prefix) {
+  let detail = '';
+  try {
+    const data = await res.json();
+    if (data && typeof data.detail === 'string') detail = data.detail;
+  } catch (_) { /* 非 JSON 回應（例如邊緣層 524）就只剩狀態碼 */ }
+  return new Error(detail || `${prefix}HTTP ${res.status}`);
+}
+
 async function generateBackground() {
   const btn = document.getElementById('btnBg');
   const status = document.getElementById('status');
@@ -352,7 +362,7 @@ async function generateBackground() {
         image_size: '1K'
       })
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (!res.ok) throw await responseError(res, '');
     const data = await res.json();
     state.bgDataUri = `data:${data.mime_type};base64,${data.image_data_base64}`;
     state.bgModel = data.model;
@@ -439,14 +449,15 @@ async function autoPilot() {
       headers: _apiHeaders(),
       body: JSON.stringify({ news_text: news })
     });
-    if (!res.ok) throw new Error('消化失敗 HTTP ' + res.status);
+    if (!res.ok) throw await responseError(res, '消化失敗 ');
     fillContent(await res.json());
     render();
 
     status.textContent = '2/3 內容就緒，生成背景中…';
     state.bgDataUri = null;
     await generateBackground();
-    if (!state.bgDataUri) throw new Error('背景生成失敗');
+    // generateBackground 自己會把失敗原因（含後端中文 detail）寫進 status，這裡只補前綴、不覆寫原因
+    if (!state.bgDataUri) throw new Error(status.textContent || '背景生成失敗');
 
     status.textContent = '3/3 匯出中…';
     await exportPNG();

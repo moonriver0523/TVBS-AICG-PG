@@ -43,11 +43,74 @@ class DirectionQualificationTests(unittest.TestCase):
         text = creativity.condition_directional_accessory(
             "magnifier",
             dict(creativity.COVER_ACCESSORY_POOL)["magnifier"],
-            direction_context="市府公布三款新產品",
+            direction_context="市府公布三款新產品，監視器拍下關鍵畫面",
         )
         self.assertIn("matching source area", text)
         self.assertIn("no arrow", text)
         self.assertNotIn("pointing back", text)
+
+    def test_magnifier_without_a_telling_detail_becomes_a_halo(self):
+        """B118：放大鏡真的有需要才用，沒有可放大的細節就不畫。"""
+        original = dict(creativity.COVER_ACCESSORY_POOL)["magnifier"]
+        for context in ("市府公布三款新產品", "營收年增兩成", "秋老虎發威 今熱如夏"):
+            with self.subTest(context=context):
+                text = creativity.condition_directional_accessory(
+                    "magnifier", original, direction_context=context
+                )
+                self.assertNotIn("MAGNIFIER", text)
+                self.assertIn("DIRECTIONLESS FOCUS HALO", text)
+
+    def test_magnifier_with_detail_and_direction_keeps_its_arrow(self):
+        original = dict(creativity.COVER_ACCESSORY_POOL)["magnifier"]
+        text = creativity.condition_directional_accessory(
+            "magnifier", original, direction_context="監視器拍到嫌犯從巷口逃往車站"
+        )
+        self.assertEqual(text, original)
+
+    def test_detail_sidebar_needs_a_telling_detail(self):
+        detail_sidebar = dict(creativity.NON_DIRECTIONAL_ELEMENT_POOL)["detail_sidebar"]
+        kept = creativity.condition_non_directional_element(
+            "detail_sidebar", detail_sidebar, content_context="女童身上掛著紙板，寫著小偷"
+        )
+        dropped = creativity.condition_non_directional_element(
+            "detail_sidebar", detail_sidebar, content_context="秋老虎發威 今熱如夏"
+        )
+        self.assertEqual(kept, detail_sidebar)
+        self.assertEqual(dropped, creativity.NON_DIRECTIONAL_CONDITION_FALLBACK)
+
+    def test_generic_words_do_not_unlock_the_magnifier(self):
+        for context in ("政府發布防災訊息", "人物特寫", "airport screening resumes", "公布三份文件", "官方尚未公布調查細節"):
+            with self.subTest(context=context):
+                self.assertFalse(creativity.detail_content_eligible(context))
+
+    def test_magnifier_swap_keeps_every_other_slot_on_the_same_seed(self):
+        """B118 複查：換成光環後形狀仍要照抽，否則後面各槽的亂數位移。"""
+        with_detail = "營收年增兩成，監視器拍下關鍵畫面"
+        without_detail = "營收年增兩成"
+        checked = 0
+        for seed in range(300):
+            rng = random.Random(seed)
+            entries = list(creativity.COVER_ACCESSORY_POOL)
+            rng.shuffle(entries)
+            keys = [key for key, _ in entries[:3]]
+            if "magnifier" not in keys:
+                continue
+            a = creativity.accessories(4, seed=seed, direction_context=with_detail)
+            b = creativity.accessories(4, seed=seed, direction_context=without_detail)
+            # 第二池換進第一槽時可能蓋掉放大鏡，或自己抽到同樣看細節的 detail_sidebar；
+            # 這兩種情況不是本測試要釘的東西，跳過。
+            if not any("MAGNIFIER" in text for text in a) or any("DETAIL SIDEBAR" in t for t in a):
+                continue
+            differing = [i for i, pair in enumerate(zip(a, b)) if pair[0] != pair[1]]
+            self.assertEqual(len(differing), 1, f"seed={seed}")
+            self.assertIn("MAGNIFIER", a[differing[0]])
+            self.assertIn("DIRECTIONLESS FOCUS HALO", b[differing[0]])
+            checked += 1
+        self.assertGreater(checked, 10)
+
+    def test_yt_cover_context_includes_the_second_title(self):
+        source = pathlib.Path(main.__file__).read_text(encoding="utf-8")
+        self.assertIn("(req.news_text, req.title, req.title_second, visual)", source)
 
     def test_same_seed_keeps_every_non_directional_move_unchanged(self):
         chosen_seed = None
