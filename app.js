@@ -333,6 +333,8 @@ let state = {
     imageSize: '1K',
     // 安全框置框：滿版生成後由後端 safe_frame.py 數學置入 TVBS 安全框
     safeFrame: true,
+    // F54：透 CG 不跨頁面重載保存；每次載入固定 OFF。
+    transparentCg: false,
     // D26（2026-09-26）：「延伸背景」勾選框，只在記者＋安全框 ON 生效，預設不勾
     modelExtension: false,
     activeParent: null,
@@ -820,6 +822,7 @@ window.onload = () => {
     resetToType('data');
     updateAIBtnRoleHint();
     syncEngineSizeButtons();
+    syncTransparentCgControl();
     syncModelExtensionControl();
     updateAspectBadge();
     ["btnSafeFrame", "p1-btnSafeFrame"].forEach(id => {
@@ -996,6 +999,7 @@ function renderTabs() {
 
 function switchRole(role) {
     state.currentRole = role;
+    syncTransparentCgControl();
     syncModelExtensionControl();
     document.querySelectorAll('[data-role]').forEach(btn => {
         const isActive = btn.dataset.role === role;
@@ -1059,6 +1063,9 @@ function applyEditorFormatLocks() {
     const presets = format.presets || {};
     const locks = format.locks || {};
     const hides = format.hides || {};
+    // 先關透 CG，下面既有的 A8 邏輯才能把即將隱藏的安全框正常歸零；若等到
+    // toggleSafeFrame() 之後才關，透 CG 的防點擊守門會讓安全框殘值留在隱藏版型。
+    syncTransparentCgControl();
 
     // 預設值：幫忙調好，但不擋——2026-09-04 使用者回報「全都不能選」，查下來
     // 播出鏡面四個鎖裡只有版面形式是真的必要，其餘三個鎖過頭了。
@@ -1103,6 +1110,7 @@ function applyEditorFormatLocks() {
     // 那個輸入框就在那裡等人打字，打完按下去卻什麼都不會發生。
     _hide(document.getElementById('refineBox'), !!hides.refine);
     _hide(document.getElementById('p1-btnSafeFrame'), !!hides.safeFrame);
+    syncTransparentCgControl();
     syncModelExtensionControl();
     _hide(document.getElementById('p1-btnStamp'), !!hides.stamp);
     // 壓框開關與挖空方向都只對有挖空側的版型有意義
@@ -1497,7 +1505,58 @@ function switchImageSize(size) {
     updateAspectBadge();
 }
 
+function syncTransparentCgControl() {
+    const formatHidesSafeFrame = !!((editorFormat() || {}).hides || {}).safeFrame;
+    const available = state.currentRole === '記者' && !formatHidesSafeFrame;
+    if (!available && state.transparentCg) state.transparentCg = false;
+    if (state.transparentCg) {
+        state.safeFrame = true;
+        state.modelExtension = false;
+    }
+
+    const transparentButton = document.getElementById('p1-btnTransparentCg');
+    if (transparentButton) {
+        transparentButton.classList.toggle('hidden', !available);
+        transparentButton.className = (available ? '' : 'hidden ') +
+            'px-2.5 py-1 rounded text-[9px] font-black transition-all ' +
+            (state.transparentCg
+                ? 'border border-emerald-600 bg-emerald-600 text-white'
+                : 'border border-emerald-600 text-slate-400 hover:text-white');
+        transparentButton.innerText = state.transparentCg ? '透CG ON' : '透CG OFF';
+    }
+
+    ['btnSafeFrame', 'p1-btnSafeFrame'].forEach(id => {
+        const safeButton = document.getElementById(id);
+        if (!safeButton) return;
+        safeButton.className = 'px-3 py-1 rounded text-[9px] font-black transition-all ' +
+            (state.safeFrame
+                ? 'border border-emerald-600 bg-emerald-600 text-white'
+                : 'border border-emerald-600 text-slate-400 hover:text-white');
+        safeButton.innerText = state.safeFrame ? '安全框 ON' : '安全框 OFF';
+        safeButton.disabled = !!state.transparentCg;
+        safeButton.classList.toggle('opacity-40', !!state.transparentCg);
+        safeButton.classList.toggle('cursor-not-allowed', !!state.transparentCg);
+    });
+    const extension = document.getElementById('p1-chkExtension');
+    if (extension) {
+        extension.disabled = !!state.transparentCg;
+        if (state.transparentCg) extension.checked = false;
+    }
+}
+
+function toggleTransparentCg() {
+    const formatHidesSafeFrame = !!((editorFormat() || {}).hides || {}).safeFrame;
+    if (state.currentRole !== '記者' || formatHidesSafeFrame) return;
+    state.transparentCg = !state.transparentCg;
+    syncTransparentCgControl();
+    syncModelExtensionControl();
+    updateAspectBadge();
+    syncOutput();
+    showToast(state.transparentCg ? '透CG：開（框外純綠 #00FF00）' : '透CG：關');
+}
+
 function toggleSafeFrame() {
+    if (state.transparentCg) return;
     state.safeFrame = !state.safeFrame;
     ['btnSafeFrame', 'p1-btnSafeFrame'].forEach(id => {
         const btn = document.getElementById(id);
@@ -1818,7 +1877,8 @@ const DEFAULT_ASPECT_RATIO = '16:9';
 // D26（2026-09-26 使用者裁決）：記者＋安全框 ON 才有「延伸背景」勾選框。
 // 三個條件缺一就當沒勾，勾選狀態本身保留（切回記者 ON 時還在）。
 function modelExtensionActive() {
-    return !!state.modelExtension && state.safeFrame && state.currentRole === '記者';
+    return !state.transparentCg && !!state.modelExtension
+        && state.safeFrame && state.currentRole === '記者';
 }
 
 function frameStrategyForApi() {
@@ -1826,6 +1886,11 @@ function frameStrategyForApi() {
 }
 
 function toggleModelExtension(checked) {
+    if (state.transparentCg) {
+        state.modelExtension = false;
+        syncModelExtensionControl();
+        return;
+    }
     state.modelExtension = !!checked;
     syncModelExtensionControl();
     updateAspectBadge();
@@ -1842,7 +1907,12 @@ function syncModelExtensionControl() {
     const visible = state.currentRole === '記者' && state.safeFrame && !formatHidesSafeFrame;
     row.classList.toggle('hidden', !visible);
     const box = document.getElementById('p1-chkExtension');
-    if (box) box.checked = !!state.modelExtension;
+    if (box) {
+        box.checked = !!state.modelExtension;
+        box.disabled = !!state.transparentCg;
+    }
+    row.classList.toggle('opacity-40', !!state.transparentCg);
+    row.classList.toggle('cursor-not-allowed', !!state.transparentCg);
 }
 
 function currentAspectRatio() {
@@ -1983,6 +2053,7 @@ function syncOutput() {
         aspectRatio: currentAspectRatio(),
         noText: state.digestDensity === 'no_text',
         modelExtension: modelExtensionActive(),
+        transparentCg: state.transparentCg,
         holeSide: broadcastLayoutHoleForApi(),
     });
     updatePromptCounter();
@@ -2016,6 +2087,12 @@ EXTENDED BACKGROUND SAFE LAYOUT (OVERRIDES EVERY EARLIER RULE ABOUT MARGINS, CAN
 - Any closing banner or bottom line is the lowest element of the foreground group and stays well above the deeper background-only area at the bottom.
 - Do NOT render any frame, rectangle, outline, border line, guide line, crop mark or dimmed band to mark where the central region ends.`;
 
+const TRANSPARENT_CG_PROMPT_RULES =
+`TRANSPARENT CG TEXT CARD (applies only when transparent_cg is ON):
+1. This is a text card: text and numbers are the primary visual; chart structures such as tables, number blocks, timelines and comparison bars are secondary support.
+2. Unless USER INSTRUCTION explicitly requests an illustration, photo, person or simulated explanatory image, do not draw illustrations, scenes, people, photo-like imagery, simulated explanatory images or 3D objects. Use a clean flat-design background such as a solid colour, gradient or geometric treatment.
+3. No content anywhere in the design — background, plate, text, outline or decoration — may use chroma-key green or bright green near (0,255,0), because it will disappear during keying. This uses the CHROMA-KEY GREEN SAFETY rule: ordinary deep, dark or olive green is still allowed, and non-chroma data green remains allowed for Taiwan-market falls, losses and negative values.`;
+
 const BROADCAST_HOLE_LAYOUT_RULES_TEMPLATE = `==================================================
 BROADCAST VIDEO HOLE — {hole_side_upper} VIDEO ZONE IS BACKGROUND-ONLY (CRITICAL OVERRIDE)
 ==================================================
@@ -2048,7 +2125,7 @@ BROADCAST BOTTOM BAND IS TEXT-FREE
 - VARIABLE FIELDS contains no <底帶> line. Keep the entire low strip below the video zone as continuous background only: NO text, digits, caption, slogan, label, icon or invented filler. Do not move or copy a body card into it.`;
 }
 
-function buildPrompt({ role, engine, typeLabel, style, structure, variable, safeFrame = false, aspectRatio = '16:9', noText = false, modelExtension = false, holeSide = '' }) {
+function buildPrompt({ role, engine, typeLabel, style, structure, variable, safeFrame = false, aspectRatio = '16:9', noText = false, modelExtension = false, transparentCg = false, holeSide = '' }) {
     // 共用的正文區塊（style / structure / variable）
     const textRules = role === '編輯' ? EDITOR_TEXT_RULES : REPORTER_TEXT_RULES;
     // D26 延伸背景：模型的圖就是交付物，版面走「中央內容」那條（跟安全框 OFF 同組），
@@ -2120,6 +2197,7 @@ FINAL OUTPUT RULE
     // 「FINAL OUTPUT RULE 到樣板結尾」那一段，跟 news_prompt 逐字比對。在樣板裡
     // 插一個 ${...} 會讓抓到的字面多出那段程式碼、比對就永遠對不起來。
     let fullBody = noText ? `${body}\n${NO_TEXT_IMAGE_OVERRIDE}` : body;
+    if (transparentCg) fullBody = `${fullBody}\n${TRANSPARENT_CG_PROMPT_RULES}`;
     if (modelExtension) fullBody = `${fullBody}\n${MODEL_EXTENSION_IMAGE_OVERRIDE}`;
     const holeRules = broadcastHoleLayoutRules(holeSide);
     if (holeRules) {
@@ -2461,6 +2539,7 @@ async function _digestFetch(input, signal) {
             // 對面，只在生圖端決定的話，重點會剛好被影片蓋掉。
             hole_side: state.holeSide,
             safe_frame: state.safeFrame,
+            transparent_cg: state.transparentCg,
             frame_strategy: frameStrategyForApi(),
             user_instruction: currentUserInstruction(),
             portrait_photo_count: uploadedPortraitCount(),
@@ -3144,6 +3223,7 @@ async function restampDisclaimer() {
                 // 少了這格會把一張 2K 成品悄悄重算成 1K（同 B84）
                 density: params.density,
                 safe_frame: params.safe_frame,
+                transparent_cg: !!params.transparent_cg,
                 frame_strategy: params.frame_strategy || '',
                 safe_frame_profile: params.safe_frame_profile,
                 broadcast_hole: broadcastHoleForApi(),
@@ -3673,6 +3753,7 @@ async function handleOneClickGenerate() {
             aspectRatio: currentAspectRatio(),
             noText: state.digestDensity === 'no_text',
             modelExtension: modelExtensionActive(),
+            transparentCg: state.transparentCg,
             holeSide: broadcastLayoutHoleForApi(),
         });
         showToast("生圖中，約 30–120 秒…");
@@ -3693,6 +3774,7 @@ async function handleOneClickGenerate() {
                 image_size: state.imageSize,
                 density: state.density,
                 safe_frame: state.safeFrame,
+                transparent_cg: state.transparentCg,
                 frame_strategy: frameStrategyForApi(),
                 safe_frame_profile: state.currentRole,
                 // 白框與 AI 版面挖空分開送：前者只在壓框 ON 時有值，後者不受壓框開關影響。
@@ -3830,6 +3912,7 @@ async function handleImageGeneration() {
                 // 與第一頁那個送出點一致，兩邊少一邊就有一邊靜靜降級。
                 density: state.density,
                 safe_frame: state.safeFrame,
+                transparent_cg: state.transparentCg,
                 frame_strategy: frameStrategyForApi(),
                 safe_frame_profile: state.currentRole,
                 // 白框與 AI 版面挖空分開送：前者只在壓框 ON 時有值，後者不受壓框開關影響。
@@ -4350,6 +4433,7 @@ async function restampRefinedCoverLabels(display, applied) {
             model: display.model || '',
             target: applied.target,
             context: applied.context,
+            transparent_cg: !!(applied.context || {}).transparent_cg,
             safe_frame_profile: display.label_safe_frame_profile || '編輯安全框',
             disclaimer_kind: applied.kind,
             disclaimer_source_text: applied.sourceText,
@@ -4375,6 +4459,7 @@ function refineParametersFromState(display = null) {
     return {
         density: state.density,
         safe_frame: state.safeFrame,
+        transparent_cg: state.transparentCg,
         frame_strategy: frameStrategyForApi(),
         safe_frame_profile: state.currentRole,
         aspect_ratio: currentAspectRatio(),
@@ -4516,6 +4601,7 @@ async function handleTitleOnly() {
                 disclaimer_context: applied.context || {},
                 disclaimer_items: applied.items || [],
                 safe_frame: params.safe_frame,
+                transparent_cg: !!params.transparent_cg,
                 frame_strategy: params.frame_strategy || '',
                 safe_frame_profile: params.safe_frame_profile,
                 broadcast_hole: broadcastHoleForApi(),
@@ -4588,6 +4674,7 @@ async function handleRefine() {
         ...savedRefineParameters,
         aspect_ratio: isCover ? '16:9' : savedRefineParameters.aspect_ratio,
         safe_frame: isCover ? false : savedRefineParameters.safe_frame,
+        transparent_cg: isCover ? false : !!savedRefineParameters.transparent_cg,
         safe_frame_profile: isCover ? '' : savedRefineParameters.safe_frame_profile,
     };
     // 送出前凍結「畫面上現在這一版」；await 期間即使 UI 狀態改變，也不能換成別張。
@@ -4620,6 +4707,7 @@ async function handleRefine() {
                 disclaimer_context: applied.context || {},
                 disclaimer_items: applied.items || [],
                 safe_frame: refineParameters.safe_frame,
+                transparent_cg: !!refineParameters.transparent_cg,
                 frame_strategy: isCover ? '' : (refineParameters.frame_strategy || ''),
                 // B51：封面不能只送 safe_frame=false 卻仍帶「編輯」——編輯身分在
                 // resolve_frame_plan 一律會被置對位框（見 main.py 的說明），safe_frame

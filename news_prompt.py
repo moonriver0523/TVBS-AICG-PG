@@ -771,6 +771,14 @@ EXTENDED BACKGROUND SAFE LAYOUT (OVERRIDES EVERY EARLIER RULE ABOUT MARGINS, CAN
 - Do NOT render any frame, rectangle, outline, border line, guide line, crop mark or dimmed band to mark where the central region ends."""
 
 
+TRANSPARENT_CG_PROMPT_RULES = """
+TRANSPARENT CG TEXT CARD (applies only when transparent_cg is ON):
+1. This is a text card: text and numbers are the primary visual; chart structures such as tables, number blocks, timelines and comparison bars are secondary support.
+2. Unless USER INSTRUCTION explicitly requests an illustration, photo, person or simulated explanatory image, do not draw illustrations, scenes, people, photo-like imagery, simulated explanatory images or 3D objects. Use a clean flat-design background such as a solid colour, gradient or geometric treatment.
+3. No content anywhere in the design — background, plate, text, outline or decoration — may use chroma-key green or bright green near (0,255,0), because it will disappear during keying. This uses the CHROMA-KEY GREEN SAFETY rule: ordinary deep, dark or olive green is still allowed, and non-chroma data green remains allowed for Taiwan-market falls, losses and negative values.
+"""
+
+
 # F48（2026-09-26）：標籤貼的位置要跟 prompt 裡叫模型留空的位置一致。上面四段肖像規則
 # 都寫死「lower-right corner」——使用者選別的角落（F43 起就能選）時，模型會把右下留白、
 # 實際標籤卻貼在另一處壓到內容。這裡只在「選的不是右下」時改寫那句，右下（預設）
@@ -877,6 +885,7 @@ def build_prompt(
     portrait_mode: str = "none",
     no_text: bool = False,
     hole_side: str = "",
+    transparent_cg: bool = False,
 ) -> str:
     """對應 app.js 的 buildPrompt()。role: 記者／編輯，engine: gemini／gpt。
 
@@ -960,6 +969,8 @@ FINAL OUTPUT RULE
 
     if no_text:
         body += "\n" + NO_TEXT_IMAGE_OVERRIDE
+    if transparent_cg:
+        body += "\n" + TRANSPARENT_CG_PROMPT_RULES
 
     hole_rules = broadcast_hole_layout_rules(hole_side)
     if hole_rules:

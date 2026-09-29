@@ -76,7 +76,9 @@ def uses_stretch(profile: str) -> bool:
 BACKDROP = "backdrop"
 CLAMP = "clamp"
 BLUR = "blur"
-BACKGROUNDS = (BACKDROP, CLAMP, BLUR)
+CHROMA = "chroma"
+CHROMA_KEY_GREEN = (0, 255, 0)
+BACKGROUNDS = (BACKDROP, CLAMP, BLUR, CHROMA)
 DEFAULT_BACKGROUND = BACKDROP
 
 # backdrop：襯底是垂直漸層，上下端點各自取自內容上／下緣的顏色。
@@ -382,7 +384,12 @@ def apply_safe_frame(
         paste_x, paste_y = max(x0, left), max(y0, top)
         box = (paste_x, paste_y, paste_x + content.width, paste_y + content.height)
 
-        if background == BACKDROP:
+        if background == CHROMA:
+            # F54：透 CG 的框是後製去背素材，不是視覺背景。整張先以精確 RGB
+            # (0,255,0) 填滿，再把內容直接貼進安全區；不取樣、不模糊、不描邊、
+            # 不加陰影，也不做任何會污染框外像素的混色處理。
+            base = Image.new("RGB", canvas, CHROMA_KEY_GREEN)
+        elif background == BACKDROP:
             # 取樣對象是「實際會被貼上去的 content」而非原圖：mode>0 時 content 被裁過，
             # 緊鄰襯底的是裁切後的邊緣，拿原圖取樣會對到一條根本不在成品上的色帶。
             base = _backdrop_background(content, canvas)
