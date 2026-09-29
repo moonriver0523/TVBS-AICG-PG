@@ -202,7 +202,10 @@ class ConsoleGenerationParamsTests(unittest.TestCase):
 
     def test_missing_params_show_a_dash_instead_of_disappearing(self):
         """藏起來的話，讀的人分不出「這個版型沒帶」與「後台不顯示」。"""
-        self.assertEqual(admin_console._params_line({}).count("－"), 3)
+        self.assertEqual(admin_console._params_line({}).count("－"), 4)
+
+    def test_transparent_cg_is_visible(self):
+        self.assertIn("透CG: ON", admin_console._params_line({"transparent_cg": True}))
 
     def test_seed_zero_is_not_treated_as_missing(self):
         """seed 0 是合法的籤，用真值判斷會把它印成沒有。"""

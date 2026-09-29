@@ -64,7 +64,7 @@ def _type_of(record: dict) -> str:
 
 
 def _params_line(record: dict) -> str:
-    """角色／份量／seed 這三個生成參數。
+    """角色／份量／seed／透 CG 這四個生成參數。
 
     2026-09-16 補（F39）：`_archive_generation` 從 `dffef81` 起就把 `role`／`density`
     傳進歸檔、`seed` 從 F0 起也有（見 `main.py` 的 `/api/news-image/generate` 呼叫端），
@@ -76,12 +76,14 @@ def _params_line(record: dict) -> str:
     參數」與「後台不顯示這個參數」，而那正是這次要解決的問題本身。
     """
     seed = record.get("seed")
+    transparent_cg = record.get("transparent_cg")
     return " · ".join([
         f"角色: {_esc(record.get('role')) or '－'}",
         f"份量: {_esc(record.get('density')) or '－'}",
         # seed 0 是合法值，要印出來而不是當成缺值。2026-09-21 _esc 已改成只把 None
         # 當空值，這裡的 str() 其實不再必要，但留著也不會錯，就不動它。
         f"seed: {_esc(str(seed)) if seed is not None else '－'}",
+        f"透CG: {'ON' if transparent_cg is True else ('OFF' if transparent_cg is False else '－')}",
     ])
 
 

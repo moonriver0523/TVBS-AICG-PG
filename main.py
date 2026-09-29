@@ -1047,6 +1047,8 @@ class GenerateRequest(BaseModel):
     visual_creativity: int = Field(default=0, ge=0, le=4)
     # True＝留白改由後端 safe_frame 置框，消化階段要出滿版版面而非縮小置中
     safe_frame: bool = False
+    # F54：記者透 CG。後端會強制安全框開啟並關閉模型延伸，不信任前端狀態。
+    transparent_cg: bool = False
     # D26（2026-09-26）：記者＋安全框 ON 時可選「模型畫延伸背景」。空字串＝現行行為。
     # 消化階段要知道：版面要改成中央內容（full_bleed=False），見 model_extension_active。
     frame_strategy: Literal["", "model_extension"] = ""
@@ -1261,6 +1263,7 @@ class ImageGenerateRequest(BaseModel):
     # 使用者的安全框開關。⚠️ 不等於「要不要後製」——編輯版兩檔都會後製，
     # 這個旗標只決定用哪一種（見 resolve_frame_plan）。
     safe_frame: bool = False
+    transparent_cg: bool = False
     # D26（2026-09-26）：見 GenerateRequest.frame_strategy 與 model_extension_active。
     frame_strategy: Literal["", "model_extension"] = ""
     # 帶的是**角色**（記者／編輯），不是解析後的 profile 名稱。
@@ -2380,6 +2383,15 @@ CHROMA-KEY GREEN SAFETY (applies at every density and creativity level):
 """
 
 
+TRANSPARENT_CG_PROMPT_RULES = """
+
+TRANSPARENT CG TEXT CARD (applies only when transparent_cg is ON):
+1. This is a text card: text and numbers are the primary visual; chart structures such as tables, number blocks, timelines and comparison bars are secondary support.
+2. Unless USER INSTRUCTION explicitly requests an illustration, photo, person or simulated explanatory image, do not draw illustrations, scenes, people, photo-like imagery, simulated explanatory images or 3D objects. Use a clean flat-design background such as a solid colour, gradient or geometric treatment.
+3. No content anywhere in the design — background, plate, text, outline or decoration — may use chroma-key green or bright green near (0,255,0), because it will disappear during keying. This uses the CHROMA-KEY GREEN SAFETY rule above: ordinary deep, dark or olive green is still allowed, and non-chroma data green remains allowed for Taiwan-market falls, losses and negative values.
+"""
+
+
 # 地圖準確性。對「禁數字」與「內容忠實度」各開一個範圍受限的豁免：
 #
 # 2026-09-04 正式站實測（基隆廟口／西定路／大武崙淹水）：本區塊原本的開頭句是
@@ -2719,6 +2731,7 @@ def build_digest_instructions(
     direction_context: str | None = None,
     news_text: str = "",
     point_count: int | None = None,
+    transparent_cg: bool = False,
 ) -> str:
     # seed（F0）：這一步只把資料流打通到這裡，實際拿去抽變化池是 2-6 的事。
     # 它**永遠不會被拼進回傳的字串**——見 next_generation_seed 上方的說明。
@@ -2753,6 +2766,8 @@ def build_digest_instructions(
     instructions += CHILD_DEPICTION_STYLE_RULES
     instructions += DIRECTIONAL_COLOR_RULES
     instructions += CHROMA_KEY_GREEN_SAFETY_RULES
+    if transparent_cg:
+        instructions += TRANSPARENT_CG_PROMPT_RULES
     # 自動判斷模式組 prompt 時還不知道 AI 會選哪一類，也要注入；
     # 區塊開頭自我限縮「非地圖類整段忽略」。
     #
@@ -3559,6 +3574,7 @@ def apply_photo_availability(
 # 直接呼叫這個函式，不經 HTTP。呼叫端要的是「消化完成或明確失敗」，跟外面那層
 # 用什麼格式把結果送出去無關。
 def generate(req: GenerateRequest):
+    req = enforce_transparent_cg(req)
     # own_clock：這支函式會被巢狀呼叫兩種情境——apply_photo_availability 第 4 層
     # 補救（下面呼叫它那行）與 generate_news_image() 的 pipeline，兩邊都會在呼叫
     # 前把 _inside_pipeline 設 True，而且各自有自己的落檔（外層決定最終結果後
@@ -3627,6 +3643,7 @@ def generate(req: GenerateRequest):
         seed=seed,
         direction_context=req.news_text,
         news_text=req.news_text,
+        transparent_cg=req.transparent_cg,
     )
 
     # 上游（OpenRouter 多 provider 輪替）偶發 502、輸出截斷或不合 schema 的回傳是常態，
@@ -3913,6 +3930,7 @@ def generate(req: GenerateRequest):
                     role=req.role,
                     density=req.density,
                     seed=seed,
+                    transparent_cg=req.transparent_cg,
                     info_layout_mode=result.info_layout_mode,
                     info_layout_rule=result.info_layout_rule,
                     **digest_meta,
@@ -3948,6 +3966,7 @@ def generate(req: GenerateRequest):
                 source="digest", news_text=req.news_text,
                 role=req.role, density=req.density, type_label=req.type_label,
                 seed=seed,
+                transparent_cg=req.transparent_cg,
                 info_layout_mode=info_layout_state,
                 info_layout_rule=info_layout_decision.rule,
             )
@@ -4206,6 +4225,7 @@ def generate_image(req: ImageGenerateRequest):
     網頁版可帶 portrait_subjects，在這裡查參考照並注入肖像規則。
     generate_news_image 已組好 prompt，走這支時不要重複落檔。
     """
+    req = enforce_transparent_cg(req)
     own_notices = not _inside_pipeline.get()
     if own_notices:
         reset_portrait_notices()
@@ -4227,6 +4247,7 @@ def generate_image(req: ImageGenerateRequest):
     )
     if localised != req.prompt:
         req = req.model_copy(update={"prompt": localised})
+    req = apply_transparent_cg_prompt(req)
     _, output_canvas = image_generation_size(req)
     request_id = request_log.new_request_id()
     own_clock = not _inside_pipeline.get()
@@ -4257,6 +4278,7 @@ def generate_image(req: ImageGenerateRequest):
                 broadcast_hole=req.broadcast_hole,
                 broadcast_watermark=not bool(req.disclaimer_kind),
                 canvas=output_canvas,
+                transparent_cg=req.transparent_cg,
             )
         # B70／F43：置框、挖空框都處理完後，最後由同一套 renderer 貼
         # 「示意圖」／「畫面來源」；播出鏡面不再由白框函式另畫固定浮水印。
@@ -4276,6 +4298,7 @@ def generate_image(req: ImageGenerateRequest):
                 "broadcast_hole": req.broadcast_hole,
                 "safe_frame": req.safe_frame,
                 "frame_strategy": req.frame_strategy,
+                "transparent_cg": req.transparent_cg,
             },
             profile=frame_profile,
         )
@@ -4288,6 +4311,7 @@ def generate_image(req: ImageGenerateRequest):
                 visual_context=req.visual_context,
                 visual_context_chars=len(req.visual_context.strip()),
                 digest_id=req.digest_id,
+                transparent_cg=req.transparent_cg,
             )
         raise
     if own_clock:
@@ -4310,6 +4334,7 @@ def generate_image(req: ImageGenerateRequest):
             visual_context=req.visual_context,
             visual_context_chars=len(req.visual_context.strip()),
             digest_id=req.digest_id,
+            transparent_cg=req.transparent_cg,
             **meta,
         )
     if own_notices:
@@ -4671,6 +4696,7 @@ def frame_image_response(
     profile: str = "記者",
     *,
     canvas: tuple[int, int] = safe_area_spec.BASE_CANVAS,
+    background: str | None = None,
 ) -> ImageGenerateResponse:
     """把回傳圖置入安全框。
 
@@ -4679,7 +4705,11 @@ def frame_image_response(
     """
     # 背景做法預設 backdrop（2026-07-30 使用者實圖對照後選定）。
     # SAFE_FRAME_BACKGROUND 可切成 clamp（無縫邊緣延伸）或 blur（舊做法）。
-    background = os.getenv("SAFE_FRAME_BACKGROUND", safe_frame.DEFAULT_BACKGROUND).strip()
+    background = (
+        background
+        if background is not None
+        else os.getenv("SAFE_FRAME_BACKGROUND", safe_frame.DEFAULT_BACKGROUND).strip()
+    )
     if background not in safe_frame.BACKGROUNDS:
         print(
             f"[safe_frame] SAFE_FRAME_BACKGROUND={background!r} 不是可用值，"
@@ -4859,6 +4889,7 @@ def finalize_image_result(
     broadcast_hole: str = "",
     broadcast_watermark: bool = True,
     canvas: tuple[int, int] = safe_area_spec.BASE_CANVAS,
+    transparent_cg: bool = False,
 ) -> ImageGenerateResponse:
     """生成後的共同收尾：驗比例，需要時置框並保留置框前原圖。
 
@@ -4871,7 +4902,13 @@ def finalize_image_result(
         return result
     # D24/B110：白色壓框是獨立的後製步驟，不能被「不置安全框」的早退一起略過。
     # safe_frame=False 時原圖已是成品座標；apply_broadcast_hole 會再依實際圖片尺寸重算。
-    framed = frame_image_response(result, profile, canvas=canvas) if safe_frame else result
+    framed = (
+        frame_image_response(
+            result, profile, canvas=canvas,
+            background="chroma" if transparent_cg else None,
+        )
+        if safe_frame else result
+    )
     if broadcast_hole:
         framed = apply_broadcast_hole_response(
             framed, broadcast_hole, profile, canvas=canvas, watermark=broadcast_watermark
@@ -5377,6 +5414,7 @@ class NewsImageGenerateRequest(BaseModel):
     image_size: str = "1K"
     # True＝滿版生成＋後端置框（安全框由數學保證，不靠模型自律）
     safe_frame: bool = False
+    transparent_cg: bool = False
     # 落檔時標示來源（line／workcord／…），純粹方便回查時篩選；空值用預設值
     source: str = ""
     # 專用指令欄位（PLAN.md ①），語意同 GenerateRequest.user_instruction。
@@ -5486,6 +5524,25 @@ def model_extension_active(role: str, safe_frame: bool, frame_strategy: str) -> 
         and safe_frame
         and role == safe_area_spec.REPORTER_PROFILE
     )
+
+
+def enforce_transparent_cg(req):
+    """F54：透 CG 一律使用安全框純綠後製，模型延伸不可同時生效。"""
+    if not getattr(req, "transparent_cg", False):
+        return req
+    update = {"safe_frame": True}
+    if hasattr(req, "frame_strategy"):
+        update["frame_strategy"] = ""
+    return req.model_copy(update=update)
+
+
+def apply_transparent_cg_prompt(req: ImageGenerateRequest) -> ImageGenerateRequest:
+    """把透 CG 生圖規則壓在所有一般版面／附圖規則之後；OFF 完全不改 prompt。"""
+    if not req.transparent_cg or "TRANSPARENT CG TEXT CARD" in req.prompt:
+        return req
+    return req.model_copy(update={
+        "prompt": f"{req.prompt.rstrip()}\n{TRANSPARENT_CG_PROMPT_RULES}",
+    })
 
 
 def resolve_aspect_ratio(
@@ -6136,6 +6193,7 @@ class ImageRefineRequest(BaseModel):
     aspect_ratio: str = "16:9"
     image_size: str = "1K"
     safe_frame: bool = False
+    transparent_cg: bool = False
     # D26：延伸背景模式要跟著過來，否則改完／重貼會被 FIT 縮小補底色。
     frame_strategy: Literal["", "model_extension"] = ""
     safe_frame_profile: str = "記者"
@@ -6234,6 +6292,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             "safe_frame_profile": str(claims.get("safe_frame_profile") or safe_area_spec.REPORTER_PROFILE),
             "safe_frame": bool(claimed_context.get("safe_frame", req.safe_frame)),
             "frame_strategy": str(claimed_context.get("frame_strategy", req.frame_strategy)),
+            "transparent_cg": bool(claimed_context.get("transparent_cg", req.transparent_cg)),
             "broadcast_hole": str(claimed_context.get("broadcast_hole") or ""),
             "hole_side": str(claimed_context.get("hole_side") or ""),
             "cover_kind": cover_kinds.get(claimed_target, ""),
@@ -6243,6 +6302,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             ),
             "disclaimer_manual_override": any(item.manual_override for item in secured_items),
         })
+        req = enforce_transparent_cg(req)
         if not supports_reference_image(req.provider):
             raise HTTPException(
                 status_code=400,
@@ -6289,6 +6349,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             density=req.density,
             safe_frame=req.safe_frame,
             frame_strategy=req.frame_strategy,
+            transparent_cg=req.transparent_cg,
             safe_frame_profile=req.safe_frame_profile,
             broadcast_hole=req.broadcast_hole,
             hole_side=req.hole_side,
@@ -6306,6 +6367,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             disclaimer_corner=req.disclaimer_corner,
         )
         image_req = apply_broadcast_hole_layout_to_image_request(image_req)
+        image_req = apply_transparent_cg_prompt(image_req)
         prompt = image_req.prompt
         if req.cover_kind:
             # B51：封面追加修改一律不置框——resolve_frame_plan 對編輯身分永遠回
@@ -6338,6 +6400,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
                 broadcast_hole=req.broadcast_hole,
                 broadcast_watermark=not bool(image_req.disclaimer_kind),
                 canvas=image_generation_size(image_req)[1],
+                transparent_cg=req.transparent_cg,
             )
         # B83 後續修正：舊版只帶 kind/source/corner，拖曳位置、人工覆寫與十點左右
         # items 全掉了。refine 現在一律套用完整成品快照；新圖障礙改變時夾到最近合法點。
@@ -6349,6 +6412,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
             request_id, started, exc,
             source=audit_source, action=audit_action,
             news_text="", prompt=prompt, provider=req.provider,
+            transparent_cg=req.transparent_cg,
         )
         raise
     meta = _outcome_meta(started, provider=req.provider, image_model=result.model)
@@ -6375,6 +6439,7 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
         label_provenance_kind=result.disclaimer_provenance_kind,
         label_manual_override=result.disclaimer_manual_override,
         label_items=result.disclaimer_items,
+        transparent_cg=req.transparent_cg,
         **meta,
     )
     notices = list(dict.fromkeys([*result.notices, *collected_portrait_notices()]))
@@ -6412,6 +6477,7 @@ class ImageRestampRequest(BaseModel):
     image_size: str = "1K"
     density: str = ""
     safe_frame: bool = False
+    transparent_cg: bool = False
     # D26：延伸背景模式要跟著過來，否則改完／重貼會被 FIT 縮小補底色。
     frame_strategy: Literal["", "model_extension"] = ""
     safe_frame_profile: str = "記者"
@@ -6641,10 +6707,12 @@ def restamp_disclaimer(req: ImageRestampRequest) -> ImageGenerateResponse:
             "broadcast_hole": str(claimed_context.get("broadcast_hole") or ""),
             "safe_frame": bool(claimed_context.get("safe_frame", req.safe_frame)),
             "frame_strategy": str(claimed_context.get("frame_strategy", req.frame_strategy)),
+            "transparent_cg": bool(claimed_context.get("transparent_cg", req.transparent_cg)),
             "items": secured_items,
             "provenance_kind": first_secured.provenance_kind if first_secured else "",
             "manual_override": any(item.manual_override for item in secured_items),
         })
+        req = enforce_transparent_cg(req)
         if req.disclaimer_kind == "source" and not req.disclaimer_source_text.strip() and not req.items:
             raise HTTPException(status_code=400, detail="畫面來源文字不可空白")
         if req.target == "yt_vstrip" and req.disclaimer_kind == "ai" and not req.items:
@@ -6777,6 +6845,7 @@ def restamp_disclaimer(req: ImageRestampRequest) -> ImageGenerateResponse:
                 density=req.density,
                 safe_frame=req.safe_frame,
                 frame_strategy=req.frame_strategy,
+                transparent_cg=req.transparent_cg,
                 safe_frame_profile=req.safe_frame_profile,
                 disclaimer_kind=req.disclaimer_kind,
                 disclaimer_source_text=req.disclaimer_source_text,
@@ -6801,6 +6870,7 @@ def restamp_disclaimer(req: ImageRestampRequest) -> ImageGenerateResponse:
                     safe_frame=needs_frame,
                     profile=frame_profile,
                     canvas=image_generation_size(sizing)[1],
+                    transparent_cg=req.transparent_cg,
                 )
             result = apply_image_disclaimer(result, sizing, profile=frame_profile)
             trusted_provenance = first_secured.provenance_kind if first_secured else ""
@@ -6827,6 +6897,7 @@ def restamp_disclaimer(req: ImageRestampRequest) -> ImageGenerateResponse:
         _record_generation_failure(
             request_id, started, exc,
             source="web-restamp", news_text="", prompt="", provider=req.provider,
+            transparent_cg=req.transparent_cg,
         )
         raise
     # 交出去的成品換了一張（標籤挪了角落），後台就得記一筆——不記的話稽核裡
@@ -6847,6 +6918,7 @@ def restamp_disclaimer(req: ImageRestampRequest) -> ImageGenerateResponse:
         label_provenance_kind=result.disclaimer_provenance_kind,
         label_manual_override=result.disclaimer_manual_override,
         label_items=result.disclaimer_items,
+        transparent_cg=req.transparent_cg,
         **meta,
     )
     return result
@@ -6915,6 +6987,7 @@ def resolve_digest_portraits(
             role=req.role,
             density=req.density,
             safe_frame=req.safe_frame,
+            transparent_cg=req.transparent_cg,
             user_instruction=req.user_instruction,
             stamp=req.stamp,
             tone=req.tone,
@@ -6952,6 +7025,7 @@ def resolve_digest_portraits(
 
 
 def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateResponse:
+    req = enforce_transparent_cg(req)
     # 前置過濾（縱深防禦）：擋垃圾／亂碼／注入輸入，避免燒掉付費呼叫。
     # LINE 路徑在 line_bot 已含頻率限制地查過一次，這裡 client_id 為空時
     # 只做內容檢查、不重複觸發頻率限制。
@@ -6978,6 +7052,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 role=req.role,
                 density=req.density,
                 safe_frame=req.safe_frame,
+                transparent_cg=req.transparent_cg,
                 user_instruction=req.user_instruction,
                 stamp=req.stamp,
                 tone=req.tone,
@@ -7011,6 +7086,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             # 明文覆蓋才壓得住前面那些「把 VARIABLE FIELDS 畫上去」的條款。
             no_text=(req.density == "no_text"),
             hole_side=broadcast_layout_hole_for(req),
+            transparent_cg=req.transparent_cg,
         )
         image = generate_image(
             ImageGenerateRequest(
@@ -7022,6 +7098,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 image_size=req.image_size,
                 density=req.density,
                 safe_frame=req.safe_frame,
+                transparent_cg=req.transparent_cg,
                 # 傳角色而非解析後的 profile：generate_image 會解析一次，
                 # 這裡先解析會讓它拿「編輯安全框」當角色再解析一次而解錯。
                 safe_frame_profile=req.role,
@@ -7089,6 +7166,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
                 density=req.density,
                 portrait_subject="、".join(digest.portrait_subjects),
                 seed=digest.seed,
+                transparent_cg=req.transparent_cg,
                 **meta,
             )
         return NewsImageGenerateResponse(
@@ -7113,6 +7191,7 @@ def generate_news_image(req: NewsImageGenerateRequest) -> NewsImageGenerateRespo
             "role": req.role,
             "density": req.density,
             "provider": provider,
+            "transparent_cg": req.transparent_cg,
         }
         if digest is not None:
             fields.update(
