@@ -6080,6 +6080,9 @@ class ImageRefineRequest(BaseModel):
     label_token: str = Field(default="", max_length=8_000)
     # 使用者的修改指令，例如「把標題改成紅色」「左邊那張圖換成長條圖」
     instruction: str = Field(min_length=1, max_length=2_000)
+    # F53：同一條追加修改路徑的固定按鈕動作。只影響稽核名稱；實際改圖仍完全走
+    # refine_image 的既有生成、後製與重新壓標籤流程。
+    audit_action: Literal["", "title-only"] = ""
     provider: Literal["gemini", "gpt"] = "gemini"
     aspect_ratio: str = "16:9"
     image_size: str = "1K"
@@ -6154,6 +6157,8 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
     _reset_generation_retries()
     reset_portrait_notices()
     prompt = ""
+    audit_source = "web-title-only" if req.audit_action == "title-only" else "web-refine"
+    audit_action = "只留標題（前一張）" if req.audit_action == "title-only" else ""
     try:
         _validate_reusable_image(req.source_image_base64, field_name="refine 原圖")
         claims = _verified_label_claims(
@@ -6293,13 +6298,14 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
     except Exception as exc:
         _record_generation_failure(
             request_id, started, exc,
-            source="web-refine", news_text="", prompt=prompt, provider=req.provider,
+            source=audit_source, action=audit_action,
+            news_text="", prompt=prompt, provider=req.provider,
         )
         raise
     meta = _outcome_meta(started, provider=req.provider, image_model=result.model)
     request_log.log_generation(
         request_id=request_id,
-        source="web-refine",
+        source=audit_source,
         news_text="",
         prompt=image_req.prompt,
         provider=req.provider,
@@ -6310,7 +6316,8 @@ def refine_image(req: ImageRefineRequest) -> ImageGenerateResponse:
         request_id=request_id,
         image_base64=result.image_data_base64,
         mime_type=result.mime_type,
-        source="web-refine",
+        source=audit_source,
+        action=audit_action,
         prompt=image_req.prompt,
         label_target=req.disclaimer_target,
         label_kind=result.disclaimer_kind,

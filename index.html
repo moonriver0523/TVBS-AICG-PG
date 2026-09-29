@@ -312,7 +312,7 @@
             <div class="flex items-center gap-2 min-w-0 mr-1">
                 <span class="tally-dot" aria-hidden="true"></span>
                 <h1 class="text-[15px] font-black tracking-tight text-white whitespace-nowrap">TVBS AICG</h1>
-                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260928-02</span>
+                <span id="appVersion" class="hidden sm:inline text-[10px] text-[color:var(--dim)]">260929-01</span>
             </div>
             <nav class="flex flex-1 flex-wrap items-center gap-1 min-w-[220px]">
                 <button id="pageTab-1" onclick="switchPage(1)" class="page-tab page-tab-active rounded-md">一鍵出圖</button>
@@ -833,6 +833,24 @@
                                 </div>
                             </div>
                             <p class="text-[9px] text-slate-600 mt-1">只改指定的部分，其餘保持不變；每次修改為一次付費生圖。Enter 換行，Ctrl+Enter／⌘+Enter 直接送出。</p>
+                            <div id="titleOnlyAction" class="hidden mt-3 rounded-lg border border-violet-900/70 bg-violet-950/20 p-3">
+                                <button id="titleOnlyBtn" type="button" onclick="handleTitleOnly()"
+                                        class="px-3 py-2 rounded-lg text-[10px] font-black bg-violet-700 hover:bg-violet-600 text-white transition-all active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5">
+                                    <span id="titleOnlyBtnText">只留標題（前一張）</span>
+                                    <div id="titleOnlyLoading" class="hidden w-3.5 h-3.5 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                                </button>
+                                <p class="text-[9px] text-slate-500 mt-1">先下載這張作為播出前一張，再切完整版；完整版會留在上方、不會被覆蓋。</p>
+                            </div>
+                            <div id="titleOnlyResult" class="hidden mt-3 rounded-lg border border-violet-800/70 bg-slate-950/50 p-3">
+                                <div class="flex items-center justify-between gap-3 mb-2">
+                                    <div>
+                                        <span class="text-[10px] font-black text-violet-300">前一張｜只留標題</span>
+                                        <span id="titleOnlyQuality" class="block text-[9px] text-slate-500 mt-0.5"></span>
+                                    </div>
+                                    <a id="titleOnlyDownload" class="text-[10px] font-black text-blue-400 hover:text-blue-300" download="tvbs-news-cg_前一張.png">下載前一張</a>
+                                </div>
+                                <img id="titleOnlyImage" alt="只留標題的前一張新聞 CG" class="w-full rounded-lg border border-slate-800" draggable="false" />
+                            </div>
                         </div>
                     </div>
                 </div>
